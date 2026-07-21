@@ -199,7 +199,16 @@ export function AuthenticationSection({ auth, form, setForm }: AuthenticationSec
         : null;
     const renderApiKeySection = (provider: AuthProvider) => (<div className="auth-apikey-section">
       <div className="auth-apikey-input-row">
-        <input type="password" className="auth-apikey-input" placeholder={t("settings.authentication.enterAPIKey", "Enter API key")} value={apiKeyInputs[provider.id] ?? ""} onChange={(e) => setApiKeyInputs((prev) => ({ ...prev, [provider.id]: e.target.value }))} disabled={authActionInProgress === provider.id}/>
+        <input
+        type="password"
+        name={`fusion-api-key-${provider.id}`}
+        autoComplete="new-password"
+        data-form-type="other"
+        data-lpignore="true"
+        data-1p-ignore
+        className="auth-apikey-input"
+        placeholder={t("settings.authentication.enterAPIKey", "Enter API key")}
+        value={apiKeyInputs[provider.id] ?? ""} onChange={(e) => setApiKeyInputs((prev) => ({ ...prev, [provider.id]: e.target.value }))} disabled={authActionInProgress === provider.id}/>
         {provider.keyHint && !apiKeyInputs[provider.id] ? (<button className="btn btn-sm" onClick={() => handleClearApiKey(provider.id)} disabled={authActionInProgress === provider.id}>
             {t("settings.auth.clearKey", "Clear")}
           </button>) : (<button className="btn btn-primary btn-sm" onClick={() => handleSaveApiKey(provider.id)} disabled={authActionInProgress === provider.id}>

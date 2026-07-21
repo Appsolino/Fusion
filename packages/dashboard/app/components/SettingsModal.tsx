@@ -4631,6 +4631,14 @@ export function SettingsModal({
                         data-testid="settings-search-input"
                         className="input settings-search-input"
                         type="search"
+                        name="fusion-settings-filter"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        data-form-type="other"
+                        data-lpignore="true"
+                        data-1p-ignore
                         value={settingsSearchQuery}
                         onChange={(event) => setSettingsSearchQuery(event.target.value)}
                         onKeyDown={(event) => {
