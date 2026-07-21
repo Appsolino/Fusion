@@ -18,6 +18,9 @@ onlyBuiltDependencies:
 overrides:
   '@types/node': ^25.5.2
   protobufjs: ^7.5.8
+  # Appsolino security baseline: critical advisory remediation.
+  shell-quote: 1.8.4
+  tar: 7.5.19
   # FNXC:ModelCatalog 2026-07-16-18:15: Keep floating @fusion/droid-cli and
   # @fusion/pi-llama-cpp imports on the ModelRuntime-capable pi SDK so the
   # workspace cannot resolve conflicting pi type surfaces.
