@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildGhostBugProbeCommandForTest,
   extractCitedConstructs,
   isBugFixShape,
   runGhostBugPreflight,
@@ -19,7 +20,7 @@ describe("triage-preflight", () => {
     const prompt = [
       "Use `secrets_sync.handle()` and `foo_bar` in packages/core/src/secrets-sync.ts:12",
       "```ts",
-      "import { x } from 'y'",
+      "const value = loadConfig()",
       "const a = b",
       "```",
       "pnpm --filter @fusion/core test",
@@ -29,7 +30,7 @@ describe("triage-preflight", () => {
     const constructs = extractCitedConstructs(prompt);
     expect(constructs.some((c) => c.kind === "identifier" && c.raw === "secrets_sync.handle()")).toBe(true);
     expect(constructs.some((c) => c.filePath === "packages/core/src/secrets-sync.ts" && c.line === 12)).toBe(true);
-    expect(constructs.some((c) => c.kind === "snippet" && c.raw.includes("import"))).toBe(true);
+    expect(constructs.some((c) => c.kind === "snippet" && c.raw.includes("loadConfig"))).toBe(true);
     expect(constructs.filter((c) => c.kind === "command")).toHaveLength(1);
   });
 
@@ -42,6 +43,12 @@ describe("triage-preflight", () => {
       shouldIgnoreCitedConstruct({
         kind: "identifier",
         raw: "updateMany({ where: { id, userId, updatedAt: expectedUpdatedAt } })",
+      }),
+    ).toBe(true);
+    expect(
+      shouldIgnoreCitedConstruct({
+        kind: "snippet",
+        raw: "await db.updateMany({ where: { id } })",
       }),
     ).toBe(true);
     expect(shouldIgnoreCitedConstruct({ kind: "identifier", raw: "patchWorkItemAtomic" })).toBe(false);
@@ -62,6 +69,24 @@ describe("triage-preflight", () => {
     expect(constructs.some((c) => c.raw === "README.md")).toBe(false);
     expect(constructs.some((c) => c.raw === "fn_task_create")).toBe(false);
     expect(constructs.some((c) => c.raw.includes("updateMany("))).toBe(false);
+  });
+
+  it("passes when the prompt only cites ignored contextual constructs", async () => {
+    const exec = vi.fn();
+    const decision = await runGhostBugPreflight(
+      { title: "fix: flaky CAS", description: "regression" },
+      [
+        "See `README.md` and `package.json`.",
+        "Helpers: `fn_task_create`, `fn_task_document_write`.",
+        "```ts",
+        "await updateMany({ where: { id, userId } });",
+        "```",
+      ].join("\n"),
+      { cwd: process.cwd(), exec },
+    );
+    expect(decision.decision).toBe("pass");
+    expect(decision.reason).toBe("no_constructs");
+    expect(exec).not.toHaveBeenCalled();
   });
 
   it("caps extracted constructs at 20", () => {
@@ -113,6 +138,19 @@ describe("triage-preflight", () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
+  it("keeps command probes non-definitive (matched with exit_code_unavailable)", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "", stderr: "" });
+    const decision = await runGhostBugPreflight(
+      { title: "fix: typecheck error", description: "desc" },
+      "pnpm --filter @fusion/core typecheck",
+      { cwd: process.cwd(), exec },
+    );
+    // Sole command probe is non-definitive → no archive from definitive misses.
+    expect(decision.decision).toBe("pass");
+    expect(decision.reason).toBe("no_definitive_probe_signal");
+    expect(decision.findings[0]?.probeError).toBe("exit_code_unavailable");
+  });
+
   it("probes file paths with git cat-file and identifiers repo-wide", async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: "FOUND", stderr: "" });
     const decision = await runGhostBugPreflight(
@@ -125,5 +163,22 @@ describe("triage-preflight", () => {
     const commands = exec.mock.calls.map((call) => String(call[0]));
     expect(commands.some((cmd) => cmd.includes("git cat-file -e") && cmd.includes("HEAD:apps/api/src/productivity/mutations.ts"))).toBe(true);
     expect(commands.some((cmd) => cmd.includes("git grep -nF --") && cmd.includes("work_item_cas") && !cmd.includes(" packages/"))).toBe(true);
+  });
+
+  it("shell-quotes path and identifier probes so metacharacters cannot inject", () => {
+    const pathCmd = buildGhostBugProbeCommandForTest({
+      kind: "identifier",
+      raw: 'apps/api/src/foo"; rm -rf /tmp/x; echo ".ts',
+      filePath: 'apps/api/src/foo"; rm -rf /tmp/x; echo ".ts',
+    });
+    expect(pathCmd.startsWith("git cat-file -e ")).toBe(true);
+    expect(pathCmd).toContain(JSON.stringify('HEAD:apps/api/src/foo"; rm -rf /tmp/x; echo ".ts'));
+    expect(pathCmd).not.toMatch(/cat-file -e HEAD:/);
+
+    const idCmd = buildGhostBugProbeCommandForTest({
+      kind: "identifier",
+      raw: 'foo"; curl evil',
+    });
+    expect(idCmd).toBe(`git grep -nF -- ${JSON.stringify('foo"; curl evil')} || true`);
   });
 });
