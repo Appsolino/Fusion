@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { extractCitedConstructs, isBugFixShape, runGhostBugPreflight } from "../triage-preflight.js";
+import {
+  extractCitedConstructs,
+  isBugFixShape,
+  runGhostBugPreflight,
+  shouldIgnoreCitedConstruct,
+} from "../triage-preflight.js";
 
 describe("triage-preflight", () => {
   it("isBugFixShape matrix", () => {
@@ -26,6 +31,37 @@ describe("triage-preflight", () => {
     expect(constructs.some((c) => c.filePath === "packages/core/src/secrets-sync.ts" && c.line === 12)).toBe(true);
     expect(constructs.some((c) => c.kind === "snippet" && c.raw.includes("import"))).toBe(true);
     expect(constructs.filter((c) => c.kind === "command")).toHaveLength(1);
+  });
+
+  it("ignores root docs, fusion tools, and complex expressions", () => {
+    expect(shouldIgnoreCitedConstruct({ kind: "identifier", raw: "README.md" })).toBe(true);
+    expect(shouldIgnoreCitedConstruct({ kind: "identifier", raw: "package.json" })).toBe(true);
+    expect(shouldIgnoreCitedConstruct({ kind: "identifier", raw: "fn_task_document_write" })).toBe(true);
+    expect(shouldIgnoreCitedConstruct({ kind: "identifier", raw: "fn_task_create" })).toBe(true);
+    expect(
+      shouldIgnoreCitedConstruct({
+        kind: "identifier",
+        raw: "updateMany({ where: { id, userId, updatedAt: expectedUpdatedAt } })",
+      }),
+    ).toBe(true);
+    expect(shouldIgnoreCitedConstruct({ kind: "identifier", raw: "patchWorkItemAtomic" })).toBe(false);
+    expect(shouldIgnoreCitedConstruct({ kind: "identifier", raw: "secrets_sync.handle()" })).toBe(false);
+  });
+
+  it("extracts non-packages app paths and drops false-negative constructs", () => {
+    const prompt = [
+      "Inspect apps/api/src/productivity/mutations.ts and `README.md`.",
+      "Do not call `fn_task_create` or `fn_task_document_write`.",
+      "Confirm `updateMany({ where: { id, userId, updatedAt: expectedUpdatedAt } })`.",
+      "Keep `work_item_cas` behavior.",
+    ].join("\n");
+
+    const constructs = extractCitedConstructs(prompt);
+    expect(constructs.some((c) => c.filePath === "apps/api/src/productivity/mutations.ts")).toBe(true);
+    expect(constructs.some((c) => c.raw === "work_item_cas")).toBe(true);
+    expect(constructs.some((c) => c.raw === "README.md")).toBe(false);
+    expect(constructs.some((c) => c.raw === "fn_task_create")).toBe(false);
+    expect(constructs.some((c) => c.raw.includes("updateMany("))).toBe(false);
   });
 
   it("caps extracted constructs at 20", () => {
@@ -75,5 +111,19 @@ describe("triage-preflight", () => {
     );
     expect(decision.decision).toBe("pass");
     expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("probes file paths with git cat-file and identifiers repo-wide", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "FOUND", stderr: "" });
+    const decision = await runGhostBugPreflight(
+      { title: "fix: flaky WorkItem CAS", description: "regression" },
+      "See apps/api/src/productivity/mutations.ts and `work_item_cas`.",
+      { cwd: process.cwd(), exec },
+    );
+    expect(decision.decision).toBe("pass");
+    expect(exec).toHaveBeenCalled();
+    const commands = exec.mock.calls.map((call) => String(call[0]));
+    expect(commands.some((cmd) => cmd.includes("git cat-file -e") && cmd.includes("HEAD:apps/api/src/productivity/mutations.ts"))).toBe(true);
+    expect(commands.some((cmd) => cmd.includes("git grep -nF --") && cmd.includes("work_item_cas") && !cmd.includes(" packages/"))).toBe(true);
   });
 });
