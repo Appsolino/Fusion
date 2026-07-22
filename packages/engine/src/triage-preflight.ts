@@ -60,13 +60,10 @@ export function shouldIgnoreCitedConstruct(construct: CitedConstruct): boolean {
   const raw = construct.raw.trim();
   if (!raw) return true;
   if (construct.kind === "command") return false;
-  if (construct.kind === "snippet") {
-    // Snippets are already line-bounded; only drop empty leftovers.
-    return false;
-  }
   if (FUSION_TOOL_NAME.test(raw)) return true;
   if (ROOT_DOC_OR_MANIFEST.test(raw)) return true;
-  // Full formatted expressions / object literals are not greppable identifiers.
+  // Full formatted expressions / object literals are not greppable identifiers —
+  // apply to both backtick identifiers and fenced snippet lines.
   if (raw.includes("{") || raw.includes("}") || raw.includes(";") || raw.includes("\n")) return true;
   const open = raw.indexOf("(");
   if (open >= 0) {
@@ -141,6 +138,11 @@ function buildProbeCommand(construct: CitedConstruct): string {
   }
 
   return construct.raw;
+}
+
+/** Exported for unit tests that assert probe-command quoting / shape. */
+export function buildGhostBugProbeCommandForTest(construct: CitedConstruct): string {
+  return buildProbeCommand(construct);
 }
 
 export async function probeCitedConstructs(
