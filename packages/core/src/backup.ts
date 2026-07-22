@@ -126,6 +126,23 @@ export class BackupManager {
   }
 
   async listBackupPairs(): Promise<BackupPairInfo[]> {
+    // Prefer the PostgreSQL dump pair listing. The legacy getBackupPairKey()
+    // matcher only understands SQLite `.db` filenames and silently dropped
+    // every `fusion-pg-*.dump` / `fusion-central-pg-*.dump` pair.
+    const pgPairs = await this.pgManager.listBackups();
+    if (pgPairs.length > 0) {
+      return pgPairs
+        .map((pair) => ({
+          timestamp: pair.timestamp,
+          project: pair.project ? pgDumpResultToBackupFileInfo(pair.project) : undefined,
+          central:
+            pair.central && "filename" in pair.central
+              ? pgDumpResultToBackupFileInfo(pair.central)
+              : undefined,
+        }))
+        .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    }
+
     const projects = await this.listBackups();
     const centrals = await this.listCentralBackups();
     const pairs = new Map<string, BackupPairInfo>();
@@ -190,6 +207,12 @@ function formatTimestamp(date: Date): string {
 }
 
 function getBackupPairKey(filename: string, isCentral: boolean): string | null {
+  const dumpPattern = isCentral
+    ? /^fusion-central-pg-(.+)\.dump$/
+    : /^fusion-pg-(.+)\.dump$/;
+  const dumpMatch = filename.match(dumpPattern);
+  if (dumpMatch) return dumpMatch[1];
+
   const pattern = isCentral
     ? /^fusion-central(?:-pre-restore)?-(\d{4}-\d{2}-\d{2}-\d{6})(-\d+)?\.db$/
     : /^(?:fusion|kb)(?:-pre-restore)?-(\d{4}-\d{2}-\d{2}-\d{6})(-\d+)?\.db$/;
