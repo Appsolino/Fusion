@@ -71,8 +71,8 @@ function buildApp(input: { task: Task; activeMergeTaskId?: string | null; staleM
     updateTask,
     moveTask,
     logEntry,
-    getSettings: async () => ({}),
-    getSettingsFast: async () => ({}),
+    getSettings: async () => ({ autoMerge: true }),
+    getSettingsFast: async () => ({ autoMerge: true }),
     getRootDir: () => "/tmp/does-not-exist",
     listTasks: async () => [input.task],
   } as unknown as TaskStore;
