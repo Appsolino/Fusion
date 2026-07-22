@@ -48,8 +48,14 @@ export type AutoMergeSettingsSlice = Pick<Settings, "autoMerge">;
  * 4. `projectSettings.autoMerge === true` → `true`
  * 5. else `globalSettings?.autoMerge` when provided; otherwise `false`
  *
+ * Policy: project/global false is an **inheritance default**, not an administrative
+ * hard prohibition — explicit `task.autoMerge === true` still wins (FN-1356).
+ * Explicit `task.autoMerge === false` is the non-negotiable operator opt-out.
+ *
  * `null`/`undefined` task values inherit. Two-arg call sites pass the active
  * project store settings as `projectSettings` (Fusion's historical surface).
+ * Production `getSettings()` materializes schema default `autoMerge: true`;
+ * incomplete slices without a global arg fail closed to `false`.
  * `autoMergeProvenance` is metadata only and does not affect the result.
  */
 export function resolveEffectiveAutoMerge(

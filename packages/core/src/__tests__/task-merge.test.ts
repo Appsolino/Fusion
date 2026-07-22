@@ -84,6 +84,26 @@ describe("resolveEffectiveAutoMerge", () => {
     expect(resolveEffectiveAutoMerge({ autoMerge: false }, { autoMerge: true }, { autoMerge: true })).toBe(false);
   });
 
+  it("task undefined + project undefined + global true => true", () => {
+    expect(resolveEffectiveAutoMerge({ autoMerge: undefined }, { autoMerge: undefined as unknown as boolean }, { autoMerge: true })).toBe(true);
+  });
+
+  it("task undefined + project undefined + global false => false", () => {
+    expect(resolveEffectiveAutoMerge({ autoMerge: undefined }, { autoMerge: undefined as unknown as boolean }, { autoMerge: false })).toBe(false);
+  });
+
+  it("task undefined + settings missing (no global) fails closed to false", () => {
+    expect(resolveEffectiveAutoMerge({ autoMerge: undefined }, { autoMerge: undefined as unknown as boolean })).toBe(false);
+  });
+
+  it("task true + project false => true (per-task opt-in; not an admin hard prohibition)", () => {
+    expect(resolveEffectiveAutoMerge({ autoMerge: true }, { autoMerge: false })).toBe(true);
+  });
+
+  it("task false + project true => false", () => {
+    expect(resolveEffectiveAutoMerge({ autoMerge: false }, { autoMerge: true })).toBe(false);
+  });
+
   it("tracks provenance as metadata and resolves solely from the value", () => {
     expect(resolveEffectiveAutoMerge({ autoMerge: true, autoMergeProvenance: "legacy-stamp" }, { autoMerge: false })).toBe(true);
     expect(resolveEffectiveAutoMerge({ autoMerge: false, autoMergeProvenance: "user" }, { autoMerge: true })).toBe(false);

@@ -248,4 +248,64 @@ describe("FUS-010 auto-merge explicit false safety", () => {
     expect(runAiMerge).not.toHaveBeenCalled();
     expect(store.logEntry.mock.calls.some((c) => String(c[1]).includes("AUTO_MERGE_DISABLED"))).toBe(true);
   });
+
+  it("awaiting-user-review is not admitted to the merge queue", async () => {
+    const store = makeStore(
+      makeTask({ autoMerge: false, status: "awaiting-user-review" }),
+      { autoMerge: true },
+    );
+    const engine = createEngine(store);
+    const privateEngine = engine as unknown as {
+      enqueueEligibleInReviewTasks: (
+        tasks: Task[],
+        settings: Pick<Settings, "autoMerge" | "maxAutoMergeRetries">,
+      ) => Promise<number>;
+    };
+    const enqueued = await privateEngine.enqueueEligibleInReviewTasks(
+      [await store.getTask(TASK_ID)] as Task[],
+      { autoMerge: true },
+    );
+    expect(enqueued).toBe(0);
+    expect(runAiMerge).not.toHaveBeenCalled();
+  });
+
+  it("interpreter waiter without forceManual cannot bypass hard-guard when task.autoMerge=false", async () => {
+    const store = makeStore(makeTask({ autoMerge: false, status: null }), { autoMerge: true });
+    const engine = createEngine(store);
+    await engine.start();
+    const privateEngine = engine as unknown as {
+      enqueueMergeAwait: (taskId: string, options?: { forceManual?: boolean }) => Promise<unknown>;
+    };
+
+    const result = await privateEngine.enqueueMergeAwait(TASK_ID, { forceManual: false }) as {
+      merged?: boolean;
+      noOp?: boolean;
+    };
+
+    expect(runAiMerge).not.toHaveBeenCalled();
+    expect(result.merged).toBe(false);
+    expect(result.noOp).toBe(true);
+    await engine.stop();
+  });
+
+  it("human forceManual onMerge still invokes runAiMerge when task.autoMerge=false", async () => {
+    vi.mocked(runAiMerge).mockResolvedValue({
+      task: makeTask({ autoMerge: false }) as unknown as Task,
+      branch: "fusion/app-002",
+      merged: true,
+      noOp: false,
+      worktreeRemoved: false,
+      branchDeleted: false,
+    } as never);
+
+    const store = makeStore(makeTask({ autoMerge: false, status: null }), { autoMerge: true });
+    const engine = createEngine(store);
+    await engine.start();
+    const result = await engine.onMerge(TASK_ID);
+
+    expect(runAiMerge).toHaveBeenCalled();
+    expect(result.merged).toBe(true);
+    expect(vi.mocked(runAiMerge).mock.calls[0]?.[3]).toMatchObject({ manual: true });
+    await engine.stop();
+  });
 });

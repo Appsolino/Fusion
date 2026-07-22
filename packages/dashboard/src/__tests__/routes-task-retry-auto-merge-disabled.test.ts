@@ -192,4 +192,25 @@ describe("FUS-029 Retry with autoMerge=false", () => {
     expect(patch.status).toBeNull();
     expect(getTask().autoMerge).toBe(true);
   });
+
+  it("Retry is idempotent: repeated calls never enqueue merge and keep awaiting-user-review", async () => {
+    const { app, enqueueMerge, getTask } = buildApp({
+      task: mkApp002Fixture(),
+      settings: { autoMerge: true },
+    });
+
+    for (let i = 0; i < 3; i++) {
+      const res = await performRequest(app, "POST", "/api/tasks/APP-002-FIXTURE/retry", "{}", {
+        "content-type": "application/json",
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("awaiting-user-review");
+      expect((res.body.retryResult as { enqueuedMerge?: boolean })?.enqueuedMerge).toBe(false);
+    }
+
+    expect(enqueueMerge).not.toHaveBeenCalled();
+    expect(getTask().autoMerge).toBe(false);
+    expect(getTask().column).toBe("in-review");
+    expect(getTask().prInfo?.status).toBe("open");
+  });
 });

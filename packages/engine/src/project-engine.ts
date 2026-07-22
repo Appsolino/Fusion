@@ -497,6 +497,12 @@ export class ProjectEngine {
   // can have more than one caller awaiting the same merge. A single-entry map
   // would let a second caller overwrite the first, stranding its promise.
   private manualMergeResolvers = new Map<string, Array<MergeResolver>>();
+  /**
+   * FUS-010: only authenticated human `onMerge` sets this. Interpreter /
+   * automatic waiters may share `manualMergeResolvers` for await semantics but
+   * must NOT skip auto-merge eligibility or the effective-auto-merge hard-guard.
+   */
+  private forceManualMergeTaskIds = new Set<string>();
   private shuttingDown = false;
   /**
    * FNXC:FasterStartup 2026-07-15-00:20:
@@ -524,11 +530,17 @@ export class ProjectEngine {
   private takeMergeResolvers(taskId: string): MergeResolver[] {
     const list = this.manualMergeResolvers.get(taskId);
     this.manualMergeResolvers.delete(taskId);
+    this.forceManualMergeTaskIds.delete(taskId);
     return list ?? [];
   }
 
   private hasMergeResolvers(taskId: string): boolean {
     return (this.manualMergeResolvers.get(taskId)?.length ?? 0) > 0;
+  }
+
+  /** True only for human-initiated Merge (POST /tasks/:id/merge → onMerge). */
+  private hasForceManualMerge(taskId: string): boolean {
+    return this.forceManualMergeTaskIds.has(taskId);
   }
 
   /** Resolve every waiter for a task with the same result, then clear them. */
@@ -1300,6 +1312,7 @@ export class ProjectEngine {
       }
     }
     this.manualMergeResolvers.clear();
+    this.forceManualMergeTaskIds.clear();
 
     // Remove event listeners
     try {
@@ -2133,6 +2146,18 @@ export class ProjectEngine {
    * in createServer().
    */
   async onMerge(taskId: string, options: { signal?: AbortSignal } = {}): Promise<MergeResult> {
+    // Human Merge & Close / POST merge — may proceed even when autoMerge is off.
+    return this.enqueueMergeAwait(taskId, { ...options, forceManual: true });
+  }
+
+  /**
+   * Shared merge-queue awaiter. `forceManual: true` is reserved for authenticated
+   * human `onMerge` and is the only signal that skips automatic auto-merge guards.
+   */
+  private enqueueMergeAwait(
+    taskId: string,
+    options: { signal?: AbortSignal; forceManual?: boolean } = {},
+  ): Promise<MergeResult> {
     const signal = options.signal;
     if (signal?.aborted) {
       throw new Error(`Merge request for ${taskId} aborted`);
@@ -2160,6 +2185,9 @@ export class ProjectEngine {
       };
       abort = () => {
         this.removeMergeResolver(taskId, resolver);
+        if (!this.hasMergeResolvers(taskId)) {
+          this.forceManualMergeTaskIds.delete(taskId);
+        }
         if (this.activeMergeTaskId === taskId) {
           this.mergeAbortController?.abort();
           this.mergeAbortController = null;
@@ -2173,6 +2201,9 @@ export class ProjectEngine {
       };
 
       signal?.addEventListener("abort", abort, { once: true });
+      if (options.forceManual) {
+        this.forceManualMergeTaskIds.add(taskId);
+      }
       this.addMergeResolver(taskId, resolver);
 
       // If this task is already queued or actively merging, wait for the
@@ -2181,6 +2212,9 @@ export class ProjectEngine {
 
       if (!this.internalEnqueueMerge(taskId)) {
         this.removeMergeResolver(taskId, resolver);
+        if (!this.hasMergeResolvers(taskId)) {
+          this.forceManualMergeTaskIds.delete(taskId);
+        }
         resolver.reject(new Error(`Merge enqueue rejected for ${taskId}`));
       }
     });
@@ -2229,8 +2263,9 @@ export class ProjectEngine {
         branchDeleted: false,
       } as MergeResult;
     }
-    // Eligible: route through the normal serialized merge path.
-    return this.onMerge(taskId, options);
+    // Eligible: await the serialized auto-merge path WITHOUT forceManual.
+    // FUS-010: must not impersonate human onMerge (which skips auto-merge guards).
+    return this.enqueueMergeAwait(taskId, options);
   }
 
   private setRestoreDiagnostics(
@@ -2706,6 +2741,9 @@ export class ProjectEngine {
    * older low-priority task would start before a later urgent one.
    */
   private async allowInReviewMergeProcessing(task: Pick<Task, "branchContext" | "autoMerge">, settings: Pick<Settings, "autoMerge">, store: Partial<Pick<TaskStore, "getBranchGroup">> = this.runtime.getTaskStore()): Promise<boolean> {
+    // FUS-010: explicit task.autoMerge=false is non-negotiable — shared-branch
+    // member integration must not bypass an operator opt-out.
+    if (task.autoMerge === false) return false;
     const groupId = task.branchContext?.groupId?.trim();
     const branchGroup = groupId ? await store.getBranchGroup?.(groupId) : null;
     /*
@@ -3169,9 +3207,12 @@ export class ProjectEngine {
         // don't start a merge whose queue entry was cleared by stop().
         if (this.shuttingDown) break;
         const hasManualResolver = this.hasMergeResolvers(taskId);
+        // FUS-010: only human onMerge (forceManual) skips auto-merge guards.
+        // Interpreter waiters share resolvers but must re-check effective auto-merge.
+        const forceManual = this.hasForceManualMerge(taskId);
         try {
-          // Manual merges (onMerge) skip auto-merge eligibility checks
-          if (!hasManualResolver) {
+          // Human merges (onMerge / forceManual) skip auto-merge eligibility checks
+          if (!forceManual) {
             // Re-check autoMerge and pause before each merge
             const settings = await store.getSettings();
             const maxAutoMergeRetries = resolveMaxAutoMergeRetries(settings);
@@ -3209,6 +3250,18 @@ export class ProjectEngine {
                   })
                   .catch(() => undefined);
               }
+              // Interpreter waiters must not hang when auto-merge is disabled mid-queue.
+              if (hasManualResolver && !forceManual) {
+                const latest = (await store.getTask(taskId).catch(() => task)) ?? task;
+                this.resolveMergeResolvers(taskId, {
+                  task: latest,
+                  branch: latest.branch ?? "",
+                  merged: false,
+                  noOp: true,
+                  worktreeRemoved: false,
+                  branchDeleted: false,
+                } as MergeResult);
+              }
               continue;
             }
 
@@ -3229,6 +3282,17 @@ export class ProjectEngine {
                 await store
                   .updateTask(taskId, { status: "awaiting-user-review", error: null })
                   .catch(() => undefined);
+              }
+              if (hasManualResolver && !forceManual) {
+                const latest = (await store.getTask(taskId).catch(() => task)) ?? task;
+                this.resolveMergeResolvers(taskId, {
+                  task: latest,
+                  branch: latest.branch ?? "",
+                  merged: false,
+                  noOp: true,
+                  worktreeRemoved: false,
+                  branchDeleted: false,
+                } as MergeResult);
               }
               continue;
             }
@@ -3753,7 +3817,7 @@ export class ProjectEngine {
               AI merge creates sessions via createResolvedAgentSession with the same Grok CLI no-visible-key auto-derive seam as chat/executor. Without pluginRunner, getRuntimeById("grok") is unavailable and grok-cli merger/fallback selections throw "Grok CLI models require the bundled Grok CLI runtime" even when chat works (ChatManager already receives engine.getPluginRunner()). Forward the engine PluginRunner so merge can route to the logged-in grok CLI like every other lane.
               */
               const mergerOptions = {
-                manual: hasManualResolver,
+                manual: forceManual,
                 pool,
                 usageLimitPauser,
                 agentStore,
@@ -3796,7 +3860,7 @@ export class ProjectEngine {
                 const liveWsGuard = await store.getTask(taskId).catch(() => null);
                 const settingsWsGuard = await store.getSettings().catch(() => ({}) as Settings);
                 if (
-                  !hasManualResolver
+                  !forceManual
                   && liveWsGuard
                   && resolveEffectiveAutoMerge(liveWsGuard, settingsWsGuard) !== true
                 ) {
@@ -3885,7 +3949,7 @@ export class ProjectEngine {
               const liveForGuard = await store.getTask(taskId).catch(() => null);
               const settingsForGuard = await store.getSettings().catch(() => settings);
               if (
-                !hasManualResolver
+                !forceManual
                 && liveForGuard
                 && resolveEffectiveAutoMerge(liveForGuard, settingsForGuard) !== true
               ) {

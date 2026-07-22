@@ -3585,6 +3585,14 @@ describe("allowInReviewMergeProcessing per-task autoMerge override", () => {
     await expect(gate({ autoMerge: false }, { autoMerge: true })).resolves.toBe(false);
   });
 
+  it("FUS-010: shared-branch exemption does not override explicit task.autoMerge=false", async () => {
+    await expect(gate(
+      { autoMerge: false, branchContext: { assignmentMode: "shared", groupId: "grp-1" } as Task["branchContext"] },
+      { autoMerge: true },
+      { status: "open" },
+    )).resolves.toBe(false);
+  });
+
   it("still exempts live shared-branch-group member integration when the global setting is off", async () => {
     await expect(gate(
       { branchContext: { assignmentMode: "shared", groupId: "grp-1" } as Task["branchContext"] },

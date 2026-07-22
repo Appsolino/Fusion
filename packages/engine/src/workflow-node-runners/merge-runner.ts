@@ -41,9 +41,12 @@ export function createMergeAttemptHandler(deps: MergeAttemptRunnerDeps): Workflo
 
 export function createMergeGateHandler(): WorkflowNodeHandler {
   return async (_node, ctx) => {
-    // FUS-010: use the canonical resolver so explicit task.autoMerge=false is never treated as on.
+    // FUS-010: canonical resolver. Pass through project autoMerge without coercing
+    // undefined→false (schema default is true; old gate used `!== false`). Callers
+    // should pass materialized store settings; missing settings fail closed only
+    // when both task and project/global slices are unset.
     const settingsSlice = {
-      autoMerge: (ctx.settings as Partial<Settings> | undefined)?.autoMerge === true,
+      autoMerge: (ctx.settings as Partial<Settings> | undefined)?.autoMerge,
     };
     const autoMerge = resolveEffectiveAutoMerge(ctx.task, settingsSlice);
     return {
