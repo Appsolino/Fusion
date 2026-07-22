@@ -15,7 +15,9 @@ name: PR Checks
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - appsolino/stable
 
 concurrency:
   group: pr-checks-${{ github.ref }}
