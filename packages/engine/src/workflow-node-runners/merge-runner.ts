@@ -1,4 +1,5 @@
 import type { Settings } from "@fusion/core";
+import { resolveEffectiveAutoMerge } from "@fusion/core";
 
 import type { WorkflowNodeHandler } from "../workflow-graph-executor.js";
 import type { WorkflowPrimitiveContext, WorkflowRuntimePrimitives } from "../runtime-primitives.js";
@@ -40,8 +41,11 @@ export function createMergeAttemptHandler(deps: MergeAttemptRunnerDeps): Workflo
 
 export function createMergeGateHandler(): WorkflowNodeHandler {
   return async (_node, ctx) => {
-    const settingsAutoMerge = (ctx.settings as Partial<Settings> | undefined)?.autoMerge;
-    const autoMerge = ctx.task.autoMerge !== false && settingsAutoMerge !== false;
+    // FUS-010: use the canonical resolver so explicit task.autoMerge=false is never treated as on.
+    const settingsSlice = {
+      autoMerge: (ctx.settings as Partial<Settings> | undefined)?.autoMerge === true,
+    };
+    const autoMerge = resolveEffectiveAutoMerge(ctx.task, settingsSlice);
     return {
       outcome: "success",
       value: autoMerge ? "auto-on" : "auto-off",

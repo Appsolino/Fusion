@@ -1100,6 +1100,7 @@ export {
   resolveTaskMergeTarget,
   AWAITING_APPROVAL_PAUSE_REASON,
   isTaskBlockedOnApproval,
+  type AutoMergeSettingsSlice,
   type MergeTargetResolution,
   type MergeTargetResolverOptions,
 } from "./task-merge.js";

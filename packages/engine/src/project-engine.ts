@@ -30,6 +30,7 @@ import {
   isSharedBranchGroupMemberIntegration,
   isWorkspaceTask,
   normalizeMergerMode,
+  resolveEffectiveAutoMerge,
   resolveEffectivePlannerOversightLevel,
   resolveEffectiveSettings,
   resolveMaxAutoMergeRetries,
@@ -2531,6 +2532,8 @@ export class ProjectEngine {
     // already gave up (verification cap, conflict-bounce cap, or non-conflict
     // error). The task is parked for human/follow-up intervention.
     if (task.status === "failed") return false;
+    // FUS-010 / FUS-029: human-review hold must not be auto-merged.
+    if (task.status === "awaiting-user-review" || task.status === "awaiting-approval") return false;
     return (
       (task.mergeRetries ?? 0) < maxAutoMergeRetries ||
       this.hasAutoHealableVerificationBufferFailure(task, maxAutoMergeRetries) ||
@@ -3183,7 +3186,50 @@ export class ProjectEngine {
               continue;
             }
             if (!(await this.allowInReviewMergeProcessing(task, settings, store))) {
-              runtimeLog.log(`Auto-merge skipping ${taskId} — autoMerge disabled`);
+              /*
+              FUS-010: stale queue entry discarded after re-resolving effective auto-merge.
+              Leave the PR open; do not mark failed; park explicit-false tasks for human review.
+              */
+              const effective = resolveEffectiveAutoMerge(task, settings);
+              runtimeLog.log(
+                `Auto-merge skipping ${taskId} — autoMerge disabled (effective=${effective}, task.autoMerge=${String(task.autoMerge)}, settings.autoMerge=${String(settings.autoMerge)})`,
+              );
+              await store
+                .logEntry(
+                  taskId,
+                  `AUTO_MERGE_DISABLED: automatic merge skipped; pull request remains open for human review (task.autoMerge=${String(task.autoMerge)}, settings.autoMerge=${String(settings.autoMerge)}, effective=${effective})`,
+                  "AutoMergeDisabled",
+                )
+                .catch(() => undefined);
+              if (effective === false && task.status !== "awaiting-user-review" && task.status !== "awaiting-approval") {
+                await store
+                  .updateTask(taskId, {
+                    status: "awaiting-user-review",
+                    error: null,
+                  })
+                  .catch(() => undefined);
+              }
+              continue;
+            }
+
+            /*
+            FUS-010 defense-in-depth: re-resolve immediately before any merge invocation.
+            Settings or task.autoMerge may have changed while the item was queued.
+            */
+            if (resolveEffectiveAutoMerge(task, settings) !== true) {
+              runtimeLog.log(`Auto-merge hard-guard blocked ${taskId} — effective auto-merge is not true`);
+              await store
+                .logEntry(
+                  taskId,
+                  `AUTO_MERGE_DISABLED: hard-guard blocked merge invocation; PR remains open for human review`,
+                  "AutoMergeDisabled",
+                )
+                .catch(() => undefined);
+              if (task.status !== "awaiting-user-review" && task.status !== "awaiting-approval") {
+                await store
+                  .updateTask(taskId, { status: "awaiting-user-review", error: null })
+                  .catch(() => undefined);
+              }
               continue;
             }
             if (task.paused && !task.mergeDetails?.mergeConfirmed) {
@@ -3746,6 +3792,38 @@ export class ProjectEngine {
                 // NOT finalize — it returns `allLanded:false`, which we surface as a
                 // WorkspacePartialLandError so the catch-block auto-retry consumes a
                 // mergeRetry and re-runs (skipping landed repos) up to MAX, then parks.
+                // FUS-010: hard-guard before workspace land.
+                const liveWsGuard = await store.getTask(taskId).catch(() => null);
+                const settingsWsGuard = await store.getSettings().catch(() => ({}) as Settings);
+                if (
+                  !hasManualResolver
+                  && liveWsGuard
+                  && resolveEffectiveAutoMerge(liveWsGuard, settingsWsGuard) !== true
+                ) {
+                  await store
+                    .logEntry(
+                      taskId,
+                      `AUTO_MERGE_DISABLED: hard-guard blocked workspace land; PR remains open for human review`,
+                      "AutoMergeDisabled",
+                    )
+                    .catch(() => undefined);
+                  if (
+                    liveWsGuard.status !== "awaiting-user-review"
+                    && liveWsGuard.status !== "awaiting-approval"
+                  ) {
+                    await store
+                      .updateTask(taskId, { status: "awaiting-user-review", error: null })
+                      .catch(() => undefined);
+                  }
+                  return {
+                    task: (await store.getTask(taskId).catch(() => liveWsGuard)) ?? liveWsGuard,
+                    branch: liveWsGuard.branch ?? "",
+                    merged: false,
+                    noOp: true,
+                    worktreeRemoved: false,
+                    branchDeleted: false,
+                  } as MergeResult;
+                }
                 const settings = await store.getSettings().catch(() => ({}) as Settings);
                 const workspaceResult = await landWorkspaceTask(
                   store,
@@ -3801,6 +3879,39 @@ export class ProjectEngine {
                 runtimeLog.warn(
                   'merger.mode "deterministic" is deprecated and inert: all merges now use the unified AI merge path (runAiMerge). Remove the setting; the legacy aiMergeTask pipeline is soft-deprecated.',
                 );
+              }
+              // FUS-010: final hard-guard immediately before the merge invocation.
+              // Reload task + settings so a queued item cannot race past a task.autoMerge=false flip.
+              const liveForGuard = await store.getTask(taskId).catch(() => null);
+              const settingsForGuard = await store.getSettings().catch(() => settings);
+              if (
+                !hasManualResolver
+                && liveForGuard
+                && resolveEffectiveAutoMerge(liveForGuard, settingsForGuard) !== true
+              ) {
+                await store
+                  .logEntry(
+                    taskId,
+                    `AUTO_MERGE_DISABLED: hard-guard blocked merge invocation immediately before runAiMerge; PR remains open for human review`,
+                    "AutoMergeDisabled",
+                  )
+                  .catch(() => undefined);
+                if (
+                  liveForGuard.status !== "awaiting-user-review"
+                  && liveForGuard.status !== "awaiting-approval"
+                ) {
+                  await store
+                    .updateTask(taskId, { status: "awaiting-user-review", error: null })
+                    .catch(() => undefined);
+                }
+                return {
+                  task: (await store.getTask(taskId).catch(() => liveForGuard)) ?? liveForGuard,
+                  branch: liveForGuard.branch ?? "",
+                  merged: false,
+                  noOp: true,
+                  worktreeRemoved: false,
+                  branchDeleted: false,
+                } as MergeResult;
               }
               const mergeOptionsWithSettings = {
                 ...mergerOptions,

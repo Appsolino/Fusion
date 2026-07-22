@@ -64,6 +64,11 @@ describe("resolveEffectiveAutoMerge", () => {
     expect(resolveEffectiveAutoMerge({ autoMerge: undefined }, { autoMerge: false })).toBe(false);
   });
 
+  it("treats null like undefined for inheritance (never as false-via-null coercion bug)", () => {
+    expect(resolveEffectiveAutoMerge({ autoMerge: null as unknown as undefined }, { autoMerge: true })).toBe(true);
+    expect(resolveEffectiveAutoMerge({ autoMerge: null as unknown as undefined }, { autoMerge: false })).toBe(false);
+  });
+
   it("tracks live global toggles while task value remains undefined", () => {
     const task = { autoMerge: undefined };
     expect(resolveEffectiveAutoMerge(task, { autoMerge: true })).toBe(true);
@@ -71,10 +76,22 @@ describe("resolveEffectiveAutoMerge", () => {
     expect(resolveEffectiveAutoMerge(task, { autoMerge: true })).toBe(true);
   });
 
-  it("treats provenance as metadata and resolves solely from the value", () => {
+  it("honors optional globalSettings when project slice is not decisive", () => {
+    // Project true wins before global is consulted.
+    expect(resolveEffectiveAutoMerge({ autoMerge: undefined }, { autoMerge: true }, { autoMerge: false })).toBe(true);
+    expect(resolveEffectiveAutoMerge({ autoMerge: undefined }, { autoMerge: false }, { autoMerge: true })).toBe(false);
+    // Task false always wins.
+    expect(resolveEffectiveAutoMerge({ autoMerge: false }, { autoMerge: true }, { autoMerge: true })).toBe(false);
+  });
+
+  it("tracks provenance as metadata and resolves solely from the value", () => {
     expect(resolveEffectiveAutoMerge({ autoMerge: true, autoMergeProvenance: "legacy-stamp" }, { autoMerge: false })).toBe(true);
     expect(resolveEffectiveAutoMerge({ autoMerge: false, autoMergeProvenance: "user" }, { autoMerge: true })).toBe(false);
     expect(resolveEffectiveAutoMerge({ autoMerge: undefined, autoMergeProvenance: undefined }, { autoMerge: true })).toBe(true);
+  });
+
+  it("FUS-010 APP-002 fixture: task false + project true => false", () => {
+    expect(resolveEffectiveAutoMerge({ autoMerge: false }, { autoMerge: true })).toBe(false);
   });
 });
 
@@ -95,10 +112,24 @@ describe("allowsAutoMergeProcessing", () => {
     expect(allowsAutoMergeProcessing({ autoMerge: false, autoMergeProvenance: "user" }, { autoMerge: false })).toBe(false);
   });
 
-  it("lets everything through when the global setting is on — explicit false still flows so the merger can park it manual-required", () => {
+  it("FUS-010: blocks explicit task false even when project/global auto-merge is on", () => {
     expect(allowsAutoMergeProcessing({ autoMerge: undefined }, { autoMerge: true })).toBe(true);
     expect(allowsAutoMergeProcessing({ autoMerge: true }, { autoMerge: true })).toBe(true);
-    expect(allowsAutoMergeProcessing({ autoMerge: false }, { autoMerge: true })).toBe(true);
+    expect(allowsAutoMergeProcessing({ autoMerge: false }, { autoMerge: true })).toBe(false);
+    expect(allowsAutoMergeProcessing({ autoMerge: false, autoMergeProvenance: "user" }, { autoMerge: true })).toBe(false);
+  });
+
+  it("APP-002 regression fixture: in-review failed + autoMerge false + project true is not processable", () => {
+    expect(
+      allowsAutoMergeProcessing(
+        {
+          autoMerge: false,
+          autoMergeProvenance: "user",
+          prInfo: prInfo({ number: 19, status: "open" }),
+        },
+        { autoMerge: true },
+      ),
+    ).toBe(false);
   });
 
   it("blocks an open or draft manually-created PR even when global auto-merge is on", () => {
