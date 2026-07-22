@@ -13,6 +13,7 @@ describe("interpreter merge seam", () => {
   function bareEngine(extra: Record<string, unknown> = {}): any {
     return Object.assign(Object.create(ProjectEngine.prototype), {
       manualMergeResolvers: new Map<string, unknown[]>(),
+      forceManualMergeTaskIds: new Set<string>(),
       ...extra,
     });
   }
@@ -77,12 +78,17 @@ describe("interpreter merge seam", () => {
       expect(onMerge).not.toHaveBeenCalled(); // the human "merge now" bypass is never invoked
     });
 
-    it("routes through onMerge when the task is auto-merge eligible", async () => {
-      const onMerge = vi.fn(async () => ({ merged: true, branch: "feat" }) as any);
-      const fakeEngine = fakeEngineWith({ autoEligible: true, onMerge });
+    it("routes through enqueueMergeAwait (not forceManual onMerge) when auto-merge eligible", async () => {
+      const enqueueMergeAwait = vi.fn(async () => ({ merged: true, branch: "feat" }) as any);
+      const onMerge = vi.fn();
+      const fakeEngine = {
+        ...fakeEngineWith({ autoEligible: true, onMerge }),
+        enqueueMergeAwait,
+      };
       const result = await (ProjectEngine.prototype as any).requestInterpreterMerge.call(fakeEngine, "FN-3");
 
-      expect(onMerge).toHaveBeenCalledWith("FN-3", {});
+      expect(enqueueMergeAwait).toHaveBeenCalledWith("FN-3", {});
+      expect(onMerge).not.toHaveBeenCalled();
       expect(result.merged).toBe(true);
     });
 

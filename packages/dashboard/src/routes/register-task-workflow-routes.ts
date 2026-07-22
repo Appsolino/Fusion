@@ -43,6 +43,7 @@ import {
   isEphemeralAgent,
   parseExplicitDuplicateMarker,
   isWorkflowColumnsEnabled,
+  resolveEffectiveAutoMerge,
   resolveWorkflowIrForTask,
   workflowHasColumn,
   columnHasFlag,
@@ -2496,11 +2497,27 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
           isInReviewMergeRetryStall ||
           isStaleMergeActiveRetry);
       /*
+      FUS-029: Retry on an already-parked human-review task with auto-merge disabled
+      must be idempotent (do not 400; do not enqueue merge).
+      */
+      const settingsForAutoMergeRetry = await scopedStore.getSettings().catch(() => ({ autoMerge: false }));
+      const isAutoMergeDisabledHumanReviewRetry =
+        task.column === "in-review" &&
+        task.status === "awaiting-user-review" &&
+        resolveEffectiveAutoMerge(task, settingsForAutoMergeRetry) !== true;
+      /*
       FNXC:MissingWorktreeRetry 2026-07-10-18:32:
       Dashboard retry must support the upstream #1992 signature where the task is stranded in a merge-active status but the durable failure is an unusable worktree session-start assertion. Only that classifier bypasses the merge-active status gate.
       */
       const isMissingWorktreeSessionRetry = isInReviewMissingWorktreeSessionStartFailure(task);
-      if (task.status !== "failed" && task.status !== "stuck-killed" && !retrySpecification && !isInReviewRetry && !isMissingWorktreeSessionRetry) {
+      if (
+        task.status !== "failed"
+        && task.status !== "stuck-killed"
+        && !retrySpecification
+        && !isInReviewRetry
+        && !isMissingWorktreeSessionRetry
+        && !isAutoMergeDisabledHumanReviewRetry
+      ) {
         throw badRequest(`Task is not in a retryable state (current status: ${task.status || 'none'})`);
       }
 
@@ -2513,6 +2530,27 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       const autoPauseClearPatch = buildAutoPauseClearPatch(task);
       const clearedDeadlockAutoPause = Object.keys(autoPauseClearPatch).length > 0;
       const retryLogSuffix = clearedDeadlockAutoPause ? ", cleared deadlock auto-pause" : "";
+
+      if (isAutoMergeDisabledHumanReviewRetry) {
+        await scopedStore.logEntry(
+          req.params.id,
+          `AUTO_MERGE_DISABLED: Retry idempotent — task already awaiting human review; automatic merge remains disabled; PR remains open.${retryLogSuffix}`,
+          "AutoMergeDisabled",
+        );
+        const updated = await scopedStore.getTask(req.params.id);
+        res.json({
+          ...updated,
+          retryResult: {
+            code: "AUTO_MERGE_DISABLED",
+            message:
+              "Automatic merge is disabled for this task; the pull request remains open for human review.",
+            enqueuedMerge: false,
+            status: "awaiting-user-review",
+            idempotent: true,
+          },
+        });
+        return;
+      }
 
       if (isMissingWorktreeSessionRetry) {
         /*
@@ -2566,6 +2604,38 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
           );
           const updated = await scopedStore.moveTask(req.params.id, reboundColumn, { preserveProgress: true });
           res.json(updated);
+          return;
+        }
+
+        // FUS-029: when effective auto-merge is false, clear the failed park into
+        // human review without re-arming the merge queue (do not reset mergeRetries).
+        const settingsForRetry = await scopedStore.getSettings().catch(() => ({ autoMerge: false }));
+        if (resolveEffectiveAutoMerge(task, settingsForRetry) !== true) {
+          await scopedStore.updateTask(req.params.id, {
+            status: "awaiting-user-review",
+            error: null,
+            // Preserve autoMerge=false and mergeRetries; do not call buildManualRetryResetPatch
+            // with resetMergeRetries — that would only matter if auto-merge were eligible.
+            ...autoPauseClearPatch,
+          });
+          await scopedStore.logEntry(
+            req.params.id,
+            `AUTO_MERGE_DISABLED: Retry cleared failure into human review without enqueueing merge ` +
+              `(task.autoMerge=${String(task.autoMerge)}, settings.autoMerge=${String(settingsForRetry.autoMerge)}). ` +
+              `Automatic merge is disabled for this task; the pull request remains open for human review.${retryLogSuffix}`,
+            "AutoMergeDisabled",
+          );
+          const updated = await scopedStore.getTask(req.params.id);
+          res.json({
+            ...updated,
+            retryResult: {
+              code: "AUTO_MERGE_DISABLED",
+              message:
+                "Automatic merge is disabled for this task; the pull request remains open for human review.",
+              enqueuedMerge: false,
+              status: "awaiting-user-review",
+            },
+          });
           return;
         }
 

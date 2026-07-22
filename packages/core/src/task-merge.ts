@@ -35,41 +35,64 @@ function isFusionSiblingBranch(branch: string): boolean {
   return FUSION_SIBLING_BRANCH_RE.test(branch);
 }
 
+/** Minimal settings slice required by the canonical auto-merge resolver. */
+export type AutoMergeSettingsSlice = {
+  autoMerge?: boolean | null;
+};
+
 /**
- * Resolves a task's effective auto-merge behavior.
- * Explicit per-task values (`true`/`false`) take precedence over the global
- * setting; when `task.autoMerge` is `undefined`, falls back to
- * `settings.autoMerge`. `autoMergeProvenance` is metadata used by legacy-stamp
- * remediation; this resolver intentionally keys only on the value.
+ * Canonical effective auto-merge resolver (FUS-010).
+ *
+ * Precedence (strict boolean; never treats `false` as undefined/inherited):
+ * 1. `task.autoMerge === false` → `false` (non-negotiable)
+ * 2. `task.autoMerge === true` → `true` (explicit opt-in; may override project/global off — FN-1356 / #1356)
+ * 3. `projectSettings.autoMerge === false` → `false`
+ * 4. `projectSettings.autoMerge === true` → `true`
+ * 5. else `globalSettings?.autoMerge` when provided; otherwise `false`
+ *
+ * Policy: project/global false is an **inheritance default**, not an administrative
+ * hard prohibition — explicit `task.autoMerge === true` still wins (FN-1356).
+ * Explicit `task.autoMerge === false` is the non-negotiable operator opt-out.
+ *
+ * `null`/`undefined` task values inherit. Two-arg call sites pass the active
+ * project store settings as `projectSettings` (Fusion's historical surface).
+ * Production `getSettings()` materializes schema default `autoMerge: true`;
+ * incomplete slices without a global arg fail closed to `false`.
+ * `autoMergeProvenance` is metadata only and does not affect the result.
  */
 export function resolveEffectiveAutoMerge(
   task: Pick<Task, "autoMerge">,
-  settings: Pick<Settings, "autoMerge">,
+  projectSettings: AutoMergeSettingsSlice,
+  globalSettings?: AutoMergeSettingsSlice | null,
 ): boolean {
-  return task.autoMerge ?? settings.autoMerge;
+  if (task.autoMerge === false) return false;
+  if (task.autoMerge === true) return true;
+  if (projectSettings.autoMerge === false) return false;
+  if (projectSettings.autoMerge === true) return true;
+  if (globalSettings?.autoMerge === true) return true;
+  if (globalSettings?.autoMerge === false) return false;
+  return false;
 }
 
 /**
- * Gate for auto-merge *processing* (engine enqueue + self-healing sweeps).
- * Additive relative to the global setting: when `settings.autoMerge` is on,
- * every task flows through — tasks with an explicit `autoMerge: false` are
- * parked as `manual-required` downstream by the merger, not silently skipped
- * here. When the global setting is off, only tasks with a per-task
- * `autoMerge: true` value proceed; legacy stamp provenance is surfaced and
- * reconciled separately. Distinct from
- * `resolveEffectiveAutoMerge`, which resolves the effective boolean and would
- * (incorrectly for processing gates) starve the manual-required parking path.
+ * Gate for auto-merge *processing* (engine enqueue + self-healing sweeps +
+ * merge-worker admission).
+ *
+ * FUS-010: requires {@link resolveEffectiveAutoMerge} === true. Explicit
+ * `task.autoMerge === false` must never enter automatic merge processing, even
+ * when project/global auto-merge is on. Manual Merge / onMerge resolvers bypass
+ * this gate at their call sites.
  *
  * FNXC:PrAutoMergeGate 2026-06-28-00:33:
  * FN-7182: a dashboard-created open PR is a human handoff, so exclude it from all automatic merge processing and self-healing recovery until the human merges or closes the PR.
- * This mirrors the `autoMerge:false` in-review gate while preserving manual Merge PR/manual done paths and pipeline PRs without `manual: true`.
  * Shared-branch member integration still bypasses this function via `allowInReviewMergeProcessing(... ) || isLiveSharedBranchGroupMemberIntegration(task, group)`, so a manual PR on a live shared member can still be integrated to its group branch; group-to-default promotion remains gated separately.
  */
 export function allowsAutoMergeProcessing(
   task: Pick<Task, "autoMerge" | "prInfo" | "prInfos">,
-  settings: Pick<Settings, "autoMerge">,
+  settings: AutoMergeSettingsSlice,
+  globalSettings?: AutoMergeSettingsSlice | null,
 ): boolean {
-  return (settings.autoMerge !== false || task.autoMerge === true) && !taskHasManualOpenPullRequest(task);
+  return resolveEffectiveAutoMerge(task, settings, globalSettings) === true && !taskHasManualOpenPullRequest(task);
 }
 
 // Resolves group → default-branch PROMOTION auto-merge. See resolveEffectiveAutoMerge for the per-task member→group-integration step; the two are distinct and must not be conflated.

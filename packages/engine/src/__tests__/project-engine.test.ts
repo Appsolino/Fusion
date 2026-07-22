@@ -3580,9 +3580,17 @@ describe("allowInReviewMergeProcessing per-task autoMerge override", () => {
     await expect(gate({ autoMerge: false }, { autoMerge: false })).resolves.toBe(false);
   });
 
-  it("keeps everything flowing when the global setting is on — explicit autoMerge:false is parked manual-required downstream", async () => {
+  it("FUS-010: blocks explicit autoMerge:false even when the global setting is on", async () => {
     await expect(gate({}, { autoMerge: true })).resolves.toBe(true);
-    await expect(gate({ autoMerge: false }, { autoMerge: true })).resolves.toBe(true);
+    await expect(gate({ autoMerge: false }, { autoMerge: true })).resolves.toBe(false);
+  });
+
+  it("FUS-010: shared-branch exemption does not override explicit task.autoMerge=false", async () => {
+    await expect(gate(
+      { autoMerge: false, branchContext: { assignmentMode: "shared", groupId: "grp-1" } as Task["branchContext"] },
+      { autoMerge: true },
+      { status: "open" },
+    )).resolves.toBe(false);
   });
 
   it("still exempts live shared-branch-group member integration when the global setting is off", async () => {
@@ -3682,10 +3690,10 @@ describe("enqueueEligibleInReviewTasks honors per-task autoMerge override (share
     expect(enqueueSpy).not.toHaveBeenCalledWith("FN-plain");
   });
 
-  it("still enqueues a task with autoMerge:false when the global setting is on (parked manual-required downstream)", async () => {
+  it("FUS-010: does not enqueue a task with autoMerge:false when the global setting is on", async () => {
     const { enqueueSpy, run } = setup();
     const count = await run([inReview("FN-explicit-false", { autoMerge: false })], { autoMerge: true });
-    expect(count).toBe(1);
-    expect(enqueueSpy).toHaveBeenCalledWith("FN-explicit-false");
+    expect(count).toBe(0);
+    expect(enqueueSpy).not.toHaveBeenCalled();
   });
 });

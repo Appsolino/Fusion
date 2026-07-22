@@ -1,4 +1,5 @@
 import type { Settings } from "@fusion/core";
+import { resolveEffectiveAutoMerge } from "@fusion/core";
 
 import type { WorkflowNodeHandler } from "../workflow-graph-executor.js";
 import type { WorkflowPrimitiveContext, WorkflowRuntimePrimitives } from "../runtime-primitives.js";
@@ -40,8 +41,14 @@ export function createMergeAttemptHandler(deps: MergeAttemptRunnerDeps): Workflo
 
 export function createMergeGateHandler(): WorkflowNodeHandler {
   return async (_node, ctx) => {
-    const settingsAutoMerge = (ctx.settings as Partial<Settings> | undefined)?.autoMerge;
-    const autoMerge = ctx.task.autoMerge !== false && settingsAutoMerge !== false;
+    // FUS-010: canonical resolver. Pass through project autoMerge without coercing
+    // undefined→false (schema default is true; old gate used `!== false`). Callers
+    // should pass materialized store settings; missing settings fail closed only
+    // when both task and project/global slices are unset.
+    const settingsSlice = {
+      autoMerge: (ctx.settings as Partial<Settings> | undefined)?.autoMerge,
+    };
+    const autoMerge = resolveEffectiveAutoMerge(ctx.task, settingsSlice);
     return {
       outcome: "success",
       value: autoMerge ? "auto-on" : "auto-off",
