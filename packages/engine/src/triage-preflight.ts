@@ -29,6 +29,21 @@ export type ProbeExec = (command: string, options?: { cwd?: string; timeoutMs?: 
 
 const BUG_FIX_REGEX = /typecheck error|compile error|broken|regression|lint error/i;
 
+/** Fusion CLI/tool identifiers are orchestration helpers, not target-repo constructs. */
+const FUSION_TOOL_NAME = /^fn_[a-z][a-z0-9_]*$/i;
+
+/**
+ * Bare root documentation / manifest filenames are frequently cited as context,
+ * not as missing code symbols. Treating them as greppable identifiers under a
+ * hardcoded `packages/` tree produces false ghost-bug archives.
+ */
+const ROOT_DOC_OR_MANIFEST =
+  /^(readme(?:\.\w+)?|package\.json|changelog(?:\.\w+)?|license(?:\.\w+)?|tsconfig(?:\.\w+)?\.json|cargo\.toml|go\.mod|pyproject\.toml|gemfile|composer\.json)$/i;
+
+/** Source-ish relative paths outside the historical Fusion-only `packages/` prefix. */
+const REPO_FILE_PATH =
+  /(?<![A-Za-z0-9_./-])((?:packages|apps|src|lib|services|server|client|web|api|backend|frontend|docs)\/[\w./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|mts|cts|md|json))(?::(\d+))?/g;
+
 export function isBugFixShape(task: { title: string | null; description: string }): boolean {
   const title = task.title?.trim() ?? "";
   const description = task.description?.trim() ?? "";
@@ -37,10 +52,37 @@ export function isBugFixShape(task: { title: string | null; description: string 
   return BUG_FIX_REGEX.test(`${title}\n${description}`);
 }
 
+/**
+ * Drop constructs that are not useful as definitive "exists on main" probes.
+ * Preserves real identifiers / paths / simple call forms for ghost-bug detection.
+ */
+export function shouldIgnoreCitedConstruct(construct: CitedConstruct): boolean {
+  const raw = construct.raw.trim();
+  if (!raw) return true;
+  if (construct.kind === "command") return false;
+  if (construct.kind === "snippet") {
+    // Snippets are already line-bounded; only drop empty leftovers.
+    return false;
+  }
+  if (FUSION_TOOL_NAME.test(raw)) return true;
+  if (ROOT_DOC_OR_MANIFEST.test(raw)) return true;
+  // Full formatted expressions / object literals are not greppable identifiers.
+  if (raw.includes("{") || raw.includes("}") || raw.includes(";") || raw.includes("\n")) return true;
+  const open = raw.indexOf("(");
+  if (open >= 0) {
+    const close = raw.lastIndexOf(")");
+    const args = close > open ? raw.slice(open + 1, close) : raw.slice(open + 1);
+    // `foo()` / `foo.bar()` stay; `updateMany({ where: ... })` is ignored.
+    if (args.length > 0 && /[{}=,]/.test(args)) return true;
+  }
+  return false;
+}
+
 export function extractCitedConstructs(prompt: string): CitedConstruct[] {
   const seen = new Set<string>();
   const constructs: CitedConstruct[] = [];
   const add = (construct: CitedConstruct) => {
+    if (shouldIgnoreCitedConstruct(construct)) return;
     if (construct.raw.trim().length === 0) return;
     const key = `${construct.kind}:${construct.raw}:${construct.filePath ?? ""}:${construct.line ?? ""}`;
     if (seen.has(key) || constructs.length >= 20) return;
@@ -56,8 +98,7 @@ export function extractCitedConstructs(prompt: string): CitedConstruct[] {
     }
   }
 
-  const fileRegex = /(packages\/[\w./-]+\.(?:ts|tsx|js|mjs|cjs|md))(?::(\d+))?/g;
-  for (const match of prompt.matchAll(fileRegex)) {
+  for (const match of prompt.matchAll(REPO_FILE_PATH)) {
     const filePath = match[1];
     const line = match[2] ? Number.parseInt(match[2], 10) : undefined;
     add({ kind: "identifier", raw: filePath, filePath, line });
@@ -82,6 +123,26 @@ export function extractCitedConstructs(prompt: string): CitedConstruct[] {
   return constructs;
 }
 
+function buildProbeCommand(construct: CitedConstruct): string {
+  if (construct.kind === "command") {
+    return construct.raw;
+  }
+
+  // Path citations: prove the file exists on HEAD. Do not require the path string
+  // to also appear as content inside the file.
+  if (construct.filePath) {
+    // Quote the full HEAD:path object name so shell metacharacters cannot split it.
+    return `git cat-file -e ${JSON.stringify(`HEAD:${construct.filePath}`)} && echo FOUND || true`;
+  }
+
+  // Repo-wide search — do not hardcode Fusion's packages/ layout.
+  if (construct.kind === "identifier" || construct.kind === "snippet") {
+    return `git grep -nF -- ${JSON.stringify(construct.raw)} || true`;
+  }
+
+  return construct.raw;
+}
+
 export async function probeCitedConstructs(
   constructs: CitedConstruct[],
   opts: { cwd: string; timeoutMs?: number; exec: ProbeExec },
@@ -91,19 +152,7 @@ export async function probeCitedConstructs(
 
   for (const construct of constructs) {
     try {
-      let command = "";
-      if (construct.kind === "identifier") {
-        if (construct.filePath) {
-          command = `git show HEAD:${construct.filePath} | grep -nF ${JSON.stringify(construct.raw)} || true`;
-        } else {
-          command = `git grep -nF -- ${JSON.stringify(construct.raw)} packages/ || true`;
-        }
-      } else if (construct.kind === "snippet") {
-        command = `git grep -nF -- ${JSON.stringify(construct.raw)} packages/ || true`;
-      } else {
-        command = construct.raw;
-      }
-
+      const command = buildProbeCommand(construct);
       const { stdout, stderr } = await opts.exec(command, { cwd: opts.cwd, timeoutMs });
       if (construct.kind === "command") {
         // FN-4892: command probes are intentionally non-definitive here because
