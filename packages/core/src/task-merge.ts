@@ -36,7 +36,9 @@ function isFusionSiblingBranch(branch: string): boolean {
 }
 
 /** Minimal settings slice required by the canonical auto-merge resolver. */
-export type AutoMergeSettingsSlice = Pick<Settings, "autoMerge">;
+export type AutoMergeSettingsSlice = {
+  autoMerge?: boolean | null;
+};
 
 /**
  * Canonical effective auto-merge resolver (FUS-010).
