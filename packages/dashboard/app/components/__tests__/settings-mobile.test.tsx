@@ -42,6 +42,7 @@ const defaultSettings = {
 
 vi.mock("../../api", () => ({
   fetchProjects: vi.fn(() => Promise.resolve([])),
+  fetchPlugins: vi.fn(() => Promise.resolve([])),
   fetchGitRemotes: vi.fn(() => Promise.resolve({ remotes: [] })),
   fetchGitRemotesDetailed: vi.fn(() => Promise.resolve([])),
   fetchGitBranches: vi.fn(() => Promise.resolve([])),
@@ -117,6 +118,7 @@ vi.mock("../../api", () => ({
   fetchSystemInfo: vi.fn(() => Promise.resolve({ supervised: true, restartSupported: true })),
   requestSystemRestart: vi.fn(() => Promise.resolve({ scheduled: true })),
   fetchGlobalSettings: vi.fn(() => Promise.resolve({ ...defaultSettings })),
+  listDiscussionCategories: vi.fn(() => Promise.resolve({ categories: [] })),
   // SettingsModal renders ProjectDefaultWorkflowField → WorkflowSelector, which loads these on mount.
   fetchWorkflows: vi.fn(() => Promise.resolve([])),
   fetchProjectDefaultWorkflow: vi.fn(() => Promise.resolve({ workflowId: null })),
@@ -402,6 +404,7 @@ describe("SettingsModal mobile adaptations", () => {
     expect(picker.getAttribute("aria-label")).toBe("Settings Section");
     expect(container.querySelector('label[for="settings-mobile-section"]')).toBeNull();
     expect(queryByText("Settings Section", { selector: "label" })).toBeNull();
+    expect(picker.closest(".settings-mobile-section-picker")?.querySelector(".settings-scope-icon")).toBeNull();
   });
 
   /*
@@ -539,7 +542,6 @@ describe("SettingsModal mobile adaptations", () => {
     expect(queryByLabelText("Push Remote")).toBeNull();
     expect(queryByText("Git remote to push to")).toBeNull();
 
-    await user.click(getByRole("button", { name: "Save" }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalled());
 
     const payload = vi.mocked(updateSettings).mock.calls[0][0] as Record<string, unknown>;
@@ -783,12 +785,21 @@ describe("SettingsModal mobile adaptations", () => {
     expectMobileRule(css, ".settings-modal .modal-actions", "padding-block: var(--space-xs);");
     expectMobileRule(css, ".settings-modal .modal-actions", "flex-wrap: nowrap;");
     expectMobileRule(css, ".settings-modal .modal-actions", "align-items: center;");
+    // Mobile footer is a centered button cluster (not the desktop left/right edge split).
+    expectMobileRule(css, ".settings-modal .modal-actions", "justify-content: center;");
+    expectMobileRule(css, ".settings-modal .modal-actions", "justify-content: safe center;");
+    expectMobileRule(css, ".settings-modal .modal-actions", "gap: var(--space-sm);");
     expectMobileRule(css, ".settings-modal .modal-actions", "overflow-x: auto;");
     expectMobileRule(css, ".settings-modal .modal-actions-left", "align-items: center;");
+    expectMobileRule(css, ".settings-modal .modal-actions-left", "margin-right: 0;");
+    expectMobileRule(css, ".settings-modal .modal-actions-left", "gap: var(--space-xs);");
     expectMobileRule(css, ".settings-modal .modal-actions-right", "align-items: center;");
+    expectMobileRule(css, ".settings-modal .modal-actions-right", "margin-left: 0;");
+    expectMobileRule(css, ".settings-modal .modal-actions-right", "gap: var(--space-xs);");
     expectMobileRule(css, ".settings-modal .settings-modal-footer-version", "align-self: center;");
     expectMobileRule(css, ".settings-modal .settings-modal-footer-version", "flex: 0 0 auto;");
     expectMobileRule(css, ".settings-modal .settings-modal-footer-version", "min-width: max-content;");
+    expectMobileRule(css, ".settings-modal .settings-modal-footer-version", "margin-right: 0;");
     expectMobileRule(css, ".settings-modal .settings-update-check", "align-items: center;");
     expectMobileRule(css, ".settings-modal .settings-update-check", "flex-wrap: wrap;");
     expectMobileRule(css, ".settings-modal .settings-version-check-btn", "line-height: 1;");

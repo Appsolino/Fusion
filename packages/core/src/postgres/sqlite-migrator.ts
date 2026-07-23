@@ -1069,12 +1069,25 @@ function normalizeLegacyJson(value: string | null, fallback: string): string {
   }
 }
 
+/** Build the canonical, path-scoped migration key for retained plugin state. */
+export function projectPluginSqliteMigrationKey(projectPath: string): string {
+  return `project-plugins:${resolve(projectPath)}`;
+}
+
 /** Backfill the split PostgreSQL plugin model once from retained project SQLite. */
 export async function migrateLegacyProjectPluginRows(
   db: PostgresJsDatabase<Record<string, never>>,
   sqlitePath: string,
   projectPath: string,
 ): Promise<void> {
+  const migrationKey = projectPluginSqliteMigrationKey(projectPath);
+  /*
+  FNXC:PostgresMigration 2026-07-22-12:00:
+  Plugin migration is independently terminal. Read its PostgreSQL marker before
+  even probing retained fusion.db so completed backups cannot add startup I/O.
+  The transaction repeats the check under its advisory lock for concurrent boot.
+  */
+  if (await isSqliteMigrationComplete(db, migrationKey)) return;
   await db.transaction(async (tx) => {
     await migrateLegacyProjectPluginRowsOnSession(
       tx as unknown as PostgresJsDatabase<Record<string, never>>,
@@ -1089,23 +1102,18 @@ async function migrateLegacyProjectPluginRowsOnSession(
   sqlitePath: string,
   projectPath: string,
 ): Promise<void> {
-  if (!sqliteTableExists(sqlitePath, "plugins")) return;
-  await acquireSqliteMigrationStateLock(db);
   const canonicalProjectPath = resolve(projectPath);
-  const migrationKey = `project-plugins:${canonicalProjectPath}`;
+  const migrationKey = projectPluginSqliteMigrationKey(projectPath);
+  await acquireSqliteMigrationStateLock(db);
   await ensureMigrationStateTable(db);
   await db.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${migrationKey}, 0))`);
-  const completed = (await db.execute(sql`
-    SELECT 1 AS complete
-    FROM public.${sql.identifier(SQLITE_MIGRATION_STATE_TABLE)}
-    WHERE migration_key = ${migrationKey} AND status = 'complete'
-    LIMIT 1
-  `)) as unknown as Array<{ complete: number }>;
+  const completed = await isSqliteMigrationComplete(db, migrationKey);
   /*
   FNXC:PluginLegacyMigration 2026-07-14-23:51:
   Retained SQLite is immutable cutover evidence, not a recurring authority. Once a project's plugin rows have been split into PostgreSQL install metadata and path-scoped state, a durable marker prevents later edits to fusion.db from changing live plugin behavior on restart.
   */
-  if (completed.length > 0) return;
+  if (completed) return;
+  if (!sqliteTableExists(sqlitePath, "plugins")) return;
   const sqlite = openSqlite(sqlitePath);
   let rows: LegacyProjectPluginMigrationRow[];
   try {
@@ -1412,33 +1420,15 @@ function classifyColumnType(pgCol: {
 }
 
 /*
-FNXC:PostgresMigrationNulSanitize 2026-07-17-10:05:
+FNXC:PostgresMigrationNulSanitize 2026-07-17-10:05 (moved to nul-sanitize.ts 2026-07-20):
 PostgreSQL rejects U+0000 in text/varchar ("invalid byte sequence" / "\u0000 cannot be converted to text") and in json/jsonb ("unsupported Unicode escape sequence"), but SQLite TEXT stores it freely, so legacy databases can contain NUL bytes that abort the first-boot auto-migration. Strip U+0000 from every migrated string — plain text cells, string values and object keys inside JSON documents, and opaque legacy-preservation text cells — rather than failing the cutover. Sanitization happens inside convertValue/tagLegacyCell so the content-checksum verification (computeSourceCanonicalRows reuses convertValue) compares the sanitized source against the sanitized target and still passes.
+
+stripNulChars/deepStripNulChars now live in ./nul-sanitize.js and are also
+reused by the live chat/mailbox write paths (async-chat-store.ts,
+async-message-store.ts), which can receive the same U+0000 byte from
+unsanitized tool output at runtime, not just from legacy SQLite migration.
 */
-// eslint-disable-next-line no-control-regex -- matching the NUL control character is the point
-const NUL_CHAR_RE = /\u0000/g;
-
-function stripNulChars(text: string): string {
-  return text.includes("\u0000") ? text.replace(NUL_CHAR_RE, "") : text;
-}
-
-/** Recursively strip U+0000 from all string values and object keys in a parsed JSON document. */
-function deepStripNulChars(value: unknown): unknown {
-  if (typeof value === "string") {
-    return stripNulChars(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map(deepStripNulChars);
-  }
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(
-        ([key, entry]) => [stripNulChars(key), deepStripNulChars(entry)],
-      ),
-    );
-  }
-  return value;
-}
+import { stripNulChars, deepStripNulChars } from "./nul-sanitize.js";
 
 /**
  * Convert a SQLite value to its PostgreSQL representation based on the column
