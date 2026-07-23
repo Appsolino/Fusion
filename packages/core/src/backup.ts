@@ -126,27 +126,25 @@ export class BackupManager {
   }
 
   async listBackupPairs(): Promise<BackupPairInfo[]> {
-    const projects = await this.listBackups();
-    const centrals = await this.listCentralBackups();
-    const pairs = new Map<string, BackupPairInfo>();
-
-    for (const project of projects) {
-      const key = getBackupPairKey(project.filename, false);
-      if (!key) continue;
-      const existing = pairs.get(key) ?? { timestamp: key };
-      existing.project = project;
-      pairs.set(key, existing);
-    }
-
-    for (const central of centrals) {
-      const key = getBackupPairKey(central.filename, true);
-      if (!key) continue;
-      const existing = pairs.get(key) ?? { timestamp: key };
-      existing.central = central;
-      pairs.set(key, existing);
-    }
-
-    return [...pairs.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    /*
+    FNXC:SqliteFinalRemoval 2026-06-26 / PR #1 review:
+    BackupManager is PostgreSQL-only. List dump pairs from PgBackupManager and
+    intentionally do NOT surface leftover SQLite `.db` files that may still sit
+    on disk after cutover. Coexistence is "PostgreSQL supersedes legacy": when
+    dump pairs exist they are returned; when none exist the listing is empty
+    rather than falling back to the removed SQLite file-copy scanner.
+    */
+    const pgPairs = await this.pgManager.listBackups();
+    return pgPairs
+      .map((pair) => ({
+        timestamp: pair.timestamp,
+        project: pair.project ? pgDumpResultToBackupFileInfo(pair.project) : undefined,
+        central:
+          pair.central && "filename" in pair.central
+            ? pgDumpResultToBackupFileInfo(pair.central)
+            : undefined,
+      }))
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }
 
   async cleanupOldBackups(): Promise<number> {
@@ -187,15 +185,6 @@ function formatTimestamp(date: Date): string {
   const minutes = String(date.getUTCMinutes()).padStart(2, "0");
   const seconds = String(date.getUTCSeconds()).padStart(2, "0");
   return `${year}-${month}-${day}-${hours}${minutes}${seconds}`;
-}
-
-function getBackupPairKey(filename: string, isCentral: boolean): string | null {
-  const pattern = isCentral
-    ? /^fusion-central(?:-pre-restore)?-(\d{4}-\d{2}-\d{2}-\d{6})(-\d+)?\.db$/
-    : /^(?:fusion|kb)(?:-pre-restore)?-(\d{4}-\d{2}-\d{2}-\d{6})(-\d+)?\.db$/;
-  const match = filename.match(pattern);
-  if (!match) return null;
-  return `${match[1]}${match[2] ?? ""}`;
 }
 
 export function validateBackupSchedule(schedule: string): boolean {
