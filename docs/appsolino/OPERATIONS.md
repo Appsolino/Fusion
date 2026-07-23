@@ -10,11 +10,43 @@
 ## Git remotes
 
 ```text
-origin    https://github.com/Anas966/Fusion.git
+origin    https://github.com/Appsolino/Fusion.git
 upstream  https://github.com/Runfusion/Fusion.git
-````
+```
 
 Never merge upstream changes directly into `appsolino/stable`.
+
+## Automated update cadence
+
+Host automation lives outside the mirrored `main` branch:
+
+`/srv/software-factory/integrations/fusion-update/`
+
+| Timer | Action |
+|-------|--------|
+| `fusion-mirror-upstream.timer` | Hourly fast-forward `Appsolino/main` ← `Runfusion/main` (no validation) |
+| `fusion-daily-candidate.timer` | Daily: at most one pinned `update/upstream-*` PR onto `appsolino/stable` |
+
+Routine human effort should be minutes, even when GitHub CI takes 20–40 minutes.
+Do **not** run Cursor-side Python loops that poll GitHub every 30 seconds.
+
+After pushing a candidate:
+
+```bash
+gh pr checks <n> --repo Appsolino/Fusion
+# or, if you must block a terminal once:
+# gh run watch <run-id> --repo Appsolino/Fusion --exit-status
+```
+
+### Validation tiers
+
+1. **Tier 1 (fast preflight, ~2–5 min)** — every candidate before push: `git diff --check`, FUS auto-merge preservation tests, static checks for `resolveEffectiveAutoMerge` / `AUTO_MERGE_DISABLED` / `appsolino/stable` CI filter / Appsolino migration registration.
+2. **Tier 2 (GitHub merge gate)** — Lint, Typecheck, Build, Gate (including PostgreSQL + boot smoke). Asynchronous.
+3. **Tier 3 (release)** — only after required PRs merge: production build, `fn backup --create`, restart, `/api/health`.
+
+Heavy local duplication of full gate/build/runtime (as used for the first large sync / harness fix) is **not** the default for routine updates.
+
+Protected paths that warrant deeper review: `task-merge.ts`, `project-engine.ts`, `merge-runner.ts`, dashboard retry routes, `packages/core/src/postgres/**`, backup code, `.github/workflows/**`, `docs/appsolino/**`, `pnpm-lock.yaml`.
 
 ## Check the installed source
 
@@ -75,30 +107,22 @@ engine.available = true
 
 `database.isRunning=false` is currently not a valid failure indicator.
 
-## Update procedure
+## Update procedure (manual fallback)
 
-Synchronize the clean main branch:
-
-```bash
-git fetch upstream --prune --tags
-git fetch origin --prune
-
-git switch main
-git merge --ff-only upstream/main
-git push origin main
-```
-
-Create an update branch from the current stable version:
+Prefer the hourly mirror + daily candidate timers. Manual mirror:
 
 ```bash
-git switch appsolino/stable
-
-UPDATE_BRANCH="update/upstream-$(date +%Y%m%d-%H%M)"
-git switch -c "$UPDATE_BRANCH"
-
-git merge --no-ff upstream/main \
-  -m "merge: update Fusion from upstream"
+/srv/software-factory/integrations/fusion-update/bin/mirror-upstream-main.sh
 ```
+
+Manual candidate (or emergency / security):
+
+```bash
+/srv/software-factory/integrations/fusion-update/bin/create-daily-candidate.sh
+```
+
+Pin one upstream SHA per candidate. If upstream moves during validation, do
+**not** restart the open candidate — the next daily batch absorbs it.
 
 Do not continue when unresolved conflicts exist:
 
@@ -108,20 +132,16 @@ git diff --name-only --diff-filter=U
 
 ## Update validation
 
-```bash
-export NODE_OPTIONS="--max-old-space-size=6144"
-export FUSION_CLI_FULL_PACKAGE=0
-unset CI
+**Routine no-conflict update:** Tier 1 locally → push → GitHub CI (Tier 2).
 
-pnpm install --frozen-lockfile
-pnpm audit --prod
-pnpm typecheck
-pnpm test:gate
-pnpm build
-```
+**Conflict-sensitive / protected paths:** Tier 1 plus focused local tests for
+touched areas → GitHub CI.
 
-A successful `test:gate` may still skip PostgreSQL tests. Always run an
-isolated embedded-PostgreSQL runtime test before promotion.
+**Migration or infrastructure update:** add disposable PostgreSQL + runtime
+smoke before merge/deploy.
+
+**Do not** default to full local `typecheck` + `test:gate` + `build` + clean-clone
+repetition on every upstream commit.
 
 Known excluded deployment paths must be reviewed separately:
 
@@ -133,18 +153,11 @@ headlessly. Production packaging must exclude unused components.
 
 ## Promotion
 
-Promote only after dependency review, typecheck, tests, build, and runtime
-health checks pass:
+Merge approved update PRs into `appsolino/stable` only after Tier 2 is green
+(and Tier 3 prep for release windows). Prefer merging related Appsolino fix PRs
+in the same release window, then deploy once.
 
-```bash
-git push -u origin "$UPDATE_BRANCH"
-
-git switch appsolino/stable
-git merge --ff-only "$UPDATE_BRANCH"
-git push origin appsolino/stable
-```
-
-Create a rollback tag:
+Create a rollback tag at the deployed SHA:
 
 ```bash
 TAG="appsolino-fusion-$(date +%Y%m%d)-$(git rev-parse --short HEAD)"
