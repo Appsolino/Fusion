@@ -348,6 +348,15 @@ so the readiness check never opens a session on the golden template.
 */
 /** Schema-qualified readiness marker table; a compile-time constant, safe to inline in SQL. */
 const GOLDEN_MARKER_QUALIFIED = "public._fusion_golden_templates";
+/**
+ * Global session advisory-lock key for creating {@link GOLDEN_MARKER_QUALIFIED}.
+ * Distinct golden names mean a lock keyed only on `goldenName` cannot serialize
+ * the shared `CREATE TABLE IF NOT EXISTS` across concurrent vitest processes
+ * that share one maintenance database — that race surfaces as
+ * `pg_type_typname_nsp_index` duplicate-key errors on the composite row type.
+ * Hold this lock only for marker-table DDL, never for the full golden schema build.
+ */
+const GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY = "fusion_pg_test_golden_marker_bootstrap";
 
 /** Lowercase-alnum, bounded suffix safe for a database identifier. */
 function sanitizeTemplateToken(raw: string): string {
@@ -437,9 +446,34 @@ async function withMaintenanceSql<T>(
   }
 }
 
+/**
+ * Serialize `CREATE TABLE IF NOT EXISTS` of the shared golden readiness marker
+ * across every maintenance session. Must use the same client for lock + DDL +
+ * unlock (session advisory locks). Does not swallow creation failures; always
+ * attempts unlock in `finally`.
+ */
+async function ensureGoldenMarkerTableOnClient(
+  client: ReturnType<typeof postgres>,
+  options?: { failAfterLock?: boolean },
+): Promise<void> {
+  await client`SELECT pg_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+  try {
+    if (options?.failAfterLock) {
+      throw new Error("injected golden-marker bootstrap failure");
+    }
+    await client.unsafe(
+      `CREATE TABLE IF NOT EXISTS ${GOLDEN_MARKER_QUALIFIED} (name text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now())`,
+    );
+  } finally {
+    await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+  }
+}
+
 /** Test-only lifecycle controls for deterministic template-state regression tests. */
 export const __pgTestTemplateTestHooks = {
   templateName: templateDbName,
+  goldenMarkerBootstrapLockKey: GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY,
+  goldenMarkerQualified: GOLDEN_MARKER_QUALIFIED,
   async templateExists(): Promise<boolean> {
     const templateName = templateDbName();
     return withMaintenanceSql(async (client) => {
@@ -460,6 +494,52 @@ export const __pgTestTemplateTestHooks = {
     await withMaintenanceSql(async (client) => {
       await client.unsafe(`DROP DATABASE IF EXISTS "${templateName}" WITH (FORCE)`);
       await client.unsafe(`CREATE DATABASE "${templateName}"`);
+    });
+  },
+  /** Ensure the shared golden marker table exists (opens its own maintenance session). */
+  async ensureGoldenMarkerTable(options?: { failAfterLock?: boolean }): Promise<void> {
+    await withMaintenanceSql(async (client) => {
+      await ensureGoldenMarkerTableOnClient(client, options);
+    });
+  },
+  async goldenMarkerTableExists(): Promise<boolean> {
+    return withMaintenanceSql(async (client) => {
+      const rows = await client<{ exists: boolean }[]>`
+        SELECT EXISTS (
+          SELECT 1
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relname = '_fusion_golden_templates'
+        ) AS exists
+      `;
+      return rows[0]?.exists === true;
+    });
+  },
+  /** Drop the shared marker table under the bootstrap lock (test isolation only). */
+  async dropGoldenMarkerTable(): Promise<void> {
+    await withMaintenanceSql(async (client) => {
+      await client`SELECT pg_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+      try {
+        await client.unsafe(`DROP TABLE IF EXISTS ${GOLDEN_MARKER_QUALIFIED}`);
+      } finally {
+        await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+      }
+    });
+  },
+  /**
+   * Return true if this session can immediately acquire the bootstrap lock
+   * (proves a prior failed init released it). Unlocks again when acquired.
+   */
+  async tryAcquireGoldenMarkerBootstrapLock(): Promise<boolean> {
+    return withMaintenanceSql(async (client) => {
+      const rows = await client<{ acquired: boolean }[]>`
+        SELECT pg_try_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY})) AS acquired
+      `;
+      const acquired = rows[0]?.acquired === true;
+      if (acquired) {
+        await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+      }
+      return acquired;
     });
   },
 };
@@ -516,10 +596,9 @@ function ensureGoldenTemplate(): Promise<string> {
     // the lock. A sibling fork blocks on pg_advisory_lock until the winner has
     // fully built the golden template and recorded its ready marker.
     await withMaintenanceSql(async (client) => {
-      // Ensure the readiness marker table exists before any read/write of it.
-      await client.unsafe(
-        `CREATE TABLE IF NOT EXISTS ${GOLDEN_MARKER_QUALIFIED} (name text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now())`,
-      );
+      // Serialize marker-table creation across ALL concurrent vitest processes
+      // that share this maintenance DB (lock key is constant, not per-golden).
+      await ensureGoldenMarkerTableOnClient(client);
       // Sweep templates orphaned by crashed/finished processes and drop marker
       // rows whose golden database no longer exists.
       const rows = await client<{ datname: string }[]>`
