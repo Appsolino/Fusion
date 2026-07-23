@@ -39,7 +39,6 @@
  * PostgreSQL. Run locally with PG on 5432 to exercise the PG paths.
  */
 
-import { exec } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -229,43 +228,66 @@ function uniqueDbName(prefix = "fusion_test"): string {
 
 /**
  * FNXC:FixPgTestsAndCi 2026-06-26-09:05:
- * Async admin DDL (CREATE/DROP DATABASE) via psql. Replaces the prior
- * execSync call that violated AGENTS.md's execSync ban (only short git
- * plumbing may use execSync) and could hang the vitest worker with no
- * timeout. Now uses async exec with a bounded timeout.
+ * Async admin DDL (CREATE/DROP DATABASE). Replaces the prior execSync call
+ * that violated AGENTS.md's execSync ban (only short git plumbing may use
+ * execSync) and could hang the vitest worker with no timeout.
  *
- * The statement is passed via stdin (`-f -`) to avoid shell-escaping hazards
- * on database names; the connection target comes from PG_TEST_URL_BASE so CI
- * can point at a non-default host/port/user without editing the harness.
+ * FNXC:PgTestHarness 2026-07-18-17:27:
+ * Do not shell out to `psql` for CREATE/DROP DATABASE. Under loaded engine
+ * suites, orphaned `psql -f -` children outlived the 30s test timeout and
+ * failed the vitest subprocess guard (workflow-graph-task-runner CU-U2).
+ * Route admin DDL through the same short-lived postgres.js maintenance
+ * connection as template lifecycle so no shell children are tracked.
+ * Bounded by Promise.race so a stuck catalog lock cannot hang the worker.
+ *
+ * FNXC:PgTestHarness 2026-07-22-03:15:
+ * Client-side Promise.race alone left in-flight `client.unsafe(statement)`
+ * running after timeout — a delayed DROP DATABASE WITH (FORCE) could still
+ * complete and kill later tests' connections. Own the maintenance client so
+ * timeout can SET statement_timeout (server cancel) and force-close the
+ * socket before the caller returns.
  */
-function adminExecAsync(statement: string, timeoutMs = 15_000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // Connect to the 'postgres' maintenance database on the same server.
-    const maintUrl = new URL(PG_TEST_URL_BASE);
-    maintUrl.pathname = "/postgres";
-    const args = [
-      `psql`,
-      `"${maintUrl.toString()}"`,
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-f",
-      "-",
-    ];
-    const child = exec(
-      args.join(" "),
-      { stdio: ["pipe", "pipe", "pipe"], env: process.env, timeout: timeoutMs },
-      (error, _stdout, stderr) => {
-        if (error) {
-          reject(new Error(`adminExec psql failed: ${error.message}\nstderr: ${stderr}`));
-          return;
-        }
-        resolve();
-      },
-    );
-    if (child.stdin) {
-      child.stdin.end(statement);
+async function adminExecAsync(statement: string, timeoutMs = 15_000): Promise<void> {
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let client: ReturnType<typeof postgres> | undefined;
+  try {
+    await Promise.race([
+      (async () => {
+        const maintUrl = new URL(PG_TEST_URL_BASE);
+        maintUrl.pathname = "/postgres";
+        client = postgres(maintUrl.toString(), {
+          max: 1,
+          prepare: false,
+          onnotice: () => {},
+        });
+        // Server-side cancel slightly before the JS race so PG stops the statement.
+        const serverTimeoutMs = Math.max(1_000, timeoutMs - 500);
+        await client.unsafe(`SET statement_timeout = ${serverTimeoutMs}`);
+        await client.unsafe(statement);
+      })(),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          // Force-close the socket so a late DROP/CREATE cannot outlive this call.
+          void client?.end({ timeout: 0 }).catch(() => {});
+          reject(new Error(`adminExec timed out after ${timeoutMs}ms: ${statement}`));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (timedOut) {
+      throw error;
     }
-  });
+    throw new Error(
+      `adminExec failed: ${error instanceof Error ? error.message : String(error)}\nstatement: ${statement}`,
+    );
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (client) {
+      await client.end({ timeout: 5 }).catch(() => {});
+    }
+  }
 }
 
 /**
@@ -326,6 +348,15 @@ so the readiness check never opens a session on the golden template.
 */
 /** Schema-qualified readiness marker table; a compile-time constant, safe to inline in SQL. */
 const GOLDEN_MARKER_QUALIFIED = "public._fusion_golden_templates";
+/**
+ * Global session advisory-lock key for creating {@link GOLDEN_MARKER_QUALIFIED}.
+ * Distinct golden names mean a lock keyed only on `goldenName` cannot serialize
+ * the shared `CREATE TABLE IF NOT EXISTS` across concurrent vitest processes
+ * that share one maintenance database — that race surfaces as
+ * `pg_type_typname_nsp_index` duplicate-key errors on the composite row type.
+ * Hold this lock only for marker-table DDL, never for the full golden schema build.
+ */
+const GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY = "fusion_pg_test_golden_marker_bootstrap";
 
 /** Lowercase-alnum, bounded suffix safe for a database identifier. */
 function sanitizeTemplateToken(raw: string): string {
@@ -395,8 +426,8 @@ function isPidAlive(pid: number): boolean {
 /**
  * Open a short-lived admin connection to the maintenance ("postgres") database
  * on the same server, run `fn`, and always close. Used for template lifecycle
- * (listing/sweeping/creating template DBs) where we need query results back —
- * unlike `adminExecAsync`, which fires psql and returns no rows.
+ * (listing/sweeping/creating template DBs) and for adminExecAsync DDL that needs
+ * no result rows.
  */
 async function withMaintenanceSql<T>(
   fn: (client: ReturnType<typeof postgres>) => Promise<T>,
@@ -415,9 +446,34 @@ async function withMaintenanceSql<T>(
   }
 }
 
+/**
+ * Serialize `CREATE TABLE IF NOT EXISTS` of the shared golden readiness marker
+ * across every maintenance session. Must use the same client for lock + DDL +
+ * unlock (session advisory locks). Does not swallow creation failures; always
+ * attempts unlock in `finally`.
+ */
+async function ensureGoldenMarkerTableOnClient(
+  client: ReturnType<typeof postgres>,
+  options?: { failAfterLock?: boolean },
+): Promise<void> {
+  await client`SELECT pg_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+  try {
+    if (options?.failAfterLock) {
+      throw new Error("injected golden-marker bootstrap failure");
+    }
+    await client.unsafe(
+      `CREATE TABLE IF NOT EXISTS ${GOLDEN_MARKER_QUALIFIED} (name text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now())`,
+    );
+  } finally {
+    await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+  }
+}
+
 /** Test-only lifecycle controls for deterministic template-state regression tests. */
 export const __pgTestTemplateTestHooks = {
   templateName: templateDbName,
+  goldenMarkerBootstrapLockKey: GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY,
+  goldenMarkerQualified: GOLDEN_MARKER_QUALIFIED,
   async templateExists(): Promise<boolean> {
     const templateName = templateDbName();
     return withMaintenanceSql(async (client) => {
@@ -438,6 +494,52 @@ export const __pgTestTemplateTestHooks = {
     await withMaintenanceSql(async (client) => {
       await client.unsafe(`DROP DATABASE IF EXISTS "${templateName}" WITH (FORCE)`);
       await client.unsafe(`CREATE DATABASE "${templateName}"`);
+    });
+  },
+  /** Ensure the shared golden marker table exists (opens its own maintenance session). */
+  async ensureGoldenMarkerTable(options?: { failAfterLock?: boolean }): Promise<void> {
+    await withMaintenanceSql(async (client) => {
+      await ensureGoldenMarkerTableOnClient(client, options);
+    });
+  },
+  async goldenMarkerTableExists(): Promise<boolean> {
+    return withMaintenanceSql(async (client) => {
+      const rows = await client<{ exists: boolean }[]>`
+        SELECT EXISTS (
+          SELECT 1
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relname = '_fusion_golden_templates'
+        ) AS exists
+      `;
+      return rows[0]?.exists === true;
+    });
+  },
+  /** Drop the shared marker table under the bootstrap lock (test isolation only). */
+  async dropGoldenMarkerTable(): Promise<void> {
+    await withMaintenanceSql(async (client) => {
+      await client`SELECT pg_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+      try {
+        await client.unsafe(`DROP TABLE IF EXISTS ${GOLDEN_MARKER_QUALIFIED}`);
+      } finally {
+        await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+      }
+    });
+  },
+  /**
+   * Return true if this session can immediately acquire the bootstrap lock
+   * (proves a prior failed init released it). Unlocks again when acquired.
+   */
+  async tryAcquireGoldenMarkerBootstrapLock(): Promise<boolean> {
+    return withMaintenanceSql(async (client) => {
+      const rows = await client<{ acquired: boolean }[]>`
+        SELECT pg_try_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY})) AS acquired
+      `;
+      const acquired = rows[0]?.acquired === true;
+      if (acquired) {
+        await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
+      }
+      return acquired;
     });
   },
 };
@@ -494,10 +596,9 @@ function ensureGoldenTemplate(): Promise<string> {
     // the lock. A sibling fork blocks on pg_advisory_lock until the winner has
     // fully built the golden template and recorded its ready marker.
     await withMaintenanceSql(async (client) => {
-      // Ensure the readiness marker table exists before any read/write of it.
-      await client.unsafe(
-        `CREATE TABLE IF NOT EXISTS ${GOLDEN_MARKER_QUALIFIED} (name text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now())`,
-      );
+      // Serialize marker-table creation across ALL concurrent vitest processes
+      // that share this maintenance DB (lock key is constant, not per-golden).
+      await ensureGoldenMarkerTableOnClient(client);
       // Sweep templates orphaned by crashed/finished processes and drop marker
       // rows whose golden database no longer exists.
       const rows = await client<{ datname: string }[]>`
@@ -660,20 +761,40 @@ export async function createTaskStoreForTest(options?: {
      * PostgreSQL can retain a just-closed baseline connection briefly. Terminate
      * stale template sessions immediately before copying; the module-local copy
      * mutex ensures this never interrupts a sibling copy using the same source.
+     *
+     * FNXC:PgTestHarness 2026-07-18-17:40:
+     * Keep terminate + DROP + CREATE TEMPLATE on one maintenance session and
+     * retry the short "source database is being accessed by other users" window
+     * (seen after switching admin DDL off shell psql). Split sessions left a race
+     * where a late-closing baseline/pool client reattached between terminate and
+     * CREATE DATABASE ... TEMPLATE.
      */
-    await withMaintenanceSql(async (client) => {
-      await client`
-        SELECT pg_terminate_backend(pid)
-        FROM pg_stat_activity
-        WHERE datname = ${template} AND pid <> pg_backend_pid()
-      `;
-    });
-    try {
-      await adminExecAsync(`DROP DATABASE IF EXISTS "${dbName}"`);
-    } catch {
-      // may not exist — safe to ignore
+    const maxAttempts = 5;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await withMaintenanceSql(async (client) => {
+          await client`
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = ${template} AND pid <> pg_backend_pid()
+          `;
+          await client.unsafe(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`).catch(() => {});
+          await client.unsafe(`CREATE DATABASE "${dbName}" TEMPLATE "${template}"`);
+        });
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        const contended = /being accessed by other users/i.test(message);
+        if (!contended || attempt === maxAttempts) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25 * attempt));
+      }
     }
-    await adminExecAsync(`CREATE DATABASE "${dbName}" TEMPLATE "${template}"`);
+    if (lastError) throw lastError;
   });
   const testUrl = `${PG_TEST_URL_BASE}/${dbName}`;
 
@@ -731,7 +852,8 @@ export async function createTaskStoreForTest(options?: {
       // best-effort
     }
     try {
-      await adminExecAsync(`DROP DATABASE IF EXISTS "${dbName}"`);
+      // FNXC:PgTestHarness 2026-07-18-17:27: FORCE so open pool sockets cannot block drop after close races.
+      await adminExecAsync(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`);
     } catch {
       // best-effort
     }
