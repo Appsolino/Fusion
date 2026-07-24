@@ -16,7 +16,15 @@ import type {
   AgentLogEntry,
   RunAuditEvent,
 } from "@fusion/core";
-import { AgentStore, ChatStore, queryRunAuditEvents, resolveGlobalDir, setRunningAgentCountSource } from "@fusion/core";
+import {
+  AgentStore,
+  ChatStore,
+  getManagedSourcePublicMetadata,
+  queryRunAuditEvents,
+  resolveAppsolinoReleaseDisplayLabel,
+  resolveGlobalDir,
+  setRunningAgentCountSource,
+} from "@fusion/core";
 import type { AuthStorageLike, ModelRegistryLike } from "./routes.js";
 import { createApiRoutes } from "./routes.js";
 import { createSSE, disconnectSSEClient, markSSEClientAlive } from "./sse.js";
@@ -71,7 +79,7 @@ import { createCliSessionsRouter } from "./routes/cli-sessions.js";
 import { getProjectIdFromRequest, resolveStoreForProjectId } from "./routes/context.js";
 import type { CliRelaunchRegistry } from "./cli-session-transport.js";
 import { validateRemoteAuthToken } from "./remote-auth.js";
-import { getCliPackageVersion, isUnresolvedCliPackageVersion } from "./cli-package-version.js";
+import { getCliPackageVersion, isUnresolvedCliPackageVersion, resolveCliPackageVersionInfo } from "./cli-package-version.js";
 import { performUpdateCheck } from "./update-check.js";
 import {
   dayHasSamples,
@@ -124,9 +132,14 @@ function buildHealthPayload(args: {
   migration?: import("./dashboard-postgres-health.js").DashboardMigrationHealth;
   cliPackageVersion: string;
   engineAvailable: boolean;
+  releaseRoot?: string;
 }) {
-  const { database, cliPackageVersion, engineAvailable, migration } = args;
+  const { database, cliPackageVersion, engineAvailable, migration, releaseRoot } = args;
   const taskIdIntegrity = buildTaskIdIntegrityHealth(args.taskIdIntegrityReport);
+  const managedMetadata = getManagedSourcePublicMetadata(releaseRoot);
+  const appsolinoReleaseLabel = managedMetadata.managedSource
+    ? resolveAppsolinoReleaseDisplayLabel(managedMetadata)
+    : null;
   return {
     // Durable running/failed migration markers must never be hidden behind ok health.
     status: migration || !database.healthy || database.corruptionDetected || taskIdIntegrity.status !== "ok" ? "degraded" : "ok",
@@ -142,6 +155,16 @@ function buildHealthPayload(args: {
     database,
     taskIdIntegrity,
     ...(migration ? { migration } : {}),
+    ...(managedMetadata.managedSource
+      ? {
+          managedSource: true,
+          managedMessage: managedMetadata.managedMessage,
+          managedStatusPath: managedMetadata.statusPath,
+          managedStatus: managedMetadata.status,
+          appsolinoProvenance: managedMetadata.provenance,
+          appsolinoReleaseLabel,
+        }
+      : {}),
   };
 }
 
@@ -830,6 +853,8 @@ export function createServer(store: TaskStore, options?: ServerOptions): ReturnT
     console.warn(`[github-tracking-hook] registration skipped: ${message}`);
   }
   const cliPackageVersion = getCliPackageVersion(import.meta.url);
+  const cliPackageInfo = resolveCliPackageVersionInfo(dirname(fileURLToPath(import.meta.url)));
+  const fusionReleaseRoot = cliPackageInfo ? dirname(cliPackageInfo.packageJsonPath) : undefined;
   // ── Derive defaults from engine when provided (explicit options override) ──
   const engine = options?.engine;
   if (engine) {
@@ -1718,6 +1743,7 @@ export function createServer(store: TaskStore, options?: ServerOptions): ReturnT
       migration: health.migration,
       cliPackageVersion,
       engineAvailable: hasDashboardEngine(options),
+      releaseRoot: fusionReleaseRoot,
     }));
   });
 
@@ -1930,6 +1956,7 @@ export function createServer(store: TaskStore, options?: ServerOptions): ReturnT
       migration: health.migration,
       cliPackageVersion,
       engineAvailable: hasDashboardEngine(options),
+      releaseRoot: fusionReleaseRoot,
     }));
   });
 

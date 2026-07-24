@@ -3,6 +3,7 @@
  * Dashboard health/engine/update client API peeled from legacy.ts.
  */
 import type { TaskIdIntegrityReport } from "@fusion/core";
+import type { AppsolinoReleaseProvenance, ManagedSourceStatus } from "@fusion/core";
 import { api } from "./client.js";
 
 export function withProjectId(path: string, projectId?: string): string {
@@ -19,6 +20,12 @@ export interface UpdateCheckResponse {
   lastChecked?: number;
   disabled?: boolean;
   error?: string;
+  managed?: boolean;
+  managedMessage?: string;
+  statusPath?: string;
+  managedStatus?: ManagedSourceStatus | null;
+  provenance?: AppsolinoReleaseProvenance | null;
+  appsolinoReleaseLabel?: string | null;
 }
 
 
@@ -26,6 +33,12 @@ export interface DashboardHealthResponse {
   status: string;
   version: string;
   uptime: number;
+  managedSource?: boolean;
+  managedMessage?: string;
+  managedStatusPath?: string;
+  managedStatus?: ManagedSourceStatus | null;
+  appsolinoProvenance?: AppsolinoReleaseProvenance | null;
+  appsolinoReleaseLabel?: string | null;
   /*
   FNXC:MigrationHoldingPage 2026-07-17-12:35:
   While the CLI's boot-window holding server owns the dashboard port (real

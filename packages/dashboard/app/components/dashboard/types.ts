@@ -285,6 +285,11 @@ export interface DashboardBannersProps {
   currentVersion: string | null;
   updateBannerDismissed: boolean;
   dismissUpdateBanner: () => void;
+  managedSource: boolean;
+  managedMessage: string | null;
+  managedStatus: import("@fusion/core").ManagedSourceStatus | null;
+  managedBannerDismissed: boolean;
+  dismissManagedBanner: () => void;
   refreshDbCorruptionHealth: () => Promise<void>;
   dbCorruptionRefreshing: boolean;
   dbCorruptionRefreshError: string | null;

@@ -321,6 +321,11 @@ function AppInner() {
     currentVersion,
     dismissed: updateBannerDismissed,
     dismiss: dismissUpdateBanner,
+    managedSource,
+    managedMessage,
+    managedStatus,
+    managedBannerDismissed,
+    dismissManagedBanner,
   } = useUpdateCheck();
   
   // Sync node context with useNodes() results:
@@ -1719,6 +1724,11 @@ function AppInner() {
     currentVersion,
     updateBannerDismissed,
     dismissUpdateBanner,
+    managedSource,
+    managedMessage,
+    managedStatus,
+    managedBannerDismissed,
+    dismissManagedBanner,
     refreshDbCorruptionHealth,
     dbCorruptionRefreshing,
     dbCorruptionRefreshError,
