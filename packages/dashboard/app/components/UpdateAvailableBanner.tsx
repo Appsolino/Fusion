@@ -6,13 +6,25 @@ import { getErrorMessage } from "@fusion/core";
 import { fetchSystemInfo, installUpdate, requestSystemRestart } from "../api";
 import type { UpdateInstallResponse } from "../api";
 
+import type { ManagedSourceStatus } from "@fusion/core";
+
 interface UpdateAvailableBannerProps {
   latestVersion: string;
   currentVersion: string;
   onDismiss: () => void;
+  managedMode?: boolean;
+  managedMessage?: string | null;
+  managedStatus?: ManagedSourceStatus | null;
 }
 
-export function UpdateAvailableBanner({ latestVersion, currentVersion, onDismiss }: UpdateAvailableBannerProps) {
+export function UpdateAvailableBanner({
+  latestVersion,
+  currentVersion,
+  onDismiss,
+  managedMode = false,
+  managedMessage,
+  managedStatus,
+}: UpdateAvailableBannerProps) {
   const { t } = useTranslation("app");
   const [installLoading, setInstallLoading] = useState(false);
   const [installResult, setInstallResult] = useState<UpdateInstallResponse | null>(null);
@@ -83,6 +95,36 @@ export function UpdateAvailableBanner({ latestVersion, currentVersion, onDismiss
   const installSucceeded = installResult?.updated === true;
   const installError = installResult?.error;
   const restartUnavailable = restartSupported !== true;
+
+  if (managedMode) {
+    const statusLine = [
+      managedStatus?.deployedSha ? `deployed ${managedStatus.deployedSha}` : null,
+      managedStatus?.upstreamSha ? `upstream ${managedStatus.upstreamSha}` : null,
+      managedStatus?.updateStatus ?? managedStatus?.state ?? null,
+    ]
+      .filter((part): part is string => typeof part === "string" && part.length > 0)
+      .join(" · ");
+
+    return (
+      <div className="update-available-banner update-available-banner--managed" role="status" aria-live="polite">
+        <div className="update-available-banner__content">
+          <p className="update-available-banner__text">
+            {managedMessage ??
+              t("updateBanner.managedMessage", "Updates are managed automatically by Appsolino.")}
+            {statusLine ? ` (${statusLine})` : null}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="update-available-banner__dismiss touch-target"
+          aria-label={t("updateBanner.dismissManagedLabel", "Dismiss managed update notice")}
+          onClick={onDismiss}
+        >
+          <X size={16} aria-hidden="true" />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="update-available-banner" role="status" aria-live="polite">

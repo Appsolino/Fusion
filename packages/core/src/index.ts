@@ -1767,6 +1767,27 @@ export { getAvailableMemoryBytes, getAvailableMemoryInfo, type AvailableMemoryRe
 export { collectSystemMetrics } from "./system-metrics.js";
 export { getAppVersion, parseSemver, compareVersions, isVersionNewer, resolveUpdateTargetVersion } from "./app-version.js";
 export type { UpdateChannel, UpdateDistTags } from "./app-version.js";
+export {
+  APPSOLINO_MANAGED_SOURCE_ENV,
+  DEFAULT_MANAGED_SOURCE_STATUS_PATH,
+  MANAGED_SOURCE_UPDATE_MESSAGE,
+  getManagedSourcePublicMetadata,
+  getManagedSourceRefusalMessage,
+  getManagedSourceStatusPath,
+  isManagedSourceMode,
+  readAppsolinoReleaseProvenance,
+  readManagedSourceStatus,
+  resolveAppsolinoReleaseDisplayLabel,
+} from "./managed-source.js";
+export type {
+  AppsolinoProvenanceField,
+  AppsolinoReleaseProvenance,
+  ManagedSourcePublicMetadata,
+  ManagedSourceStatus,
+  ManagedSourceStatusField,
+  ReadAppsolinoReleaseProvenanceOptions,
+  ReadManagedSourceStatusOptions,
+} from "./managed-source.js";
 export { DockerClientService } from "./docker-client.js";
 export { MeshConfigGenerator } from "./mesh-config-generator.js";
 export { DockerProvisioningService } from "./docker-provisioning.js";

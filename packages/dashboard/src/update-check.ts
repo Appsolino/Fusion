@@ -3,8 +3,8 @@ import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { resolveGlobalDir, isVersionNewer, resolveUpdateTargetVersion } from "@fusion/core";
-import type { UpdateChannel } from "@fusion/core";
+import { resolveGlobalDir, isVersionNewer, resolveUpdateTargetVersion, getManagedSourcePublicMetadata, isManagedSourceMode, resolveAppsolinoReleaseDisplayLabel } from "@fusion/core";
+import type { AppsolinoReleaseProvenance, ManagedSourceStatus, UpdateChannel } from "@fusion/core";
 
 const CACHE_FILENAME = "update-check.json";
 const REGISTRY_URL = "https://registry.npmjs.org/@runfusion%2Ffusion";
@@ -28,6 +28,13 @@ export type UpdateCheckResult = {
   /** Release track this result was resolved for; absent in pre-channel caches (treated as "stable"). */
   channel?: UpdateChannel;
   error?: string;
+  /** Appsolino managed-source mode: npm updates are disabled. */
+  managed?: boolean;
+  managedMessage?: string;
+  statusPath?: string;
+  managedStatus?: ManagedSourceStatus | null;
+  provenance?: AppsolinoReleaseProvenance | null;
+  appsolinoReleaseLabel?: string | null;
 };
 
 export type UpdateInstallResult = {
@@ -252,6 +259,20 @@ export async function performUpdateInstall(
   latestVersion: string | null,
   options: { exec?: ExecInstall; fusionDir?: string } = {},
 ): Promise<UpdateInstallResult> {
+  /*
+  FNXC:AppsolinoManagedSource 2026-07-24-17:10:
+  Managed Appsolino builds must never run global npm install from the dashboard Update now path.
+  */
+  if (isManagedSourceMode()) {
+    const metadata = getManagedSourcePublicMetadata();
+    return {
+      currentVersion,
+      latestVersion,
+      updated: false,
+      error: metadata.managedMessage || "Updates are managed automatically by Appsolino.",
+    };
+  }
+
   const runExec = options.exec ?? execAsync;
   const fusionDir = options.fusionDir ?? resolveGlobalDir();
 
@@ -333,12 +354,40 @@ export async function performUpdateInstall(
 export async function performUpdateCheck(
   fusionDir: string,
   currentVersion: string,
-  options: { frequency?: UpdateCheckFrequency; force?: boolean; channel?: UpdateChannel } = {},
+  options: {
+    frequency?: UpdateCheckFrequency;
+    force?: boolean;
+    channel?: UpdateChannel;
+    releaseRoot?: string;
+  } = {},
 ): Promise<UpdateCheckResult> {
   const now = Date.now();
   // FNXC:UpdateChannels 2026-07-19-12:40: normalize once; absent = stable so
   // pre-channel callers and settings keep today's behavior.
   const channel: UpdateChannel = options.channel === "beta" ? "beta" : "stable";
+
+  /*
+  FNXC:AppsolinoManagedSource 2026-07-24-17:10:
+  Skip npm registry checks entirely on Appsolino-managed hosts; return integration status + provenance for dashboard surfaces instead.
+  */
+  if (isManagedSourceMode()) {
+    const metadata = getManagedSourcePublicMetadata(options.releaseRoot);
+    return {
+      currentVersion,
+      latestVersion: null,
+      updateAvailable: false,
+      lastChecked: now,
+      channel,
+      managed: true,
+      managedMessage: metadata.managedMessage,
+      statusPath: metadata.statusPath,
+      managedStatus: metadata.status,
+      provenance: metadata.provenance,
+      appsolinoReleaseLabel: metadata.managedSource
+        ? resolveAppsolinoReleaseDisplayLabel(metadata)
+        : null,
+    };
+  }
 
   /*
    * FNXC:DesktopUpdates 2026-07-03-15:35:

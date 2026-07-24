@@ -64,6 +64,11 @@ export function DashboardBanners({
   currentVersion,
   updateBannerDismissed,
   dismissUpdateBanner,
+  managedSource,
+  managedMessage,
+  managedStatus,
+  managedBannerDismissed,
+  dismissManagedBanner,
   refreshDbCorruptionHealth,
   dbCorruptionRefreshing,
   dbCorruptionRefreshError,
@@ -152,7 +157,17 @@ export function DashboardBanners({
           onOpenSettings={(section) => openSettingsWithNav(section as SectionId)}
         />
       )}
-      {viewMode === "project" && currentProject && updateAvailable && latestVersion && currentVersion && !updateBannerDismissed && (
+      {viewMode === "project" && currentProject && managedSource && !managedBannerDismissed && (
+        <UpdateAvailableBanner
+          latestVersion={latestVersion ?? currentVersion ?? "0.0.0"}
+          currentVersion={currentVersion ?? "0.0.0"}
+          onDismiss={dismissManagedBanner}
+          managedMode
+          managedMessage={managedMessage}
+          managedStatus={managedStatus}
+        />
+      )}
+      {viewMode === "project" && currentProject && updateAvailable && latestVersion && currentVersion && !updateBannerDismissed && !managedSource && (
         <UpdateAvailableBanner
           latestVersion={latestVersion}
           currentVersion={currentVersion}
