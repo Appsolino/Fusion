@@ -972,6 +972,27 @@ Task-card agent badges must retain their visible text label in narrow containers
   margin-top: var(--space-sm);
 }
 
+/*
+FNXC:TaskCardDates 2026-07-24-11:02:
+Lifecycle dates share the card's compact metadata rhythm and wrap independently
+on narrow/mobile cards, so added terminal metadata cannot force horizontal scroll.
+*/
+.card-lifecycle-dates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.2;
+}
+
+.card-lifecycle-dates time {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .card-footer-row {
   display: flex;
   align-items: center;
@@ -1939,6 +1960,12 @@ The three-dot menu is the sole card move/action entry point. Keep this shared bu
 
   .card-steps-toggle {
     padding: var(--space-xs) 0;
+  }
+
+  .card-lifecycle-dates {
+    gap: var(--space-xs);
+    margin-top: var(--space-xs);
+    font-size: 0.625rem;
   }
 
   .card-footer-row {

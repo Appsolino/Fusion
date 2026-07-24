@@ -243,6 +243,23 @@ afterEach(() => {
 });
 
 describe("TaskCard", () => {
+  it("renders creation on all cards and terminal completion from canonical lifecycle timestamps", () => {
+    const createdAt = new Date().toISOString();
+    const archivedAt = "2026-07-20T09:00:00.000Z";
+    const { rerender } = render(
+      <TaskCard task={makeTask({ createdAt })} onOpenDetail={noop} addToast={noop} />,
+    );
+
+    expect(screen.getByTestId("card-lifecycle-dates")).toHaveTextContent("Created");
+    expect(screen.queryByText(/Completed/)).not.toBeInTheDocument();
+
+    rerender(
+      <TaskCard task={makeTask({ column: "archived", createdAt, archivedAt, columnMovedAt: "2026-07-19T09:00:00.000Z" })} onOpenDetail={noop} addToast={noop} />,
+    );
+    expect(screen.getByTestId("card-lifecycle-dates")).toHaveTextContent("Completed");
+    expect(screen.getByTestId("card-lifecycle-dates").querySelectorAll("time")).toHaveLength(2);
+  });
+
   it("renders GitLab tracking badges for linked and stale items without dropping GitHub badges", () => {
     const gitlabItem = {
       kind: "merge_request" as const,

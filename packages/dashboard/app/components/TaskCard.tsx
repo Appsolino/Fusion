@@ -53,6 +53,7 @@ import { MAX_AUTO_MERGE_RETRIES, type BlockerFanoutEntry } from "../hooks/useBlo
 import { useRetryWarning } from "../context/RetryWarningContext";
 import { useCostBadge } from "../context/CostBadgeContext";
 import { useColumnLabel } from "../i18n/labels";
+import { formatCompactLifecycleDate, useLocaleFormat } from "../i18n/format";
 import { WorkspaceWorktreesSummary, isWorkspaceTask } from "./WorkspaceWorktreesSummary";
 import { WorkflowIcon } from "./WorkflowIcon";
 import { TaskContextMenu, buildTaskActionMenuModel, getTaskPrAutomationLabel, type TaskContextMenuColumnFlags, type TaskContextMenuColumnMetadata, type TaskMenuActionDescriptor } from "./TaskContextMenu";
@@ -753,6 +754,12 @@ function areCommentsEqual(previous: Task["comments"], next: Task["comments"]): b
 
 // Keep this comparator aligned with the fields TaskCard renders directly and the
 // task metadata that influences child badge freshness/subscriptions.
+function millisecondsUntilNextLocalMidnight(now: Date): number {
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 25);
+  return Math.max(1, next.getTime() - now.getTime());
+}
+
 function areTaskCardPropsEqual(previous: TaskCardProps, next: TaskCardProps): boolean {
   const previousTask = previous.task;
   const nextTask = next.task;
@@ -820,6 +827,8 @@ function areTaskCardPropsEqual(previous: TaskCardProps, next: TaskCardProps): bo
     previousTask.timedExecutionMs === nextTask.timedExecutionMs &&
     previousTask.updatedAt === nextTask.updatedAt &&
     previousTask.createdAt === nextTask.createdAt &&
+    previousTask.executionCompletedAt === nextTask.executionCompletedAt &&
+    previousTask.archivedAt === nextTask.archivedAt &&
     previousTask.status === nextTask.status &&
     previousTask.recentAgentActivityAt === nextTask.recentAgentActivityAt &&
     previousTask.priority === nextTask.priority &&
@@ -963,6 +972,7 @@ function TaskCardComponent({
   nearDuplicateCanonicalInactive,
 }: TaskCardProps) {
   const { t } = useTranslation("app");
+  const { locale } = useLocaleFormat();
   const columnLabel = useColumnLabel();
   const [dragging, setDragging] = useState(false);
   const [fileDragOver, setFileDragOver] = useState(false);
@@ -981,6 +991,27 @@ function TaskCardComponent({
   const [isAddressingPrFeedback, setIsAddressingPrFeedback] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [timeIndicatorNowMs, setTimeIndicatorNowMs] = useState(() => Date.now());
+  const [lifecycleNowMs, setLifecycleNowMs] = useState(() => Date.now());
+
+  /*
+  FNXC:TaskCardDates 2026-07-24-11:02:
+  FN-8561 requires compact lifecycle labels to change at the viewer's local
+  midnight even when memoized task props are unchanged. One boundary timer per
+  mounted card avoids stale "today" time labels and is always cleaned up.
+  */
+  useEffect(() => {
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        setLifecycleNowMs(Date.now());
+        schedule();
+      }, millisecondsUntilNextLocalMidnight(new Date()));
+    };
+    schedule();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
 
   const descTextareaRef = useRef<HTMLTextAreaElement>(null);
   const touchOpenHandledRef = useRef(false);
@@ -1621,6 +1652,16 @@ function TaskCardComponent({
       ariaLabel: t("tasks.executionTimeCompleted", "Execution time {{elapsed}}. Completed {{completedAt}}", { elapsed: elapsedLabel, completedAt }),
     };
   }, [task.column, task.status, task.columnMovedAt, task.timedExecutionMs, task.updatedAt, task.workflowStepResults, task.log, task.firstExecutionAt, task.cumulativeActiveMs, task.cumulativePlanningMs, task.planningStartedAt, task.executionStartedAt, task.executionCompletedAt, timeIndicatorNowMs]);
+
+  const lifecycleDates = useMemo(() => {
+    const created = formatCompactLifecycleDate(task.createdAt, locale, new Date(lifecycleNowMs));
+    const completionSource = task.executionCompletedAt
+      ?? (task.column === "archived" ? task.archivedAt : undefined);
+    const completed = (task.column === "done" || task.column === "archived")
+      ? formatCompactLifecycleDate(completionSource, locale, new Date(lifecycleNowMs))
+      : null;
+    return { created, completed };
+  }, [task.createdAt, task.executionCompletedAt, task.archivedAt, task.column, locale, lifecycleNowMs]);
 
   const liveBadgeData = badgeUpdates.get(`${projectId ?? "default"}:${task.id}`);
 
@@ -3673,6 +3714,20 @@ function TaskCardComponent({
           </>
         );
       })()}
+      {(lifecycleDates.created || lifecycleDates.completed) && (
+        <div className="card-lifecycle-dates" data-testid="card-lifecycle-dates">
+          {lifecycleDates.created && (
+            <time dateTime={lifecycleDates.created.dateTime} title={t("tasks.createdAtTitle", "Created {{date}}", { date: lifecycleDates.created.full })}>
+              {t("tasks.createdAt", "Created {{date}}", { date: lifecycleDates.created.compact })}
+            </time>
+          )}
+          {lifecycleDates.completed && (
+            <time dateTime={lifecycleDates.completed.dateTime} title={t("tasks.completedAtTitle", "Completed {{date}}", { date: lifecycleDates.completed.full })}>
+              {t("tasks.completedAt", "Completed {{date}}", { date: lifecycleDates.completed.compact })}
+            </time>
+          )}
+        </div>
+      )}
       {(footerHasLeadingContent || (footerRightHasContent && !placeFooterRightInMeta)) && (
         <div className={`card-footer-row${chipFarRight ? " card-footer-row--chip-far-right" : ""}`}>
           {filesChangedButton}
