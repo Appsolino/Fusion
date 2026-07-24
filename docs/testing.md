@@ -344,7 +344,12 @@ the default branch only**: each CI shard uploads per-shard JSON timing artifacts
 shard artifacts into `.timings/` first (the default lookup directory), or pass
 `--inputs-dir <path>` to point at wherever they were downloaded. A future
 scheduled job can gate on freshness via `node scripts/ci-test-shard.mjs --check-timings-staleness`,
-which exits non-zero when the snapshot is missing or older than the 30-day budget.
+which exits non-zero when the snapshot is missing or older than the 30-day budget. Package test
+wrappers that launch Vitest (including `@fusion/desktop`) must forward caller reporter/output
+arguments unchanged: shard telemetry uses `--reporter=json` plus a package-relative
+`--outputFile.json=.timings/timings-*.json`. Wrappers may default to dot only when callers do
+not select a reporter; a successful artifact set must include parseable, non-empty desktop
+`testResults` under `packages/desktop/.timings/`.
 
 ## Weekly test velocity baseline
 
