@@ -20,9 +20,18 @@ describe("PlanningModeModal sequential layout", () => {
     expect(component).toContain('document.addEventListener("selectionchange", capturePlanSelection)');
     expect(component).toContain("selection.isCollapsed");
     expect(component).toContain("Add comment to selection");
-    expect(component).toContain("planning-add-comment--document");
-    expect(component).toContain("planning-add-comment--mobile");
-    expect(component).toContain("mobileAddCommentTriggerRef");
+    /*
+    FNXC:PlanningComments 2026-07-25-10:20:
+    Exactly one Add-comment trigger, in the plan action rail. The --document / --mobile variant pair
+    rendered two buttons and must not come back.
+    */
+    expect(component).not.toContain("planning-add-comment--document");
+    expect(component).not.toContain("planning-add-comment--mobile");
+    expect(component.match(/className="btn planning-add-comment"/g)).toHaveLength(1);
+    expect(component).toContain("addCommentTriggerRef");
+    // FNXC:PlanningComments 2026-07-25-10:20: the control appears once the drag-selection is done, not per selectionchange.
+    expect(component).toContain("planSelectionDragActiveRef");
+    expect(component).toContain('document.addEventListener("pointerup", handlePointerRelease)');
     expect(component).toContain("contextualComments");
     expect(component).toContain("setContextualComments([])");
     // FNXC:PlanningComments 2026-07-24-06:20: prevent blur on pointerdown; commit on click.
@@ -42,10 +51,11 @@ describe("PlanningModeModal sequential layout", () => {
     expect(css).toMatch(/@media \(max-width: 1024px\)[\s\S]*?\.planning-plan-actions\s*\{[^}]*display\s*:\s*grid\s*;[^}]*grid-template-columns\s*:\s*repeat\(2, minmax\(0, 1fr\)\)\s*;[^}]*gap\s*:\s*var\(--space-md\)\s*;[^}]*calc\(var\(--space-sm\) \+ env\(safe-area-inset-bottom\)\)/);
     expect(css).toMatch(/@media \(max-width: 1024px\)[\s\S]*?\.planning-plan-actions \.btn\s*\{[^}]*width\s*:\s*100%\s*;/);
     expect(css).toMatch(/@media \(max-width: 768px\)[\s\S]*?\.planning-plan-actions\s*\{[^}]*gap\s*:\s*var\(--space-md\)\s*;[^}]*calc\(var\(--space-sm\) \+ env\(safe-area-inset-bottom\)\)/);
-    expect(css).toMatch(/\.planning-add-comment--mobile\s*\{[^}]*display\s*:\s*none\s*;/);
-    expect(css).toMatch(/@media \(max-width: 1024px\)[\s\S]*?\.planning-add-comment--document\s*\{[^}]*display\s*:\s*none\s*;/);
-    expect(css).toMatch(/@media \(max-width: 1024px\)[\s\S]*?\.planning-plan-actions \.btn\.planning-add-comment--mobile\s*\{[^}]*display\s*:\s*flex\s*;[^}]*grid-column\s*:\s*1\s*\/\s*-1\s*;/);
-    expect(css).not.toMatch(/@media \(max-width: 768px\)[\s\S]*?\.planning-plan-actions \.btn\.planning-add-comment--mobile\s*\{[^}]*position\s*:\s*fixed\s*;/);
+    // FNXC:PlanningComments 2026-07-25-10:20: one trigger everywhere — no breakpoint hides or duplicates it.
+    expect(css).not.toMatch(/planning-add-comment--(document|mobile)/);
+    expect(css).toMatch(/\.planning-add-comment\s*\{[^}]*display\s*:\s*inline-flex\s*;/);
+    expect(css).toMatch(/@media \(max-width: 1024px\)[\s\S]*?\.planning-plan-actions \.btn\.planning-add-comment\s*\{[^}]*display\s*:\s*flex\s*;[^}]*grid-column\s*:\s*1\s*\/\s*-1\s*;/);
+    expect(css).not.toMatch(/@media \(max-width: 768px\)[\s\S]*?\.planning-plan-actions \.btn\.planning-add-comment\s*\{[^}]*position\s*:\s*fixed\s*;/);
     expect(css).toMatch(/@media \(max-width: 1024px\)[\s\S]*?\.planning-comment-editor\s*\{[^}]*position\s*:\s*fixed\s*;/);
   });
 });

@@ -766,10 +766,17 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const commentEditorRef = useRef<HTMLDivElement>(null);
   const addCommentTriggerRef = useRef<HTMLButtonElement>(null);
-  const mobileAddCommentTriggerRef = useRef<HTMLButtonElement>(null);
   const restoreCommentTriggerFocusRef = useRef(false);
   const isCommentEditorOpenRef = useRef(false);
   const pendingOpenCommentQuoteRef = useRef<string | null>(null);
+  /*
+  FNXC:PlanningComments 2026-07-25-10:20:
+  While a pointer drag is extending a plan selection, selectionchange fires on every mouse move.
+  Mounting/unmounting the Add-comment control on each of those intermediate ranges made the button
+  strobe under the cursor on desktop. This ref suppresses quote writes for the duration of the drag
+  so the control appears exactly once, when the selection is done (pointerup/pointercancel).
+  */
+  const planSelectionDragActiveRef = useRef(false);
 
   const setCommentEditorOpen = useCallback((open: boolean) => {
     /*
@@ -818,12 +825,12 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
 
   const focusAddCommentTrigger = useCallback(() => {
     /*
-    FNXC:PlanningComments 2026-07-24-05:35:
-    Tablet and phone both expose the action-rail trigger; only wide desktop uses the document
-    variant. Match the 1024px CSS gate so focus restore lands on the visible control.
+    FNXC:PlanningComments 2026-07-25-10:20:
+    One trigger at every breakpoint. The document-adjacent duplicate that sat at the end of the plan
+    text was removed (FN operator report: two "Add comment to selection" buttons), so focus restore
+    always targets the plan action rail control.
     */
-    const usesRailTrigger = window.matchMedia?.("(max-width: 1024px)").matches ?? false;
-    (usesRailTrigger ? mobileAddCommentTriggerRef : addCommentTriggerRef).current?.focus();
+    addCommentTriggerRef.current?.focus();
   }, []);
 
   /*
@@ -834,7 +841,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     if (isCommentEditorOpen || !restoreCommentTriggerFocusRef.current) return;
     restoreCommentTriggerFocusRef.current = false;
     queueMicrotask(() => {
-      if (addCommentTriggerRef.current || mobileAddCommentTriggerRef.current) {
+      if (addCommentTriggerRef.current) {
         focusAddCommentTrigger();
       }
     });
@@ -2999,6 +3006,12 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     as the open gesture collapsed the native range.
     */
     if (isCommentEditorOpenRef.current || pendingOpenCommentQuoteRef.current) return;
+    /*
+    FNXC:PlanningComments 2026-07-25-10:20:
+    Mid-drag ranges are not a finished selection. Skip them entirely; the pointerup handler runs one
+    final capture so the control shows once the selection is done instead of flickering per movement.
+    */
+    if (planSelectionDragActiveRef.current) return;
 
     const selection = window.getSelection();
     const root = planDocumentRef.current;
@@ -3018,12 +3031,38 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     setSelectedPlanQuote(quote || null);
   }, []);
 
+  /*
+  FNXC:PlanningComments 2026-07-25-10:20:
+  Selection-in-progress gate. A drag that starts inside the plan document hides any stale control and
+  freezes quote updates until the pointer is released; the release (or cancel) performs the single
+  capture. Drags that start outside the plan are left alone — their collapse still clears the quote
+  through the normal selectionchange path.
+  */
   useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (isCommentEditorOpenRef.current || pendingOpenCommentQuoteRef.current) return;
+      const root = planDocumentRef.current;
+      if (!root || !root.contains(event.target as Node)) return;
+      planSelectionDragActiveRef.current = true;
+      setSelectedPlanQuote(null);
+    };
+    const handlePointerRelease = () => {
+      if (!planSelectionDragActiveRef.current) return;
+      planSelectionDragActiveRef.current = false;
+      capturePlanSelection();
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("pointerup", handlePointerRelease);
+    document.addEventListener("pointercancel", handlePointerRelease);
     document.addEventListener("selectionchange", capturePlanSelection);
     document.addEventListener("mouseup", capturePlanSelection);
     document.addEventListener("touchend", capturePlanSelection);
     document.addEventListener("keyup", capturePlanSelection);
     return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("pointerup", handlePointerRelease);
+      document.removeEventListener("pointercancel", handlePointerRelease);
       document.removeEventListener("selectionchange", capturePlanSelection);
       document.removeEventListener("mouseup", capturePlanSelection);
       document.removeEventListener("touchend", capturePlanSelection);
@@ -3353,20 +3392,13 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
               testId="planning-plan-markdown"
             />
           </div>
-          {selectedPlanQuote && !isCommentEditorOpen && (
-            <button
-              ref={addCommentTriggerRef}
-              type="button"
-              className="btn planning-add-comment planning-add-comment--document"
-              onMouseDown={(event) => event.preventDefault()}
-              onPointerDown={handleOpenCommentEditorPointerDown}
-              onClick={openCommentEditor}
-            >
-              {/* FNXC:PlanningComments 2026-07-24-05:55: Match New-session / mobile rail glyph scale. */}
-              <MessageSquarePlus size={16} aria-hidden="true" />
-              {t("planning.addComment", "Add comment to selection")}
-            </button>
-          )}
+          {/*
+          FNXC:PlanningComments 2026-07-25-10:20:
+          The document-adjacent Add-comment trigger was REMOVED. It duplicated the plan action rail
+          control (operators saw two "Add comment to selection" buttons) and, sitting at the end of a
+          long plan, it was the harder of the two to reach. The rail trigger below is now the single
+          control at every breakpoint. Do not reintroduce a second trigger inside the plan document.
+          */}
           {isCommentEditorOpen && openCommentQuote && (
             <div
               ref={commentEditorRef}
@@ -3406,26 +3438,20 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
       </div>
       <div className="planning-actions planning-summary-actions planning-plan-actions" data-testid="planning-plan-actions">
         {/*
-        FNXC:PlanningComments 2026-07-31-00:00:
-        FN-8533 keeps the selection-adjacent control on wide desktop, but compact shells need a
-        counterpart that cannot be lost under the document fold.
-
-        FNXC:PlanningComments 2026-07-24-05:50:
-        On tablet and phone (≤1024) the rail control stays in the plan action footer as a
-        full-width row above Refine/Proceed so a selection never requires scrolling past the
-        action baseline. Document-level selectionchange still dismisses it when the selection
-        collapses. CSS shows exactly one of the two variants; only established 768px/1024px
-        breakpoint literals are allowed here, while all other dimensions remain design-token based.
+        FNXC:PlanningComments 2026-07-25-10:20:
+        The plan action rail holds the ONLY Add-comment trigger, at every breakpoint. It cannot be
+        lost under the document fold, and a selection never requires scrolling past the action
+        baseline. Document-level selectionchange still dismisses it when the selection collapses.
 
         FNXC:PlanningComments 2026-07-24-05:55:
-        Tablet must keep the two-column grid (not flex nowrap) so Add comment stays a full-width
-        first row with the same MessageSquarePlus 16px glyph as phone.
+        Tablet and phone keep the two-column grid (not flex nowrap) so Add comment stays a full-width
+        first row above Refine/Proceed with the same MessageSquarePlus 16px glyph.
         */}
         {selectedPlanQuote && !isCommentEditorOpen && (
           <button
-            ref={mobileAddCommentTriggerRef}
+            ref={addCommentTriggerRef}
             type="button"
-            className="btn planning-add-comment planning-add-comment--mobile"
+            className="btn planning-add-comment"
             onMouseDown={(event) => event.preventDefault()}
             onPointerDown={handleOpenCommentEditorPointerDown}
             onClick={openCommentEditor}
