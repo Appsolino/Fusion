@@ -1973,8 +1973,23 @@ export class TaskExecutor {
   getActiveWorktreePaths() consumers that cd into a path are unaffected; only the registry key changes.
   Non-workspace tasks (unique worktree path != rootDir) are returned unchanged.
   */
+  /*
+  FNXC:PlanReviewWorktree 2026-07-25-20:40 (concurrent root-rooted step sessions — single-repo collision):
+  The task-scoped key must apply to the shared repo root in EVERY project mode, not only workspace mode.
+  Read-only graph nodes that need no worktree (Plan Review is the canonical one — it reviews the
+  store-injected PROMPT.md, see FNXC:PlanReviewSpecInjection) run rooted at `this.rootDir`, and a todo
+  task has no worktree of its own. With the bare root as the registry key, two tasks reaching Plan Review
+  at the same time collided: the second failed with "active-session path <root> is held by task <other>;
+  task <self> may not overwrite it", which surfaced as a Plan Review provider failure, burned the
+  in-place retry budget against a hold that retrying can never clear, and left the task parked
+  (reported: FN-1398 holding /home/ubuntu/dev/freemap-svelte while FN-1403 planned).
+  Path-exclusivity on the shared root is not what keeps these sessions correct: write-capable nodes are
+  refused at the root outright (no-worktree-for-write-node above), real per-sub-repo exclusivity is the
+  workspace-repo-acquire lease, and every isPathActive consumer guards removable WORKTREE paths — the
+  root is never one. Liveness still works because the synthetic key stays in the registry under the task.
+  */
   private sessionRegistryPath(taskId: string, worktreePath: string): string {
-    if (this.workspaceConfig && worktreePath === this.rootDir) {
+    if (worktreePath === this.rootDir) {
       return `${worktreePath}#session:${taskId}`;
     }
     return worktreePath;
