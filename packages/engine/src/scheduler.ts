@@ -15,7 +15,7 @@ import {
   type AgentStore,
   type Settings,
   TransitionRejectionError,
-  buildBootstrapPrompt,
+  isUnplannedSeedPrompt,
 } from "@fusion/core";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -1536,13 +1536,21 @@ export class Scheduler {
       /*
       FNXC:CodingIdeasWorkflow 2026-07-04-10:46:
       Exclude unplanned todo tasks whose PROMPT.md is still the bootstrap stub. In a merged planner/capacity column a freshly promoted card has no real spec yet; dispatching it would execute the stub. Normal-workflow todo tasks always carry a real spec (triage writes it before moving them to todo), so this filter is a no-op for them. This closes the gap between the operator promoting a card and the triage service picking it up.
+
+      FNXC:CodingIdeasWorkflow 2026-07-25-11:20:
+      Use the shared isUnplannedSeedPrompt predicate instead of an open-coded strict stub compare.
+      The two disagreed on the refineTask seed shape: triage's todo-discovery treated a refinement
+      seed as unplanned (planning it) while this filter treated it as a real spec (keeping it as a
+      dispatch candidate), so the two lanes could race for the same card and only hold-release stood
+      between an executor and a prompt containing nothing but the operator's feedback text. One
+      predicate, one answer — and it also absorbs CRLF/trailing-newline drift.
       */
       todo = (
         await Promise.all(
           todo.map(async (t) => {
             try {
               const content = await readFile(getPromptPath(this.store.getTasksDir(), t.id), "utf-8");
-              if (content === buildBootstrapPrompt(t.id, t.title, t.description)) return null;
+              if (isUnplannedSeedPrompt(content, t.id, t.title, t.description)) return null;
             } catch {
               // Missing prompt is handled by filesystem validation below; keep the candidate.
             }

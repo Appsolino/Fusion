@@ -227,6 +227,17 @@ export class TriageProcessor {
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   /** The interval (ms) of the currently active `setInterval` timer. */
   private activePollMs: number | null = null;
+  /*
+  FNXC:CodingIdeasWorkflow 2026-07-25-11:20:
+  Event-wake state for requestImmediatePoll(). Planning discovery is timer-driven, so pressing
+  Start on an Ideas card (which only writes a column change) used to wait out the remainder of the
+  poll interval — up to pollIntervalMs, 15s by default — before anything even looked at the card.
+  `nudgeTimer` debounces a burst of moves into one poll; `nudgeDuringPoll` remembers a nudge that
+  arrived while a poll was already in flight, since that poll may have snapshotted the task list
+  before the move landed and would otherwise drop the wake entirely.
+  */
+  private nudgeTimer: ReturnType<typeof setTimeout> | null = null;
+  private nudgeDuringPoll = false;
   private processing = new Set<string>();
   /** Synchronous ownership fence shared with advanced-triage self-healing. */
   private advancedRecoveryReservations = new Set<string>();
@@ -266,6 +277,8 @@ export class TriageProcessor {
   private stuckAborted = new Set<string>();
   private taskDeletedHandler?: (task: Task) => void;
   private taskPausedHandler?: (task: Task) => void;
+  /** FNXC:CodingIdeasWorkflow 2026-07-25-11:20: store-event wake for planning-eligible columns. */
+  private taskColumnWakeHandler?: (task: Task) => void;
   private _approvalRequestStore?: ApprovalRequestStore;
 
   /**
@@ -500,6 +513,32 @@ export class TriageProcessor {
         this.activeSessions.delete(task.id);
       }
     };
+
+    /*
+    FNXC:CodingIdeasWorkflow 2026-07-25-11:20:
+    Wake planning discovery the moment a task lands in a planning-eligible column, instead of
+    waiting out the poll timer. Symptom: pressing Start on a Coding (Ideas) card appeared to do
+    nothing for up to pollIntervalMs (15s default) — the Start affordance performs a bare column
+    move (TaskCard.handleStartClick -> onMoveTask) with no dispatch call, so the engine did not
+    learn about the card until its next tick.
+
+    Surface enumeration — the wake is bound to the STORE EVENT, not to the Start button, so every
+    move surface is covered by construction: board drag, card context menu, task detail, List view,
+    the CLI, agent tools, and POST /tasks/:id/move all funnel through store.moveTask, which emits
+    task:updated. Both move sources (user and engine) and both intake shapes (Ideas -> Todo
+    promotion and a plain triage-column create) go through the same emit.
+
+    The handler is deliberately dumb: it filters on column only and delegates every real decision
+    to the poll, so it cannot bypass a pause, dependency, seed-prompt, or concurrency gate.
+    */
+    this.taskColumnWakeHandler = (task: Task) => {
+      if (!task?.id) return;
+      if (task.column !== "todo" && task.column !== "triage") return;
+      if (task.paused === true || task.userPaused === true) return;
+      // Already being planned (or mid-plan) — the running poll/session owns it.
+      if (this.processing.has(task.id) || this.hasLivePlanningWork(task.id)) return;
+      this.requestImmediatePoll();
+    };
   }
 
   start(): void {
@@ -510,6 +549,10 @@ export class TriageProcessor {
     }
     if (this.taskPausedHandler && typeof this.store.on === "function") {
       this.store.on("task:updated", this.taskPausedHandler);
+    }
+    if (this.taskColumnWakeHandler && typeof this.store.on === "function") {
+      this.store.on("task:updated", this.taskColumnWakeHandler);
+      this.store.on("task:created", this.taskColumnWakeHandler);
     }
 
     // Clear stale "planning" statuses left by a prior crash/restart.
@@ -556,11 +599,21 @@ export class TriageProcessor {
       this.pollInterval = null;
       this.activePollMs = null;
     }
+    // FNXC:CodingIdeasWorkflow 2026-07-25-11:20: a debounced wake must not fire past shutdown.
+    if (this.nudgeTimer) {
+      clearTimeout(this.nudgeTimer);
+      this.nudgeTimer = null;
+    }
+    this.nudgeDuringPoll = false;
     if (this.taskDeletedHandler && typeof this.store.off === "function") {
       this.store.off("task:deleted", this.taskDeletedHandler);
     }
     if (this.taskPausedHandler && typeof this.store.off === "function") {
       this.store.off("task:updated", this.taskPausedHandler);
+    }
+    if (this.taskColumnWakeHandler && typeof this.store.off === "function") {
+      this.store.off("task:updated", this.taskColumnWakeHandler);
+      this.store.off("task:created", this.taskColumnWakeHandler);
     }
     // Tear down any in-flight specify sessions and reviewer subagents so they
     // don't keep streaming LLM tokens / tool calls past engine shutdown.
@@ -1125,14 +1178,35 @@ export class TriageProcessor {
         eligibleTodoTasks.push(todoTask);
         continue;
       }
+      /*
+      FNXC:CodingIdeasWorkflow 2026-07-25-11:20:
+      A MISSING PROMPT.md means unplanned, so the card is admitted for planning rather than
+      dropped. Previously any read failure hit a silent `catch {}` that deferred to "scheduler
+      filesystem validation" — but the scheduler's filter KEEPS a candidate whose prompt it cannot
+      read, so a card with no PROMPT.md was invisible to planning while still visible to dispatch,
+      and produced no log line in either lane. Planning regenerates the spec, which is the correct
+      recovery for both plan-in-place (Ideas) cards and a normal-workflow card whose spec vanished.
+      Only ENOENT is treated as unplanned; a genuine read fault (permissions, a directory in the
+      file's place) still skips the card, but now says so in the log instead of vanishing.
+      */
       try {
         const promptPath = join(this.rootDir, ".fusion", "tasks", todoTask.id, "PROMPT.md");
         const content = await readFile(promptPath, "utf-8");
         if (isUnplannedSeedPrompt(content, todoTask.id, todoTask.title, todoTask.description)) {
           eligibleTodoTasks.push(todoTask);
         }
-      } catch {
-        // Missing/unreadable prompt — scheduler filesystem validation owns it.
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+          planLog.warn(
+            `${todoTask.id}: PROMPT.md is missing — treating as unplanned and admitting it for planning`,
+          );
+          eligibleTodoTasks.push(todoTask);
+        } else {
+          planLog.warn(
+            `${todoTask.id}: PROMPT.md unreadable (${(err as NodeJS.ErrnoException)?.code ?? "unknown"}) — ` +
+            "skipping planning discovery for this poll",
+          );
+        }
       }
     }
     return [...eligibleTriageTasks, ...eligibleTodoTasks].sort((a, b) => {
@@ -1147,10 +1221,44 @@ export class TriageProcessor {
     });
   }
 
+  /**
+   * Run a planning-discovery poll now instead of waiting for the next timer tick.
+   *
+   * FNXC:CodingIdeasWorkflow 2026-07-25-11:20:
+   * Requirement: starting a task must begin planning immediately, not "within 15 seconds".
+   * The Start affordance on an intake (Ideas) card performs a bare column move — there is no
+   * dispatch call in that path — so planning only began when the next `setInterval` tick happened
+   * to fire. The store-event wake (taskColumnWakeHandler) is the primary caller.
+   *
+   * Contract: advisory and idempotent. It never plans a task by itself, it only advances WHEN the
+   * existing poll runs — every pause, seed-prompt, dependency, and concurrency gate still applies,
+   * so a nudge on a capacity-blocked card is a no-op rather than an admission bypass. Returns false
+   * when the processor is not running.
+   */
+  requestImmediatePoll(): boolean {
+    if (!this.running) return false;
+    // A poll is mid-flight: it may already have read the task list, so remember to re-poll after.
+    if (this.polling) {
+      this.nudgeDuringPoll = true;
+      return true;
+    }
+    if (this.nudgeTimer) return true; // Already coalescing a burst of moves.
+    this.nudgeTimer = setTimeout(() => {
+      this.nudgeTimer = null;
+      void this.poll();
+    }, TriageProcessor.NUDGE_DEBOUNCE_MS);
+    this.nudgeTimer.unref?.();
+    return true;
+  }
+
+  /** Coalescing window for requestImmediatePoll, so a multi-card drag causes one poll, not N. */
+  private static readonly NUDGE_DEBOUNCE_MS = 150;
+
   private async poll(): Promise<void> {
     if (!this.running) return;
     if (this.polling) return;
     this.polling = true;
+    this.nudgeDuringPoll = false;
 
     try {
       const settings = await this.store.getSettings();
@@ -1286,6 +1394,18 @@ export class TriageProcessor {
       planLog.error("Poll error:", err);
     } finally {
       this.polling = false;
+      /*
+      FNXC:CodingIdeasWorkflow 2026-07-25-11:20:
+      Replay a nudge that arrived mid-poll. Without this, a move that lands microseconds after the
+      poll's listTasks() snapshot is swallowed by the `if (this.polling) return` re-entry guard and
+      the operator waits a full interval anyway — exactly the symptom the wake exists to remove.
+      Re-entry is bounded: the flag is cleared when the replay poll starts, so a nudge storm during
+      a slow poll produces at most one extra poll.
+      */
+      if (this.nudgeDuringPoll && this.running) {
+        this.nudgeDuringPoll = false;
+        this.requestImmediatePoll();
+      }
     }
   }
 
