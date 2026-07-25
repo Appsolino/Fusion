@@ -611,6 +611,13 @@ export class Scheduler {
   private activePollMs: number | null = null;
   /** Tracks which task IDs are currently paused, to detect unpause transitions. */
   private pausedTaskIds = new Set<string>();
+  /**
+   * FNXC:CodingIdeasWorkflow 2026-07-25-13:10:
+   * Tracks task IDs last seen with status "planning", so the planning -> dispatchable transition
+   * can trigger an immediate scheduling pass. Plan-in-place workflows clear status without a
+   * task:moved, so this is the only signal that the card just became executable.
+   */
+  private planningTaskIds = new Set<string>();
   /** Tracks mission-linked tasks observed with status=failed before moveTask clears status/error. */
   private failedTaskIds = new Set<string>();
   /** Tracks tasks blocked by unavailable-node policy to deduplicate block log entries. */
@@ -929,6 +936,38 @@ export class Scheduler {
         }
       }
 
+      /*
+      FNXC:CodingIdeasWorkflow 2026-07-25-13:10:
+      Dispatch the moment planning finishes, instead of waiting out the poll timer.
+
+      This closes the second half of the "started card does nothing" gap. Triage's finalize clears
+      `status` in place (it deliberately skips the triage->todo move for plan-in-place workflows), so
+      the card becomes dispatchable via a bare task:updated with no task:moved and no pause
+      transition — none of the existing event wakes above fire for it. The operator therefore paid
+      pollIntervalMs (15s default) for planning to start AND another one for execution to start.
+
+      Same shape as the pausedTaskIds tracker above: remember ids seen mid-planning, then fire once
+      on the transition back to a dispatchable state. Guarded on `!task.status` so a planning ->
+      failed/awaiting-approval park does not trigger a pointless pass, and on column so a card
+      finishing planning somewhere unschedulable is ignored. schedule()'s re-entrance guard drops
+      the call harmlessly if a poll-based pass is already running.
+      */
+      if (task.status === "planning") {
+        this.planningTaskIds.add(task.id);
+      } else if (this.planningTaskIds.has(task.id)) {
+        this.planningTaskIds.delete(task.id);
+        if (
+          this.running
+          && !task.status
+          && !task.paused
+          && !task.userPaused
+          && (task.column === "todo" || task.column === "triage")
+        ) {
+          schedulerLog.log(`Task ${task.id} finished planning — triggering scheduling`);
+          this.schedule();
+        }
+      }
+
       if (!this.options.prMonitor) return;
       if (task.column !== "in-review") return;
       if (!task.prInfo) return;
@@ -950,6 +989,9 @@ export class Scheduler {
       this.lastAutoClaimFingerprint.delete(task.id);
       this.options.snapshotManager?.invalidate("task:deleted");
       this.pausedTaskIds.delete(task.id);
+      // FNXC:CodingIdeasWorkflow 2026-07-25-13:10: drop planning tracking with the other per-task
+      // sets so a deleted-mid-planning id cannot leak or fire a stale wake if the id is reused.
+      this.planningTaskIds.delete(task.id);
       this.failedTaskIds.delete(task.id);
       this.recentEngineTodoRequeues.delete(task.id);
       this.wasNodeDispatchValidationBlocked.delete(task.id);
