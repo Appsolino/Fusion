@@ -14,6 +14,8 @@ and the dev checkout (`pnpm dev`, dashboard version badge) still reported the
 last beta.
 */
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
 /**
  * Prerelease-aware semver comparison: returns <0, 0, >0.
  * `1.2.3-beta.1` sorts BELOW `1.2.3`; numeric prerelease identifiers compare
@@ -89,6 +91,27 @@ export function evaluateBetaCycleAnchor({ cycleBase, latestStable }) {
   if (!cycleBase) return { stale: true, anchor: latestStable };
   const stale = compareReleaseVersions(cycleBase, latestStable) < 0;
   return { stale, anchor: stale ? latestStable : cycleBase };
+}
+
+/**
+ * Point each package.json at `version`, skipping files already there or absent.
+ * Used to re-anchor the fixed group (plus the workspace root) on the shipped
+ * stable before `changeset pre enter`, which snapshots these versions into
+ * pre.json's `initialVersions` and derives every X.Y.Z-beta.N from them.
+ *
+ * @returns {string[]} the paths actually rewritten, so a dry-run can restore them.
+ */
+export function setPackageJsonVersions(paths, version) {
+  const rewritten = [];
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    const pkg = JSON.parse(readFileSync(path, "utf8"));
+    if (pkg.version === version) continue;
+    pkg.version = version;
+    writeFileSync(path, JSON.stringify(pkg, null, 2) + "\n");
+    rewritten.push(path);
+  }
+  return rewritten;
 }
 
 /**

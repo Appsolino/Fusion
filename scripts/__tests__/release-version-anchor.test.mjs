@@ -10,12 +10,16 @@ Regression context: v0.73.0 was cut on `release` while `main` stayed in the
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   compareReleaseVersions,
   evaluateBetaCycleAnchor,
   isVersionAheadOfStable,
   latestStableVersionFromTags,
+  setPackageJsonVersions,
 } from "../lib/release-version-anchor.mjs";
 
 test("compareReleaseVersions ranks a prerelease below its stable", () => {
@@ -81,4 +85,22 @@ test("isVersionAheadOfStable rejects releases at or below the newest stable", ()
   assert.equal(isVersionAheadOfStable("0.74.0-beta.0", "0.73.0"), true);
   assert.equal(isVersionAheadOfStable("0.74.0", "0.73.0"), true);
   assert.equal(isVersionAheadOfStable("0.1.0", null), true);
+});
+
+test("setPackageJsonVersions re-anchors only the files that need it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fusion-anchor-test-"));
+  const root = join(dir, "package.json");
+  const cli = join(dir, "cli.package.json");
+  const missing = join(dir, "nope.package.json");
+  writeFileSync(root, JSON.stringify({ name: "root", version: "0.73.0-beta.6" }, null, 2) + "\n");
+  writeFileSync(cli, JSON.stringify({ name: "cli", version: "0.73.0" }, null, 2) + "\n");
+
+  const rewritten = setPackageJsonVersions([root, cli, missing], "0.73.0");
+
+  // Already-anchored and absent files are left alone; the stale one is rewritten.
+  assert.deepEqual(rewritten, [root]);
+  assert.equal(JSON.parse(readFileSync(root, "utf8")).version, "0.73.0");
+  assert.equal(JSON.parse(readFileSync(cli, "utf8")).version, "0.73.0");
+  // Unrelated fields survive the rewrite.
+  assert.equal(JSON.parse(readFileSync(root, "utf8")).name, "root");
 });

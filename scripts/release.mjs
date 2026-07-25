@@ -52,6 +52,7 @@ import {
   evaluateBetaCycleAnchor,
   isVersionAheadOfStable,
   latestStableVersionFromTags,
+  setPackageJsonVersions,
 } from "./lib/release-version-anchor.mjs";
 import {
   archivePointerLine,
@@ -418,24 +419,12 @@ function readFixedGroupPackageNames() {
  * Returns the list of rewritten paths so a dry-run can restore them.
  */
 function rewriteFixedGroupVersions(version) {
-  const rewritten = [];
+  const paths = ["package.json"];
   for (const name of readFixedGroupPackageNames()) {
     const dir = findPackageDir(name);
-    if (!dir) continue;
-    const pkgPath = join(dir, "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-    if (pkg.version === version) continue;
-    pkg.version = version;
-    writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
-    rewritten.push(pkgPath);
+    if (dir) paths.push(join(dir, "package.json"));
   }
-  const rootPkg = JSON.parse(readFileSync("package.json", "utf8"));
-  if (rootPkg.version !== version) {
-    rootPkg.version = version;
-    writeFileSync("package.json", JSON.stringify(rootPkg, null, 2) + "\n");
-    rewritten.push("package.json");
-  }
-  return rewritten;
+  return setPackageJsonVersions(paths, version);
 }
 
 /**
