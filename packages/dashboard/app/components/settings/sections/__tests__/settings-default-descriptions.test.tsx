@@ -67,6 +67,8 @@ function resolveCanonicalDefault(settingKey: string): unknown {
  * English description states that setting's default value.
  */
 const SETTING_DESCRIPTION_KEYS: Record<string, string> = {
+  // AuthenticationSection — Anthropic dual-credential precedence (default api-key)
+  anthropicAuthPreference: "auth.anthropicPreferenceHint",
   // GlobalGeneralSection
   githubTrackingDefaultRepo: "globalGeneral.projectsInheritThisValueWhenTheyDoNot",
   gitlabEnabled: "merge.gitLabAuthDetails",

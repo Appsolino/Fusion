@@ -8,6 +8,7 @@
  */
 import type { SettingsSearchEntry } from "./types";
 import { appearanceSearchEntries } from "../sections/AppearanceSection.search";
+import { authenticationSearchEntries } from "../sections/AuthenticationSection.search";
 import { backupsSearchEntries } from "../sections/BackupsSection.search";
 import { databaseBackupsSearchEntries } from "../sections/DatabaseBackupsSection.search";
 import { commandsSearchEntries } from "../sections/CommandsSection.search";
@@ -36,6 +37,7 @@ import { worktreesSearchEntries } from "../sections/WorktreesSection.search";
  */
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   ...appearanceSearchEntries,
+  ...authenticationSearchEntries,
   ...backupsSearchEntries,
   ...databaseBackupsSearchEntries,
   ...commandsSearchEntries,
