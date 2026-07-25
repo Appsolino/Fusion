@@ -402,6 +402,32 @@ Fix the invariant for BOTH presentations (standalone modal + embedded SettingsVi
     white-space: normal;
   }
 
+  /*
+  FNXC:SettingsUpdate 2026-07-25-19:40:
+  Mobile-only row that carries the update-check result above the footer rail (rendered by SettingsModal.tsx when
+  viewportMode === "mobile"). The rail below is a deliberate nowrap scroller; the banner is not, so it wraps and
+  centers here at full width and can no longer clip itself or shove Import/Export/Reset/Close out of view.
+  It owns the footer's top divider and the adjacent rail drops its own so the two rows read as one footer block.
+  */
+  .settings-modal .settings-modal-footer-update-row {
+    display: flex;
+    flex-shrink: 0;
+    justify-content: center;
+    text-align: center;
+    padding: var(--space-sm) var(--modal-padding) 0;
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+
+  .settings-modal .settings-modal-footer-update-row + .modal-actions {
+    border-top: none;
+  }
+
+  .settings-modal .settings-modal-footer-update-row .settings-update-result {
+    justify-content: center;
+    white-space: normal;
+  }
+
   .settings-modal .settings-footer-help-btn {
     align-items: center;
     flex-shrink: 0;

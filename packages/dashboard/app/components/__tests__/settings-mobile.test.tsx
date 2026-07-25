@@ -397,10 +397,38 @@ describe("SettingsModal mobile adaptations", () => {
 
     await user.click(within(modalActions as HTMLElement).getByRole("button", { name: "Check for updates" }));
     const updateNow = await findByRole("button", { name: "Update now" });
-    expect((modalActions as HTMLElement).contains(updateNow)).toBe(true);
+
+    /*
+    The mobile footer rail is a single nowrap horizontal scroller, so the update banner must live in its own
+    full-width row directly above it — inside the rail it clipped itself and pushed Import/Export/Reset/Close
+    off-screen. Assert both halves of that invariant: banner outside the rail, banner present in the footer row.
+    */
+    const updateRow = container.querySelector(".settings-modal-footer-update-row");
+    expect(updateRow).toBeTruthy();
+    expect((updateRow as HTMLElement).contains(updateNow)).toBe(true);
+    expect((modalActions as HTMLElement).contains(updateNow)).toBe(false);
+    expect(modalActions?.querySelector(".settings-update-result")).toBeNull();
+    expect(updateRow?.nextElementSibling).toBe(modalActions);
 
     await user.click(updateNow);
     expect(await findByText("Updated to v2.0.0 — restart Fusion to apply")).toBeTruthy();
+  });
+
+  it("keeps the update result inline in the footer rail on desktop", async () => {
+    mockSettingsViewport(false);
+    const user = userEvent.setup();
+    const { container, findByRole } = render(<SettingsModal onClose={vi.fn()} addToast={vi.fn()} />);
+    await waitFor(() => expect(fetchSettings).toHaveBeenCalled());
+
+    const modalActions = container.querySelector(".modal-actions");
+    expect(modalActions).toBeTruthy();
+
+    await user.click(within(modalActions as HTMLElement).getByRole("button", { name: "Check for updates" }));
+    const updateNow = await findByRole("button", { name: "Update now" });
+
+    expect(container.querySelector(".settings-modal-footer-update-row")).toBeNull();
+    expect((modalActions as HTMLElement).contains(updateNow)).toBe(true);
+    expect(container.querySelector(".settings-update-check .settings-update-result")).toBeTruthy();
   });
 
   it("preserves the mobile section picker accessible name without rendering a visible label", async () => {
@@ -811,6 +839,10 @@ describe("SettingsModal mobile adaptations", () => {
     expectMobileRule(css, ".settings-modal .settings-modal-footer-version", "margin-right: 0;");
     expectMobileRule(css, ".settings-modal .settings-update-check", "align-items: center;");
     expectMobileRule(css, ".settings-modal .settings-update-check", "flex-wrap: wrap;");
+    // The update banner owns a full-width row above the nowrap footer rail, and the rail drops its duplicate divider.
+    expectMobileRule(css, ".settings-modal .settings-modal-footer-update-row", "border-top: 1px solid var(--border);");
+    expectMobileRule(css, ".settings-modal .settings-modal-footer-update-row", "justify-content: center;");
+    expectMobileRule(css, ".settings-modal .settings-modal-footer-update-row + .modal-actions", "border-top: none;");
     expectMobileRule(css, ".settings-modal .settings-version-check-btn", "line-height: 1;");
     expectMobileRule(css, ".settings-modal .settings-version-check-btn", "white-space: nowrap;");
     expectMobileRule(css, ".settings-modal .settings-modal-version", "display: inline-flex;");

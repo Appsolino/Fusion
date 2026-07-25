@@ -2160,6 +2160,30 @@ export function SettingsModal({
     return t("settings.general.upToDate", "You're up to date ✓");
   }, [handleInstallUpdate, handleRestart, restartError, restartLoading, restartScheduled, restartSupported, t, updateCheckResult, updateInstallLoading, updateInstallResult]);
 
+  /*
+  FNXC:SettingsUpdate 2026-07-25-19:40:
+  The update-check result ("vX available · Learn more" plus the Update now / Restart controls) is one node rendered
+  in two places: inline next to the version button on desktop/tablet, and on its OWN full-width row above the footer
+  rail on mobile. The mobile footer is a single nowrap horizontally-scrolling rail (FN-7752); once an update banner
+  joined that rail its intrinsic width exceeded the viewport, so the banner itself was clipped mid-sentence and
+  Import/Export/Reset/Close were pushed off-screen behind a scroll affordance operators do not see. Giving the banner
+  its own row keeps the rail to the controls it was sized for, and the banner wraps normally instead of clipping.
+  */
+  const updateCheckResultNode = updateCheckResult ? (
+    <span
+      aria-live="polite"
+      className={`settings-update-result ${
+        updateCheckResult.error
+          ? "settings-update-result--error"
+          : updateCheckResult.updateAvailable
+            ? "settings-update-result--available"
+            : "settings-update-result--up-to-date"
+      }`}
+    >
+      {renderUpdateCheckResultContent()}
+    </span>
+  ) : null;
+
   // Load auth status when the authentication section is active
   const loadAuthStatus = useCallback(async () => {
     try {
@@ -4916,6 +4940,9 @@ export function SettingsModal({
             </div>
           </div>
         )}
+        {viewportMode === "mobile" && updateCheckResultNode && (
+          <div className="settings-modal-footer-update-row">{updateCheckResultNode}</div>
+        )}
         <div className="modal-actions">
           <div className="settings-modal-footer-version">
             <a
@@ -4952,20 +4979,7 @@ export function SettingsModal({
                   <RefreshCw size={12} className={updateCheckLoading ? "spinning" : undefined} />
                 </button>
               )}
-              {updateCheckResult && (
-                <span
-                  aria-live="polite"
-                  className={`settings-update-result ${
-                    updateCheckResult.error
-                      ? "settings-update-result--error"
-                      : updateCheckResult.updateAvailable
-                        ? "settings-update-result--available"
-                        : "settings-update-result--up-to-date"
-                  }`}
-                >
-                  {renderUpdateCheckResultContent()}
-                </span>
-              )}
+              {viewportMode !== "mobile" && updateCheckResultNode}
             </div>
           </div>
           <div className="modal-actions-left">
