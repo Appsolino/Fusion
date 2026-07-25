@@ -5755,7 +5755,13 @@
       "statusActive": "✓ 활성",
       "statusNotConnected": "✗ 연결되지 않음",
       "title": "인증",
-      "waitingForLogin": "로그인을 기다리는 중…"
+      "waitingForLogin": "로그인을 기다리는 중…",
+      "anthropicPreferenceLabel": "Anthropic credential to use",
+      "anthropicPreferenceHint": "You have both an Anthropic API key and a Claude subscription connected. Choose which one Fusion sends when a lane calls Anthropic directly. Default: API key.",
+      "anthropicPreferenceApiKey": "API key",
+      "anthropicPreferenceSubscription": "Claude subscription",
+      "credentialInUse": "In use",
+      "credentialOverridden": "Overridden below"
     },
     "authentication": {
       "enterAPIKey": "",

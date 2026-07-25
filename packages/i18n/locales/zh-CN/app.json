@@ -5755,7 +5755,13 @@
       "statusActive": "✓ 已激活",
       "statusNotConnected": "✗ 未连接",
       "title": "认证",
-      "waitingForLogin": "等待登录…"
+      "waitingForLogin": "等待登录…",
+      "anthropicPreferenceLabel": "Anthropic credential to use",
+      "anthropicPreferenceHint": "You have both an Anthropic API key and a Claude subscription connected. Choose which one Fusion sends when a lane calls Anthropic directly. Default: API key.",
+      "anthropicPreferenceApiKey": "API key",
+      "anthropicPreferenceSubscription": "Claude subscription",
+      "credentialInUse": "In use",
+      "credentialOverridden": "Overridden below"
     },
     "authentication": {
       "enterAPIKey": "",
