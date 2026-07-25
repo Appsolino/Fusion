@@ -1,5 +1,26 @@
 # @fusion/dashboard
 
+## 0.74.0-beta.2
+
+### Patch Changes
+
+- @fusion/core@0.74.0-beta.2
+- @fusion/engine@0.74.0-beta.2
+- @fusion/i18n@0.39.32-beta.2
+- @fusion-plugin-examples/claude-runtime@0.1.7-beta.2
+- @fusion-plugin-examples/cli-printing-press@0.1.49-beta.2
+- @fusion-plugin-examples/compound-engineering@0.1.32-beta.2
+- @fusion-plugin-examples/dependency-graph@0.1.63-beta.2
+- @fusion-plugin-examples/grok-runtime@0.2.10-beta.2
+- @fusion-plugin-examples/omp-runtime@0.1.7-beta.2
+- @fusion-plugin-examples/quality@0.1.7-beta.2
+- @fusion-plugin-examples/roadmap@0.1.51-beta.2
+- @fusion-plugin-examples/cursor-runtime@0.1.51-beta.2
+- @fusion-plugin-examples/droid-runtime@0.1.58-beta.2
+- @fusion-plugin-examples/hermes-runtime@0.2.82-beta.2
+- @fusion-plugin-examples/openclaw-runtime@0.2.82-beta.2
+- @fusion-plugin-examples/paperclip-runtime@0.2.82-beta.2
+
 ## 0.74.0-beta.1
 
 ### Patch Changes

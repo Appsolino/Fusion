@@ -62,12 +62,16 @@
     "lane-model-pair-resolution",
     "mobile-nav-large-phones",
     "paused-engine-visibility",
+    "plan-review-shared-root-session-collision",
+    "planning-evacuation-and-worktree-sweep",
     "planning-model-pair-rehydration",
     "planning-single-add-comment-trigger",
     "project-switch-modal-reset",
     "quick-add-start-button",
     "quick-add-start-seeds-prompt",
     "quick-chat-tablet-drag-header",
+    "session-contention-worktree-isolation",
+    "settings-footer-update-banner-mobile",
     "system-panel-restart-agents-pg",
     "terminal-blank-until-keypress-refresh"
   ]

@@ -1,5 +1,25 @@
 # @runfusion/fusion
 
+## 0.74.0-beta.2
+
+### Minor Changes
+
+- d10d91b: summary: Moving a card out of Todo while it plans now stops planning, clears the badge, and frees its worktree.
+  category: fix
+  dev: TriageProcessor gains `taskEvacuatedFromPlanningHandler` (reuses the pause/delete abort path, clears `status: "planning"`); the executor aborts in-flight work on a backward move out of todo/triage and calls `releasePreExecutionWorktree`, which requires no execution timestamp, no live session, and a clean branch. A new self-healing sweep `reconcile-pre-execution-worktrees` reclaims parked worktrees only after 30 days of complete inactivity, skipping todo/executing/paused/status-carrying/blocked/recovery-scheduled rows. `hasAdvancedPastPlanning` no longer reads `worktree` as execution evidence — planning owns one now — and uses `firstExecutionAt`/`executionStartedAt` instead.
+- 168819b: summary: Planning and every review step now run in the task's own worktree, never the shared checkout.
+  category: fix
+  dev: Planning acquires the task worktree (TriageProcessor `acquirePlanningWorktree` → `TaskExecutor.ensureTaskWorktreeForPlanning`); graph nodes with no worktree acquire one instead of falling back to `rootDir`, and Plan Review re-acquires when its recorded worktree is gone (replacing the FN-7996 repo-root degrade). Registration goes through `acquireActiveSessionPath`, which reclaims a leaked entry whose holder is provably dead and aged past the FN-5256 floor. Remaining contention gets `SESSION_CONTENTION_HOLD_VALUE`: `isSessionContentionError` classifies it transient, `isNonPlanDefectPlanReviewFailure` explicitly excludes it, and the executor waits on a 10-attempt 5s→60s ladder that ends in a benign requeue, never a park.
+
+### Patch Changes
+
+- e6b2da6: summary: Two tasks can now run Plan Review at the same time instead of one failing and parking.
+  category: fix
+  dev: `TaskExecutor.sessionRegistryPath` now task-scopes the activeSessionRegistry key for any session rooted at `rootDir`, not just in workspace mode. Read-only graph nodes (Plan Review) run at the repo root, so the bare-root key made the second concurrent task throw `ActiveSessionPathHeldByForeignTaskError`, which surfaced as a Plan Review provider failure and burned the in-place retry budget.
+- b0fdef4: summary: Fix the Settings footer update notice and buttons being cut off on mobile.
+  category: fix
+  dev: On mobile the update-check result renders in a new `.settings-modal-footer-update-row` above the nowrap `.modal-actions` rail; desktop/tablet keep it inline next to the version button.
+
 ## 0.74.0-beta.1
 
 ### Minor Changes

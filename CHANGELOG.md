@@ -2,6 +2,25 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.74.0-beta.2
+
+### Highlights
+
+- Two tasks can run Plan Review at the same time instead of one failing and parking
+- Planning and every review step run in the task's own worktree, never the shared checkout
+- Moving a card out of Todo mid-plan stops planning, clears the badge, and frees the worktree
+- Session contention now waits and requeues on a 10-attempt ladder instead of parking the task
+- Mobile Settings footer no longer clips the update notice and buttons
+
+### Fixed
+
+- Concurrent tasks no longer collide in Plan Review: the second task used to surface a provider failure and burn its retry budget. Sessions are now scoped per task even outside workspace mode.
+- Planning and all review steps acquire the task's own worktree instead of degrading to the shared repo root; Plan Review re-acquires a worktree if its recorded one is gone.
+- Remaining contention is treated as transient: the engine waits on a 10-attempt ladder from 5s to 60s and ends in a benign requeue rather than parking the task.
+- Moving a card backward out of Todo while it is planning now aborts the in-flight planning run, clears the planning badge, and releases the pre-execution worktree.
+- A new self-healing sweep reclaims parked pre-execution worktrees only after 30 days of complete inactivity, skipping todo, executing, paused, blocked, and recovery-scheduled tasks.
+- On mobile, the Settings update-check result renders on its own row above the action buttons instead of being cut off; desktop and tablet keep it inline next to the version button.
+
 ## 0.74.0-beta.1
 
 ### Highlights
