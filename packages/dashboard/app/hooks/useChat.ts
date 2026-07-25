@@ -151,7 +151,7 @@ export interface UseChatReturn {
    */
   setSessionThinkingLevel: (id: string, level: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
-  createTag: (name: string) => Promise<void>;
+  createTag: (name: string) => Promise<ChatTag>;
   renameTag: (id: string, name: string) => Promise<void>;
   deleteTag: (id: string) => Promise<void>;
   setSessionTags: (sessionId: string, tagIds: string[]) => Promise<void>;
@@ -1705,7 +1705,7 @@ export function useChat(
   }, [trimmedSearchQuery, projectId]);
 
   /* FNXC:ChatTags 2026-08-05-10:55: optimistic assignment keeps shared Chat hosts in sync while a failed API mutation rolls back exactly the prior session snapshot. */
-  const createTag = useCallback(async (name: string) => { const response = await apiCreateChatTag(name, projectId); setTags((previous) => [...previous, response.tag].sort((a, b) => a.name.localeCompare(b.name))); }, [projectId]);
+  const createTag = useCallback(async (name: string): Promise<ChatTag> => { const response = await apiCreateChatTag(name, projectId); setTags((previous) => [...previous, response.tag].sort((a, b) => a.name.localeCompare(b.name))); return response.tag; }, [projectId]);
   const renameTag = useCallback(async (id: string, name: string) => { const response = await apiRenameChatTag(id, name, projectId); setTags((previous) => previous.map((tag) => tag.id === id ? response.tag : tag).sort((a, b) => a.name.localeCompare(b.name))); setSessions((previous) => previous.map((session) => ({ ...session, tags: (session.tags ?? []).map((tag) => tag.id === id ? response.tag : tag) }))); }, [projectId]);
   const deleteTag = useCallback(async (id: string) => { await apiDeleteChatTag(id, projectId); setTags((previous) => previous.filter((tag) => tag.id !== id)); setSessions((previous) => previous.map((session) => ({ ...session, tags: (session.tags ?? []).filter((tag) => tag.id !== id) }))); setSelectedTagId((selected) => selected === id ? null : selected); }, [projectId]);
   const setSessionTags = useCallback(async (sessionId: string, tagIds: string[]) => {

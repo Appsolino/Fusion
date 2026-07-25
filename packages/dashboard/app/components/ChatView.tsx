@@ -3167,6 +3167,38 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     ? filteredSessions.find((session) => session.id === contextMenu.sessionId) ?? (activeSession?.id === contextMenu.sessionId ? activeSession : undefined)
     : undefined;
 
+  /**
+   * FNXC:ChatTags 2026-07-24-23:19:
+   * A tag created from a session context menu must be assigned to that open session immediately,
+   * preserving its existing tags so the user never has to select the newly created tag twice.
+   */
+  const handleCreateTagForSession = useCallback(async () => {
+    const name = newTagName.trim();
+    if (!name) return;
+
+    let tag;
+    try {
+      tag = await createTag(name);
+    } catch {
+      addToast(t("chat.failedToCreateTag", "Failed to create tag"), "error");
+      return;
+    }
+
+    if (contextMenu?.sessionId) {
+      const tagIds = (contextMenuSession?.tags ?? []).map((candidate) => candidate.id);
+      if (!tagIds.includes(tag.id)) {
+        try {
+          await setSessionTags(contextMenu.sessionId, [...tagIds, tag.id]);
+        } catch {
+          addToast(t("chat.failedToUpdateTags", "Failed to update tags"), "error");
+          return;
+        }
+      }
+    }
+
+    setNewTagName("");
+  }, [addToast, contextMenu, contextMenuSession, createTag, newTagName, setSessionTags, t]);
+
   const mobileDirectSessionSwitcher = showMobileSessionSwitcher ? (
     <div className="chat-mobile-session-menu" ref={mobileSessionMenuRef}>
       <button
@@ -3684,8 +3716,8 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
               </div>;
             })}
             <div className="chat-tag-create-row">
-              <input className="input" value={newTagName} placeholder={t("chat.newTag", "New tag")} aria-label={t("chat.newTag", "New tag")} onChange={(event) => setNewTagName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void createTag(newTagName).then(() => setNewTagName("")).catch(() => addToast(t("chat.failedToCreateTag", "Failed to create tag"), "error")); } }} />
-              <button type="button" className="btn btn-sm" onClick={() => void createTag(newTagName).then(() => setNewTagName("")).catch(() => addToast(t("chat.failedToCreateTag", "Failed to create tag"), "error"))}>{t("chat.addTag", "Add")}</button>
+              <input className="input" value={newTagName} placeholder={t("chat.newTag", "New tag")} aria-label={t("chat.newTag", "New tag")} onChange={(event) => setNewTagName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void handleCreateTagForSession(); } }} />
+              <button type="button" className="btn btn-sm" onClick={() => void handleCreateTagForSession()}>{t("chat.addTag", "Add")}</button>
             </div>
           </div>
           <button
