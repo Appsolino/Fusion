@@ -2788,5 +2788,10 @@ Queued-message banners stack above the composer input with a capped scroll area,
 .chat-tag-create-row .input { min-width: 0; }
 @media (max-width: 768px) {
   .chat-session-tags { max-height: calc(var(--space-lg) * 2); }
-  .chat-tag-menu-item { gap: var(--space-2xs); }
+  /*
+  FNXC:ChatTags 2026-07-24-23:05:
+  Compact mobile tag-menu gap must use a defined token. --space-2xs is intentionally
+  undefined (space-token-defined hygiene); half of --space-xs matches the prior intent.
+  */
+  .chat-tag-menu-item { gap: calc(var(--space-xs) / 2); }
 }
