@@ -2055,16 +2055,27 @@ describe("SettingsModal", () => {
       mockUpdateSettings.mockRejectedValueOnce(new Error("offline"));
       renderModal({ initialSection: "general", addToast });
       await waitForSettingsModalReady();
+      /*
+      FNXC:SettingsModalTests 2026-07-25-18:20:
+      Drive the 500ms auto-save debounce deterministically with fake timers instead of a real-timer waitFor.
+      Waiting the debounce out on the wall clock (two cycles) added ~1s of dead time to the dashboard's
+      slowest feedback-loop suite for no added coverage; advancing fake timers keeps the retry semantics
+      identical while removing the artificial wait (Standing Rule: prefer fake timers over real time waits).
+      */
+      vi.useFakeTimers();
 
       changeProjectToggle();
-      await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledTimes(1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(mockUpdateSettings).toHaveBeenCalledTimes(1);
       expect(addToast).toHaveBeenCalledWith("offline", "error");
       expect(screen.getByRole("dialog")).toBeInTheDocument();
 
       changeProjectToggle();
       changeProjectToggle();
-      await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledTimes(2));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(mockUpdateSettings).toHaveBeenCalledTimes(2);
       expect(screen.queryByRole("button", { name: /^Save$/i })).not.toBeInTheDocument();
+      vi.useRealTimers();
     });
 
     it("trails an in-flight snapshot so an older response cannot overwrite the final edit", async () => {
@@ -2072,15 +2083,20 @@ describe("SettingsModal", () => {
       mockUpdateSettings.mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirstSave = resolve; }));
       renderModal({ initialSection: "general" });
       await waitForSettingsModalReady();
+      // FNXC:SettingsModalTests 2026-07-25-18:20: fake timers flush the 500ms auto-save debounce without a real-timer wait; the trailing-snapshot persist still fires when the in-flight save resolves.
+      vi.useFakeTimers();
 
       changeProjectToggle();
-      await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledTimes(1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(mockUpdateSettings).toHaveBeenCalledTimes(1);
       changeProjectToggle();
       await act(async () => { finishFirstSave?.(); });
 
-      await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledTimes(2));
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(mockUpdateSettings).toHaveBeenCalledTimes(2);
       expect(mockUpdateSettings.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ capacityRiskBannerEnabled: true }));
       expect(mockUpdateSettings.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ capacityRiskBannerEnabled: false }));
+      vi.useRealTimers();
     });
   });
 
