@@ -2270,3 +2270,7 @@ Custom workflow authors can add optional explanatory copy beneath each column na
 ## Planning Mode contextual comments
 
 In plan review, select text inside the rendered plan and choose **Add comment to selection**. On mobile widths through 768px, the selection action appears in the bottom plan-action rail beside **Refine** and **Proceed with plan**; at 769px and wider it stays beside the selected plan content. Enter a suggestion to capture the selected quote and suggestion as a pending contextual comment. You can remove individual comments before choosing **Submit comments**; Fusion sends the ordered batch through the existing Planning Mode revision generation, so the agent revises the quoted areas while preserving unaffected plan content. A successful revised-plan update clears the batch; a failed submission retains it for retry.
+
+### Conversation tags
+
+Direct conversations can be organized with reusable tags. Open a conversation's **More** menu to create a tag or toggle its assignments; a conversation can have multiple tags. Use the tag selector beside conversation search to filter pinned and recent conversations without affecting text search. Tags are project-scoped, and deleting a tag only removes its assignments—it never deletes conversations or messages. Chat Rooms do not use conversation tags.

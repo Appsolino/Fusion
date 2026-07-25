@@ -2330,6 +2330,9 @@ export type {
 
 export type {
   ChatSessionStatus,
+  ChatTag,
+  ChatTagCreateInput,
+  ChatTagUpdateInput,
   ChatMessageRole,
   ChatInFlightToolCall,
   ChatInFlightGenerationState,

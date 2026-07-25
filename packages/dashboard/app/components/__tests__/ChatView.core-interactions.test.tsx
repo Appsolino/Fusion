@@ -1180,6 +1180,33 @@ describe("ChatView core interactions", () => {
     expect(screen.getByTestId("chat-context-delete")).toBeInTheDocument();
   });
 
+  it("renders tag rename and deletion controls from the conversation menu", async () => {
+    const renameTag = vi.fn().mockResolvedValue(undefined);
+    const deleteTag = vi.fn().mockResolvedValue(undefined);
+    const tag = { id: "tag-topic", projectId: "proj-123", name: "Topic", createdAt: "2026-04-08T00:00:00.000Z", updatedAt: "2026-04-08T00:00:00.000Z" };
+    setupMockChat({
+      sessions: [{ id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", tags: [tag], createdAt: tag.createdAt, updatedAt: tag.updatedAt }],
+      filteredSessions: [{ id: "session-001", agentId: "agent-001", status: "active", title: "Test Chat", tags: [tag], createdAt: tag.createdAt, updatedAt: tag.updatedAt }],
+      tags: [tag],
+      renameTag,
+      deleteTag,
+    });
+
+    await renderWithAct(<ChatView projectId="proj-123" addToast={vi.fn()} />);
+    await userEvent.pointer({ target: screen.getByTestId("chat-session-session-001"), keys: "[MouseRight]" });
+
+    await userEvent.click(screen.getByTestId("chat-context-rename-tag-tag-topic"));
+    await userEvent.clear(screen.getByTestId("chat-rename-tag-input"));
+    await userEvent.type(screen.getByTestId("chat-rename-tag-input"), "Research");
+    await userEvent.click(screen.getByTestId("chat-rename-tag-save"));
+    expect(renameTag).toHaveBeenCalledWith("tag-topic", "Research");
+
+    await userEvent.pointer({ target: screen.getByTestId("chat-session-session-001"), keys: "[MouseRight]" });
+    await userEvent.click(screen.getByTestId("chat-context-delete-tag-tag-topic"));
+    await userEvent.click(screen.getByTestId("chat-delete-tag-confirm"));
+    expect(deleteTag).toHaveBeenCalledWith("tag-topic");
+  });
+
   it("calls archiveSession when clicking Archive in context menu", async () => {
     const archiveSession = vi.fn();
     setupMockChat({

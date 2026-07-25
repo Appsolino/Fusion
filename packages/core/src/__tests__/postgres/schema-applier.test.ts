@@ -79,6 +79,7 @@ import {
   TASK_WEDGE_NOTIFICATION_VERSION,
   MILESTONE_ASSERTION_PROVENANCE_VERSION,
   MISSION_LINEAGE_STOP_VERSION,
+  CHAT_SESSION_TAGS_VERSION,
 } from "../../postgres/schema-applier.js";
 import { ProjectPartitionRekeyError, rekeyFallbackProjectPartition } from "../../postgres/migration-stamping.js";
 import type { PluginSchemaInitHook } from "../../postgres/plugin-schema-hook.js";
@@ -665,7 +666,7 @@ pgDescribe("schema-applier: VAL-SCHEMA-001 final-schema parity (table counts)", 
     // + 1 task_verification_requests + 1 durable symbol_locks table (FN-8305)
     // + 1 mission_lineage_stops (FNXC:MissionLineageBudget FN-8543 / migration 0035).
     // Plugin tables are added separately by the hook.
-    expect(bySchema.project).toBe(96);
+    expect(bySchema.project).toBe(98);
     expect(bySchema.central).toBe(18);
     expect(bySchema.archive).toBe(1);
   });
@@ -1630,6 +1631,7 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
       TASK_WEDGE_NOTIFICATION_VERSION,
       MILESTONE_ASSERTION_PROVENANCE_VERSION,
       MISSION_LINEAGE_STOP_VERSION,
+  CHAT_SESSION_TAGS_VERSION,
     ]);
     expect((await applySchemaBaseline(ctx.db, { pluginHooks: [] })).applied).toBe(false);
   });
@@ -1691,6 +1693,7 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
       TASK_WEDGE_NOTIFICATION_VERSION,
       MILESTONE_ASSERTION_PROVENANCE_VERSION,
       MISSION_LINEAGE_STOP_VERSION,
+  CHAT_SESSION_TAGS_VERSION,
     ]);
   });
 
@@ -1885,6 +1888,7 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
       TASK_WEDGE_NOTIFICATION_VERSION,
       MILESTONE_ASSERTION_PROVENANCE_VERSION,
       MISSION_LINEAGE_STOP_VERSION,
+  CHAT_SESSION_TAGS_VERSION,
     ]);
   });
 
@@ -1960,6 +1964,7 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
       TASK_WEDGE_NOTIFICATION_VERSION,
       MILESTONE_ASSERTION_PROVENANCE_VERSION,
       MISSION_LINEAGE_STOP_VERSION,
+  CHAT_SESSION_TAGS_VERSION,
     ]);
   });
 
@@ -2035,6 +2040,7 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
       TASK_WEDGE_NOTIFICATION_VERSION,
       MILESTONE_ASSERTION_PROVENANCE_VERSION,
       MISSION_LINEAGE_STOP_VERSION,
+  CHAT_SESSION_TAGS_VERSION,
     ]);
   });
 });

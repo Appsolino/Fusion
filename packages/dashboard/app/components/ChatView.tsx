@@ -21,13 +21,14 @@ import {
   Pin,
   PinOff,
   MoreHorizontal,
+  Tag,
 } from "lucide-react";
 import { FN_AGENT_ID, TASK_PLANNER_CHAT_AGENT_ID_PREFIX, useChat, type ChatMessageInfo } from "../hooks/useChat";
 import { RoomMessageDeliveredButReplyFailedError, useChatRooms } from "../hooks/useChatRooms";
 import { useChatUnread } from "../hooks/useChatUnread";
 import { useViewportMode } from "./Header";
 import { fetchSettings, updateGlobalSettings, type DiscoveredSkill } from "../api";
-import { type Agent, type Settings } from "@fusion/core";
+import { type Agent, type ChatTag, type Settings } from "@fusion/core";
 import { CustomModelDropdown } from "./CustomModelDropdown";
 import { ChatThinkingLevelControl } from "./ChatThinkingLevelControl";
 import { AgentMentionPopup } from "./AgentMentionPopup";
@@ -626,6 +627,13 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     setSessionModel,
     setSessionThinkingLevel,
     deleteSession,
+    tags = [],
+    selectedTagId,
+    setSelectedTagId,
+    createTag,
+    renameTag,
+    deleteTag,
+    setSessionTags,
     sendMessage,
     editMessageAndResend,
     stopStreaming,
@@ -715,6 +723,10 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
   const [renameTitle, setRenameTitle] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [confirmDeleteRoomId, setConfirmDeleteRoomId] = useState<string | null>(null);
+  const [newTagName, setNewTagName] = useState("");
+  const [renameTagDialog, setRenameTagDialog] = useState<{ id: string; name: string } | null>(null);
+  const [renameTagName, setRenameTagName] = useState("");
+  const [confirmDeleteTag, setConfirmDeleteTag] = useState<ChatTag | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(CHAT_SIDEBAR_DEFAULT_WIDTH);
   const [createRoomOpen, setCreateRoomOpen] = useState(false);
@@ -3385,6 +3397,20 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
                   data-testid="chat-search-input"
                 />
               </div>
+              <label className="chat-tag-filter" htmlFor="chat-tag-filter">
+                <Tag size={14} aria-hidden="true" />
+                <select
+                  id="chat-tag-filter"
+                  value={selectedTagId ?? ""}
+                  onChange={(event) => setSelectedTagId(event.target.value || null)}
+                  data-testid="chat-tag-filter"
+                  aria-label={t("chat.filterByTag", "Filter conversations by tag")}
+                >
+                  <option value="">{t("chat.allTags", "All tags")}</option>
+                  {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
+                </select>
+                {selectedTagId ? <button type="button" className="btn-icon" aria-label={t("chat.clearTagFilter", "Clear tag filter")} onClick={() => setSelectedTagId(null)}><X size={14} /></button> : null}
+              </label>
             </div>
             {/* Session list section */}
             <div className="chat-session-list chat-sidebar-list">
@@ -3465,6 +3491,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
                       <div className="chat-session-preview">
                         {session.lastMessagePreview || t("chat.noMessages", "No messages")}
                       </div>
+                      {(session.tags ?? []).length > 0 ? <div className="chat-session-tags" data-testid={`chat-session-tags-${session.id}`}>{(session.tags ?? []).map((tag) => <span className="chat-session-tag" key={tag.id}>{tag.name}</span>)}</div> : null}
                       {session.matchedMessagePreview ? (
                         <div className="chat-session-preview chat-session-preview--matched" data-testid={`chat-session-matched-preview-${session.id}`}>
                           {t("chat.matchedInMessage", "Matched: \"{{preview}}\"", { preview: session.matchedMessagePreview })}
@@ -3647,6 +3674,20 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
             <Pencil size={14} />
             {t("chat.rename", "Rename")}
           </button>
+          <div className="chat-session-tag-menu" role="group" aria-label={t("chat.conversationTags", "Conversation tags")}>
+            {tags.map((tag) => {
+              const assigned = (contextMenuSession?.tags ?? []).some((candidate) => candidate.id === tag.id);
+              return <div className="chat-tag-menu-item" key={tag.id}>
+                <button type="button" role="menuitemcheckbox" aria-checked={assigned} data-testid={`chat-context-tag-${tag.id}`} onClick={() => void setSessionTags(contextMenu.sessionId, assigned ? (contextMenuSession?.tags ?? []).filter((candidate) => candidate.id !== tag.id).map((candidate) => candidate.id) : [...(contextMenuSession?.tags ?? []).map((candidate) => candidate.id), tag.id]).catch(() => addToast(t("chat.failedToUpdateTags", "Failed to update tags"), "error"))}>{assigned ? "✓ " : ""}{tag.name}</button>
+                <button type="button" className="btn-icon" aria-label={t("chat.renameTag", "Rename tag {{name}}", { name: tag.name })} data-testid={`chat-context-rename-tag-${tag.id}`} onClick={(event) => { event.stopPropagation(); setRenameTagName(tag.name); setRenameTagDialog(tag); }}><Pencil size={14} /></button>
+                <button type="button" className="btn-icon" aria-label={t("chat.deleteTag", "Delete tag {{name}}", { name: tag.name })} data-testid={`chat-context-delete-tag-${tag.id}`} onClick={(event) => { event.stopPropagation(); setConfirmDeleteTag(tag); }}><Trash2 size={14} /></button>
+              </div>;
+            })}
+            <div className="chat-tag-create-row">
+              <input className="input" value={newTagName} placeholder={t("chat.newTag", "New tag")} aria-label={t("chat.newTag", "New tag")} onChange={(event) => setNewTagName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void createTag(newTagName).then(() => setNewTagName("")).catch(() => addToast(t("chat.failedToCreateTag", "Failed to create tag"), "error")); } }} />
+              <button type="button" className="btn btn-sm" onClick={() => void createTag(newTagName).then(() => setNewTagName("")).catch(() => addToast(t("chat.failedToCreateTag", "Failed to create tag"), "error"))}>{t("chat.addTag", "Add")}</button>
+            </div>
+          </div>
           <button
             onClick={() => handleArchive(contextMenu.sessionId)}
             data-testid="chat-context-archive"
@@ -3711,6 +3752,33 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
               >
                 {t("chat.save", "Save")}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameTagDialog && (
+        <div className="chat-new-dialog-backdrop chat-view-dialog-backdrop" onClick={() => setRenameTagDialog(null)}>
+          <div className="chat-new-dialog chat-view-dialog" role="dialog" aria-modal="true" aria-labelledby="chat-rename-tag-dialog-title" onClick={(event) => event.stopPropagation()}>
+            <h3 id="chat-rename-tag-dialog-title">{t("chat.renameTagTitle", "Rename tag")}</h3>
+            <label className="chat-rename-label" htmlFor="chat-rename-tag-input">{t("chat.tagName", "Tag name")}</label>
+            <input id="chat-rename-tag-input" className="input chat-rename-input" value={renameTagName} data-testid="chat-rename-tag-input" onChange={(event) => setRenameTagName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void renameTag(renameTagDialog.id, renameTagName).then(() => setRenameTagDialog(null)).catch(() => addToast(t("chat.failedToRenameTag", "Failed to rename tag"), "error")); } }} autoFocus />
+            <div className="chat-new-dialog-actions">
+              <button className="btn btn-sm" onClick={() => setRenameTagDialog(null)}>{t("chat.cancel", "Cancel")}</button>
+              <button className="btn btn-sm btn-primary" data-testid="chat-rename-tag-save" onClick={() => void renameTag(renameTagDialog.id, renameTagName).then(() => setRenameTagDialog(null)).catch(() => addToast(t("chat.failedToRenameTag", "Failed to rename tag"), "error"))}>{t("chat.save", "Save")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDeleteTag && (
+        <div className="chat-new-dialog-backdrop chat-view-dialog-backdrop" onClick={() => setConfirmDeleteTag(null)}>
+          <div className="chat-new-dialog chat-view-dialog" role="dialog" aria-modal="true" aria-labelledby="chat-delete-tag-dialog-title" onClick={(event) => event.stopPropagation()}>
+            <h3 id="chat-delete-tag-dialog-title">{t("chat.deleteTagTitle", "Delete tag?")}</h3>
+            <p className="chat-view-delete-dialog-copy">{t("chat.deleteTagBody", "This removes the tag from all conversations, but does not delete conversations.")}</p>
+            <div className="chat-new-dialog-actions">
+              <button className="btn btn-sm" onClick={() => setConfirmDeleteTag(null)}>{t("chat.cancel", "Cancel")}</button>
+              <button className="btn btn-sm btn-danger" data-testid="chat-delete-tag-confirm" onClick={() => void deleteTag(confirmDeleteTag.id).then(() => setConfirmDeleteTag(null)).catch(() => addToast(t("chat.failedToDeleteTag", "Failed to delete tag"), "error"))}>{t("chat.delete", "Delete")}</button>
             </div>
           </div>
         </div>

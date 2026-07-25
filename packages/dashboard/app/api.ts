@@ -5,5 +5,6 @@
  * while implementation lives under `app/api/*` modules.
  */
 export * from "./api/legacy";
+export * from "./api/chat";
 export * from "./api-node";
 export * from "./api/report";
