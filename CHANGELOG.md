@@ -2,6 +2,41 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.74.0-beta.1
+
+### Highlights
+
+- Voice dictation in dashboard composers, opt-in with a checksum-pinned Parakeet v3 model
+- Execution starts the moment planning finishes instead of waiting out the 15s engine poll
+- Quick-add Start no longer strands tasks in Todo that could never be planned
+- Open on duplicate-task warnings now actually opens the task
+- Restart all agents in the System panel works again instead of erroring
+
+### New
+
+- Voice dictation across dashboard composers, gated behind a project-scoped Voice Input setting and disabled by default; the mic button stays inert until you turn it on.
+- Voice Input settings panel for enabling dictation and managing the Parakeet v3 model, with live download and status controls.
+- Parakeet v3 model downloads are verified against a pinned upstream SHA-256 checksum before use, and cached in a shared location across projects.
+- Voice transcription API with project-bound audio endpoints and a lazily loaded speech runtime, so nothing extra is initialized unless dictation is on.
+- Quiet CLI mode that suppresses informational stdout chatter, via the new quiet flag or the FUSION_QUIET environment variable.
+
+### Fixed
+
+- Starting a task now kicks off planning immediately from every surface (board drag, context menu, CLI, tools, API move) instead of waiting up to 15 seconds for the next planning poll. Todo cards still waiting on a planning slot show a "Queued to plan" badge, and the Start toast now honestly says "Queued for planning" rather than claiming planning began.
+- Once planning finishes, the scheduler wakes and dispatches right away; plan-in-place workflows such as Coding (Ideas) previously sat idle until the next engine poll.
+- Quick-add Start on a manual-intake workflow no longer creates tasks with placeholder steps that planning would skip forever, leaving them stuck in Todo with no log line.
+- Coding (Ideas) boards can move cards back from Todo to Ideas again; the move check now respects the workflow's own column adjacency.
+- The Open button on possible-duplicate task warnings works from every surface it appears on, and unresolvable task ids now show a toast instead of silently doing nothing.
+- Restart all agents in the System panel no longer fails with a storage removal error.
+- Planning Mode shows a single "Add comment to selection" button, and only after the selection is finished, so it no longer flickers mid-drag or duplicates on mobile.
+- Creating a chat tag from the context menu applies it to the open conversation immediately.
+- Reports Health Check now surfaces unrecoverable direct-report failures instead of hiding them behind stale state.
+- Task composers no longer fire duplicate project-settings requests when the dictation button is present.
+
+### Internal
+
+- Hold-release sweeps log how long each card was held, a per-sweep summary with prefetch cost broken out, and a warning when a sweep exceeds 2 seconds.
+
 ## 0.74.0-beta.0
 
 ### Highlights

@@ -1,5 +1,58 @@
 # @runfusion/fusion
 
+## 0.74.0-beta.1
+
+### Minor Changes
+
+- 9a2aea6: summary: Add opt-in voice transcription model lifecycle and API support.
+  category: feature
+  dev: Adds voiceInput settings, optional lazy sherpa runtime, checksum-gated shared model cache, and project-bound PCM voice endpoints.
+- 11db361: summary: Add Voice Input settings for opt-in dictation and Parakeet v3 model management.
+  category: feature
+  dev: Adds project-scoped voiceInput.enabled UI with polled model lifecycle controls.
+- 32adc0a: summary: Add fail-closed voice dictation controls to dashboard composers.
+  category: feature
+  dev: Shared useVoiceDictation, useComposerDictation, and MicButton honor voiceInput.enabled.
+- b31bee0: summary: Add a quiet CLI mode that hides informational stdout chatter.
+  category: feature
+  dev: Adds the output.ts quiet seam and FUSION_QUIET environment control.
+- 3597d06: summary: Enable Parakeet v3 voice model downloads with a verified upstream checksum.
+  category: feature
+  dev: Pins sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 at SHA-256 5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf; strips its archive prefix and accepts its BSD year-only tar timestamps.
+
+### Patch Changes
+
+- 927efb1: summary: Coding (Ideas) boards can now move cards back from Todo to Ideas.
+  category: fix
+  dev: Legacy source columns in the flag-OFF `moveTaskInternal` path now union `VALID_TRANSITIONS` with the task's workflow-resolved adjacency (`resolveAllowedColumns`), resolved lazily only when the legacy table alone would reject. builtin:coding adjacency is unchanged.
+- e712b6f: summary: Execution now starts as soon as planning finishes, instead of waiting for the next engine poll.
+  category: fix
+  dev: Scheduler tracks task ids seen with `status: "planning"` and triggers a scheduling pass on the planning -> dispatchable transition. Plan-in-place workflows (Coding (Ideas)) clear `status` in place without a `task:moved`, so none of the pre-existing event wakes (task:created, globalPause/enginePaused unpause, per-task unpause) fired for a card that had just become executable — it waited out `pollIntervalMs`. The wake is guarded on `!task.status`, not paused/userPaused, and a schedulable column, so a planning -> failed/awaiting-approval park does not trigger a pass; `schedule()`'s re-entrance guard drops it if a pass is already running.
+- 1c38c6e: summary: Fix the "Open" button on possible-duplicate task warnings doing nothing.
+  category: fix
+  dev: `#/tasks/<id>` had no consumer — five surfaces wrote it (duplicate-warning Open in InlineCreateCard/NewTaskModal/QuickEntryBox, Column/ListView quick-add fallbacks) while only `?task=<id>` was implemented. `useDeepLink` now owns both shapes; unresolvable ids toast instead of no-op'ing.
+- cb8d116: summary: Apply a newly created chat tag to the open conversation immediately.
+  category: fix
+  dev: Chat context-menu tag creation now returns and assigns the new tag ID.
+- 0056d75: summary: Surface unrecoverable direct-report failures in Reports Health Check.
+  category: fix
+  dev: Health classification now honors pause markers even when a live state is stale.
+- 9575e4b: summary: Fix duplicate project-settings requests when voice dictation is present in task composers.
+  category: fix
+  dev: useVoiceDictation now uses project-scoped useVoiceAvailability and no longer calls fetchSettings; it reuses health.ts withProjectId.
+- b557844: summary: Starting a task begins planning immediately, and cards waiting on a planning slot now say so.
+  category: fix
+  dev: TriageProcessor gains `requestImmediatePoll()` plus a store-event wake (`task:updated`/`task:created`) that fires when a task lands in `todo`/`triage`, debounced 150ms with a mid-poll replay — so every move surface (board drag, context menu, CLI, tools, `POST /tasks/:id/move`) wakes planning rather than waiting out `pollIntervalMs` (15s default). Planning discovery now admits a `todo` task whose `PROMPT.md` is missing (ENOENT) instead of dropping it via a silent `catch {}`, and logs unreadable prompts. `isUnplannedSeedPrompt` normalizes line endings/trailing whitespace before comparing, and `scheduler.ts`'s dispatch filter now uses that shared predicate instead of an open-coded strict bootstrap compare that disagreed with triage on the refinement-seed shape. Dashboard: an unplanned idle Todo card shows a "Queued to plan" badge (the complement of "Ready"), and the Start toast now reads "Queued {id} for planning" instead of claiming planning began.
+- e4fb3f9: summary: Planning Mode shows one "Add comment to selection" button, and only once the selection is finished.
+  category: fix
+  dev: Removes the `planning-add-comment--document` trigger and the `--mobile` modifier (single `.planning-add-comment` rail button at every breakpoint); `planSelectionDragActiveRef` suppresses quote writes between pointerdown and pointerup inside the plan document so mid-drag `selectionchange` no longer mounts/unmounts the trigger.
+- 10df734: summary: Fix quick-add Start creating tasks that could never be planned, and log how long held cards wait.
+  category: fix
+  dev: Quick-add "Start" submits a workflow id and the post-intake `todo` column in one request, so the card missed the intake branch in `task-creation.ts` and got `generateSpecifiedPrompt`'s hard-coded placeholder steps. Triage then read the non-seed PROMPT.md as "already planned" and never planned it, stranding the card in Todo with no log line (observed on FN-8587). Creates into `todo` on a manual-intake workflow (resolved intake != `triage`) now get the bootstrap seed; the pinned default-workflow direct-create-into-todo contract is unchanged. Separately, `runHoldReleaseSweep` now logs per-task held duration on release, a per-sweep summary with the prefetch cost broken out (the prefetch is a sequential await per non-archived task, so it scales with board size), and warns when a sweep exceeds 2s.
+- 13ff885: summary: Fix "Restart all agents" in the System panel failing with a SQLite removal error.
+  category: fix
+  dev: `POST /system/agents/restart-all` built its `AgentStore` from `rootDir` alone, falling through to the deleted sync SQLite path (VAL-REMOVAL-005). It now passes the scoped project's `AsyncDataLayer` via `requireAsyncLayer` and the scoped `taskStore`.
+
 ## 0.74.0-beta.0
 
 ### Minor Changes
