@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useVoiceDictation } from "../useVoiceDictation";
 
-vi.mock("../../api", () => ({ fetchSettings: vi.fn() }));
-import { fetchSettings } from "../../api";
+import { __resetVoiceAvailabilityCache } from "../useVoiceAvailability";
 
 function Harness() {
   const voice = useVoiceDictation();
@@ -15,7 +14,6 @@ function Harness() {
 }
 
 function availableResponses() {
-  vi.mocked(fetchSettings).mockResolvedValue({ voiceInput: { enabled: true } } as never);
   vi.mocked(fetch).mockImplementation(async (input, init) => {
     const url = String(input);
     if (url === "/api/voice/status") return new Response(JSON.stringify({ enabled: true, runtime: { status: "available" }, model: { status: "installed" } }));
@@ -42,25 +40,26 @@ function installAudioCapture() {
 
 describe("useVoiceDictation", () => {
   beforeEach(() => {
-    vi.mocked(fetchSettings).mockReset();
+    __resetVoiceAvailabilityCache();
     vi.stubGlobal("fetch", vi.fn());
   });
   afterEach(() => vi.useRealTimers());
 
   it("fails closed while status is pending or fails", async () => {
-    vi.mocked(fetchSettings).mockResolvedValue({ voiceInput: { enabled: true } } as never);
-    vi.mocked(fetch).mockRejectedValue(new Error("offline"));
+      vi.mocked(fetch).mockRejectedValue(new Error("offline"));
     render(<Harness />);
     expect(screen.getByTestId("voice").textContent).toContain('"supported":false');
-    await waitFor(() => expect(screen.getByTestId("voice").textContent).toContain('"enabled":true'));
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/voice/status"));
+    expect(screen.getByTestId("voice").textContent).toContain('"enabled":false');
     expect(screen.getByTestId("voice").textContent).toContain('"supported":false');
   });
 
-  it("does not request status while voice is disabled", async () => {
-    vi.mocked(fetchSettings).mockResolvedValue({ voiceInput: { enabled: false } } as never);
+  it("keeps capture unavailable while voice status is disabled", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ enabled: false, runtime: { status: "available" }, model: { status: "installed" } })));
     render(<Harness />);
-    await waitFor(() => expect(fetchSettings).toHaveBeenCalled());
-    expect(fetch).not.toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/voice/status"));
+    expect(screen.getByTestId("voice").textContent).toContain('"enabled":false');
+    expect(screen.getByTestId("voice").textContent).toContain('"supported":false');
   });
 
   it("fails closed when AudioWorkletNode is unavailable", async () => {
@@ -95,8 +94,7 @@ describe("useVoiceDictation", () => {
 
   it("releases microphone tracks immediately when an in-flight transcription never settles", async () => {
     const { tracks, port } = installAudioCapture();
-    vi.mocked(fetchSettings).mockResolvedValue({ voiceInput: { enabled: true } } as never);
-    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === "/api/voice/status") return new Response(JSON.stringify({ enabled: true, runtime: { status: "available" }, model: { status: "installed" } }));
       if (url === "/api/voice/session") return new Response(JSON.stringify({ sessionId: "session-1" }), { status: 201 });
@@ -120,8 +118,7 @@ describe("useVoiceDictation", () => {
   it("bounds a stalled pre-stop flush, aborts its request, and deletes only that session", async () => {
     const { port } = installAudioCapture();
     let stalledSignal: AbortSignal | undefined;
-    vi.mocked(fetchSettings).mockResolvedValue({ voiceInput: { enabled: true } } as never);
-    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === "/api/voice/status") return new Response(JSON.stringify({ enabled: true, runtime: { status: "available" }, model: { status: "installed" } }));
       if (url === "/api/voice/session") return new Response(JSON.stringify({ sessionId: "session-1" }), { status: 201 });

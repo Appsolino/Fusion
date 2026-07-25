@@ -1,17 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchSettings } from "../api";
+import { useVoiceAvailability } from "./useVoiceAvailability";
 
 export type VoiceDictationState = "idle" | "listening" | "transcribing" | "error";
-type VoiceStatus = { enabled?: boolean; runtime?: { status?: string }; model?: { status?: string } };
-
-function canCapture(): boolean {
-  return typeof navigator !== "undefined"
-    && Boolean(navigator.mediaDevices?.getUserMedia)
-    && Boolean((window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext))
-    // FNXC:VoiceInput 2026-07-24-05:30: This capture path constructs an AudioWorkletNode,
-    // so a browser without that constructor is unavailable before the mic button may render.
-    && typeof AudioWorkletNode !== "undefined";
-}
 function base64(bytes: ArrayBuffer): string {
   let value = ""; for (const byte of new Uint8Array(bytes)) value += String.fromCharCode(byte);
   return btoa(value);
@@ -25,8 +15,7 @@ function base64(bytes: ArrayBuffer): string {
  * Stale responses are ignored after stop so capture tracks can always be released without late text.
  */
 export function useVoiceDictation(projectId?: string) {
-  const [enabled, setEnabled] = useState(false);
-  const [supported, setSupported] = useState(false);
+  const { enabled, supported } = useVoiceAvailability(projectId);
   const [state, setState] = useState<VoiceDictationState>("idle");
   const [partialText, setPartialText] = useState("");
   const [finalText, setFinalText] = useState("");
@@ -89,22 +78,6 @@ export function useVoiceDictation(projectId?: string) {
     }
   }, [releaseCapture]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setSupported(false); setEnabled(false);
-    void (async () => {
-      try {
-        const settings = await fetchSettings(projectId);
-        if (controller.signal.aborted || settings.voiceInput?.enabled !== true) return;
-        setEnabled(true);
-        const response = await fetch("/api/voice/status", { signal: controller.signal });
-        if (!response.ok) return;
-        const status = await response.json() as VoiceStatus;
-        if (!controller.signal.aborted && canCapture() && status.enabled === true && status.runtime?.status === "available" && status.model?.status === "installed") setSupported(true);
-      } catch { /* availability deliberately remains false */ }
-    })();
-    return () => controller.abort();
-  }, [projectId]);
   useEffect(() => release, [release]);
 
   const fail = useCallback((message: string) => { release(); setError(message); setState("error"); }, [release]);
