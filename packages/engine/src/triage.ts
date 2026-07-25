@@ -288,6 +288,8 @@ export class TriageProcessor {
   private taskPausedHandler?: (task: Task) => void;
   /** FNXC:CodingIdeasWorkflow 2026-07-25-11:20: store-event wake for planning-eligible columns. */
   private taskColumnWakeHandler?: (task: Task) => void;
+  /** FNXC:PlanningEvacuation 2026-07-25-23:00: stops planning when a card leaves the planner lanes. */
+  private taskEvacuatedFromPlanningHandler?: (task: Task) => void;
   private _approvalRequestStore?: ApprovalRequestStore;
 
   /**
@@ -548,6 +550,67 @@ export class TriageProcessor {
       if (this.processing.has(task.id) || this.hasLivePlanningWork(task.id)) return;
       this.requestImmediatePoll();
     };
+
+    /*
+    FNXC:PlanningEvacuation 2026-07-25-23:00:
+    Moving a card OUT of the planner lanes while it is being planned (the reported case: dragging a
+    todo card back to Ideas) must stop the planning session immediately — the operator has withdrawn
+    the card, and an agent that keeps streaming tokens and writing a spec for it is doing work nobody
+    asked for. It must also stop LOOKING planned: the "planning" status badge is what the card shows,
+    so the abort path clears it (`pauseAborted` + the existing restore-status unwind) and the card
+    reads as a plain idea again.
+
+    This reuses the pause/delete abort machinery verbatim — same abort(), same token-usage snapshot,
+    same `pauseAborted` unwind that clears status without reporting an error — so evacuation cannot
+    drift from the two paths that already work.
+
+    Moving the card BACK to todo/triage needs no new code: `taskColumnWakeHandler` above wakes the
+    poll on that move, and with the planning status cleared the card is an ordinary planning
+    candidate again, so planning restarts.
+
+    Columns are matched positively (todo/triage) rather than naming "ideas", so evacuation to ANY
+    non-planner column stops the session. `in-progress` is excluded from the abort because a card
+    that legitimately advances into execution is not an evacuation — its session is already
+    unwinding on its own.
+    */
+    this.taskEvacuatedFromPlanningHandler = (task: Task) => {
+      if (!task?.id) return;
+      /*
+      Only an explicit, known destination column is evidence of evacuation. `task:updated` also
+      carries PARTIAL payloads (a pause flag flip, a steering comment) with no `column` field at all,
+      and treating an absent column as "not a planner lane" would abort a healthy planning session on
+      an unrelated update.
+      */
+      if (typeof task.column !== "string") return;
+      if (task.column === "todo" || task.column === "triage" || task.column === "in-progress") return;
+      if (this.activeSubagentSessions.has(task.id)) {
+        this.disposeSubagentsForTask(task.id, `task moved to ${task.column}`);
+      }
+      const session = this.activeSessions.get(task.id);
+      if (!session) return;
+      planLog.log(`task moved out of planning to '${task.column}' — terminating triage session for ${task.id}`);
+      this.pauseAborted.add(task.id);
+      this.options.stuckTaskDetector?.untrackTask(task.id);
+      const sessionWithAbort = session as { abort?: () => Promise<void>; dispose: () => void };
+      if (typeof sessionWithAbort.abort === "function") {
+        void sessionWithAbort.abort().catch((err) => {
+          planLog.warn(`Failed to abort triage session for ${task.id}: ${err}`);
+        });
+      }
+      this.recordTriageSessionTokenUsageSoon(task.id, session as AgentSession, { agentId: task.assignedAgentId ?? "triage" });
+      session.dispose();
+      this.activeSessions.delete(task.id);
+      /*
+      The `pauseAborted` unwind restores status only while the row is still in the planning stage; an
+      evacuated card is not, so clear the badge directly here. Fail-soft: a status write must never
+      break the abort.
+      */
+      if (task.status === "planning") {
+        void Promise.resolve(this.store.updateTask(task.id, { status: null })).catch((err: unknown) => {
+          planLog.warn(`${task.id}: failed to clear planning status after evacuation: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    };
   }
 
   start(): void {
@@ -562,6 +625,11 @@ export class TriageProcessor {
     if (this.taskColumnWakeHandler && typeof this.store.on === "function") {
       this.store.on("task:updated", this.taskColumnWakeHandler);
       this.store.on("task:created", this.taskColumnWakeHandler);
+    }
+    if (this.taskEvacuatedFromPlanningHandler && typeof this.store.on === "function") {
+      // `task:updated` is the single event every move surface emits (see the wake handler's
+      // surface enumeration); `task:moved` carries a different payload shape and is not needed.
+      this.store.on("task:updated", this.taskEvacuatedFromPlanningHandler);
     }
 
     // Clear stale "planning" statuses left by a prior crash/restart.
@@ -623,6 +691,9 @@ export class TriageProcessor {
     if (this.taskColumnWakeHandler && typeof this.store.off === "function") {
       this.store.off("task:updated", this.taskColumnWakeHandler);
       this.store.off("task:created", this.taskColumnWakeHandler);
+    }
+    if (this.taskEvacuatedFromPlanningHandler && typeof this.store.off === "function") {
+      this.store.off("task:updated", this.taskEvacuatedFromPlanningHandler);
     }
     // Tear down any in-flight specify sessions and reviewer subagents so they
     // don't keep streaming LLM tokens / tool calls past engine shutdown.

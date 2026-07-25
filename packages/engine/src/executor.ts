@@ -3265,6 +3265,22 @@ export class TaskExecutor {
             }
           }),
         );
+      } else if ((from === "todo" || from === "triage") && to !== "in-progress" && to !== "in-review" && to !== "done") {
+        /*
+        FNXC:PlanningEvacuation 2026-07-25-23:00:
+        A card pulled BACKWARD out of a planner lane (the reported case: todo → Ideas) must stop all
+        engine work on it, not just its planning session. Plan Review and other pre-execution graph
+        nodes run while the card sits in todo/triage, so without this branch the reviewer kept
+        streaming against a card the operator had withdrawn. Forward transitions are excluded — those
+        are the card advancing, and their own lanes own the handoff. Also release the pre-execution
+        worktree acquired at planning time so a withdrawn card leaves nothing behind on disk.
+        */
+        this.trackTaskDisposal(
+          task.id,
+          this.awaitAbortInFlightTaskWork(task.id, `task moved out of planning to ${to}`, {
+            userCanceled: source === "user",
+          }).then(async () => { await this.releasePreExecutionWorktree(task.id, `moved to ${to}`); }),
+        );
       } else if (from === "in-progress") {
         if (this.workflowLifecycleMovesInFlight.has(task.id) && this.graphRouting.has(task.id)) {
           executorLog.log(
@@ -8447,6 +8463,66 @@ export class TaskExecutor {
   Returns null (caller falls back to the root, unchanged behavior) when the project is a workspace, or
   when acquisition fails: planning must never be blocked by a worktree problem.
   */
+  /*
+  FNXC:PlanningEvacuation 2026-07-25-23:00 (pre-execution worktree release):
+  Planning now acquires a worktree, so a card that never reaches execution — withdrawn to Ideas,
+  archived from a planner lane, or parked pre-execution — would otherwise hold one forever. Release
+  it. Safety conditions, all required:
+   - the task never executed (`firstExecutionAt`/`executionStartedAt` unset): execution evidence means
+     the worktree may hold real work, and only the normal merge/archive lifecycle may remove it;
+   - no live session registered on the path (the same isPathActive guard the other sweeps use);
+   - the branch carries no commits beyond its base — planning writes its spec to the task store, not
+     the worktree, so a clean branch means there is genuinely nothing to lose.
+  Metadata (`worktree`/`branch`) is cleared with it, so a later promotion re-acquires cleanly.
+  Fail-soft throughout: a cleanup problem must never block the lifecycle move that triggered it.
+  */
+  public async releasePreExecutionWorktree(taskId: string, reason: string): Promise<boolean> {
+    try {
+      const live = await this.store.getTask(taskId);
+      if (!live?.worktree) return false;
+      if (live.firstExecutionAt || live.executionStartedAt) return false;
+      if (activeSessionRegistry.isPathActive(live.worktree) || activeSessionRegistry.isPathActive(resolvePath(live.worktree))) return false;
+      if (this.hasLiveTaskSessionSurface(taskId) || executingTaskLock.has(taskId)) return false;
+
+      if (existsSync(live.worktree)) {
+        if (await this.preExecutionWorktreeHasWork(live.worktree)) {
+          executorLog.log(`${taskId}: keeping pre-execution worktree ${live.worktree} — it carries commits or uncommitted changes`);
+          return false;
+        }
+        const settings = await this.store.getSettings();
+        await removeWorktree({
+          rootDir: this.rootDir,
+          worktreePath: live.worktree,
+          settings,
+          taskId,
+          reason: RemovalReason.SelfHealingReclaim,
+        });
+      }
+      this.activeWorktrees.get(taskId)?.delete(live.worktree);
+      await this.store.updateTask(taskId, { worktree: null, branch: null, baseCommitSha: null, sessionFile: null }, this.getRunContextFor(taskId));
+      await this.store.logEntry(taskId, `Released the pre-execution worktree (${reason}) — it will be re-acquired when planning or execution resumes`, undefined, this.getRunContextFor(taskId)).catch(() => undefined);
+      executorLog.log(`${taskId}: released pre-execution worktree ${live.worktree} (${reason})`);
+      return true;
+    } catch (error) {
+      executorLog.warn(`${taskId}: could not release the pre-execution worktree: ${formatError(error).message}`);
+      return false;
+    }
+  }
+
+  /** True when a pre-execution worktree holds commits past its base or any uncommitted change. */
+  private async preExecutionWorktreeHasWork(worktreePath: string): Promise<boolean> {
+    try {
+      const { stdout: dirty } = await execFileAsync("git", ["status", "--porcelain"], { cwd: worktreePath, timeout: 30_000 });
+      if (dirty.trim()) return true;
+      const { stdout: ahead } = await execFileAsync("git", ["log", "--oneline", "@{upstream}..HEAD"], { cwd: worktreePath, timeout: 30_000 })
+        .catch(async () => await execFileAsync("git", ["log", "--oneline", "-1", "HEAD", "--not", "--remotes", "--branches=main", "--branches=master"], { cwd: worktreePath, timeout: 30_000 }));
+      return Boolean(ahead.trim());
+    } catch {
+      // Cannot prove the worktree is clean → treat it as holding work and keep it.
+      return true;
+    }
+  }
+
   public async ensureTaskWorktreeForPlanning(taskId: string): Promise<string | null> {
     try {
       if (this.workspaceConfig === undefined) {

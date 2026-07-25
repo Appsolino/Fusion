@@ -252,6 +252,16 @@ async function preserveWorktreeChanges(repoDir: string, worktreePath: string, ta
 
 
 
+/*
+FNXC:PlanningEvacuation 2026-07-25-23:20:
+The pre-execution worktree sweep touches VERY OLD trees only. Planning-acquired worktrees are cheap to
+re-create but expensive to lose track of, and a card parked for a few hours is routinely resumed — so
+the sweep waits a month of complete inactivity before reclaiming anything. The event-driven release on
+an explicit operator withdrawal (todo -> Ideas) is separate and immediate; this constant governs only
+the unattended background pass.
+*/
+const PRE_EXECUTION_WORKTREE_MAX_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+
 export interface SelfHealingOptions {
   /** Project root directory (parent of .worktrees/) */
   rootDir: string;
@@ -270,6 +280,13 @@ export interface SelfHealingOptions {
    * (the leaked-slot reaper relies on this refusal signal).
    */
   clearPhantomExecutorBinding?: (taskId: string, options?: { preserveWorktrees?: boolean }) => boolean | void;
+  /*
+  FNXC:PlanningEvacuation 2026-07-25-23:00:
+  Releases a task's PRE-EXECUTION worktree (acquired at planning time) when the card is parked
+  without ever executing. The executor owns the safety conditions — never executed, no live session,
+  clean branch — so this sweep only supplies candidates. Returns true when a worktree was released.
+  */
+  releasePreExecutionWorktree?: (taskId: string, reason: string) => Promise<boolean>;
   /** Optional AgentStore for agent-level self-healing checks. */
   agentStore?: AgentStore;
   /** Canonical stale-lease recovery manager. */
@@ -2725,6 +2742,8 @@ export class SelfHealingManager {
           { name: "reconcile-workspace-partial-lands", fn: () => this.reconcileWorkspacePartialLands() },
           { name: "reclaim-phantom-workspace-land-leases", fn: () => this.reclaimPhantomWorkspaceLandLeases() },
           { name: "reconcile-orphaned-workspace-worktrees", fn: () => this.reconcileOrphanedWorkspaceWorktrees() },
+          // FNXC:PlanningEvacuation 2026-07-25-23:00: reclaim worktrees acquired at planning time by cards that never executed.
+          { name: "reconcile-pre-execution-worktrees", fn: () => this.reconcilePreExecutionWorktrees() },
           { name: "recover-merged-review", fn: () => this.recoverMergedReviewTasks() },
           { name: "recover-already-merged-review", fn: () => this.recoverAlreadyMergedReviewTasks() },
           { name: "recover-post-done-noncontinuable-wedge", fn: () => this.recoverPostDoneNonContinuableWedge() },
@@ -8678,6 +8697,73 @@ export class SelfHealingManager {
       return reclaimed;
     } catch (err: unknown) {
       log.error(`reclaimPhantomWorkspaceLandLeases sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
+  /*
+  FNXC:PlanningEvacuation 2026-07-25-23:00 (pre-execution worktree sweep):
+  Planning acquires the task's own worktree, so cards that never reach execution would accumulate
+  worktrees on disk: withdrawn to an intake column, archived from a planner lane, or simply parked.
+  This sweep reclaims them.
+
+  Candidates are addressed from task ROWS (never a directory walk — AGENTS.md forbids unbounded temp
+  scans): tasks holding `worktree` that sit in a non-executing column and carry no execution
+  timestamp. `todo` is deliberately EXCLUDED: a planned card waiting for a WIP slot legitimately
+  keeps its worktree, and churning it would just force a re-acquire minutes later. Every real safety
+  decision (live session, clean branch, execution evidence) belongs to
+  `TaskExecutor.releasePreExecutionWorktree`, so this sweep cannot diverge from the event-driven path
+  that runs on the move itself.
+  */
+  async reconcilePreExecutionWorktrees(): Promise<number> {
+    try {
+      const release = this.options.releasePreExecutionWorktree;
+      if (!release) return 0;
+      const settings = await this.store.getSettings();
+      if (settings.globalPause || settings.enginePaused) return 0;
+
+      const now = Date.now();
+      const parked = await this.store.listTasks({ slim: true });
+      const candidates = parked.filter((task) => {
+        if (!task.worktree || task.deletedAt) return false;
+        // Execution evidence — the worktree may hold real work; only the merge/archive lifecycle owns it.
+        if (task.firstExecutionAt || task.executionStartedAt) return false;
+        // Columns where a card is active or queued to become active.
+        if (task.column === "todo" || task.column === "in-progress" || task.column === "in-review" || task.column === "done") return false;
+        /*
+        WAITING is not PARKED. A card paused for an operator decision, carrying any status (planning,
+        needs-replan, awaiting-*), blocked on another task, or scheduled for a recovery attempt is
+        still expected to resume — taking its worktree would disturb work that is merely queued.
+        */
+        if (task.paused || task.userPaused) return false;
+        if (task.status != null) return false;
+        if (task.blockedBy || task.overlapBlockedBy || task.nextRecoveryAt) return false;
+        /*
+        AGE GATE: only very old trees. A recently parked card is routinely un-parked within minutes,
+        and re-acquiring costs a clone-ish setup plus the project's init command. Idleness is measured
+        from the most recent of the column move and the last update, so any touch re-arms the clock.
+        */
+        const lastTouchedMs = Math.max(
+          Date.parse(task.columnMovedAt ?? "") || 0,
+          Date.parse(task.updatedAt ?? "") || 0,
+        );
+        if (!lastTouchedMs) return false; // cannot prove age → never sweep
+        return now - lastTouchedMs >= PRE_EXECUTION_WORKTREE_MAX_IDLE_MS;
+      });
+      if (candidates.length === 0) return 0;
+
+      let released = 0;
+      for (const task of candidates) {
+        try {
+          if (await release(task.id, `parked pre-execution in '${task.column}'`)) released++;
+        } catch (err: unknown) {
+          log.warn(`reconcilePreExecutionWorktrees: release failed for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (released > 0) log.log(`reconcilePreExecutionWorktrees: released ${released} pre-execution worktree(s)`);
+      return released;
+    } catch (err: unknown) {
+      log.error(`reconcilePreExecutionWorktrees sweep failed: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
     }
   }

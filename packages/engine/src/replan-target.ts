@@ -44,7 +44,8 @@ legal from every legacy column and eligibleTriageTasks re-specifies unconditiona
 const PLANNING_STAGE_STATUSES = new Set(["planning", "needs-replan", "plan-review-unavailable"]);
 
 export function hasAdvancedPastPlanning(
-  task: Pick<Task, "column" | "worktree" | "steps" | "status">,
+  task: Pick<Task, "column" | "worktree" | "steps" | "status">
+    & Partial<Pick<Task, "firstExecutionAt" | "executionStartedAt">>,
 ): boolean {
   if (
     task.column === "in-progress"
@@ -54,8 +55,16 @@ export function hasAdvancedPastPlanning(
   ) {
     return true;
   }
-  // A worktree proves an executor claimed the card, even while it still sits in a planner lane.
-  if (task.worktree != null) {
+  /*
+  FNXC:NodeWorktreeIsolation 2026-07-25-22:40:
+  A worktree NO LONGER proves an executor claimed the card. Planning acquires the task's own
+  worktree up front (so no lane runs in the shared checkout), which means a card being planned right
+  now carries `worktree` — and reading that as "advanced" would make every planning write skip:
+  `status:"planning"` never lands, the spec finalization is refused, and the card is re-claimed
+  forever while occupying a maxTriageConcurrent slot. Execution TIMESTAMPS are the durable evidence
+  instead; they are written when implementation actually starts, never by worktree acquisition.
+  */
+  if (task.firstExecutionAt != null || task.executionStartedAt != null) {
     return true;
   }
   // The planner column itself is never "advanced" — nothing executes out of triage.

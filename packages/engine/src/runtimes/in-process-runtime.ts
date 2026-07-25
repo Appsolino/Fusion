@@ -1203,6 +1203,9 @@ export class InProcessRuntime
         getExecutingTaskIds: () => this.executor?.getExecutingTaskIds() ?? new Set<string>(),
         clearPhantomExecutorBinding: (taskId: string, options?: { preserveWorktrees?: boolean }) => this.executor?.clearPhantomExecutorBinding(taskId, options),
         listWorktreeHolders: () => this.executor?.listWorktreeHolders() ?? [],
+        // FNXC:PlanningEvacuation 2026-07-25-23:00: the executor owns the release safety conditions.
+        releasePreExecutionWorktree: (taskId, reason) =>
+          this.executor?.releasePreExecutionWorktree(taskId, reason) ?? Promise.resolve(false),
         recoverApprovedTriageTask: (task) => this.triageProcessor?.recoverApprovedTask(task) ?? Promise.resolve(false),
         getPlanningTaskIds: () => this.triageProcessor?.getPlanningTaskIds() ?? new Set<string>(),
         // FNXC:TaskTiming 2026-08-01-12:00: orphan planning recovery must defer

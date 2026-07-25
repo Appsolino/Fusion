@@ -8338,10 +8338,17 @@ describe("SelfHealingManager", () => {
     FN-8361 regression: a stale candidate may be claimed by execution after
     listTasks but before the recovery patch acquires the task lock.
     */
+    /*
+    FNXC:NodeWorktreeIsolation 2026-07-25-22:40:
+    The third case used a WORKTREE as the claim signal. Planning now acquires the task's own worktree
+    (so no lane runs in the shared checkout), which makes a worktree on a `status: "planning"` triage
+    row the normal state of a card being planned — not evidence that execution claimed it. Execution
+    TIMESTAMPS carry that meaning instead; the FN-8361 invariant is otherwise unchanged.
+    */
     it.each([
       { column: "in-progress", status: null, worktree: "/tmp/claimed" },
       { column: "todo", status: null, worktree: undefined, steps: [{ id: "planned" }] },
-      { column: "triage", status: "planning", worktree: "/tmp/claimed" },
+      { column: "triage", status: "planning", worktree: "/tmp/claimed", firstExecutionAt: "2026-01-01T00:01:00.000Z" },
     ])("does not clear a stale candidate advanced to $column", async (live) => {
       const candidate = {
         id: "FN-8361", column: "triage", status: "planning", paused: false,
