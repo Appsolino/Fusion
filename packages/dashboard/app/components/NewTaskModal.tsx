@@ -1,5 +1,5 @@
 import "./NewTaskModal.css";
-import { useState, useCallback, useEffect, useRef, type CSSProperties, type ChangeEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useState, useCallback, useEffect, useRef, type CSSProperties, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { DEFAULT_TASK_PRIORITY, type Task, type TaskPriority } from "@fusion/core";
@@ -65,6 +65,11 @@ const NEW_TASK_DEFAULT_HEIGHT = 640;
 const NEW_TASK_MIN_WIDTH = 420;
 const NEW_TASK_MIN_HEIGHT = 360;
 const NEW_TASK_VIEWPORT_PADDING = 16;
+/*
+FNXC:TaskModalResize 2026-07-24-19:00:
+Keyboard resizing follows the existing viewport padding quantum, so focusable edge controls produce predictable, touch-safe geometry changes without a second sizing scale.
+*/
+const NEW_TASK_KEYBOARD_RESIZE_STEP = NEW_TASK_VIEWPORT_PADDING;
 
 interface FloatSize {
   width: number;
@@ -560,6 +565,34 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
     captureTarget.addEventListener("pointermove", handlePointerMove);
     captureTarget.addEventListener("pointerup", handlePointerUp);
     captureTarget.addEventListener("pointercancel", handlePointerUp);
+  }, [persistPosition, persistSize, position, size]);
+
+  /*
+  FNXC:TaskModalResize 2026-07-24-19:00:
+  Tablet resize handles must be keyboard-operable as well as touch-operable. Each focused edge
+  adjusts the dimensions it owns, clamps and persists exactly like a completed pointer resize,
+  and exposes the resulting geometry through its ARIA separator value.
+  */
+  const handleFloatingResizeKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>, direction: FloatResizeDirection) => {
+    let widthDelta = 0;
+    let heightDelta = 0;
+    const step = NEW_TASK_KEYBOARD_RESIZE_STEP;
+
+    if (event.key === "ArrowRight") widthDelta = direction.includes("e") ? step : direction.includes("w") ? -step : 0;
+    if (event.key === "ArrowLeft") widthDelta = direction.includes("w") ? step : direction.includes("e") ? -step : 0;
+    if (event.key === "ArrowDown") heightDelta = direction.includes("s") ? step : direction.includes("n") ? -step : 0;
+    if (event.key === "ArrowUp") heightDelta = direction.includes("n") ? step : direction.includes("s") ? -step : 0;
+    if (widthDelta === 0 && heightDelta === 0) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const nextSize = clampFloatSize({ width: size.width + widthDelta, height: size.height + heightDelta });
+    const nextPosition = clampFloatPosition({
+      x: position.x + (direction.includes("w") ? size.width - nextSize.width : 0),
+      y: position.y + (direction.includes("n") ? size.height - nextSize.height : 0),
+    }, nextSize);
+    persistSize(nextSize);
+    persistPosition(nextPosition, nextSize);
   }, [persistPosition, persistSize, position, size]);
 
   // FNXC:NewTask 2026-06-22-20:30: Run any active drag/resize teardown on unmount so element pointer listeners + a pending rAF never outlive the modal.
@@ -1173,7 +1206,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
         style={isFloating ? { zIndex } : undefined}
       >
         <div
-          className={`modal modal-lg new-task-modal${isFloating ? " new-task-modal--floating" : ""}`}
+          className={`modal modal-lg new-task-modal${viewportMode === "tablet" ? " task-modal--tablet" : ""}${isFloating ? " new-task-modal--floating" : ""}`}
           style={panelStyle}
           onPointerDownCapture={isFloating ? bringToFront : undefined}
           onFocusCapture={isFloating ? bringToFront : undefined}
@@ -1184,8 +1217,15 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
               className={`new-task-resize-handle new-task-resize-handle--${direction}`}
               data-testid={`new-task-resize-${direction}`}
               role="separator"
+              aria-orientation={direction === "n" || direction === "s" ? "horizontal" : "vertical"}
+              aria-valuemin={direction === "n" || direction === "s" ? NEW_TASK_MIN_HEIGHT : NEW_TASK_MIN_WIDTH}
+              aria-valuemax={direction === "n" || direction === "s" ? Math.max(NEW_TASK_MIN_HEIGHT, window.innerHeight - NEW_TASK_VIEWPORT_PADDING * 2) : Math.max(NEW_TASK_MIN_WIDTH, window.innerWidth - NEW_TASK_VIEWPORT_PADDING * 2)}
+              aria-valuenow={direction === "n" || direction === "s" ? size.height : size.width}
+              aria-valuetext={`${t("newTaskModal.resize", "Resize new task window")}: ${size.width} by ${size.height}`}
               aria-label={t("newTaskModal.resize", "Resize new task window")}
+              tabIndex={0}
               onPointerDown={(event) => handleFloatingResizePointerDown(event, direction)}
+              onKeyDown={(event) => handleFloatingResizeKeyDown(event, direction)}
             />
           ))}
           <div

@@ -82,6 +82,11 @@ Press `Escape` to close the current/topmost dashboard popup. Popped-out task win
 <!-- FNXC:ModalGeometryPersistenceDocs 2026-07-16-00:40: Full-screen mobile FloatingWindow sheets must preserve, rather than overwrite, the movable desktop geometry record so a later desktop reopen restores the user's chosen location and size. -->
 Movable dashboard pop-outs remember their last desktop location and size, while centered resizable dialogs remember their size. When a pop-out becomes a full-screen sheet at mobile widths (or, for Artifact Gallery, its short-height sheet breakpoint), it leaves that desktop record untouched; reopening it on desktop restores the prior floating geometry.
 
+<!-- FNXC:TaskModalResizeDocs 2026-08-07-00:00: Known touch tablets at the 768px CSS boundary use the shared physical-screen-aware viewport classification, so documentation must distinguish their resize contract from true phones that share the CSS media query. -->
+### Task modal resizing on tablets
+
+Task Detail and New Task remain resizable on known touch tablets, including a 768px-wide tablet viewport. Task Detail exposes its accessible bottom-right resize grip; New Task keeps its draggable header and edge/corner resize controls. Their geometry stays within the viewport and is restored from browser storage on later tablet or desktop opens. True phones and narrow folded panes remain full-screen sheets without active resize controls so keyboard and safe-area behavior is unchanged.
+
 ## Mobile/PWA app icons
 
 The installed mobile/PWA home-screen icons are generated from `packages/dashboard/app/public/logo.svg` by the desktop icon generator. When the Fusion brand mark changes, run `pnpm --filter @fusion/desktop generate:icons` so `packages/dashboard/app/public/icons/icon-192.png` and `packages/dashboard/app/public/icons/icon-512.png` stay aligned with the canonical logo. Also bump `CACHE_NAME` in `packages/dashboard/app/public/sw.js` whenever those icon assets change so installed PWAs refresh the cached launcher images.
