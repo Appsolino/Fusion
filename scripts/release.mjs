@@ -23,7 +23,7 @@
 //                                 # preview only, but exercise the version prompt override
 //   pnpm release --channel beta   # beta release from `main`: enters changesets pre-mode,
 //                                 # versions X.Y.Z-beta.N, publishes npm dist-tag `beta`,
-//                                 # GitHub prerelease; skips Homebrew tap + X draft
+//                                 # GitHub prerelease; prints a tester-facing X draft; skips Homebrew tap
 //   pnpm release --channel stable # stable release from the `release` branch:
 //                                 # exits pre-mode if present, publishes dist-tag `latest`,
 //                                 # GitHub release marked latest, bumps Homebrew tap
@@ -82,7 +82,8 @@ const INTERACTIVE = args.has("--interactive");
  * Two release tracks (see docs/plans/2026-07-19-001-beta-stable-release-tracks-plan.md):
  * - `--channel beta` runs on `main`, uses changesets pre-mode (auto `pre enter beta`),
  *   publishes to the npm `beta` dist-tag, tags vX.Y.Z-beta.N, and creates a GitHub
- *   PRERELEASE. Homebrew tap and the X draft are stable-only and skipped.
+ *   PRERELEASE. Homebrew tap is stable-only; the X draft is printed for both
+ *   channels (betas get tester-facing copy).
  * - `--channel stable` runs on the long-lived `release` branch, exits
  *   pre-mode if `.changeset/pre.json` was merged in from main, publishes to `latest`,
  *   marks the GitHub Release latest, and bumps the Homebrew tap. After a stable
@@ -963,8 +964,8 @@ if (DRY_RUN) {
     const raw = readFileSync(join(".changeset", file), "utf8");
     return parseChangesetFile(raw).parsed;
   }).filter(Boolean);
-  info("Distilling release notes with Claude (sonnet; soft fallback if unavailable)…");
-  const dryDistilled = await distillReleaseNotes(dryEntries, chosenVersion);
+  info("Distilling release notes with Claude (opus; soft fallback if unavailable)…");
+  const dryDistilled = await distillReleaseNotes(dryEntries, chosenVersion, { channel: CHANNEL });
   console.log("");
   console.log(color(36, "─── Draft post for X (preview) ───"));
   console.log(dryDistilled.tweet);
@@ -1054,13 +1055,13 @@ ok("Root CHANGELOG.md updated.");
  * notes, and an engagement-oriented X draft ≤280 chars. Soft deterministic
  * fallback only if Claude is unreachable so release never blocks.
  */
-info("Distilling release notes with Claude (sonnet; soft fallback if unavailable)…");
+info("Distilling release notes with Claude (opus; soft fallback if unavailable)…");
 const {
   notes: distilledNotes,
   source: distillSource,
   highlights: releaseHighlights,
   tweet: releaseTweet,
-} = await distillReleaseNotes(capturedEntries, version);
+} = await distillReleaseNotes(capturedEntries, version, { channel: CHANNEL });
 const changelogBeforeDistill = readFileSync("CHANGELOG.md", "utf8");
 const changelogAfterDistill = replaceVersionSection(changelogBeforeDistill, version, distilledNotes);
 if (changelogAfterDistill !== changelogBeforeDistill) {
@@ -1196,13 +1197,14 @@ if (!IS_BETA) {
  * FNXC:ReleaseScript 2026-07-13-15:25:
  * After a successful publish/tag, print the LLM-authored X draft (≤280 chars)
  * produced during distillation so the operator can copy-paste to X.
- * FNXC:UpdateChannels 2026-07-19-13:20: stable-only — betas are not announced.
+ * FNXC:Changelog 2026-07-24-11:05: BOTH channels get a draft now (it was
+ * stable-only). Betas ship to testers who opt in, and that audience only hears
+ * about a prerelease if it is posted; the beta draft is written as a call for
+ * testers carrying `fn update --channel beta`, never as a GA announcement.
  */
-if (!IS_BETA) {
-  console.log("");
-  console.log(color(36, "─── Draft post for X (copy-paste) ───"));
-  console.log(releaseTweet);
-  console.log(color(90, `(${releaseTweet.length}/280 chars; source: ${distillSource})`));
-  console.log(color(36, "─────────────────────────────────────"));
-}
+console.log("");
+console.log(color(36, `─── Draft post for X (${CHANNEL}, copy-paste) ───`));
+console.log(releaseTweet);
+console.log(color(90, `(${releaseTweet.length}/280 chars; source: ${distillSource})`));
+console.log(color(36, "──────────────────────────────────────────────"));
 
