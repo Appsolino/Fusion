@@ -6366,7 +6366,8 @@
       },
       "globalMcp": "MCP Servers · Global",
       "mcp": "MCP Servers · Project",
-      "configVersions": "配置版本"
+      "configVersions": "配置版本",
+      "voiceInput": "Voice Input"
     },
     "nodeRouting": {
       "blockExecution": "",
@@ -6886,6 +6887,25 @@
       "confirmTitle": "回滚配置？",
       "confirmMessage": "恢复此版本？回滚会记录为新版本。",
       "confirmRollback": "回滚"
+    },
+    "voiceInput": {
+      "title": "Voice Input",
+      "enable": "Enable voice input",
+      "enableHelp": "Default: off. Voice dictation uses the operator-managed Parakeet v3 model.",
+      "modelStatus": "Parakeet v3 model status",
+      "modelStatusHelp": "The speech model is installed and managed locally on this device.",
+      "modelActions": "Model management",
+      "modelActionsHelp": "Download or remove the Parakeet v3 speech model.",
+      "statusUnavailable": "Voice runtime status could not be determined; voice mode stays disabled.",
+      "runtimeUnavailable": "Voice runtime unavailable",
+      "unknown": "Status unavailable",
+      "downloading": "Downloading model…",
+      "downloadingProgress": "Downloading: {{progress}}%",
+      "installed": "Installed",
+      "notInstalled": "Not installed",
+      "download": "Download",
+      "remove": "Remove",
+      "error": "Model error: {{message}}"
     }
   },
   "setup": {

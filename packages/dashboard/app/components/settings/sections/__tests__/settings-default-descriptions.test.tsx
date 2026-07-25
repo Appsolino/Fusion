@@ -318,6 +318,13 @@ const NOT_SURFACED_ALLOWLIST: Record<string, string> = {
   ephemeralAgentsCanCreateTasks: "legacy compatibility input replaced by ephemeralAgentTaskCreationPolicy",
   // Global-only serve/dashboard LAN discovery switch; no Settings UI description field exists.
   localNetworkDiscoveryEnabled: "global-only LAN discovery runtime switch",
+  /*
+  FNXC:VoiceInput 2026-07-25-09:05:
+  Nested Voice Input settings object. DEFAULT_SETTINGS stores voiceInput as undefined
+  (opt-in object); the VoiceInputSection enable toggle documents Default: off for the
+  nested enabled flag rather than a top-level plain description field.
+  */
+  voiceInput: "nested Voice Input section object; enable toggle owns Default: off for voiceInput.enabled",
   // Moved to workflow settings (U4) — see MOVED_SETTINGS_KEYS in settings-schema.ts.
   workflowStepTimeoutMs: "moved to workflow settings (U4)",
   workflowStepScopeEnforcement: "moved to workflow settings (U4)",
