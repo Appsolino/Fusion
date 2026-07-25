@@ -58,6 +58,7 @@ import { SourceControlGlobalSection } from "./settings/sections/SourceControlGlo
 import { AgentPermissionsSection } from "./settings/sections/AgentPermissionsSection";
 import { MemorySection } from "./settings/sections/MemorySection";
 import { ResearchProjectSection } from "./settings/sections/ResearchProjectSection";
+import { VoiceInputSection } from "./settings/sections/VoiceInputSection";
 import { ProjectMcpSection } from "./settings/sections/ProjectMcpSection";
 import { BackupsSection } from "./settings/sections/BackupsSection";
 import { ConfigurationVersionsSection } from "./settings/sections/ConfigurationVersionsSection";
@@ -313,7 +314,8 @@ const RUNTIME_PLUGIN_SECTION_IDS: ReadonlyMap<string, string> = new Map([
 
 const RUNTIME_SETTINGS_SECTION_IDS = new Set(RUNTIME_PLUGIN_SECTION_IDS.values());
 
-const ADVANCED_SETTINGS_SECTION_IDS = new Set([
+/* FNXC:VoiceInput 2026-07-28-12:00: Voice Input is an opt-in end-user feature, so it stays visible in Basic Settings rather than joining this advanced-only set. */
+export const ADVANCED_SETTINGS_SECTION_IDS = new Set([
   "node-sync",
   "global-mcp",
   "cli-agents",
@@ -631,6 +633,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   { id: "memory", label: "Memory", labelKey: "settings.nav.memory", scope: "project", searchableText: ["memory backend", "Dreams", "long-term memory", "qmd", "memory file", "retrieval"] },
   { id: "research-global", label: "Research · Global", labelKey: "settings.nav.researchGlobal", scope: "global", searchableText: ["research providers", "external search providers", "fetch limits", "global research defaults", "citations"] },
   { id: "research-project", label: "Research · Project", labelKey: "settings.nav.researchProject", scope: "project", searchableText: ["project research", "research runs", "citations", "search limits", "fetch synthesis"] },
+  { id: "voice-input", label: "Voice Input", labelKey: "settings.nav.voiceInput", scope: "project", searchableText: ["voice", "dictation", "microphone", "speech to text", "parakeet", "transcription"] },
 
   { id: "__automation_header", label: "Automation", labelKey: "settings.nav.automationHeader", scope: undefined, isGroupHeader: true },
   /*
@@ -4421,6 +4424,8 @@ export function SettingsModal({
             researchLimitError={researchLimitError}
           />
         );
+      case "voice-input":
+        return <VoiceInputSection form={form} setForm={setForm} />;
       case "cli-binary":
         return <CliBinarySection />;
       case "experimental":

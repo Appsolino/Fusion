@@ -30,6 +30,7 @@ import { schedulingSearchEntries } from "../sections/SchedulingSection.search";
 import { sourceControlGlobalSearchEntries } from "../sections/SourceControlGlobalSection.search";
 import { sourceControlSearchEntries } from "../sections/SourceControlSection.search";
 import { worktreesSearchEntries } from "../sections/WorktreesSection.search";
+import { voiceInputSearchEntries } from "../sections/VoiceInputSection.search";
 
 /**
  * Flat index of every searchable setting. Order is not significant — results
@@ -59,6 +60,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   ...sourceControlGlobalSearchEntries,
   ...sourceControlSearchEntries,
   ...worktreesSearchEntries,
+  ...voiceInputSearchEntries,
 ];
 
 /** Entries owned by one section id. */

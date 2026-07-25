@@ -38,6 +38,10 @@ Every user-editable setting's help text (the `.settings-description`/`<small>` h
 <!-- FNXC:SettingsAutoSaveDocs 2026-08-02-20:55: FN-8395 removes the ambiguous Settings Save affordance. Operators need the persistence timing and close guarantee documented where Settings behavior is introduced. -->
 Settings form changes save automatically after a short pause. The footer no longer includes a **Save** button and closing Settings does not ask about unsaved changes: Close, Escape, and clicking outside the modal first flush any pending edit. The footer shows quiet **Saving…**, **Saved**, or save-failure status; correct the value and retry after a failure.
 
+## Voice Input
+
+**Settings → Voice Input** is visible in both Basic and Advanced settings. Voice mode is off by default; enabling it is an explicit project preference. The same section shows the locally managed Parakeet v3 model and lets an operator download or remove it. Download progress is polled only while the model is downloading. When sherpa-onnx is unavailable, Settings preserves any saved enabled preference but presents voice mode as backend-enforced disabled with an explanation. If status cannot be determined, the section fails closed: voice mode stays disabled and model actions are not shown until status is available.
+
 ## Reset Settings
 
 <!-- FNXC:SettingsResetDocs 2026-07-04-00:00: Reset Settings is a DESTRUCTIVE action. Document both choices, the scope-precision guarantee, and which sections are excluded so operators understand exactly what a reset does and does not touch before they click it.

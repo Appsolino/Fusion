@@ -73,6 +73,7 @@ const SECTION_FILE_TO_ID: Record<string, string> = {
   "SourceControlGlobalSection.tsx": "source-control-global",
   "SourceControlSection.tsx": "source-control",
   "WorktreesSection.tsx": "worktrees",
+  "VoiceInputSection.tsx": "voice-input",
 };
 
 describe("settings search index", () => {
