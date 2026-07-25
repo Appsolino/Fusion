@@ -737,6 +737,7 @@ import type {
   RemoteAccessLifecycleConfig,
   RemoteAccessProjectSettings,
   SecretsEnvSettings,
+  VoiceInputSettings,
   ProjectSettings,
   Settings,
 } from "./types/settings-scope.js";
@@ -787,6 +788,7 @@ export type {
   RemoteAccessLifecycleConfig,
   RemoteAccessProjectSettings,
   SecretsEnvSettings,
+  VoiceInputSettings,
   ProjectSettings,
   Settings,
 };

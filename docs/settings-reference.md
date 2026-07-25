@@ -45,6 +45,18 @@ See [Signals Connectors](./signals-connectors.md) for setup, signing, payload, a
 
 ---
 
+## Voice input
+
+`VoiceInputSettings` is exported from `@fusion/core`. Both global and project settings accept
+`voiceInput: { enabled?, model?, language? }`; values resolve per request with project precedence.
+`enabled` defaults to false and gates dictation only, so model status/download/delete remain available
+while disabled. `model` defaults to registry identifier `"parakeet-v3"` and `language` to `"en"`;
+unsupported values are rejected and never become URLs or paths. The optional sherpa runtime and
+user-scoped cache degrade to unavailable safely. Downloads are on demand and require a pinned SHA-256;
+unpinned assets refuse download. Status polling reports `queued`/`downloading`; deleting fences an
+in-flight download. Voice chunks alone allow 2 MiB JSON, use 16 kHz mono PCM, and sessions retain
+closed tombstones for 60 seconds (size-cap responses stay 413 before eviction).
+
 ## Global Settings
 
 Defaults from `DEFAULT_GLOBAL_SETTINGS`; key scope from `GLOBAL_SETTINGS_KEYS`.

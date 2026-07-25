@@ -143,6 +143,7 @@ export const DEFAULT_GLOBAL_SETTINGS = {
   defaultProvider: undefined,
   defaultModelId: undefined,
   testMode: undefined,
+  voiceInput: undefined,
   modelPricingOverrides: undefined,
   modelPricingFetchedAt: undefined,
   modelPricingSource: undefined,
@@ -436,6 +437,7 @@ export const DEFAULT_PROJECT_SETTINGS = {
   // with this on but auto-merge off, review threads are resolved but the PR is not merged.
   autoResolveReviewComments: true,
   testMode: undefined,
+  voiceInput: undefined,
   mergeRequestContractShadowEnabled: false,
   mergeStrategy: "direct",
   directMergeCommitStrategy: "always-squash",

@@ -958,13 +958,30 @@ export function createServer(store: TaskStore, options?: ServerOptions): ReturnT
   // Preserve the raw payload buffer so signed endpoints (for example
   // /api/routines/:id/webhook and settings sync proxying) can verify HMAC
   // signatures and forward exact request bytes.
-  app.use(express.json({
+  /*
+  FNXC:VoiceInput 2026-07-21-12:00:
+  Voice chunks have a route-only 2 MiB parser. The global 100 KiB parser must skip only this
+  endpoint (with or without Express's optional trailing slash) or it rejects before the voice
+  error mapper; rawBody/HMAC behavior remains unchanged elsewhere.
+  */
+  const jsonParser = express.json({
     verify: (req, _res, buf) => {
       if (buf.length > 0) {
         (req as express.Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
       }
     },
-  }));
+  });
+  app.use((req, res, next) => {
+    // Express treats the trailing-slash spelling as the same route, so its parser boundary must,
+    // too; no broader prefix is exempted from the global rawBody-preserving parser.
+    if (req.path === "/api/voice/transcribe" || req.path === "/api/voice/transcribe/") return next();
+    return jsonParser(req, res, (error) => {
+      // Keep the established global 100 KiB rejection observable as 413 instead of allowing
+      // Express's parser error to fall through to the generic 500 handler.
+      if ((error as { type?: string } | undefined)?.type === "entity.too.large") return res.status(413).json({ error: "payload-too-large" });
+      return next(error);
+    });
+  });
 
   // Daemon mode: bearer token authentication middleware
   // Auth is enabled when daemon option is provided OR FUSION_DAEMON_TOKEN env var is set.

@@ -289,6 +289,23 @@ export interface BackupSettingsMigrationConflict {
   recordedAt: string;
 }
 
+/**
+ * FNXC:VoiceInput 2026-07-21-12:00:
+ * Voice dictation is opt-in and resolved per request with project values overriding global
+ * values. The flag gates dictation only: operators may manage the on-demand model while
+ * disabled, and missing optional runtime support reports unavailable rather than failing boot.
+ * `model` is a registry identifier (default `parakeet-v3`), never a path or URL; `language`
+ * defaults to `en` and unsupported values are rejected when a session is created.
+ */
+export interface VoiceInputSettings {
+  /** Default false; gates dictation/transcription only. */
+  enabled?: boolean;
+  /** Registry model identifier; default `parakeet-v3`. */
+  model?: string;
+  /** Recognition language code; default `en`. */
+  language?: string;
+}
+
 export interface GlobalSettings {
   /** Maximum PostgreSQL server connections for Fusion's embedded database. Applied on the next Fusion restart. */
   embeddedPostgresMaxConnections?: number;
@@ -352,6 +369,7 @@ export interface GlobalSettings {
    *  of per-task or per-lane overrides. No network calls, zero token cost.
    *  Project `testMode` takes precedence over the global value. */
   testMode?: boolean;
+  voiceInput?: VoiceInputSettings;
   /**
    * User-edited or one-click-fetched pricing entries keyed by lowercased `provider:model`.
    *
@@ -1117,6 +1135,7 @@ export interface ProjectSettings {
   /** When true, force every AI lane onto the deterministic mock provider regardless
    *  of per-task or per-lane overrides. No network calls, zero token cost. */
   testMode?: boolean;
+  voiceInput?: VoiceInputSettings;
   /** Phase-1 FN-5741 write-only shadow seam toggle.
    *  Overrides global `mergeRequestContractShadowEnabled` when defined.
    *  Default: false. */
