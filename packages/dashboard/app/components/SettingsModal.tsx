@@ -4539,6 +4539,15 @@ export function SettingsModal({
               handleSubmitManualCode,
               onReopenOnboarding,
             }}
+            /*
+            FNXC:ProviderAuth 2026-07-24-17:05:
+            Authentication is presentational like every other section — the shell keeps
+            ownership of persistence. It needs the form only for the Anthropic
+            credential-precedence row, which belongs beside the two Anthropic cards
+            rather than buried in a general settings list.
+            */
+            form={form}
+            setForm={setForm}
           />
         );
       case "hermes-runtime":

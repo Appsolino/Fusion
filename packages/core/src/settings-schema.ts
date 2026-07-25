@@ -88,6 +88,12 @@ export const DEFAULT_GLOBAL_SETTINGS = {
   FNXC:DashboardTheming 2026-07-03-00:00:
   Fresh installs must follow the operating system theme until the user explicitly chooses Light, Dark, or System. Keep this global default aligned with dashboard and desktop pre-hydration fallbacks.
   */
+  /*
+  FNXC:ProviderAuth 2026-07-24-17:05:
+  Default to the historical precedence (raw API key beats subscription OAuth, FN-7391/FN-7396)
+  so upgrading never silently moves an operator's traffic from their key onto their subscription.
+  */
+  anthropicAuthPreference: "api-key",
   themeMode: "system",
   /*
   FNXC:DashboardTheming 2026-06-30-00:00:

@@ -11,6 +11,7 @@ import type {
   Locale,
   ReviewArtifactsMode,
   ThemeMode,
+  AnthropicAuthPreference,
 } from "./execution-and-ui.js";
 import type {
   AutoRecoverySettings,
@@ -291,6 +292,15 @@ export interface BackupSettingsMigrationConflict {
 export interface GlobalSettings {
   /** Maximum PostgreSQL server connections for Fusion's embedded database. Applied on the next Fusion restart. */
   embeddedPostgresMaxConnections?: number;
+  /**
+   * FNXC:ProviderAuth 2026-07-24-17:05:
+   * Which Anthropic credential wins when BOTH a raw API key and a Claude subscription OAuth
+   * login are present. Global because credentials are global. "api-key" (default) preserves
+   * the historical precedence; "subscription" makes the OAuth login win so a stale or revoked
+   * saved key can no longer shadow it with `401 invalid x-api-key`. With only one credential
+   * configured this setting changes nothing — resolution falls through to whatever exists.
+   */
+  anthropicAuthPreference?: AnthropicAuthPreference;
   /** Theme mode preference: dark, light, or system (follows OS). Default: "dark". */
   themeMode?: ThemeMode;
   /** Color theme preference for accent colors and styling. Default: "shadcn-ember"; "default" and "ocean" remain valid explicit legacy selections. */
