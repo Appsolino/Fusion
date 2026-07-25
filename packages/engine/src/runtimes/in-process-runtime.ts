@@ -1092,6 +1092,9 @@ export class InProcessRuntime
           usageLimitPauser: this.usageLimitPauser,
           agentStore: this.agentStore,
           pluginRunner: this.pluginRunner,
+          // FNXC:NodeWorktreeIsolation 2026-07-25-22:10: planning acquires (or reuses) the task's own
+          // worktree through the executor's acquisition path, so no lane runs in the shared checkout.
+          acquirePlanningWorktree: (taskId) => this.executor.ensureTaskWorktreeForPlanning(taskId),
           onSpecifyStart: (t) => {
             this.recordActivity();
             runtimeLog.log(`Specifying ${t.id}...`);

@@ -209,6 +209,15 @@ export interface TriageProcessorOptions {
   agentStore?: import("@fusion/core").AgentStore;
   /** Plugin runner for runtime selection. When provided, enables plugin runtime lookup. */
   pluginRunner?: import("./plugin-runner.js").PluginRunner;
+  /*
+  FNXC:NodeWorktreeIsolation 2026-07-25-22:10:
+  Acquires (or reuses) the task-specific worktree so the planning session runs there instead of in the
+  shared main checkout. Planning uses the CODING tool surface, so running it at the repo root gave every
+  planner write tools in the operator's tree and made concurrent planners share one path. Optional: when
+  unwired (older callers, tests) or when it resolves null (workspace projects, acquisition failure),
+  planning falls back to the repo root exactly as before.
+  */
+  acquirePlanningWorktree?: (taskId: string) => Promise<string | null>;
 }
 
 /**
@@ -1756,11 +1765,23 @@ export class TriageProcessor {
         advertising that writer in the prompt while running readonly stranded triage
         on the original PROMPT.md stub and sent the stub into Plan Review.
         */
+        /*
+        FNXC:NodeWorktreeIsolation 2026-07-25-22:10:
+        Planning runs in the TASK's own worktree, not the shared main checkout. This session carries the
+        coding tool surface (see FNXC:TriagePromptPersistence above), so rooting it at `this.rootDir`
+        put write tools in the operator's tree and made every concurrent planner share one path — the
+        same shared-path shape behind the reported Plan Review session collision. The worktree acquired
+        here is the one Plan Review and the implementation session then reuse.
+        */
+        const planningCwd = (await this.options.acquirePlanningWorktree?.(task.id).catch(() => null)) || this.rootDir;
+        if (planningCwd !== this.rootDir) {
+          await this.store.logEntry(task.id, `Planning session running in task worktree ${planningCwd}`).catch(() => undefined);
+        }
         const { session } = await createResolvedAgentSession({
           sessionPurpose: "triage",
           runtimeHint: triageRuntimeHint,
           pluginRunner: this.options.pluginRunner,
-          cwd: this.rootDir,
+          cwd: planningCwd,
           systemPrompt: triageSystemPromptFinal,
           systemPromptLayers: triageLayers,
           tools: "coding",
