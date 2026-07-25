@@ -131,6 +131,27 @@ describe("Anthropic credential precedence (anthropicAuthPreference)", () => {
     await expect(storage.getApiKey("anthropic")).resolves.toBe(SUBSCRIPTION_ACCESS_TOKEN);
   });
 
+  it("honors the preference stored in a legacy global settings dir", async () => {
+    writeAuth(homeDir, {
+      anthropic: { type: "api_key", key: RAW_API_KEY },
+      "anthropic-subscription": liveSubscriptionCredential(),
+    });
+    /*
+    Operators who never migrated off the pre-rename global dir keep settings.json under
+    ~/.pi/fusion. Reading only ~/.fusion would silently ignore their choice and fall back to
+    raw-key precedence — the exact silent fallback this preference exists to remove.
+    */
+    mkdirSync(join(homeDir, ".pi", "fusion"), { recursive: true });
+    writeFileSync(
+      join(homeDir, ".pi", "fusion", "settings.json"),
+      JSON.stringify({ anthropicAuthPreference: "subscription" }),
+    );
+
+    const storage = createFusionAuthStorage();
+
+    await expect(storage.getApiKey("anthropic")).resolves.toBe(SUBSCRIPTION_ACCESS_TOKEN);
+  });
+
   it("falls back to the historical precedence when the settings file is unreadable", async () => {
     writeAuth(homeDir, {
       anthropic: { type: "api_key", key: RAW_API_KEY },

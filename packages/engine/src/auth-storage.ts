@@ -421,9 +421,26 @@ function resolveStoredCredentialApiKey(providerId: string, credential: StoredCre
  * can return them as a fallback when neither Fusion auth nor legacy auth.json
  * contains a key for the provider.
  */
-/** Global settings file that carries the operator's Anthropic credential preference. */
+/*
+FNXC:ProviderAuth 2026-07-24-18:20:
+Global settings live in `settings.json` under the resolved GLOBAL dir — not in Postgres
+(Postgres holds project settings, which are merged over the global ones by
+`settings-ops.ts`, and the immutable configuration-revision journal). The global dir is
+`~/.fusion` for current installs but falls back to the pre-rename `~/.pi/fusion` and
+`~/.pi/kb` dirs for operators who never migrated (see core `resolveGlobalDirForHome`).
+Hardcoding `~/.fusion` would silently ignore the operator's preference on those installs and
+fall back to raw-key precedence — the same silent-fallback failure this preference exists to
+remove. Mirror the legacy-aware lookup `getModelRegistryModelsPath` already does for
+models.json rather than importing core's resolver, which throws under VITEST when called
+without an explicit dir.
+*/
 export function getFusionGlobalSettingsPath(home = getHomeDir()): string {
-  return join(home, ".fusion", "settings.json");
+  const candidates = [
+    join(home, ".fusion", "settings.json"),
+    join(home, ".pi", "fusion", "settings.json"),
+    join(home, ".pi", "kb", "settings.json"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
 }
 
 /*
