@@ -1,4 +1,10 @@
 export { AgentLogger, type AgentLoggerOptions, summarizeToolArgs } from "./agent-logger.js";
+export {
+  classifyReportHealth,
+  type ReportHealthBucket,
+  type ReportHealthClassification,
+  type ReportHealthInput,
+} from "./reports-health.js";
 export { reloadExemptTools, addToExemptTools, getExemptToolNames } from "./agent-action-gate.js";
 export type { AgentActionGateContext } from "./agent-action-gate.js";
 export { createFusionAuthStorage, createFusionModelRegistry } from "./auth-storage.js";
