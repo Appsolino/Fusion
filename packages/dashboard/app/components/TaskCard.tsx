@@ -1417,6 +1417,24 @@ function TaskCardComponent({
     && (task.steps?.length ?? 0) > 0
     && !planReviewRunning
     && !isAgentActive;
+  /*
+  FNXC:CodingIdeasWorkflow 2026-07-25-12:05:
+  "Queued to plan" is the exact complement of Ready: same idle-in-Todo conditions, but the card has
+  NO steps yet, so it is unplanned and waiting for a PLANNING slot rather than a WIP slot. Without
+  it a started card that the concurrency pool has not admitted is visually identical to a card
+  nothing is going to happen to — the throttle was only observable in the engine log
+  ("Plan throttled by running-agent cap|global semaphore"), which is why a busy pool read as a bug.
+
+  Three Todo states are now distinguishable: planning in flight (the "planning" status badge),
+  unplanned and waiting for a planning slot (this badge), planned and waiting for a WIP slot
+  (Ready). The conditions are mutually exclusive by the steps count, so no card shows both.
+  */
+  const showQueuedToPlanBadge = !isPaused
+    && task.column === "todo"
+    && !visualStatus
+    && (task.steps?.length ?? 0) === 0
+    && !planReviewRunning
+    && !isAgentActive;
   // Native HTML5 drag is desktop-mouse only — it doesn't move cards via touch.
   // On touch-primary devices the `draggable` attribute still arms the browser's
   // touch-drag heuristic, which intermittently hijacks horizontal swipes meant
@@ -2739,7 +2757,14 @@ function TaskCardComponent({
     setIsStarting(true);
     try {
       await onMoveTask(task.id, startTargetColumn);
-      addToast(t("tasks.startedPlanning", "Started planning {{taskId}}", { taskId: task.id }), "success");
+      /*
+      FNXC:CodingIdeasWorkflow 2026-07-25-12:05:
+      Honest copy: Start performs a column move, not a plan dispatch. "Started planning" claimed an
+      outcome this handler cannot observe — the engine still has to admit the card, and a busy
+      concurrency pool (maxConcurrent / globalMaxConcurrent) can defer that indefinitely, which
+      made a throttled card look broken. The card's "Queued to plan" badge carries the live state.
+      */
+      addToast(t("tasks.queuedForPlanning", "Queued {{taskId}} for planning", { taskId: task.id }), "success");
     } catch (err) {
       addToast(getErrorMessage(err), "error");
     } finally {
@@ -3034,6 +3059,10 @@ function TaskCardComponent({
     || showStatusBadge
     || showOptionalGateBadge
     || showReadyBadge
+    // FNXC:CodingIdeasWorkflow 2026-07-25-12:05: the header wrapper only renders when it has a
+    // real child, so a new badge must be declared here or it never mounts (Queued to plan is the
+    // only badge on an unplanned idle Todo card — without this the whole cluster stays absent).
+    || showQueuedToPlanBadge
     || Boolean(hasInReviewStall && stallCopy)
     || cliWaitingOnInput
     || cliNeedsAttention
@@ -3229,6 +3258,24 @@ function TaskCardComponent({
         {showReadyBadge && (
           <span className="card-status-badge card-status-badge--todo ready" data-testid={`card-ready-${task.id}`}>
             {t("tasks.ready", "Ready")}
+          </span>
+        )}
+        {/*
+        FNXC:CodingIdeasWorkflow 2026-07-25-12:05:
+        Started-but-not-yet-planned. Reuses the Ready badge's primitives with the queued modifier
+        rather than forking a new badge variant. The title names both caps, since the per-project
+        maxConcurrent and the cross-project globalMaxConcurrent can each be the binding one.
+        */}
+        {showQueuedToPlanBadge && (
+          <span
+            className="card-status-badge card-status-badge--todo queued-to-plan"
+            data-testid={`card-queued-to-plan-${task.id}`}
+            title={t(
+              "tasks.queuedToPlanTitle",
+              "Waiting for a planning slot — planning starts when a concurrency slot frees up (maxConcurrent / globalMaxConcurrent)",
+            )}
+          >
+            {t("tasks.queuedToPlan", "Queued to plan")}
           </span>
         )}
         {hasInReviewStall && stallCopy && (

@@ -848,7 +848,13 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
         if (target && onMoveTask) {
           try {
             await onMoveTask(createdTask.id, target as ColumnId);
-            addToast(t("tasks.startedPlanning", "Started planning {{taskId}}", { taskId: createdTask.id }), "success");
+            /*
+            FNXC:CodingIdeasWorkflow 2026-07-25-12:05:
+            Honest copy: this path performs a column move, not a plan dispatch. The old "Started
+            planning" claim was optimistic — planning begins when the engine admits the card, which
+            a busy maxConcurrent pool can defer indefinitely. Same wording as TaskCard's Start.
+            */
+            addToast(t("tasks.queuedForPlanning", "Queued {{taskId}} for planning", { taskId: createdTask.id }), "success");
           } catch (moveError) {
             addToast(getErrorMessage(moveError) || t("tasks.createFailed", "Failed to create task"), "error");
           }
