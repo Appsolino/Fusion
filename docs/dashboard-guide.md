@@ -40,7 +40,7 @@ Settings form changes save automatically after a short pause. The footer no long
 
 ## Voice Input
 
-**Settings → Voice Input** is visible in both Basic and Advanced settings. Voice mode is off by default; enabling it is an explicit project preference. The same section shows the locally managed Parakeet v3 model and lets an operator download or remove it. Download progress is polled only while the model is downloading. When sherpa-onnx is unavailable, Settings preserves any saved enabled preference but presents voice mode as backend-enforced disabled with an explanation. If status cannot be determined, the section fails closed: voice mode stays disabled and model actions are not shown until status is available.
+**Settings → Voice Input** is visible in both Basic and Advanced settings. Voice mode is off by default; enabling it is an explicit project preference. The same section shows the locally managed Parakeet v3 model and lets an operator download or remove it. Its upstream `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2` archive is about 465 MB and Fusion verifies its pinned SHA-256 before installing it; an unpinned or mismatched download is refused. Download progress is polled only while the model is downloading. When sherpa-onnx is unavailable, Settings preserves any saved enabled preference but presents voice mode as backend-enforced disabled with an explanation. If status cannot be determined, the section fails closed: voice mode stays disabled and model actions are not shown until status is available.
 
 ## Reset Settings
 

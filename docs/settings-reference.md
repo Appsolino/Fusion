@@ -53,9 +53,11 @@ See [Signals Connectors](./signals-connectors.md) for setup, signing, payload, a
 while disabled. `model` defaults to registry identifier `"parakeet-v3"` and `language` to `"en"`;
 unsupported values are rejected and never become URLs or paths. The optional sherpa runtime and
 user-scoped cache degrade to unavailable safely. Downloads are on demand and require a pinned SHA-256;
-unpinned assets refuse download. Status polling reports `queued`/`downloading`; deleting fences an
-in-flight download. Voice chunks alone allow 2 MiB JSON, use 16 kHz mono PCM, and sessions retain
-closed tombstones for 60 seconds (size-cap responses stay 413 before eviction).
+unpinned assets refuse download. The default asset is upstream `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2`
+(~465 MB), verified against its pinned SHA-256 before installation. Status polling reports
+`queued`/`downloading`; deleting fences an in-flight download. Voice chunks alone allow 2 MiB JSON,
+use 16 kHz mono PCM, and sessions retain closed tombstones for 60 seconds (size-cap responses stay
+413 before eviction).
 
 ## Global Settings
 

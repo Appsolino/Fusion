@@ -32,10 +32,13 @@ export function parseSafeTarListing(listing: string): { safe: true } | { safe: f
   for (const line of listing.split("\n").filter(Boolean)) {
     const type = line[0];
     if (type !== "-" && type !== "d") return { safe: false, reason: "unsafe entry type" };
-    // GNU uses YYYY-MM-DD HH:MM while BSD tar uses Mon DD HH:MM YYYY. Do not
-    // guess a column offset: owner/group fields vary, and guessing could turn an
-    // absolute pathname into a harmless-looking date suffix.
-    const timestamp = /\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?\s+\d{4}\s+/.exec(line);
+    /*
+     * FNXC:VoiceInput 2026-07-25-00:00:
+     * The pinned Parakeet archive uses BSD `Mon DD  YYYY` metadata, in addition to GNU and
+     * BSD-with-clock forms. Do not guess a column offset: owner/group fields vary, and guessing
+     * could turn an absolute pathname into a harmless-looking date suffix.
+     */
+    const timestamp = /\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s+|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+(?:\d{2}:\d{2}(?::\d{2})?\s+\d{4}|\d{4})\s+/.exec(line);
     if (!timestamp || timestamp.index === undefined) return { safe: false, reason: "unparseable tar metadata" };
     const path = line.slice(timestamp.index + timestamp[0].length);
     if (!path || /\s(?:->|link to|hard link to)\s/.test(path) || path.startsWith("/") || path.split(/[\\/]+/).includes("..")) return { safe: false, reason: "unsafe entry path" };
@@ -95,7 +98,7 @@ export function createVoiceModelManager(options: VoiceModelManagerOptions = {}):
     : runTar(["-tvf", archive], signal);
   const extractArchive = async (archive: string, staging: string, signal: AbortSignal) => {
     if (options.extract) return options.extract(archive, staging, signal);
-    await runTar(["--no-same-owner", "-xf", archive, "-C", staging], signal);
+    await runTar(["--no-same-owner", "-x", `--strip-components=${asset.stripComponents ?? 0}`, "-f", archive, "-C", staging], signal);
   };
   const move = options.rename ?? rename;
 

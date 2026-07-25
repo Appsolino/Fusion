@@ -14,6 +14,12 @@ const safeListing = "-rw-r--r-- root/root 6 2026-01-01 00:00 tokens.txt";
 
 describe("voice model manager", () => {
   it.each([
+    "-rw-r--r-- root/root 6 2026-01-01 00:00 tokens.txt",
+    "-rw-r--r-- root wheel 6 Aug 16 12:34 2025 tokens.txt",
+    "-rw-r--r-- 0 runner staff 93939 Aug 16  2025 tokens.txt",
+  ])("accepts supported tar timestamp formats: %s", (listing) => expect(parseSafeTarListing(listing)).toEqual({ safe: true }));
+
+  it.each([
     "lrwxrwxrwx root/root 0 2026-01-01 00:00 model -> /tmp/x",
     "hrwxrwxrwx root/root 0 2026-01-01 00:00 model hard link to other",
     "crw-rw-rw- root/root 0 2026-01-01 00:00 device",
@@ -31,6 +37,46 @@ describe("voice model manager", () => {
     expect(await manager.getState()).toMatchObject({ status: "installed", checksumVerified: true });
     expect(extract).toHaveBeenCalledOnce();
     expect(JSON.parse(await readFile(join(cacheDir, "model", "manifest.json"), "utf8"))).toMatchObject({ sha256: digest });
+  });
+
+  it("promotes a stripped nested archive fixture with model files at the install root", async () => {
+    const fixture = Buffer.from("nested Parakeet archive fixture");
+    const nestedAsset = {
+      url: "https://example.invalid/parakeet-nested.tar.bz2",
+      filename: "parakeet-nested.tar.bz2",
+      sha256: createHash("sha256").update(fixture).digest("hex"),
+      expectedFiles: ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
+      stripComponents: 1,
+    };
+    const cacheDir = await mkdtemp(join(tmpdir(), "voice-nested-model-"));
+    const manager = createVoiceModelManager({
+      cacheDir,
+      asset: nestedAsset,
+      fetch: vi.fn(async () => new Response(fixture)) as typeof fetch,
+      listArchive: async () => [
+        "drwxr-xr-x 0 runner staff 0 Aug 16  2025 sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/",
+        "-rw-r--r-- 0 runner staff 1 Aug 16  2025 sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx",
+      ].join("\n"),
+      // The extract seam represents tar invoked with this fixture asset's strip-components value.
+      extract: async (_archive, staging) => Promise.all(nestedAsset.expectedFiles.map((file) => writeFile(join(staging, file), "model"))).then(() => undefined),
+    });
+
+    await expect(manager.download()).resolves.toMatchObject({ status: "installed", checksumVerified: true });
+    for (const expected of nestedAsset.expectedFiles) await expect(readFile(join(cacheDir, "model", expected), "utf8")).resolves.toBe("model");
+  });
+
+  it("reports a nested archive missing an expected file as incomplete", async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), "voice-incomplete-model-"));
+    const incompleteAsset = { ...asset, expectedFiles: ["tokens.txt", "encoder.int8.onnx"], stripComponents: 1 };
+    const manager = createVoiceModelManager({
+      cacheDir,
+      asset: incompleteAsset,
+      fetch: vi.fn(async () => response()) as typeof fetch,
+      listArchive: async () => "-rw-r--r-- 0 runner staff 6 Aug 16  2025 sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/tokens.txt",
+      extract: async (_archive, staging) => writeFile(join(staging, "tokens.txt"), "tokens"),
+    });
+
+    await expect(manager.download()).resolves.toMatchObject({ status: "error", errorReason: "incomplete-install" });
   });
 
   it("reports a corrupt final model directory as incomplete instead of absent", async () => {

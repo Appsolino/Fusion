@@ -1,15 +1,46 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createVoiceModelManager } from "../model-manager.js";
 import { createParakeetService } from "../parakeet-service.js";
-import { resolveVoiceLanguage, resolveVoiceModelId } from "../types.js";
+import { PARAKEET_V3_ASSET, resolveVoiceLanguage, resolveVoiceModelId } from "../types.js";
 
 describe("voice STT graceful degradation", () => {
+  it("pins a downloadable Parakeet v3 archive with its verified model files", () => {
+    expect(PARAKEET_V3_ASSET).toMatchObject({
+      filename: "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+      url: expect.stringContaining("/releases/download/"),
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      expectedFiles: ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
+      stripComponents: 1,
+    });
+  });
+
+  it("opens the pinned registry asset's pre-network download gate", async () => {
+    const fetch = vi.fn(async () => { throw new Error("network must not be reached by this gate test"); });
+    const manager = createVoiceModelManager({ cacheDir: await mkdtemp(join(tmpdir(), "voice-registry-")), fetch: fetch as typeof globalThis.fetch });
+
+    await expect(manager.getState()).resolves.toMatchObject({ status: "not-installed" });
+    expect(manager.scheduleDownload()).toMatchObject({ accepted: true });
+  });
+
   it("refuses an unpinned archive synchronously without fetching", () => {
     const fetch = vi.fn();
     const manager = createVoiceModelManager({ cacheDir: "/unused", fetch, asset: { url: "https://example.test/model", filename: "model.tar", sha256: null, expectedFiles: [] } });
     expect(manager.scheduleDownload()).toMatchObject({ accepted: false, state: { status: "error", errorReason: "checksum-unpinned" } });
     expect(fetch).not.toHaveBeenCalled();
   });
+  it("reports a byte mismatch without installing an archive", async () => {
+    const manager = createVoiceModelManager({
+      cacheDir: await mkdtemp(join(tmpdir(), "voice-mismatch-")),
+      asset: { url: "https://example.test/model", filename: "model.tar", sha256: "0".repeat(64), expectedFiles: [] },
+      fetch: vi.fn(async () => new Response(Buffer.from("wrong bytes"))) as typeof globalThis.fetch,
+    });
+
+    await expect(manager.download()).resolves.toMatchObject({ status: "error", errorReason: "checksum-mismatch", checksumVerified: false });
+  });
+
   it("keeps unknown model identifiers and languages out of runtime configuration", () => {
     expect(resolveVoiceModelId(undefined)).toEqual({ id: "parakeet-v3" });
     expect(resolveVoiceModelId("../unsafe")).toEqual({ unsupported: "../unsafe" });
