@@ -1,5 +1,61 @@
 # @runfusion/fusion
 
+## 0.74.0-beta.0
+
+### Minor Changes
+
+- 8dc6598: summary: Choose whether Anthropic lanes use your API key or your Claude subscription, and see which is in use.
+  category: feature
+  dev: New global setting `anthropicAuthPreference` ("api-key" | "subscription", default "api-key" — the historical precedence). Read in `resolveAnthropicRuntimeApiKey` (packages/engine/src/auth-storage.ts) straight from `~/.fusion/settings.json`, so it applies without a restart and needs no settings plumbing through `createFusionAuthStorage`. Settings → Authentication renders the control and an "In use" / "Overridden below" marker only when both Anthropic credentials are connected.
+- e01dc7d: summary: Board scrolling feels faster — desktop no longer snaps, and phone swipes page immediately instead of coasting.
+  category: feature
+  dev: Base `.board`/`.board-workflow-columns`/`.lane-columns` declare `scroll-snap-type: none`; proximity snap is re-declared in phone-tier media blocks only. `useColumnScrollSnap` now owns post-lift motion: a directional lift kills native inertia (`overflow-x: hidden` for the animation) and animates to its target column via rAF ease-out (~190-300ms), with the page count derived from release velocity sampled off scroll ticks (`resolvePageCount`, `resolveFlingTargetIndex`, `resolvePageAnimationMs`). Re-touch cancels the animation; reduced motion and missing rAF fall back to the instant hard jump. Tap-to-stop-during-momentum is gone as an interaction (no long coast remains).
+- 03cfc2d: summary: Show creation and completion dates directly on task cards.
+  category: feature
+  dev: Archived cards retain their canonical archive timestamp for completion fallback.
+- a9d5b06: summary: Organize Direct chat conversations with reusable tags and sidebar filtering.
+  category: feature
+  dev: Tags are project-scoped and retain conversations when deleted.
+- 8156308: summary: Quick Add now shows a visible Start button for workflows with a waiting column.
+  category: feature
+  dev: Replaces the hidden long-press/right-click Start menu on Save in `QuickEntryBox`; eligibility still comes from `workflowSupportsQuickAddStart` (Coding (Ideas) or a hold-first workflow) and the create-time column override / follow-up move paths are unchanged.
+
+### Patch Changes
+
+- c3cebcd: summary: Make Windows direct-chat Agent selection switch visibly and reliably.
+  category: fix
+  dev: Handles primary pointer activation before an Electron host can suppress its following click.
+- f3a6949: summary: Close untouched New Task dialogs without a discard confirmation.
+  category: fix
+  dev: Workflow optional-step initialization is no longer classified as an operator edit.
+- e3dba36: summary: Update bundled Pi runtime dependencies to the exact matched 0.82.0 pair.
+  category: internal
+  dev: Pins @earendil-works/pi-ai and @earendil-works/pi-coding-agent to 0.82.0.
+- 4b4df1f: summary: Restore touch resizing for Task Detail and New Task on tablets.
+  category: fix
+  dev: Known touch tablets at the 768px boundary now retain floating modal geometry and resize controls.
+- 190cc04: summary: AI helper lanes now run on your configured model instead of silently falling back to a default Anthropic model.
+  category: fix
+  dev: `createFnAgent`/`createResolvedAgentSession` forward no model unless BOTH `defaultProvider` and `defaultModelId` are set, after which pi-coding-agent picks its own built-in default (`anthropic/claude-opus-4-8`). Milestone/slice interviews, subtask breakdown (triage + streaming), agent generation, text refine, goal drafting, and agent reflection all resolved no pair and hit that path on every call — a permanent `401 invalid x-api-key` for custom-provider/subscription operators and a hole in test-mode forcing. All now resolve through the shared `resolveLaneSessionModel` (dashboard) or `resolveProjectDefaultModel` (engine). Also pairs the research synthesis provider/model halves and replaces `pr-conflict-resolver`'s hand-rolled default resolution. A source ratchet (`lane-model-pair-ratchet.test.ts`) keeps new dashboard lanes from reintroducing the pattern.
+- c50e303: summary: Restore the mobile bottom nav bar on large phones, which were being treated as tablets.
+  category: fix
+  dev: `isMobileViewport()` gained a phone width floor (`PHONE_MAX_CSS_WIDTH` = 600) that overrides the FN-8557 `isTabletClassTouchScreen()` exclusion. That check treats any touch device whose `window.screen` min edge exceeds 480px as tablet-class, which large Android phones report, so they lost mobile mode at any CSS width while `MobileNavBar.css` still displayed at `(max-width: 768px)`. The tablet carve-out now applies only in the 601-768px band.
+- 749167c: summary: A paused engine now reads "Paused" in the footer instead of "Idle", and pausing from the terminal takes two presses.
+  category: fix
+  dev: `deriveExecutorState` (dashboard `app/hooks/useExecutorStats.ts`) now returns "paused" for any `enginePaused` value regardless of `runningTaskCount`; the previous matrix mapped paused-with-zero-running to "idle". In the CLI TUI, the global `t` (Git view) branch now yields when the Utilities section owns input, making the advertised "[t] Toggle Engine Pause" reachable, and pausing requires a second `t` within `PAUSE_CONFIRM_WINDOW_MS` (5s); resuming stays single-press.
+- 1959e7c: summary: Fix Planning Mode failing mid-interview with a provider auth error on a model you never selected.
+  category: fix
+  dev: `ensureSessionAgent` rebuilt the planning agent with an empty provider/model pair, so resumed turns (`/planning/respond`, `/planning/:id/retry`, rewind, drafts resumed after the in-memory agent was dropped) fell through to the runtime's built-in default model (`anthropic/claude-opus-4-8`) and hit api.anthropic.com with a key the operator never configured. The pair is now resolved from the persisted draft, then the lane's `resolvePlanningSettingsModel` result, on every rebuild and on the non-streaming start. Planning also now constructs sessions through `createResolvedAgentSession` (`sessionPurpose: "executor"`) like chat/executor/merger, so CLI and plugin runtimes can own their own auth and planning emits `session:runtime-resolved`.
+- 07541f7: summary: Switching projects now fully resets Planning, Chat, Missions, subtask breakdown, GitHub import, and open modals.
+  category: fix
+  dev: New `closeProjectScopedModals()` on the modal manager plus an App-level composite reset invoked by project select/view-all/setup-complete that also dismisses popped-out task FloatingWindows, main-panel task detail, the right-dock task, and the Quick Chat window; PlanningModeModal, ChatView, MissionManager, SubtaskBreakdownModal, and GitHubImportModal are keyed by project id so running streams, session lists, and per-project persisted drafts/active sessions no longer leak or mis-file across projects (subtask/mission drafts save on unmount under their own project key).
+- e4fc3d2: summary: Make the Quick Chat header easier to drag on tablets.
+  category: fix
+  dev: Enlarges only the floating Chat tablet drag target while preserving phone and desktop layouts.
+- 7423621: summary: Fix terminal opening blank (no shell prompt) on some systems until a keypress, font-size change, or new tab.
+  category: fix
+  dev: Observer/geometry-driven fits in TerminalModal (`fitAndResizeForSession`, initial fit) and SessionTerminal now always follow `fit()` with `terminal.refresh(0, rows-1)`, so a renderer stalled at init repaints even when cols/rows are unchanged.
+
 ## 0.73.0
 
 ### Minor Changes

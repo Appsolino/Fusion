@@ -2,6 +2,37 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.74.0-beta.0
+
+### Highlights
+- Choose Anthropic API key vs. subscription per lane, with a clear "in use" indicator
+- Fixed: AI helper lanes (subtasks, milestones, goals, reflections) no longer silently fall back to the wrong Anthropic model
+- Fixed: Planning Mode no longer fails mid-interview with an auth error on a model you never picked
+- Board scrolling is snappier — no more snap-lock on desktop, instant paging on phone swipes
+- Tag and filter Direct chat conversations in the sidebar
+
+### New
+- Choose whether Anthropic lanes use your API key or your Claude subscription, with an "in use" marker in Settings → Authentication
+- Board scrolling feels faster: desktop no longer snaps mid-drag, and phone swipes page immediately instead of coasting
+- Task cards now show creation and completion dates directly
+- Organize Direct chat conversations with reusable, project-scoped tags and sidebar filtering
+- Quick Add now shows a visible Start button for workflows with a waiting column, instead of a hidden long-press menu
+
+### Fixed
+- Windows: direct-chat Agent selection now switches visibly and reliably
+- New Task dialogs close without a discard confirmation when nothing was actually touched
+- Tablets: Task Detail and New Task regain touch resizing
+- AI helper lanes (interviews, subtask breakdown, agent generation, text refine, goal drafting, reflections) now run on your configured model instead of silently falling back to a default Anthropic model and erroring out for custom-provider or subscription users
+- Large phones no longer lose the mobile bottom nav bar after being misclassified as tablets
+- The footer now reads "Paused" instead of "Idle" when the engine is paused, and pausing from the terminal now takes two presses to avoid accidental toggles
+- Planning Mode no longer fails mid-interview with a provider auth error tied to a model you never selected
+- Switching projects now fully resets Planning, Chat, Missions, subtask breakdown, GitHub import, and any open modals so nothing leaks across projects
+- Tablets: the Quick Chat header is easier to grab and drag
+- Terminal windows no longer open blank until a keypress, font-size change, or new tab
+
+### Internal
+- Updated bundled Pi runtime dependencies to the matched 0.82.0 pair
+
 ## 0.73.0
 
 ### Highlights
