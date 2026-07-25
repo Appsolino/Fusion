@@ -9,6 +9,11 @@ import { scopedKey } from "../../utils/projectStorage";
 import { getPriorityColorVar } from "../../utils/priorityIndicator";
 import { loadAllAppCss } from "../../test/cssFixture";
 
+// FNXC:VoiceInput 2026-07-26-05:05: Keep legacy quick-entry tests focused on task creation settings; voice behavior has dedicated suites.
+vi.mock("../../hooks/useComposerDictation", () => ({
+  useComposerDictation: () => ({ micProps: { enabled: false, supported: false, state: "idle", start: vi.fn(), stop: vi.fn() } }),
+}));
+
 const MOCK_MODELS = [
   {
     provider: "anthropic",

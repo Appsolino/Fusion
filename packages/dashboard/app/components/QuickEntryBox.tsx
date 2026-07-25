@@ -13,6 +13,8 @@ import { CustomModelDropdown } from "./CustomModelDropdown";
 import { LoadingSpinner } from "./LoadingSpinner";
 import { getScopedItem, removeScopedItem, setScopedItem } from "../utils/projectStorage";
 import { useNodes } from "../hooks/useNodes";
+import { useComposerDictation } from "../hooks/useComposerDictation";
+import { MicButton } from "./MicButton";
 import { NodeHealthDot } from "./NodeHealthDot";
 import { ProviderIcon } from "./ProviderIcon";
 import { WorkflowOptionalStepsDropdown } from "./WorkflowOptionalStepsDropdown";
@@ -170,6 +172,7 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
   // Starts expanded by default — controls visible immediately
   const [isDisclosureExpanded, setIsDisclosureExpanded] = useState(defaultExpanded);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dictation = useComposerDictation({ textareaRef, value: description, onChange: setDescription, projectId });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const touchButtonRef = useRef<HTMLButtonElement | null>(null);
   const startIntentRef = useRef<ValidatedQuickAddWorkflow | null>(null);
@@ -1838,6 +1841,7 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
               aria-expanded={isDisclosureExpanded}
             />
           </div>
+          <MicButton {...dictation.micProps} disabled={isSubmitting || isDisabled} />
           <button
             type="button"
             className="btn btn-sm quick-entry-toggle"

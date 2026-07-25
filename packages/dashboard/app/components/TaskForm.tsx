@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
+import { useComposerDictation } from "../hooks/useComposerDictation";
+import { MicButton } from "./MicButton";
 import { DEFAULT_TASK_PRIORITY, TASK_PRIORITIES, type GlobalSettings, type Task, type TaskPriority, type Settings, type WorkflowDefinition, type ResolvedWorkflowOptionalStep } from "@fusion/core";
 import type { ToastType } from "../hooks/useToast";
 import { fetchModels, fetchSettings, fetchWorkflows, fetchWorkflowOptionalSteps, refineText, getRefineErrorMessage, updateGlobalSettings, fetchGlobalSettings, fetchGitBranches, type RefinementType, type ModelInfo, type NodeInfo } from "../api";
@@ -318,6 +320,15 @@ export function TaskForm({
   const depDropdownRef = useRef<HTMLDivElement>(null);
   const workflowDropdownRef = useRef<HTMLDivElement>(null);
   const descTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // FNXC:VoiceInput 2026-07-24-05:00: Controlled dictated updates must use the same
+  // description autosize routine as keyboard events after their React render commits.
+  const resizeDescription = useCallback(() => {
+    const element = descTextareaRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${element.scrollHeight}px`;
+  }, []);
+  const dictation = useComposerDictation({ textareaRef: descTextareaRef, value: description, onChange: onDescriptionChange, onResize: resizeDescription, projectId });
   const titleInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -724,10 +735,8 @@ export function TaskForm({
   // Auto-resize textarea
   const handleDescriptionInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onDescriptionChange(e.target.value);
-    const el = e.target;
-    el.style.height = "auto";
-    el.style.height = el.scrollHeight + "px";
-  }, [onDescriptionChange]);
+    resizeDescription();
+  }, [onDescriptionChange, resizeDescription]);
 
   const handleToggleDescriptionExpand = useCallback(() => {
     setIsDescriptionExpanded((prev) => !prev);
@@ -922,6 +931,7 @@ export function TaskForm({
             rows={mode === "edit" ? 8 : 5}
             disabled={disabled || isRefining}
           />
+          <MicButton {...dictation.micProps} disabled={disabled || isRefining} />
           {/* Determine if refine button will be shown — controls expand button placement */}
           {(() => {
             const showRefineButton = Boolean(description.trim()) && !disabled;

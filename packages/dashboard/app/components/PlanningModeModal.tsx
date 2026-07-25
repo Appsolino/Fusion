@@ -67,6 +67,8 @@ import { useNavigationHistoryContext } from "../hooks/useNavigationHistory";
 import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { useAutosizeTextarea } from "../hooks/useAutosizeTextarea";
 import { useToast } from "../hooks/useToast";
+import { useComposerDictation } from "../hooks/useComposerDictation";
+import { MicButton } from "./MicButton";
 
 const WARNING_ICON = "⚠️";
 
@@ -529,6 +531,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   const [generationActivity, setGenerationActivity] = useState<PlanningGenerationActivity>("initial_plan");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const initialPlanDictation = useComposerDictation({ textareaRef, value: initialPlan, onChange: setInitialPlan, projectId });
   // Align long-form planning composers with FN-5146's 640px chat convention so
   // multi-paragraph drafts stay visible; SummaryView keeps a larger expanded
   // cap so the two-tier collapsed/expanded editing UX remains intact.
@@ -854,6 +857,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   }, [isMobile, workspaceQuestion?.id]);
   const refineMenuRef = useRef<HTMLDivElement>(null);
   const refinementInputRef = useRef<HTMLTextAreaElement>(null);
+  const refinementDictation = useComposerDictation({ textareaRef: refinementInputRef, value: refinementPrompt, onChange: setRefinementPrompt, projectId });
   const refineTriggerRef = useRef<HTMLButtonElement>(null);
   const { addToast } = useToast();
   const { pushNav } = useNavigationHistoryContext();
@@ -3476,6 +3480,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
                 placeholder={t("planning.refinePromptPlaceholder", "For example: add a staged rollout, cover failure recovery, and ask about migration risks.")}
                 rows={4}
               />
+              <MicButton {...refinementDictation.micProps} />
             </label>
             <div className="planning-refine-menu-actions">
               <button
@@ -3782,6 +3787,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
                       }
                     }}
                   />
+                  <MicButton {...initialPlanDictation.micProps} />
                 </div>
 
                 <div className="planning-examples">
@@ -3999,6 +4005,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
               {workspaceQuestion && (
                 <section id="planning-question-panel" className="planning-question planning-question-pane" data-testid="planning-question-pane" aria-label={t("planning.currentQuestion", "Current question")}>
                   <QuestionForm
+                    projectId={projectId}
                     question={workspaceQuestion}
                     initialResponse={editingQuestionId
                       ? conversationHistory.find((entry) => entry.question?.id === editingQuestionId)?.response
@@ -4167,6 +4174,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
 
           {view.type === "summary" && editedSummary && (
             <SummaryView
+              projectId={projectId}
               summary={editedSummary}
               historyEntries={conversationHistory}
               onSummaryChange={setEditedSummary}
@@ -4219,9 +4227,12 @@ interface QuestionFormProps {
   question: PlanningQuestion;
   initialResponse?: QuestionResponse;
   onSubmit: (responses: QuestionResponse) => void;
+  projectId?: string;
 }
 
-function QuestionForm({ question: rawQuestion, initialResponse, onSubmit }: QuestionFormProps) {
+// FNXC:VoiceInput 2026-07-25-19:20: Export the real interview surface for dictation
+// contract tests instead of substituting a fixture that could drift from this textarea.
+export function QuestionForm({ question: rawQuestion, initialResponse, onSubmit, projectId }: QuestionFormProps) {
   const { t } = useTranslation("app");
   const question = normalizeQuestionOptions(rawQuestion);
   const questionOptions = question.options ?? [];
@@ -4236,6 +4247,12 @@ function QuestionForm({ question: rawQuestion, initialResponse, onSubmit }: Ques
     maxHeight: 640,
     deps: [question.id],
   });
+  const textAnswerRef = useRef<HTMLTextAreaElement>(null);
+  const setTextAnswerRef = useCallback((node: HTMLTextAreaElement | null) => {
+    textAnswerRef.current = node;
+    textAnswerAutosizeRef(node);
+  }, [textAnswerAutosizeRef]);
+  const textAnswerDictation = useComposerDictation({ textareaRef: textAnswerRef, value: textValue, onChange: setTextValue, projectId });
   const { ref: commentAutosizeRef } = useAutosizeTextarea({
     value: commentValue,
     minHeight: 80,
@@ -4356,19 +4373,22 @@ function QuestionForm({ question: rawQuestion, initialResponse, onSubmit }: Ques
 
             <div className="planning-options">
               {question.type === "text" && (
-                <textarea
-                  ref={textAnswerAutosizeRef}
-                  className="planning-textarea"
-                  placeholder={t("planning.typeAnswerPlaceholder", "Type your answer here...")}
-                  value={textValue}
-                  onChange={(e) => setTextValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey && textValue.trim()) {
-                      e.preventDefault();
-                      handleSubmit();
-                    }
-                  }}
-                />
+                <>
+                  <textarea
+                    ref={setTextAnswerRef}
+                    className="planning-textarea"
+                    placeholder={t("planning.typeAnswerPlaceholder", "Type your answer here...")}
+                    value={textValue}
+                    onChange={(e) => setTextValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey && textValue.trim()) {
+                        e.preventDefault();
+                        handleSubmit();
+                      }
+                    }}
+                  />
+                  <MicButton {...textAnswerDictation.micProps} />
+                </>
               )}
 
               {question.type === "single_select" && (
@@ -4570,6 +4590,7 @@ function QuestionForm({ question: rawQuestion, initialResponse, onSubmit }: Ques
 }
 
 interface SummaryViewProps {
+  projectId?: string;
   summary: PlanningSummary;
   historyEntries: ConversationHistoryEntry[];
   onSummaryChange: (summary: PlanningSummary) => void;
@@ -4588,7 +4609,10 @@ interface SummaryViewProps {
   isRefiningSummary: boolean;
 }
 
-function SummaryView({
+// FNXC:VoiceInput 2026-07-25-19:20: Export the real summary surface for dictation
+// contract tests instead of substituting a fixture that could drift from this textarea.
+export function SummaryView({
+  projectId,
   summary: rawSummary,
   historyEntries,
   onSummaryChange,
@@ -4622,6 +4646,17 @@ function SummaryView({
     minHeight: isExpanded ? 200 : 120,
     maxHeight: isExpanded ? 800 : 640,
     deps: [isExpanded],
+  });
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const setDescriptionRef = useCallback((node: HTMLTextAreaElement | null) => {
+    descriptionRef.current = node;
+    descriptionAutosizeRef(node);
+  }, [descriptionAutosizeRef]);
+  const descriptionDictation = useComposerDictation({
+    textareaRef: descriptionRef,
+    value: summary.description,
+    onChange: (description) => onSummaryChange({ ...summary, description }),
+    projectId,
   });
   const selectedPriority = normalizeTaskPriority(summary.priority);
   const isBranchNameRequired = branchMode === "existing" || branchMode === "custom-new";
@@ -4693,13 +4728,16 @@ function SummaryView({
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary.description}</ReactMarkdown>
               </div>
             ) : (
-              <textarea
-                id="planning-summary-description"
-                ref={descriptionAutosizeRef}
-                className={`planning-textarea ${isExpanded ? "expanded" : ""}`}
-                value={summary.description}
-                onChange={(e) => onSummaryChange({ ...summary, description: e.target.value })}
-              />
+              <>
+                <textarea
+                  id="planning-summary-description"
+                  ref={setDescriptionRef}
+                  className={`planning-textarea ${isExpanded ? "expanded" : ""}`}
+                  value={summary.description}
+                  onChange={(e) => onSummaryChange({ ...summary, description: e.target.value })}
+                />
+                <MicButton {...descriptionDictation.micProps} />
+              </>
             )}
           </div>
 

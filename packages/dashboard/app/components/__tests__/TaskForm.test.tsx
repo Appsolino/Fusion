@@ -23,6 +23,11 @@ vi.mock("lucide-react", () => ({
   Cpu: () => null,
 }));
 
+// FNXC:VoiceInput 2026-07-26-05:05: Keep legacy form tests focused on form settings; voice behavior has dedicated hook and composer-invariant suites.
+vi.mock("../../hooks/useComposerDictation", () => ({
+  useComposerDictation: () => ({ micProps: { enabled: false, supported: false, state: "idle", start: vi.fn(), stop: vi.fn() } }),
+}));
+
 // Mock the api module
 vi.mock("../../api", () => ({
   fetchModels: vi.fn().mockResolvedValue({ models: [

@@ -26,10 +26,12 @@ import {
 import { FN_AGENT_ID, TASK_PLANNER_CHAT_AGENT_ID_PREFIX, useChat, type ChatMessageInfo } from "../hooks/useChat";
 import { RoomMessageDeliveredButReplyFailedError, useChatRooms } from "../hooks/useChatRooms";
 import { useChatUnread } from "../hooks/useChatUnread";
+import { useComposerDictation } from "../hooks/useComposerDictation";
 import { useViewportMode } from "./Header";
 import { fetchSettings, updateGlobalSettings, type DiscoveredSkill } from "../api";
 import { type Agent, type ChatTag, type Settings } from "@fusion/core";
 import { CustomModelDropdown } from "./CustomModelDropdown";
+import { MicButton } from "./MicButton";
 import { ChatThinkingLevelControl } from "./ChatThinkingLevelControl";
 import { AgentMentionPopup } from "./AgentMentionPopup";
 import { AgentAvatar } from "./AgentAvatar";
@@ -814,6 +816,10 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
   // quick re-tap never scrolls the document while iOS is raising the keyboard.
   const blurScrollResetTimeoutRef = useRef<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const roomInputRef = useRef<HTMLTextAreaElement>(null);
+  // FNXC:VoiceInput 2026-07-24-04:10:
+  // ChatView can mount direct and room composers together, so each owns a ref and dictation
+  // adapter; a shared anchor would route a transcript into whichever textarea rendered last.
   const appliedComposerDraftNonceRef = useRef<number | undefined>(undefined);
   const focusComposerAfterPrefillRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1726,17 +1732,38 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
     composer.style.overflowY = resolveChatInputOverflowY(composer.scrollHeight, effectiveMax);
   }, [mode]);
 
+  // FNXC:VoiceInput 2026-07-24-05:00: Dictation uses this same post-render resize path as
+  // keyboard input, including the independently mounted room composer.
+  const composerDictation = useComposerDictation({
+    textareaRef: inputRef,
+    value: messageInput,
+    onChange: setMessageInput,
+    onResize: () => resizeComposer(inputRef.current),
+    projectId,
+  });
+  const roomComposerDictation = useComposerDictation({
+    textareaRef: roomInputRef,
+    value: messageInput,
+    onChange: setMessageInput,
+    onResize: () => resizeComposer(roomInputRef.current),
+    projectId,
+  });
+
   const handleComposerRef = useCallback((textarea: HTMLTextAreaElement | null) => {
     inputRef.current = textarea;
-    if (!textarea) {
-      return;
-    }
-
+    if (!textarea) return;
+    resizeComposer(textarea);
+  }, [resizeComposer]);
+  const handleRoomComposerRef = useCallback((textarea: HTMLTextAreaElement | null) => {
+    roomInputRef.current = textarea;
+    if (!textarea) return;
     resizeComposer(textarea);
   }, [resizeComposer]);
 
   useLayoutEffect(() => {
-    resizeComposer();
+    // FNXC:VoiceInput 2026-07-24-05:00: Select the active textarea explicitly so controlled
+    // programmatic updates, including dictation, resize the room composer instead of a hidden direct input.
+    resizeComposer(chatScope === "rooms" ? roomInputRef.current : inputRef.current);
     if (focusComposerAfterPrefillRef.current) {
       focusComposerAfterPrefillRef.current = false;
       inputRef.current?.focus();
@@ -2856,6 +2883,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
               activeModelTag={activeModelTag}
               activeModelProvider={activeModelProvider}
               activeSessionId={activeSession?.id ?? null}
+              projectId={projectId}
               mentionAgentsByName={mentionAgentsByName}
               roomContext={null}
               copyAction={showProviderResponseCopy && message.role === "assistant" ? renderCopyAction(message.id, message.content) : undefined}
@@ -2901,6 +2929,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
               activeModelTag={activeModelTag}
               activeModelProvider={activeModelProvider}
               activeSessionId={activeSession?.id ?? null}
+              projectId={projectId}
               mentionAgentsByName={mentionAgentsByName}
               roomContext={null}
               copyAction={showProviderResponseCopy && message.role === "assistant" ? renderCopyAction(message.id, message.content) : undefined}
@@ -3136,6 +3165,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
             loading={fileMention.loading}
           />
         </div>
+        <MicButton {...composerDictation.micProps} />
         <StandardChatActionButton
           isStreaming={isStreaming}
           canSend={Boolean(messageInput.trim() || pendingAttachments.length > 0)}
@@ -3965,6 +3995,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
                         activeModelTag={null}
                         activeModelProvider={null}
                         activeSessionId={rooms.activeRoom?.id ?? null}
+                        projectId={projectId}
                         mentionAgentsByName={mentionAgentsByName}
                         roomContext={roomContext}
                         onScrollToTop={handleScrollMessageToTop}
@@ -4072,7 +4103,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
                   }}
                 >
                   <textarea
-                    ref={handleComposerRef}
+                    ref={handleRoomComposerRef}
                     className="chat-input-textarea"
                     placeholder={t("chat.typeMessage", "Type a message...")}
                     value={messageInput}
@@ -4106,6 +4137,7 @@ export function ChatView({ projectId, addToast, floating = false, compactLayout 
                     roomName={roomContext?.roomName}
                   />
                 </div>
+                <MicButton {...roomComposerDictation.micProps} />
                 <StandardChatActionButton
                   isStreaming={false}
                   canSend={Boolean(messageInput.trim() || pendingAttachments.length > 0)}
