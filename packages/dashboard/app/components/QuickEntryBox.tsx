@@ -8,7 +8,7 @@ import type { Task, Settings, TaskPriority, ResolvedWorkflowOptionalStep, Thinki
 import type { ModelInfo, Agent, CreateTaskInput, DuplicateMatch, BoardWorkflowDefinition, NodeInfo } from "../api";
 import { checkDuplicateTasks, fetchModels, fetchSettings, updateGlobalSettings, fetchAgents, uploadAttachment, fetchWorkflowOptionalSteps } from "../api";
 import { DuplicateWarningModal } from "./DuplicateWarningModal";
-import { Link, Paperclip, Brain, Lightbulb, ListTree, Sparkles, Save, ChevronDown, ChevronUp, ChevronRight, Bot, Server, Zap, Eye, EyeOff } from "lucide-react";
+import { Link, Paperclip, Brain, Lightbulb, ListTree, Sparkles, Save, ChevronDown, ChevronUp, ChevronRight, Bot, Server, Zap, Eye, EyeOff, Play } from "lucide-react";
 import { CustomModelDropdown } from "./CustomModelDropdown";
 import { LoadingSpinner } from "./LoadingSpinner";
 import { getScopedItem, removeScopedItem, setScopedItem } from "../utils/projectStorage";
@@ -172,13 +172,7 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const touchButtonRef = useRef<HTMLButtonElement | null>(null);
-  const saveButtonRef = useRef<HTMLButtonElement | null>(null);
   const startIntentRef = useRef<ValidatedQuickAddWorkflow | null>(null);
-  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const longPressStartRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
-  const suppressSaveClickRef = useRef(false);
-  const [showStartMenu, setShowStartMenu] = useState(false);
-  const [startMenuPosition, setStartMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const justResetRef = useRef(false);
   const previousProjectIdRef = useRef(projectId);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
@@ -373,15 +367,17 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
   const selectedWorkflowForCreate = workflowId === undefined ? undefined : quickEntryWorkflowId;
   const validatedStartWorkflow = useMemo(() => validateQuickAddStartWorkflow(selectedQuickEntryWorkflow), [selectedQuickEntryWorkflow]);
   const startInitialColumn = validatedStartWorkflow ? resolveQuickAddStartInitialColumn(validatedStartWorkflow) : null;
+  /*
+  FNXC:QuickAddStart 2026-07-24-11:20:
+  Start is a VISIBLE button in the quick-add action row for eligible workflows only, replacing the hidden
+  long-press/right-click Save menu that operators could not discover. Eligibility is unchanged
+  (`workflowSupportsQuickAddStart`: Coding (Ideas), or any workflow whose first visible lane is a hold/"waiting"
+  column) and a provable target is still required (`startInitialColumn` for the create-time column override, or
+  `onMoveTask` for the follow-up move). Workflows without a waiting lane render no Start button at all — Save
+  stays the single create affordance there.
+  */
   const canQuickAddStart = Boolean(validatedStartWorkflow && workflowSupportsQuickAddStart(validatedStartWorkflow) && (startInitialColumn || onMoveTask));
-  const canOpenQuickAddStartMenu = canQuickAddStart && Boolean(description.trim()) && !isSubmitting;
-
-  useEffect(() => {
-    if (!canOpenQuickAddStartMenu) {
-      setShowStartMenu(false);
-      setStartMenuPosition(null);
-    }
-  }, [canOpenQuickAddStartMenu]);
+  const canQuickAddStartNow = canQuickAddStart && Boolean(description.trim()) && !isSubmitting;
 
   useEffect(() => {
     const parentChanged = previousWorkflowDefaultRef.current.workflowId !== workflowId
@@ -1693,51 +1689,17 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
     resetForm();
   }, [description, onSubtaskBreakdown, selectedWorkflowForCreate, addToast, resetForm]);
 
-  const openStartMenu = useCallback(() => {
-    if (!canOpenQuickAddStartMenu) return;
-    const rect = saveButtonRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    setStartMenuPosition({ top: Math.min(rect.bottom + 4, window.innerHeight - 40), left: Math.max(8, Math.min(rect.right - 120, window.innerWidth - 128)) });
-    setShowStartMenu(true);
-  }, [canOpenQuickAddStartMenu]);
-
-  const clearLongPress = useCallback(() => {
-    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-    longPressTimerRef.current = null;
-    longPressStartRef.current = null;
-  }, []);
-
-  const handleSavePointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!canQuickAddStart || (event.pointerType !== "touch" && event.pointerType !== "pen")) return;
-    clearLongPress();
-    longPressStartRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
-    longPressTimerRef.current = setTimeout(() => {
-      suppressSaveClickRef.current = true;
-      clearLongPress();
-      openStartMenu();
-    }, 550);
-  }, [canQuickAddStart, clearLongPress, openStartMenu]);
-
-  const handleSavePointerMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
-    const start = longPressStartRef.current;
-    if (start && start.pointerId === event.pointerId && (Math.abs(start.x - event.clientX) > 10 || Math.abs(start.y - event.clientY) > 10)) clearLongPress();
-  }, [clearLongPress]);
-
-  const handleSaveClick = useCallback(() => {
-    if (suppressSaveClickRef.current) {
-      suppressSaveClickRef.current = false;
-      return;
-    }
-    handleSubmit();
-  }, [handleSubmit]);
-
+  /*
+  FNXC:QuickAddStart 2026-07-24-11:20:
+  Start stashes the workflow snapshot validated at click time in `startIntentRef` and then runs the SAME submit
+  path as Save. The snapshot (not live state) is what `submitCreateTask` reads, so a workflow list refreshed
+  mid-duplicate-confirmation cannot retarget an in-flight Start.
+  */
   const handleStartClick = useCallback(() => {
-    if (!canOpenQuickAddStartMenu || !validatedStartWorkflow) return;
+    if (!canQuickAddStartNow || !validatedStartWorkflow) return;
     startIntentRef.current = validatedStartWorkflow;
-    setShowStartMenu(false);
-    setStartMenuPosition(null);
     handleSubmit();
-  }, [canOpenQuickAddStartMenu, handleSubmit, validatedStartWorkflow]);
+  }, [canQuickAddStartNow, handleSubmit, validatedStartWorkflow]);
 
   const truncate = (s: string, len: number) =>
     s.length > len ? s.slice(0, len) + "…" : s;
@@ -2340,6 +2302,29 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
               </div>,
               portalRoot,
             )}
+
+            {/*
+            FNXC:QuickAddStart 2026-07-24-11:20:
+            Start renders as the last chip in the options group so it wraps onto the same line as Models/Agent and
+            reads as an alternate create action beside Save (which stays right-aligned in the primary group). It is
+            present ONLY for hold-first/"waiting"-column workflows — most workflows show no Start chip. With an
+            empty description it stays visible but DISABLED (matching Save) so the affordance does not appear and
+            vanish as the operator types; the whole action row still unmounts while a create is in flight.
+            */}
+            {canQuickAddStart && (
+              <button
+                type="button"
+                className="btn btn-sm quick-entry-start-button"
+                onClick={handleStartClick}
+                onMouseDown={(e) => e.preventDefault()}
+                disabled={!canQuickAddStartNow}
+                data-testid="quick-entry-save-start"
+                title={t("tasks.startTaskTitle", "Create and start the task")}
+              >
+                <Play size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                {t("tasks.start", "Start")}
+              </button>
+            )}
             </div>
 
             {/*
@@ -2503,30 +2488,17 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
               </button>
 
               <button
-                ref={saveButtonRef}
                 type="button"
                 className="btn btn-task-create btn-sm"
-                onClick={handleSaveClick}
-                onContextMenu={(event) => { if (canOpenQuickAddStartMenu) { event.preventDefault(); openStartMenu(); } }}
-                onPointerDown={handleSavePointerDown}
-                onPointerMove={handleSavePointerMove}
-                onPointerLeave={clearLongPress}
-                onPointerUp={clearLongPress}
-                onPointerCancel={clearLongPress}
+                onClick={handleSubmit}
                 onMouseDown={(e) => e.preventDefault()}
                 disabled={!description.trim() || isSubmitting}
-                aria-haspopup={canOpenQuickAddStartMenu ? "menu" : undefined}
                 data-testid="quick-entry-save"
                 title={t("tasks.createTaskTitle", "Create task")}
               >
                 <Save size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
                 {t("tasks.save", "Save")}
               </button>
-              {showStartMenu && canOpenQuickAddStartMenu && portalRoot && startMenuPosition && createPortal(
-                <div className="quick-entry-start-menu" role="menu" data-testid="quick-entry-save-start" style={{ position: "fixed", top: startMenuPosition.top, left: startMenuPosition.left }}>
-                  <button type="button" role="menuitem" onClick={handleStartClick}>{t("tasks.start", "Start")}</button>
-                </div>, portalRoot,
-              )}
             </div>
           </div>
         )}
