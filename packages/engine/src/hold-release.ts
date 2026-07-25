@@ -402,11 +402,44 @@ function countCapacitySlot(
 /**
  * Run one hold/release sweep pass for the default workflow-column runtime.
  */
+/*
+FNXC:HoldReleaseInstrumentation 2026-07-25-14:35:
+Operator-reported symptom: "tasks that finish planning and are ready don't move immediately — there
+is a long delay." The sweep already logged per-task hold REASONS, but nothing recorded how LONG a
+card waited or how long the sweep itself took, so the delay could not be attributed between (a) the
+poll cadence, (b) sweep execution cost, and (c) a card legitimately waiting on capacity.
+
+`heldSince` records when each task was first observed held with its current reason. On release the
+elapsed time is logged; the entry is dropped when the task releases or stops being held, so the map
+tracks only currently-held cards and cannot grow without bound. Reason changes reset the clock, so
+"waiting 4m on downstream-full" is never conflated with "waiting 4m on deps-unsatisfied".
+*/
+const heldSince = new Map<string, { reason: string; sinceMs: number }>();
+
+/** Sweeps slower than this are the delay rather than a symptom of it — log loudly. */
+const SLOW_SWEEP_WARN_MS = 2_000;
+
+/** Record/refresh the held-since clock for a task and return how long it has been held. */
+function trackHeld(taskId: string, reason: string, nowMs: number): number {
+  const existing = heldSince.get(taskId);
+  if (!existing || existing.reason !== reason) {
+    heldSince.set(taskId, { reason, sinceMs: nowMs });
+    return 0;
+  }
+  return nowMs - existing.sinceMs;
+}
+
+/** Exposed for tests: forget all held-since bookkeeping. */
+export function resetHoldReleaseInstrumentation(): void {
+  heldSince.clear();
+}
+
 export async function runHoldReleaseSweep(
   store: TaskStore,
   deps: HoldReleaseDeps,
 ): Promise<HoldReleaseResult> {
   const result: HoldReleaseResult = { released: [], held: [] };
+  const sweepStartedMs = deps.now();
 
   const settings = await store.getSettings();
   /*
@@ -423,9 +456,17 @@ export async function runHoldReleaseSweep(
   // check is unaffected — this only trims the sweep pre-check cost.
   const irCache = new Map<string, WorkflowIr>();
   const effectiveWorkflowIdByTask = new Map<string, string>();
+  /*
+  FNXC:HoldReleaseInstrumentation 2026-07-25-14:35:
+  This prefetch is a SEQUENTIAL await per non-archived task, so its cost scales with total board
+  size rather than with the number of held cards — the prime suspect for a slow sweep on a large
+  board. Timed separately from the sweep total so the two are distinguishable in one log line.
+  */
+  const prefetchStartedMs = deps.now();
   for (const t of allTasks) {
     effectiveWorkflowIdByTask.set(t.id, await effectiveWorkflowId(store, t.id));
   }
+  const prefetchMs = deps.now() - prefetchStartedMs;
 
   for (const task of allTasks) {
     // Skip paused / recovery-backoff tasks exactly as the legacy scheduler does.
@@ -446,6 +487,7 @@ export async function runHoldReleaseSweep(
 
     // manual / external-event are NEVER auto-released by the sweep.
     if (release === "manual" || release === "external-event") {
+      trackHeld(task.id, `${release}-only`, deps.now());
       result.held.push({ taskId: task.id, reason: `${release}-only` });
       continue;
     }
@@ -455,12 +497,14 @@ export async function runHoldReleaseSweep(
       const deadline = resolveTimerDeadline(holdConfig, task);
       shouldRelease = deadline !== undefined && deps.now() >= deadline;
       if (!shouldRelease) {
+        trackHeld(task.id, "timer-not-elapsed", deps.now());
         result.held.push({ taskId: task.id, reason: "timer-not-elapsed" });
         continue;
       }
     } else if (release === "dependency") {
       shouldRelease = await allDependenciesSatisfied(store, task, allTasks);
       if (!shouldRelease) {
+        trackHeld(task.id, "deps-unsatisfied", deps.now());
         result.held.push({ taskId: task.id, reason: "deps-unsatisfied" });
         continue;
       }
@@ -469,6 +513,7 @@ export async function runHoldReleaseSweep(
       // slot is free (pre-check); the in-txn check is the authority.
       const target = resolveReleaseTarget(ir, task.column, true);
       if (!target) {
+        trackHeld(task.id, "no-downstream-capacity-column", deps.now());
         result.held.push({ taskId: task.id, reason: "no-downstream-capacity-column" });
         continue;
       }
@@ -480,6 +525,7 @@ export async function runHoldReleaseSweep(
         const budgetColumns = new Set(resolveWipBudgetColumns(ir, target));
         const occupants = countCapacitySlot(allTasks, effectiveWorkflowIdByTask, budgetColumns, workflowId, capacity.countPending);
         if (occupants >= capacity.limit) {
+          trackHeld(task.id, "downstream-full", deps.now());
           result.held.push({ taskId: task.id, reason: "downstream-full" });
           continue;
         }
@@ -491,16 +537,58 @@ export async function runHoldReleaseSweep(
 
     const target = resolveReleaseTarget(ir, task.column, release === "capacity");
     if (!target) {
+      trackHeld(task.id, "no-release-target", deps.now());
       result.held.push({ taskId: task.id, reason: "no-release-target" });
       continue;
     }
 
     const released = await issueRelease(store, deps, task, target, ir);
     if (released) {
+      /*
+      FNXC:HoldReleaseInstrumentation 2026-07-25-14:35:
+      Report how long the card actually waited. This is the number that answers "why didn't it move
+      immediately": a few hundred ms means the sweep is prompt and the wait was the poll cadence; a
+      multi-second/minute value with a capacity reason means the card was genuinely queued.
+      */
+      const waitedMs = deps.now() - (heldSince.get(task.id)?.sinceMs ?? deps.now());
+      heldSince.delete(task.id);
+      schedulerLog.log(
+        `Hold release for ${task.id} → ${target} after ${waitedMs}ms held (release=${release})`,
+      );
       result.released.push(task.id);
     } else {
+      trackHeld(task.id, "move-rejected-or-no-slot", deps.now());
       result.held.push({ taskId: task.id, reason: "move-rejected-or-no-slot" });
     }
+  }
+
+  /*
+  FNXC:HoldReleaseInstrumentation 2026-07-25-14:35:
+  One summary line per sweep. Held cards carry their longest current wait so a card stuck for
+  minutes is visible without turning on debug logging. Info-level only when the sweep did something
+  or ran slowly; otherwise debug, so a quiet board does not reprint this every poll.
+  */
+  const sweepMs = deps.now() - sweepStartedMs;
+  const longestHeldMs = result.held.reduce((max, h) => {
+    const entry = heldSince.get(h.taskId);
+    return entry ? Math.max(max, deps.now() - entry.sinceMs) : max;
+  }, 0);
+  const summary =
+    `Hold-release sweep: ${sweepMs}ms (prefetch ${prefetchMs}ms over ${allTasks.length} tasks), `
+    + `released=${result.released.length}, held=${result.held.length}`
+    + (longestHeldMs > 0 ? `, longest held ${longestHeldMs}ms` : "");
+  if (sweepMs >= SLOW_SWEEP_WARN_MS) {
+    schedulerLog.warn(`${summary} — sweep exceeded ${SLOW_SWEEP_WARN_MS}ms and is itself the delay`);
+  } else if (result.released.length > 0) {
+    schedulerLog.log(summary);
+  } else {
+    schedulerLog.debug(summary);
+  }
+
+  // Drop bookkeeping for tasks no longer held so the map tracks only live holds.
+  const stillHeld = new Set(result.held.map((h) => h.taskId));
+  for (const taskId of [...heldSince.keys()]) {
+    if (!stillHeld.has(taskId)) heldSince.delete(taskId);
   }
 
   return result;
