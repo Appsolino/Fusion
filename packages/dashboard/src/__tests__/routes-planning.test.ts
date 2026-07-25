@@ -1204,6 +1204,103 @@ describe("Planning Mode Routes", () => {
         });
       });
 
+      it("uses a selected workflow planning pair for new and existing draft starts", async () => {
+        const workflowId = "wf-planning-lane";
+        const workflowIr = {
+          version: "v2",
+          name: "Planning lane workflow",
+          columns: [{ id: "todo", name: "Todo", traits: [] }],
+          nodes: [{ id: "start", kind: "start" }, { id: "end", kind: "end" }],
+          edges: [{ from: "start", to: "end" }],
+          settings: [
+            { id: "planningProvider", name: "Planning provider", type: "string" },
+            { id: "planningModelId", name: "Planning model", type: "string" },
+          ],
+        };
+        store = createMockStore({
+          getSettings: vi.fn().mockResolvedValue({}),
+          getDefaultWorkflowId: vi.fn().mockResolvedValue("builtin:coding"),
+          getWorkflowDefinition: vi.fn(async (id: string) => id === workflowId ? { ir: workflowIr } : undefined),
+          getWorkflowSettingValues: vi.fn((id: string) => id === workflowId
+            ? { planningProvider: "workflow-provider", planningModelId: "workflow-model" }
+            : {}),
+          getWorkflowSettingsProjectId: vi.fn(() => "default"),
+        });
+        const createFnAgentSpy = vi.fn(async () => ({
+          session: { state: { messages: [] }, prompt: vi.fn(), dispose: vi.fn() },
+        }));
+        __setCreateFnAgent(createFnAgentSpy as any);
+
+        const newSession = await REQUEST(
+          buildApp(),
+          "POST",
+          "/api/planning/start-streaming",
+          JSON.stringify({ initialPlan: "New workflow planning session", workflowId }),
+          { "Content-Type": "application/json" },
+        );
+        expect(newSession.status).toBe(201);
+
+        const draft = await REQUEST(
+          buildApp(),
+          "POST",
+          "/api/planning/create-draft",
+          JSON.stringify({ initialPlan: "Existing workflow planning session" }),
+          { "Content-Type": "application/json" },
+        );
+        const existingSession = await REQUEST(
+          buildApp(),
+          "POST",
+          "/api/planning/start-streaming",
+          JSON.stringify({
+            initialPlan: "Existing workflow planning session",
+            existingSessionId: draft.body.sessionId,
+            workflowId,
+          }),
+          { "Content-Type": "application/json" },
+        );
+        expect(existingSession.status).toBe(201);
+
+        await connectPlanningStreamUntilComplete(newSession.body.sessionId);
+        await connectPlanningStreamUntilComplete(existingSession.body.sessionId);
+        await vi.waitFor(() => {
+          expect(createFnAgentSpy).toHaveBeenCalledTimes(2);
+        });
+        for (const [options] of createFnAgentSpy.mock.calls) {
+          expect(options).toEqual(expect.objectContaining({
+            defaultProvider: "workflow-provider",
+            defaultModelId: "workflow-model",
+          }));
+        }
+      });
+
+      it("keeps test mode forced to mock despite a complete request override", async () => {
+        const createFnAgentSpy = vi.fn(async () => ({
+          session: { state: { messages: [] }, prompt: vi.fn(), dispose: vi.fn() },
+        }));
+        __setCreateFnAgent(createFnAgentSpy as any);
+        (store.getSettings as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ testMode: true });
+
+        const res = await REQUEST(
+          buildApp(),
+          "POST",
+          "/api/planning/start-streaming",
+          JSON.stringify({
+            initialPlan: "Test-mode workflow planning session",
+            planningModelProvider: "operator-provider",
+            planningModelId: "operator-model",
+          }),
+          { "Content-Type": "application/json" },
+        );
+        expect(res.status).toBe(201);
+        await connectPlanningStreamUntilComplete(res.body.sessionId);
+        await vi.waitFor(() => {
+          expect(createFnAgentSpy).toHaveBeenCalledWith(expect.objectContaining({
+            defaultProvider: "mock",
+            defaultModelId: "scripted",
+          }));
+        });
+      });
+
       it("rejects partial request override (provider only, no modelId)", async () => {
         const res = await REQUEST(
           buildApp(),
@@ -2536,6 +2633,76 @@ describe("Planning Mode Routes", () => {
         expect(store.createTask).toHaveBeenCalled();
       });
 
+      it("terminalizes a not-yet-validated session when Proceed with plan creates its task", async () => {
+        /*
+        FNXC:PlanningMode 2026-07-23-12:10:
+        Proceed with plan calls create-task directly, without the legacy /validate step. The
+        persisted session must still leave awaiting_input on task creation; otherwise the
+        session list and the needs-input banner keep advertising a finished session.
+        */
+        const mockStore = new MockAiSessionStore();
+        setAiSessionStore(mockStore as unknown as Parameters<typeof setAiSessionStore>[0]);
+
+        (store.createTask as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "FN-777",
+          description: "Proceed-with-plan task",
+          column: "triage",
+          dependencies: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        });
+        (store.updateTask as ReturnType<typeof vi.fn>).mockResolvedValue({});
+        (store.logEntry as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+        const startRes = await REQUEST(
+          buildApp(),
+          "POST",
+          "/api/planning/start",
+          JSON.stringify({ initialPlan: "Build a user auth system" }),
+          { "Content-Type": "application/json" }
+        );
+        const sessionId = startRes.body.sessionId;
+        await REQUEST(buildApp(), "POST", "/api/planning/respond", JSON.stringify({ sessionId, responses: { scope: "medium" } }), { "Content-Type": "application/json" });
+
+        // Precondition: mid-interview session, never validated.
+        expect((await mockStore.get(sessionId))?.status).toBe("awaiting_input");
+
+        const summary = {
+          title: "Auth running plan",
+          description: "Running plan accepted via Proceed with plan",
+          suggestedSize: "M",
+          suggestedDependencies: [],
+          keyDeliverables: ["Implementation"],
+        };
+        const res = await REQUEST(
+          buildApp(),
+          "POST",
+          "/api/planning/create-task",
+          JSON.stringify({ sessionId, summary }),
+          { "Content-Type": "application/json" }
+        );
+        expect(res.status).toBe(201);
+
+        // Invariant: a session whose one task exists is terminal for every store reader
+        // (sidebar session-list label, needs-input banner count, recoverable-session sweep).
+        expect((await mockStore.get(sessionId))?.status).toBe("complete");
+
+        // The alreadyCreated reconciliation replay must keep the terminal status.
+        (store.listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([
+          { id: "FN-777", proposalClaimId: `planning-session:${sessionId}` },
+        ]);
+        const replay = await REQUEST(
+          buildApp(),
+          "POST",
+          "/api/planning/create-task",
+          JSON.stringify({ sessionId, summary }),
+          { "Content-Type": "application/json" }
+        );
+        expect(replay.status).toBe(200);
+        expect(replay.body.alreadyCreated).toBe(true);
+        expect((await mockStore.get(sessionId))?.status).toBe("complete");
+      });
+
       it("uses summary override when provided", async () => {
         (store.createTask as ReturnType<typeof vi.fn>).mockResolvedValue({
           id: "FN-099",
@@ -2746,6 +2913,152 @@ describe("Planning Mode Routes", () => {
           suggestedDependencies: ["FN-100"],
           keyDeliverables: [],
         });
+      });
+
+      /*
+      FNXC:PlanningMultiTask 2026-07-24-01:40:
+      Review finding: creating a task while a planning turn is still generating raced the
+      turn-completion persist against finalize and could tear the created-task linkage. The
+      route now rejects with 409 while the durable session status is "generating".
+      */
+      it("rejects create-task with 409 while the session is still generating", async () => {
+        const sessionId = "planning-generating-409";
+        const generatingRow = {
+          id: sessionId,
+          type: "planning",
+          status: "generating",
+          title: "Still generating",
+          inputPayload: JSON.stringify({ initialPlan: "Build a thing" }),
+          conversationHistory: "[]",
+          currentQuestion: null,
+          result: JSON.stringify({
+            title: "Draft plan",
+            description: "Mid-turn running plan",
+            suggestedSize: "M",
+            suggestedDependencies: [],
+            keyDeliverables: ["Implementation"],
+          }),
+          thinkingOutput: "",
+          error: null,
+          projectId: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        };
+        const mockAiSessionStore = {
+          on: vi.fn(),
+          upsert: vi.fn(),
+          get: vi.fn(async () => generatingRow),
+          listAll: vi.fn(() => []),
+          listActive: vi.fn(() => []),
+        };
+        const appWithAiSessionStore = express();
+        appWithAiSessionStore.use(express.json());
+        appWithAiSessionStore.use("/api", createApiRoutes(store, { aiSessionStore: mockAiSessionStore as any }));
+
+        const res = await REQUEST(
+          appWithAiSessionStore,
+          "POST",
+          "/api/planning/create-task",
+          JSON.stringify({ sessionId }),
+          { "Content-Type": "application/json" },
+        );
+
+        expect(res.status).toBe(409);
+        expect(store.createTask).not.toHaveBeenCalled();
+      });
+
+      /*
+      FNXC:PlanningMultiTask 2026-07-24-03:20:
+      Reported bug: deleting the task created from a plan left the session permanently stuck on
+      PLANNING_CREATED_TASK_MISSING — Retry create replayed the same 409 forever. A linked task
+      that is absent from the include-archived scan clears the stale linkage and creates a
+      fresh task; a linked task still LISTED but unreadable keeps failing closed (never fork on
+      a flaky read).
+      */
+      const buildLinkedGoneRow = (sessionId: string) => ({
+        id: sessionId,
+        type: "planning",
+        status: "complete",
+        title: "Linked task deleted",
+        inputPayload: JSON.stringify({ initialPlan: "Build a thing", validated: true, createdTaskId: "FN-GONE", createClaimStatus: "created" }),
+        conversationHistory: "[]",
+        currentQuestion: null,
+        result: JSON.stringify({
+          title: "Replacement plan",
+          description: "Recreate after the linked task was deleted",
+          suggestedSize: "M",
+          suggestedDependencies: [],
+          keyDeliverables: ["Implementation"],
+        }),
+        thinkingOutput: "",
+        error: null,
+        projectId: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      it("creates a fresh task when the linked task was deleted instead of dead-ending", async () => {
+        const sessionId = "planning-linked-task-deleted";
+        const mockStore = new MockAiSessionStore();
+        await mockStore.upsert(buildLinkedGoneRow(sessionId) as never);
+        setAiSessionStore(mockStore as unknown as Parameters<typeof setAiSessionStore>[0]);
+
+        (store.listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        (store.getTask as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("Task FN-GONE not found"));
+        (store.createTask as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "FN-REBORN",
+          description: "Recreated task",
+          column: "triage",
+          dependencies: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        });
+        (store.updateTask as ReturnType<typeof vi.fn>).mockResolvedValue({});
+        (store.logEntry as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+        const appWithAiSessionStore = express();
+        appWithAiSessionStore.use(express.json());
+        appWithAiSessionStore.use("/api", createApiRoutes(store, { aiSessionStore: mockStore as any }));
+
+        const res = await REQUEST(
+          appWithAiSessionStore,
+          "POST",
+          "/api/planning/create-task",
+          JSON.stringify({ sessionId }),
+          { "Content-Type": "application/json" },
+        );
+
+        expect(res.status).toBe(201);
+        expect(res.body.alreadyCreated).toBe(false);
+        expect(res.body.task.id).toBe("FN-REBORN");
+        expect(store.createTask).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps failing closed when the linked task is still listed but unreadable", async () => {
+        const sessionId = "planning-linked-task-unreadable";
+        const mockStore = new MockAiSessionStore();
+        await mockStore.upsert(buildLinkedGoneRow(sessionId) as never);
+        setAiSessionStore(mockStore as unknown as Parameters<typeof setAiSessionStore>[0]);
+
+        (store.listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([
+          { id: "FN-GONE", proposalClaimId: undefined },
+        ]);
+        (store.getTask as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("transient store failure"));
+
+        const appWithAiSessionStore = express();
+        appWithAiSessionStore.use(express.json());
+        appWithAiSessionStore.use("/api", createApiRoutes(store, { aiSessionStore: mockStore as any }));
+
+        const res = await REQUEST(
+          appWithAiSessionStore,
+          "POST",
+          "/api/planning/create-task",
+          JSON.stringify({ sessionId }),
+          { "Content-Type": "application/json" },
+        );
+
+        expect(res.status).toBe(409);
+        expect(store.createTask).not.toHaveBeenCalled();
       });
 
       it.each([

@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { PlanningModeModal } from "../PlanningModeModal";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { PlanningModeModal, resetPlanningAutoRetryAttemptsForTests } from "../PlanningModeModal";
 import { mockCreatePlanningDraft, mockFetchAiSession, mockFetchAiSessions, mockRespondToPlanning, mockRetryPlanningSession, mockStartPlanningStreaming, mockStopPlanningGeneration, mockValidatePlanningSession, mockCreateTaskFromPlanning, mockTasks, mockSummary } from "./PlanningModeModal.test-helpers";
 
 const mockViewportMode = vi.hoisted(() => vi.fn(() => "desktop" as "desktop" | "tablet" | "mobile"));
@@ -29,7 +29,7 @@ vi.mock("../../api", () => {
 });
 
 const base = { id: "session-1", title: "Secure plan", projectId: "project-1", updatedAt: new Date().toISOString(), archived: false, conversationHistory: "[]", thinkingOutput: "" };
-function renderSession() { return render(<PlanningModeModal isOpen onClose={vi.fn()} onTaskCreated={vi.fn()} onTasksCreated={vi.fn()} tasks={mockTasks} projectId="project-1" resumeSessionId="session-1" />); }
+function renderSession(sessionId = "session-1") { return render(<PlanningModeModal isOpen onClose={vi.fn()} onTaskCreated={vi.fn()} onTasksCreated={vi.fn()} tasks={mockTasks} projectId="project-1" resumeSessionId={sessionId} />); }
 const summaryWithRefinements = {
   ...mockSummary,
   description: "Build a **reviewed** recovery workflow with an operator [runbook](https://example.com/runbook).",
@@ -39,7 +39,30 @@ const summaryWithRefinements = {
 };
 
 describe("PlanningModeModal sequential flow", () => {
-  beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); mockPlanningSse.events = null; mockViewportMode.mockReturnValue("desktop"); mockFetchAiSessions.mockResolvedValue([]); mockCreatePlanningDraft.mockResolvedValue({ sessionId: "draft-1", title: "Secure plan" }); mockStartPlanningStreaming.mockResolvedValue({ sessionId: "draft-1" }); mockRetryPlanningSession.mockResolvedValue({ success: true }); mockStopPlanningGeneration.mockResolvedValue({ success: true }); mockValidatePlanningSession.mockResolvedValue({ summary: mockSummary, validated: true }); mockCreateTaskFromPlanning.mockResolvedValue({ id: "FN-8442" }); });
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    resetPlanningAutoRetryAttemptsForTests();
+    localStorage.clear();
+    mockPlanningSse.events = null;
+    mockViewportMode.mockReturnValue("desktop");
+    mockFetchAiSessions.mockResolvedValue([]);
+    mockCreatePlanningDraft.mockResolvedValue({ sessionId: "draft-1", title: "Secure plan" });
+    mockStartPlanningStreaming.mockResolvedValue({ sessionId: "draft-1" });
+    mockRetryPlanningSession.mockResolvedValue({ success: true });
+    mockStopPlanningGeneration.mockResolvedValue({ success: true });
+    mockValidatePlanningSession.mockResolvedValue({ summary: mockSummary, validated: true });
+    mockCreateTaskFromPlanning.mockResolvedValue({ id: "FN-8442" });
+  });
+
+  afterEach(() => {
+    cleanup();
+    mockPlanningSse.events = null;
+    localStorage.clear();
+    resetPlanningAutoRetryAttemptsForTests();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   /*
   FNXC:PlanningRetry 2026-07-21-10:00:
@@ -48,8 +71,10 @@ describe("PlanningModeModal sequential flow", () => {
   subsequently reports its durable error dispatch the existing retry endpoint automatically.
   */
   it("automatically retries a persisted error when returning to Planning", async () => {
+    const sessionId = "persisted-error-session";
     mockFetchAiSession.mockResolvedValue({
       ...base,
+      id: sessionId,
       status: "error",
       error: "The planning stream was interrupted",
       currentQuestion: null,
@@ -57,25 +82,28 @@ describe("PlanningModeModal sequential flow", () => {
       inputPayload: "{}",
     });
 
-    renderSession();
+    renderSession(sessionId);
 
-    await waitFor(() => expect(mockRetryPlanningSession).toHaveBeenCalledWith("session-1", "project-1"));
+    await waitFor(() => expect(mockRetryPlanningSession).toHaveBeenCalledWith(sessionId, "project-1"));
     expect(screen.queryByText("The planning stream was interrupted")).toBeNull();
   });
 
   it("automatically retries a stream error after returning to a generating session", async () => {
+    const sessionId = "resumed-stream-error-session";
     mockFetchAiSession.mockResolvedValue({
       ...base,
+      id: sessionId,
       status: "generating",
       currentQuestion: null,
       result: JSON.stringify(summaryWithRefinements),
       inputPayload: JSON.stringify({ generationPurpose: "plan_update" }),
     });
-    renderSession();
+    renderSession(sessionId);
     await waitFor(() => expect(mockConnectPlanningStream).toHaveBeenCalledTimes(1));
 
     mockFetchAiSession.mockResolvedValue({
       ...base,
+      id: sessionId,
       status: "error",
       error: "The resumed stream failed",
       currentQuestion: null,
@@ -84,13 +112,15 @@ describe("PlanningModeModal sequential flow", () => {
     });
     mockConnectPlanningStream.mock.calls[0]?.[2]?.onError?.("The resumed stream failed");
 
-    await waitFor(() => expect(mockRetryPlanningSession).toHaveBeenCalledWith("session-1", "project-1"));
+    await waitFor(() => expect(mockRetryPlanningSession).toHaveBeenCalledWith(sessionId, "project-1"));
     expect(screen.queryByText("The resumed stream failed")).toBeNull();
   });
 
   it("retries all bounded attempts before surfacing a returned stream error", async () => {
+    const sessionId = "bounded-retry-session";
     mockFetchAiSession.mockResolvedValue({
       ...base,
+      id: sessionId,
       status: "error",
       error: "The planning stream was interrupted",
       currentQuestion: null,
@@ -99,7 +129,7 @@ describe("PlanningModeModal sequential flow", () => {
     });
     mockRetryPlanningSession.mockRejectedValue(new Error("Temporary retry outage"));
 
-    renderSession();
+    renderSession(sessionId);
 
     await waitFor(() => expect(mockRetryPlanningSession).toHaveBeenCalledTimes(3));
     expect(await screen.findByText("Temporary retry outage")).toBeInTheDocument();
@@ -111,26 +141,36 @@ describe("PlanningModeModal sequential flow", () => {
   });
 
   it("coalesces overlapping stream errors into one retry request", async () => {
+    const sessionId = "coalesced-retry-session";
     let resolveRetry!: (value: { success: true }) => void;
     mockRetryPlanningSession.mockReturnValue(new Promise((resolve) => {
       resolveRetry = resolve;
     }));
     mockFetchAiSession.mockResolvedValue({
       ...base,
+      id: sessionId,
       status: "error",
       error: "The planning stream was interrupted",
       currentQuestion: null,
       result: JSON.stringify(summaryWithRefinements),
       inputPayload: "{}",
     });
-    renderSession();
+    renderSession(sessionId);
     await waitFor(() => expect(mockRetryPlanningSession).toHaveBeenCalledTimes(1));
 
     mockConnectPlanningStream.mock.calls[0]?.[2]?.onError?.("Duplicate stream error");
     await act(async () => Promise.resolve());
     expect(mockRetryPlanningSession).toHaveBeenCalledTimes(1);
 
-    resolveRetry({ success: true });
+    await act(async () => {
+      resolveRetry({ success: true });
+      await Promise.resolve();
+    });
+
+    // Settlement releases the first owner. A later, distinct error may acquire the next
+    // bounded attempt; only the duplicate report while the promise was pending is coalesced.
+    mockConnectPlanningStream.mock.calls.at(-1)?.[2]?.onError?.("Later stream error");
+    await waitFor(() => expect(mockRetryPlanningSession).toHaveBeenCalledTimes(2));
   });
 
   it("ignores a stale errored load after a newer session is selected", async () => {
@@ -202,21 +242,24 @@ describe("PlanningModeModal sequential flow", () => {
   });
 
   it("automatically retries a resumed error discovered by the loading poll", async () => {
+    const sessionId = "polled-error-session";
     const intervalSpy = vi.spyOn(globalThis, "setInterval");
     mockFetchAiSession.mockResolvedValue({
       ...base,
+      id: sessionId,
       status: "generating",
       currentQuestion: null,
       result: JSON.stringify(summaryWithRefinements),
       inputPayload: JSON.stringify({ generationPurpose: "plan_update" }),
     });
-    renderSession();
+    renderSession(sessionId);
     await waitFor(() => expect(mockConnectPlanningStream).toHaveBeenCalledTimes(1));
 
     const poll = intervalSpy.mock.calls.find(([, delay]) => delay === 8000)?.[0];
     expect(poll).toBeTypeOf("function");
     mockFetchAiSession.mockResolvedValue({
       ...base,
+      id: sessionId,
       status: "error",
       error: "Poll observed stream error",
       currentQuestion: null,
@@ -227,7 +270,7 @@ describe("PlanningModeModal sequential flow", () => {
       await (poll as () => Promise<void>)();
     });
 
-    expect(mockRetryPlanningSession).toHaveBeenCalledWith("session-1", "project-1");
+    expect(mockRetryPlanningSession).toHaveBeenCalledWith(sessionId, "project-1");
     expect(screen.queryByText("Poll observed stream error")).toBeNull();
     intervalSpy.mockRestore();
   });
@@ -285,24 +328,63 @@ describe("PlanningModeModal sequential flow", () => {
     renderSession();
     const documentNode = await screen.findByTestId("planning-plan-markdown");
     const selectQuote = (quote: string) => {
-      const walker = document.createTreeWalker(documentNode, NodeFilter.SHOW_TEXT);
-      let textNode: Node | null = walker.nextNode();
-      while (textNode && !textNode.textContent?.includes(quote)) textNode = walker.nextNode();
-      expect(textNode).not.toBeNull();
-      const range = document.createRange();
-      range.selectNodeContents(textNode!);
-      window.getSelection()?.removeAllRanges();
-      window.getSelection()?.addRange(range);
-      fireEvent.mouseUp(documentNode);
+      act(() => {
+        const walker = document.createTreeWalker(documentNode, NodeFilter.SHOW_TEXT);
+        let textNode: Node | null = walker.nextNode();
+        while (textNode && !textNode.textContent?.includes(quote)) textNode = walker.nextNode();
+        expect(textNode).not.toBeNull();
+        const range = document.createRange();
+        range.selectNodeContents(textNode!);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(range);
+        document.dispatchEvent(new Event("selectionchange"));
+        fireEvent.mouseUp(documentNode);
+      });
     };
     selectQuote("Build authentication system");
+    const actionBar = screen.getByTestId("planning-plan-actions");
+    const documentTrigger = document.querySelector(".planning-add-comment--document");
+    const mobileTrigger = document.querySelector(".planning-add-comment--mobile");
+    expect(documentTrigger).toBeInstanceOf(HTMLElement);
+    expect(mobileTrigger).toBeInstanceOf(HTMLElement);
+    expect(documentTrigger?.closest(".planning-plan-document")).toContainElement(documentTrigger as HTMLElement);
+    expect(actionBar).toContainElement(mobileTrigger as HTMLElement);
+    const openTrigger = screen.getByRole("button", { name: "Add comment to selection" });
+    fireEvent.pointerDown(openTrigger);
+    // FNXC:PlanningComments 2026-07-24-06:30: selection collapse before click must not drop the frozen open quote.
+    act(() => {
+      window.getSelection()?.removeAllRanges();
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    fireEvent.click(openTrigger);
+    expect(screen.getByTestId("planning-comment-editor")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    /*
+    FNXC:PlanningComments 2026-07-23-17:05:
+    Opening the composer moves the native selection into the suggestion field. Cancel leaves
+    that selection collapsed, so the trigger dismisses with the selection instead of staying
+    sticky after the selection is done. Re-select to comment again.
+    */
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Add comment to selection" })).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("planning-comment-editor")).toBeNull());
+
+    selectQuote("Build authentication system");
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Add comment to selection" }));
     fireEvent.click(screen.getByRole("button", { name: "Add comment to selection" }));
     const suggestionInput = screen.getByLabelText("Suggestion");
     fireEvent.change(suggestionInput, { target: { value: "Explain the audit path." } });
-    // Editor selections are not plan selections: the captured quote must remain the Markdown text.
-    suggestionInput.setSelectionRange(0, suggestionInput.value.length);
-    fireEvent.mouseUp(suggestionInput);
+    // Editor selections are not plan selections: the frozen open quote must remain the Markdown text.
+    act(() => {
+      suggestionInput.setSelectionRange(0, suggestionInput.value.length);
+      fireEvent.mouseUp(suggestionInput);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    expect(screen.getByLabelText("Add plan comment")).toHaveTextContent("Build authentication system");
+    expect(screen.getByTestId("planning-comment-editor")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add comment" }));
+    // Adding a comment clears the selection, so the trigger dismisses with it.
+    await waitFor(() => expect(document.querySelector(".planning-add-comment")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("planning-comment-editor")).toBeNull());
     expect(screen.getByTestId("planning-comment-tray")).toHaveTextContent("Explain the audit path.");
     expect(screen.getByRole("button", { name: "Refine" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Proceed with plan" })).toBeInTheDocument();
@@ -310,6 +392,36 @@ describe("PlanningModeModal sequential flow", () => {
     await waitFor(() => expect(mockRespondToPlanning).toHaveBeenCalledWith("session-1", {
       contextualComments: [{ quote: expect.stringContaining("Build authentication system"), suggestion: "Explain the audit path." }],
     }, "project-1"));
+  });
+
+  it("dismisses the selection comment trigger when the plan selection collapses", async () => {
+    mockFetchAiSession.mockResolvedValue({
+      ...base,
+      status: "awaiting_input",
+      currentQuestion: JSON.stringify({ id: "q-1", type: "text", question: "Anything else?" }),
+      result: JSON.stringify(summaryWithRefinements),
+      inputPayload: "{}",
+    });
+    renderSession();
+    const documentNode = await screen.findByTestId("planning-plan-markdown");
+    const walker = document.createTreeWalker(documentNode, NodeFilter.SHOW_TEXT);
+    let textNode: Node | null = walker.nextNode();
+    while (textNode && !textNode.textContent?.includes("Build authentication system")) textNode = walker.nextNode();
+    expect(textNode).not.toBeNull();
+    act(() => {
+      const range = document.createRange();
+      range.selectNodeContents(textNode!);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    expect(await screen.findByRole("button", { name: "Add comment to selection" })).toBeInTheDocument();
+
+    act(() => {
+      window.getSelection()?.removeAllRanges();
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Add comment to selection" })).toBeNull());
   });
 
   it("rehydrates a restored idle session when another tab advances its question", async () => {
@@ -484,6 +596,53 @@ describe("PlanningModeModal sequential flow", () => {
     expect(screen.queryByTestId("planning-create-retry")).toBeNull();
   });
 
+  it("settles a delayed active-create claim before a fresh session can own the next flow", async () => {
+    mockFetchAiSession.mockResolvedValue({
+      ...base,
+      status: "awaiting_input",
+      currentQuestion: JSON.stringify({ id: "q-1", type: "text", question: "Anything else?" }),
+      result: JSON.stringify(summaryWithRefinements),
+      inputPayload: "{}",
+    });
+    mockCreateTaskFromPlanning
+      .mockRejectedValueOnce(Object.assign(new Error("Planning task creation is already in progress"), { status: 409 }))
+      .mockRejectedValueOnce(Object.assign(new Error("Planning task creation is already in progress"), { status: 409 }))
+      .mockResolvedValueOnce({ id: "FN-8442" });
+
+    const { rerender } = renderSession();
+    fireEvent.click(await screen.findByRole("button", { name: "Proceed with plan" }));
+    vi.useFakeTimers();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockCreateTaskFromPlanning).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("planning-create-retry")).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(screen.getByTestId("planning-task-created")).toHaveTextContent("FN-8442");
+    expect(mockCreateTaskFromPlanning).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+
+    mockFetchAiSession.mockResolvedValue({
+      ...base,
+      id: "session-2",
+      status: "awaiting_input",
+      currentQuestion: JSON.stringify({ id: "q-2", type: "text", question: "What should happen next?" }),
+      result: JSON.stringify(summaryWithRefinements),
+      inputPayload: "{}",
+    });
+    rerender(<PlanningModeModal isOpen onClose={vi.fn()} onTaskCreated={vi.fn()} onTasksCreated={vi.fn()} tasks={mockTasks} projectId="project-1" resumeSessionId="session-2" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockFetchAiSession).toHaveBeenLastCalledWith("session-2");
+    expect(mockCreateTaskFromPlanning).toHaveBeenCalledTimes(3);
+    expect(screen.queryByTestId("planning-create-retry")).toBeNull();
+  });
+
   it("keeps both created-task handoffs reachable on mobile", async () => {
     mockViewportMode.mockReturnValue("mobile");
     mockFetchAiSession.mockResolvedValue({
@@ -502,7 +661,13 @@ describe("PlanningModeModal sequential flow", () => {
     expect(screen.getByRole("button", { name: "Return to sessions" })).toBeEnabled();
   });
 
-  it("restores a linked task into the created-task handoff", async () => {
+  /*
+  FNXC:PlanningMultiTask 2026-07-24-00:20:
+  A session whose task exists resumes to the EDITABLE plan review workspace with a banner
+  linking that task — not a terminal created-task handoff — so the plan can keep evolving
+  into further tasks. Reopen never re-fires onTaskCreated for a previously created task.
+  */
+  it("restores a linked task as a plan-review banner with a live View task action", async () => {
     mockFetchAiSession.mockResolvedValue({
       ...base,
       status: "complete",
@@ -514,12 +679,17 @@ describe("PlanningModeModal sequential flow", () => {
     const onViewTask = vi.fn();
     render(<PlanningModeModal isOpen onClose={vi.fn()} onTaskCreated={onTaskCreated} onTasksCreated={vi.fn()} onViewTask={onViewTask} tasks={mockTasks} projectId="project-1" resumeSessionId="session-1" />);
 
-    expect(await screen.findByTestId("planning-task-created")).toHaveTextContent("FN-001");
-    await waitFor(() => expect(onTaskCreated).toHaveBeenCalledWith(mockTasks[0]));
-    expect(screen.getByRole("button", { name: "View task" })).toBeEnabled();
+    expect(await screen.findByTestId("planning-linked-task-note")).toHaveTextContent("FN-001");
+    expect(screen.getByTestId("planning-plan-review")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Proceed with plan" })).toBeInTheDocument();
+    expect(onTaskCreated).not.toHaveBeenCalled();
+    const viewTask = screen.getByRole("button", { name: "View task" });
+    expect(viewTask).toBeEnabled();
+    fireEvent.click(viewTask);
+    expect(onViewTask).toHaveBeenCalledWith(mockTasks[0]);
   });
 
-  it("waits for a restored linked task before enabling its task handoff", async () => {
+  it("disables the linked-task banner action until the restored task is loaded", async () => {
     mockFetchAiSession.mockResolvedValue({
       ...base,
       status: "complete",
@@ -530,9 +700,65 @@ describe("PlanningModeModal sequential flow", () => {
     const onTaskCreated = vi.fn();
     render(<PlanningModeModal isOpen onClose={vi.fn()} onTaskCreated={onTaskCreated} onTasksCreated={vi.fn()} onViewTask={vi.fn()} tasks={[]} projectId="project-1" resumeSessionId="session-1" />);
 
-    expect(await screen.findByTestId("planning-task-created")).toHaveTextContent("FN-LATER");
+    expect(await screen.findByTestId("planning-linked-task-note")).toHaveTextContent("FN-LATER");
     expect(screen.getByRole("button", { name: "View task" })).toBeDisabled();
     expect(onTaskCreated).not.toHaveBeenCalled();
+  });
+
+  /*
+  FNXC:PlanningMultiTask 2026-07-24-01:40:
+  Review findings: Continue planning must return to the editable plan review with a working
+  linked-task banner (resolving the just-created Task object, before the tasks prop refreshes),
+  and the banner must never leak across session switches.
+  */
+  it("Continue planning returns from the task handoff to an editable plan review with a live banner", async () => {
+    mockFetchAiSession.mockResolvedValue({
+      ...base,
+      status: "complete",
+      currentQuestion: null,
+      result: JSON.stringify(mockSummary),
+      inputPayload: JSON.stringify({ validated: true }),
+    });
+    mockCreateTaskFromPlanning.mockResolvedValue(mockTasks[0]);
+    // tasks={[]} proves the banner resolves the just-created Task object, not the tasks prop.
+    render(<PlanningModeModal isOpen onClose={vi.fn()} onTaskCreated={vi.fn()} onTasksCreated={vi.fn()} onViewTask={vi.fn()} tasks={[]} projectId="project-1" resumeSessionId="session-1" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Proceed with plan" }));
+    expect(await screen.findByTestId("planning-task-created")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue planning" }));
+    expect(await screen.findByTestId("planning-plan-review")).toBeInTheDocument();
+    expect(screen.getByTestId("planning-linked-task-note")).toHaveTextContent(mockTasks[0].id);
+    expect(screen.getByRole("button", { name: "View task" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Proceed with plan" })).toBeInTheDocument();
+  });
+
+  it("clears the linked-task banner when switching to a session without a created task", async () => {
+    mockFetchAiSession.mockImplementation(async (sessionId: string) => sessionId === "session-1"
+      ? {
+          ...base,
+          id: "session-1",
+          status: "complete",
+          currentQuestion: null,
+          result: JSON.stringify(mockSummary),
+          inputPayload: JSON.stringify({ validated: true, createdTaskId: "FN-001" }),
+        }
+      : {
+          ...base,
+          id: "session-2",
+          status: "awaiting_input",
+          currentQuestion: null,
+          result: JSON.stringify(mockSummary),
+          inputPayload: "{}",
+        });
+    const props = { isOpen: true, onClose: vi.fn(), onTaskCreated: vi.fn(), onTasksCreated: vi.fn(), tasks: mockTasks, projectId: "project-1" };
+    const { rerender } = render(<PlanningModeModal {...props} resumeSessionId="session-1" />);
+
+    expect(await screen.findByTestId("planning-linked-task-note")).toBeInTheDocument();
+
+    rerender(<PlanningModeModal {...props} resumeSessionId="session-2" />);
+    await waitFor(() => expect(screen.queryByTestId("planning-linked-task-note")).toBeNull());
+    expect(screen.getByTestId("planning-plan-review")).toBeInTheDocument();
   });
 
   it("uses full-view Questions and Plan preview tabs on mobile", async () => {
@@ -625,6 +851,31 @@ describe("PlanningModeModal sequential flow", () => {
     await waitFor(() => expect(mockRespondToPlanning).toHaveBeenCalledWith("session-1", { refine: true, focus: "Add migration sequencing and ask about rollout risks." }, "project-1"));
     expect(await screen.findByText("Which migration risk should come first?")).toBeInTheDocument();
   });
+  /*
+  FNXC:PlanningMode 2026-07-23-00:00:
+  Hydrating a persisted session from the database is not generation. While the fetch is in
+  flight the modal must show the neutral session loader; the "Generating…" copy (and its Stop
+  affordance) is reserved for sessions the server reports as actually generating.
+  */
+  it("shows a session loader, not generating copy, while a persisted session hydrates", async () => {
+    let resolveFetch!: (session: Record<string, unknown>) => void;
+    mockFetchAiSession.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
+    renderSession();
+
+    expect(await screen.findByTestId("planning-session-loading")).toHaveTextContent("Loading session…");
+    expect(screen.queryByText(/Generating/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+
+    resolveFetch({
+      ...base,
+      status: "awaiting_input",
+      currentQuestion: JSON.stringify({ id: "q-1", type: "text", question: "What should the plan prioritize?" }),
+      result: JSON.stringify(summaryWithRefinements),
+      inputPayload: "{}",
+    });
+    expect(await screen.findByText("What should the plan prioritize?")).toBeInTheDocument();
+    expect(screen.queryByTestId("planning-session-loading")).toBeNull();
+  });
   it("restores the updating-plan progress state after refresh", async () => {
     mockFetchAiSession.mockResolvedValue({ ...base, status: "generating", currentQuestion: null, result: JSON.stringify(summaryWithRefinements), inputPayload: JSON.stringify({ generationPurpose: "plan_update" }) });
     renderSession();
@@ -657,6 +908,30 @@ describe("PlanningModeModal sequential flow", () => {
     rerender(<PlanningModeModal {...props} resumeSessionId="session-2" />);
     expect(await screen.findByText("Thinking… (7s)")).toBeInTheDocument();
     dateNow.mockRestore();
+  });
+  /*
+  FNXC:PlanningThinkingVisibility 2026-07-23-22:45:
+  Every generation step must stream thinking/output to the operator. Follow-up turns render
+  the workspace loader (summary present), which previously showed only a spinner + elapsed
+  time; this pins the streamed thinking pane there too.
+  */
+  it("streams thinking in the workspace loader during follow-up generations", async () => {
+    mockFetchAiSession.mockResolvedValue({
+      ...base,
+      status: "generating",
+      currentQuestion: null,
+      result: JSON.stringify(summaryWithRefinements),
+      inputPayload: JSON.stringify({ generationPurpose: "plan_update", generationStartedAt: new Date().toISOString() }),
+    });
+    renderSession();
+
+    await waitFor(() => expect(mockConnectPlanningStream).toHaveBeenCalledWith("session-1", "project-1", expect.any(Object)));
+    const handlers = mockConnectPlanningStream.mock.calls[0]?.[2];
+    act(() => handlers?.onThinking?.("Weighing the tradeoffs between approaches…"));
+
+    expect(await screen.findByText("Weighing the tradeoffs between approaches…")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Hide thinking" }));
+    expect(screen.queryByText("Weighing the tradeoffs between approaches…")).toBeNull();
   });
   it("returns to the prior question without an error when generation is stopped", async () => {
     const priorQuestion = { id: "q-prior", type: "text", question: "What should change?" };
@@ -724,6 +999,14 @@ describe("PlanningModeModal sequential flow", () => {
     renderSession();
 
     fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+    /*
+    FNXC:PlanningMode 2026-07-23-00:00:
+    Wait for the stop to settle into plan review before grabbing Refine. Clicking the workspace
+    pane's Refine while the stop transition remounts the plan pane dispatches on a detached node
+    and the refinement menu never opens.
+    */
+    await waitFor(() => expect(mockStopPlanningGeneration).toHaveBeenCalledWith("session-1", "project-1"));
+    await screen.findByTestId("planning-plan-review");
     fireEvent.click(await screen.findByRole("button", { name: "Refine" }));
     fireEvent.change(screen.getByLabelText("Refinement instructions"), { target: { value: "Focus the next questions on rollout." } });
     fireEvent.click(screen.getByRole("button", { name: "Apply refinement" }));
@@ -801,10 +1084,120 @@ describe("PlanningModeModal sequential flow", () => {
     expect(screen.queryByRole("dialog", { name: "Refine plan and questions" })).toBeNull();
     expect(screen.getByTestId("planning-plan-review")).toBeInTheDocument();
   });
-  it("restores a validated unlinked session to create-only retry", async () => {
+  /*
+  FNXC:PlanningReopenAfterValidate 2026-07-23-23:30:
+  A validated session with no created task must resume into the full plan review workspace
+  (read, keep editing, Proceed at any time), never a create-only retry card.
+  */
+  it("restores a validated unlinked session to the full plan review workspace", async () => {
     mockFetchAiSession.mockResolvedValue({ ...base, status: "complete", currentQuestion: null, result: JSON.stringify(mockSummary), inputPayload: JSON.stringify({ validated: true }) });
     renderSession();
-    expect(await screen.findByTestId("planning-create-retry")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Proceed with plan" })).toBeNull();
+    expect(await screen.findByTestId("planning-plan-review")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Proceed with plan" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refine" })).toBeInTheDocument();
+    expect(screen.queryByTestId("planning-create-retry")).toBeNull();
+  });
+
+  it("routes generation retry away from already-validated sessions into plan review", async () => {
+    /*
+    FNXC:PlanningMode 2026-07-24-05:45:
+    Auto/manual generation retry on a finished plan used to echo "already been validated".
+    Reject retry and re-fetch the complete row.
+
+    FNXC:PlanningReopenAfterValidate 2026-07-23-23:30:
+    The refreshed complete row now lands on plan review so the plan stays editable and
+    creatable instead of a create-only retry card.
+    */
+    mockRetryPlanningSession.mockRejectedValue(new Error("Planning session has already been validated"));
+    mockFetchAiSession
+      .mockResolvedValueOnce({
+        ...base,
+        status: "error",
+        currentQuestion: null,
+        result: JSON.stringify(mockSummary),
+        error: "stream failed",
+        inputPayload: JSON.stringify({ validated: true }),
+      })
+      .mockResolvedValue({
+        ...base,
+        status: "complete",
+        currentQuestion: null,
+        result: JSON.stringify(mockSummary),
+        inputPayload: JSON.stringify({ validated: true }),
+      });
+    renderSession();
+    expect(await screen.findByTestId("planning-plan-review")).toBeInTheDocument();
+    expect(screen.queryByText("Planning session has already been validated")).toBeNull();
+    expect(mockRetryPlanningSession).toHaveBeenCalled();
+  });
+
+  it("restores plan review when awaiting_input has a plan but no current question after retry refresh", async () => {
+    mockRetryPlanningSession.mockRejectedValue(new Error("Planning session session-1 is not in an error state"));
+    mockFetchAiSession
+      .mockResolvedValueOnce({
+        ...base,
+        status: "error",
+        currentQuestion: null,
+        result: JSON.stringify(mockSummary),
+        error: "stream failed",
+        inputPayload: "{}",
+      })
+      .mockResolvedValue({
+        ...base,
+        status: "awaiting_input",
+        currentQuestion: null,
+        result: JSON.stringify(mockSummary),
+        inputPayload: "{}",
+      });
+    renderSession();
+    expect(await screen.findByTestId("planning-plan-review")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Proceed with plan" })).toBeInTheDocument();
+  });
+
+  /*
+  FNXC:PlanningMode 2026-07-23-00:00:
+  The seeded initialPlan handoff must be one-shot. Embedded Planning unmounts on every
+  main-content navigation, resetting its in-component auto-start guard; before consumption
+  existed, navigating back re-fired auto-start against the still-set modalManager payload and
+  created a duplicate planning session while the first one was silently abandoned. The remount
+  must instead restore the persisted active session.
+  */
+  it("consumes the seeded initial plan on auto-start so a navigate-back remount restores the session instead of creating a duplicate", async () => {
+    mockFetchAiSession.mockResolvedValue({
+      ...base,
+      id: "draft-1",
+      status: "generating",
+      currentQuestion: null,
+      result: null,
+      inputPayload: "{}",
+    });
+    const onInitialPlanConsumed = vi.fn();
+    const commonProps = {
+      isOpen: true,
+      onClose: vi.fn(),
+      onTaskCreated: vi.fn(),
+      onTasksCreated: vi.fn(),
+      tasks: mockTasks,
+      projectId: "project-1",
+    };
+
+    const first = render(
+      <PlanningModeModal {...commonProps} initialPlan="Seeded plan from the board" onInitialPlanConsumed={onInitialPlanConsumed} />,
+    );
+    await waitFor(() => expect(mockStartPlanningStreaming).toHaveBeenCalledTimes(1));
+    // Consumption fires with the start itself so the owner clears the payload immediately.
+    expect(onInitialPlanConsumed).toHaveBeenCalledTimes(1);
+
+    // Navigate away: the embedded Planning view unmounts entirely.
+    first.unmount();
+
+    // Navigate back: the owner cleared the payload, so the remount takes the
+    // stored-active-session restore path.
+    render(<PlanningModeModal {...commonProps} />);
+    await waitFor(() => expect(mockFetchAiSession).toHaveBeenCalledWith("draft-1"));
+
+    // No second session was drafted or started by the remount.
+    expect(mockCreatePlanningDraft).toHaveBeenCalledTimes(1);
+    expect(mockStartPlanningStreaming).toHaveBeenCalledTimes(1);
   });
 });

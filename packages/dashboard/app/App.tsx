@@ -321,11 +321,6 @@ function AppInner() {
     currentVersion,
     dismissed: updateBannerDismissed,
     dismiss: dismissUpdateBanner,
-    managedSource,
-    managedMessage,
-    managedStatus,
-    managedBannerDismissed,
-    dismissManagedBanner,
   } = useUpdateCheck();
   
   // Sync node context with useNodes() results:
@@ -990,6 +985,7 @@ function AppInner() {
     openSetupWizard: modalManager.openSetupWizard,
     closeSetupWizard: modalManager.closeSetupWizard,
     closeModelOnboarding: modalManager.closeModelOnboarding,
+    closeProjectScopedModals: modalManager.closeProjectScopedModals,
   });
 
   const { handleDetailClose } = useDeepLink({
@@ -1724,11 +1720,6 @@ function AppInner() {
     currentVersion,
     updateBannerDismissed,
     dismissUpdateBanner,
-    managedSource,
-    managedMessage,
-    managedStatus,
-    managedBannerDismissed,
-    dismissManagedBanner,
     refreshDbCorruptionHealth,
     dbCorruptionRefreshing,
     dbCorruptionRefreshError,

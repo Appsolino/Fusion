@@ -4,12 +4,7 @@ import { SettingsSelectRow } from "../SettingsSelectRow";
 import { SettingsHelpTip } from "../SettingsHelpTip";
 import type { SectionBaseProps } from "./context";
 import { useTranslation } from "react-i18next";
-export type GlobalGeneralSectionProps = SectionBaseProps & {
-  managedSource?: boolean;
-  managedMessage?: string | null;
-  managedStatus?: import("@fusion/core").ManagedSourceStatus | null;
-};
-
+export type GlobalGeneralSectionProps = SectionBaseProps;
 /*
 FNXC:SettingsStyling 2026-07-15-17:35:
 Plain settings rows render through the shared primitives rather than hand-rolled `form-group` + `checkbox-label` markup, so labels, help copy, and padding come from one type scale. `.form-group` stays global and untouched — 35 non-settings files style forms with it.
@@ -19,13 +14,7 @@ Rows that stay bespoke are the ones whose copy a single-string descriptor cannot
 FNXC:SettingsHelp 2026-07-16-12:45:
 Bespoke rows no longer render their help as inline `<small>` paragraphs. The copy moved VERBATIM (same `t()` keys, same `<code>` fragments) behind the shared "?" affordance (`SettingsHelpTip`) — operator requirement: no inline description paragraphs in Settings. The thinking-log pair's shared help hangs off ONE tip beside the group heading.
 */
-export function GlobalGeneralSection({
-  form,
-  setForm,
-  managedSource = false,
-  managedMessage,
-  managedStatus,
-}: GlobalGeneralSectionProps) {
+export function GlobalGeneralSection({ form, setForm }: GlobalGeneralSectionProps) {
     const { t } = useTranslation("app");
     return (<>
       <h4 className="settings-section-heading">{t("settings.globalGeneral.general", "General")}</h4>
@@ -99,30 +88,11 @@ export function GlobalGeneralSection({
         </div>
       </div>
       <h4 className="settings-section-heading settings-section-heading--spaced">{t("settings.globalGeneral.updates", "Updates")}</h4>
-      {managedSource ? (
-        <div className="form-group settings-managed-source-notice" role="status">
-          <p>
-            {managedMessage ??
-              t(
-                "settings.globalGeneral.managedUpdatesMessage",
-                "Updates are managed automatically by Appsolino. Release channel and npm install controls are disabled on this host.",
-              )}
-          </p>
-          {managedStatus && (
-            <p className="settings-managed-source-status">
-              {managedStatus.deployedSha ? `${t("settings.globalGeneral.deployedSha", "Deployed SHA")}: ${managedStatus.deployedSha}` : null}
-              {managedStatus.upstreamSha ? ` · ${t("settings.globalGeneral.upstreamSha", "Upstream SHA")}: ${managedStatus.upstreamSha}` : null}
-              {managedStatus.candidatePr ? ` · ${t("settings.globalGeneral.candidatePr", "Candidate PR")}: ${managedStatus.candidatePr}` : null}
-              {managedStatus.ciStatus ? ` · ${t("settings.globalGeneral.ciStatus", "CI")}: ${managedStatus.ciStatus}` : null}
-            </p>
-          )}
-        </div>
-      ) : null}
       <div className="form-group">
         {/* FNXC:SettingsHelp 2026-07-16-12:45: Inline help moved behind the shared "?" affordance — operator requirement: no inline description paragraphs in Settings. The tip is a SIBLING of the checkbox label (a button inside a label breaks click-to-toggle). */}
         <div className="settings-field-label-row">
           <label htmlFor="updateCheckEnabled" className="checkbox-label">
-            <input id="updateCheckEnabled" type="checkbox" checked={form.updateCheckEnabled !== false} disabled={managedSource} onChange={(e) => setForm((f) => ({ ...f, updateCheckEnabled: e.target.checked }))}/>{t("settings.globalGeneral.checkForUpdatesAutomatically", " Check for updates automatically ")}</label>
+            <input id="updateCheckEnabled" type="checkbox" checked={form.updateCheckEnabled !== false} onChange={(e) => setForm((f) => ({ ...f, updateCheckEnabled: e.target.checked }))}/>{t("settings.globalGeneral.checkForUpdatesAutomatically", " Check for updates automatically ")}</label>
           <SettingsHelpTip settingKey="updateCheckEnabled">{t("settings.globalGeneral.whenEnabledFusionChecksNpmForNewVersions", " When enabled, Fusion checks npm for new versions of")}{" "}
             <code>@runfusion/fusion</code>{t("settings.globalGeneral.andShowsUpdateNoticesInTheCLIAnd", " and shows update notices in the CLI and dashboard. Cadence is governed by the frequency below. Default: enabled. ")}</SettingsHelpTip>
         </div>
@@ -138,7 +108,7 @@ export function GlobalGeneralSection({
           label: t("settings.globalGeneral.frequency", "Frequency"),
           help: t("settings.globalGeneral.controlsHowOftenTheDashboardReFetchesThe", " Controls how often the dashboard re-fetches the npm registry. Use the version + refresh control in the header to trigger an immediate check at any time. Default: daily. "),
           scope: "global",
-          disabled: form.updateCheckEnabled === false || managedSource,
+          disabled: form.updateCheckEnabled === false,
           options: [
             { value: "manual", label: t("settings.globalGeneral.manualOnlyNeverAutoCheck", "Manual only \u2014 never auto-check") },
             { value: "on-startup", label: t("settings.globalGeneral.onStartupOncePerServerLaunch", "On startup \u2014 once per server launch") },
@@ -166,7 +136,6 @@ export function GlobalGeneralSection({
           label: t("settings.globalGeneral.releaseChannel", "Release channel"),
           help: t("settings.globalGeneral.releaseChannelHelp", " Stable follows official releases. Beta follows pre-releases cut from main (versions like 0.73.0-beta.2) and also picks up each stable release once it overtakes the beta. Switching back to Stable never downgrades; you stay on the installed beta until the next stable release passes it. Default: stable. "),
           scope: "global",
-          disabled: managedSource,
           options: [
             { value: "stable", label: t("settings.globalGeneral.channelStable", "Stable (recommended)") },
             { value: "beta", label: t("settings.globalGeneral.channelBeta", "Beta — early builds from main") },
@@ -184,7 +153,6 @@ export function GlobalGeneralSection({
           label: t("settings.globalGeneral.autoReloadDashboardOnVersionChange", " Auto-reload dashboard on version change "),
           help: t("settings.globalGeneral.whenEnabledDefaultTheDashboardAutomaticallyReloadsWhen", " When enabled (default), the dashboard automatically reloads when it detects a new build version \u2014 either from server rebuilds or service worker updates. Disable this to stay on the current version until you manually refresh. Default: enabled. "),
           scope: "global",
-          disabled: managedSource,
         }}
         value={form.autoReloadOnVersionChange !== false}
         onChange={(v) => setForm((f) => ({ ...f, autoReloadOnVersionChange: v === true }))}

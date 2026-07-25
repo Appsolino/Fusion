@@ -3,12 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { promisify } from "node:util";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  getManagedSourceRefusalMessage,
-  isManagedSourceMode,
-  isVersionNewer,
-  resolveUpdateTargetVersion,
-} from "@fusion/core";
+import { isVersionNewer, resolveUpdateTargetVersion } from "@fusion/core";
 import type { UpdateChannel } from "@fusion/core";
 import { getCachedUpdateStatus, getConfiguredUpdateChannel, persistUpdateChannel } from "../update-cache.js";
 
@@ -384,31 +379,6 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<void> {
   const globalInstall = options.global !== false;
   const jsonOutput = options.json === true;
   const force = options.force === true;
-
-  /*
-  FNXC:AppsolinoManagedSource 2026-07-24-17:05:
-  Appsolino-managed hosts must not replace the running Fusion source build via npm install. Refuse before registry/channel work and point operators at the integration status file path.
-  */
-  if (isManagedSourceMode()) {
-    const refusal = getManagedSourceRefusalMessage();
-    if (jsonOutput) {
-      console.log(
-        JSON.stringify({
-          currentVersion: readOwnCliVersion() ?? "unknown",
-          latestVersion: null,
-          updateAvailable: false,
-          updated: false,
-          channel: "stable",
-          managed: true,
-          error: refusal,
-        }),
-      );
-    } else {
-      console.error(refusal);
-    }
-    process.exit(1);
-    return;
-  }
 
   if (options.channel !== undefined && options.channel !== "stable" && options.channel !== "beta") {
     console.error(`Error: invalid --channel '${options.channel}'. Valid channels: stable, beta.`);

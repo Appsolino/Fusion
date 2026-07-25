@@ -6,7 +6,7 @@ import {
   normalizeMergeIntegrationWorktreeMode,
   normalizeMergeAdvanceAutoSyncMode,
 } from "@fusion/core";
-import type { Settings, GlobalSettings, ThemeMode, ColorTheme, ModelPreset, ManagedSourceStatus } from "@fusion/core";
+import type { Settings, GlobalSettings, ThemeMode, ColorTheme, ModelPreset } from "@fusion/core";
 import { DEFAULT_GLOBAL_SETTINGS } from "@fusion/core";
 import { fetchSettings, fetchSettingsByScope, updateSettings, updateGlobalSettings, fetchAuthStatus, loginProvider, logoutProvider, cancelProviderLogin, saveApiKey, clearApiKey, fetchModels, testNotification, fetchBackups, createBackup, exportSettings, importSettings, fetchMemoryFile, fetchMemoryFiles, saveMemoryFile, compactMemory, fetchGlobalConcurrency, updateGlobalConcurrency, installQmd, testMemoryRetrieval, triggerMemoryDreams, fetchGitRemotes, fetchGitRemotesDetailed, fetchGitBranches, fetchProjects, fetchDashboardHealth, checkForUpdates, installUpdate, fetchSystemInfo, requestSystemRestart, fetchRemoteSettings, fetchRemoteStatus, installCloudflared, fetchRemoteQr, fetchRemoteUrl, submitProviderManualCode, fetchPlugins } from "../api";
 import type { AuthProvider, ManualOAuthCodeInfo, ModelInfo, BackupListResponse, SettingsExportData, MemoryFileInfo, MemoryRetrievalTestResult, GitRemote, GitRemoteDetailed, ProjectInfo, RemoteStatus, UpdateCheckResponse, UpdateInstallResponse, OAuthDeviceCodeInfo } from "../api";
@@ -1403,10 +1403,6 @@ export function SettingsModal({
    */
   const [mobileSearchRowExpanded, setMobileSearchRowExpanded] = useState(false);
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const [managedSource, setManagedSource] = useState(false);
-  const [managedMessage, setManagedMessage] = useState<string | null>(null);
-  const [managedStatus, setManagedStatus] = useState<ManagedSourceStatus | null>(null);
-  const [appsolinoReleaseLabel, setAppsolinoReleaseLabel] = useState<string | null>(null);
   const [updateCheckLoading, setUpdateCheckLoading] = useState(false);
   const [updateCheckResult, setUpdateCheckResult] = useState<UpdateCheckResponse | null>(null);
   const [updateInstallLoading, setUpdateInstallLoading] = useState(false);
@@ -1941,19 +1937,6 @@ export function SettingsModal({
         if (typeof health.version === "string" && health.version.trim().length > 0) {
           setAppVersion(health.version);
         }
-        if (health.managedSource === true) {
-          setManagedSource(true);
-          setManagedMessage(typeof health.managedMessage === "string" ? health.managedMessage : null);
-          setManagedStatus(health.managedStatus ?? null);
-          setAppsolinoReleaseLabel(
-            typeof health.appsolinoReleaseLabel === "string" ? health.appsolinoReleaseLabel : null,
-          );
-        } else {
-          setManagedSource(false);
-          setManagedMessage(null);
-          setManagedStatus(null);
-          setAppsolinoReleaseLabel(null);
-        }
       })
       .catch(() => {
         // Non-blocking metadata only — settings remains usable when unavailable.
@@ -2082,29 +2065,6 @@ export function SettingsModal({
       return updateCheckResult.error;
     }
 
-    if (updateCheckResult.managed || managedSource) {
-      const status = updateCheckResult.managedStatus ?? managedStatus;
-      const message =
-        updateCheckResult.managedMessage ??
-        managedMessage ??
-        t("settings.general.managedUpdatesMessage", "Updates are managed automatically by Appsolino.");
-      return (
-        <>
-          <span>{message}</span>
-          {status && (
-            <span className="settings-managed-source-status">
-              {status.deployedSha ? `${t("settings.general.deployedSha", "Deployed")}: ${status.deployedSha}` : null}
-              {status.upstreamSha ? ` · ${t("settings.general.upstreamSha", "Upstream")}: ${status.upstreamSha}` : null}
-              {status.candidatePr ? ` · PR ${status.candidatePr}` : null}
-              {status.ciStatus ? ` · CI ${status.ciStatus}` : null}
-              {status.lastSuccessfulUpdate ? ` · ${t("settings.general.lastSuccess", "Last success")}: ${status.lastSuccessfulUpdate}` : null}
-              {status.lastFailure ? ` · ${t("settings.general.lastFailure", "Last failure")}: ${status.lastFailure}` : null}
-            </span>
-          )}
-        </>
-      );
-    }
-
     if (updateCheckResult.updateAvailable && updateCheckResult.latestVersion) {
       const installSucceeded = updateInstallResult?.updated === true;
       const installError = updateInstallResult?.error;
@@ -2195,7 +2155,7 @@ export function SettingsModal({
     }
 
     return t("settings.general.upToDate", "You're up to date ✓");
-  }, [handleInstallUpdate, handleRestart, managedMessage, managedSource, managedStatus, restartError, restartLoading, restartScheduled, restartSupported, t, updateCheckResult, updateInstallLoading, updateInstallResult]);
+  }, [handleInstallUpdate, handleRestart, restartError, restartLoading, restartScheduled, restartSupported, t, updateCheckResult, updateInstallLoading, updateInstallResult]);
 
   // Load auth status when the authentication section is active
   const loadAuthStatus = useCallback(async () => {
@@ -4223,9 +4183,6 @@ export function SettingsModal({
           <GlobalGeneralSection
             form={form}
             setForm={setForm}
-            managedSource={managedSource}
-            managedMessage={managedMessage}
-            managedStatus={managedStatus}
           />
         );
       case "keyboard-shortcuts":
@@ -4983,18 +4940,8 @@ export function SettingsModal({
                   */}
                   <span className="settings-modal-version">
                     {viewportMode === "mobile"
-                      ? managedSource && appsolinoReleaseLabel
-                        ? t("settings.footer.appsolinoVersionShort", "v{{version}} · {{release}}", {
-                            version: appVersion,
-                            release: appsolinoReleaseLabel,
-                          })
-                        : t("settings.footer.versionShort", "v{{version}}", { version: appVersion })
-                      : managedSource && appsolinoReleaseLabel
-                        ? t("settings.footer.appsolinoVersion", "Version {{version}} · Appsolino {{release}}", {
-                            version: appVersion,
-                            release: appsolinoReleaseLabel,
-                          })
-                        : t("settings.footer.version", "Version {{version}}", { version: appVersion })}
+                      ? t("settings.footer.versionShort", "v{{version}}", { version: appVersion })
+                      : t("settings.footer.version", "Version {{version}}", { version: appVersion })}
                   </span>
                   <RefreshCw size={12} className={updateCheckLoading ? "spinning" : undefined} />
                 </button>

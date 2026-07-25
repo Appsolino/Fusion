@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import type { Request, Response } from "express";
-import { superviseSpawn, AgentStore, getManagedSourcePublicMetadata, resolveAppsolinoReleaseDisplayLabel } from "@fusion/core";
+import { superviseSpawn, AgentStore } from "@fusion/core";
 import { ApiError, badRequest, notFound } from "../api-error.js";
-import { resolveCliPackageVersionInfo } from "../cli-package-version.js";
 import {
   runLinkLocalFnBinary,
   runUseGlobalFnBinary,
@@ -260,15 +258,6 @@ export function registerSystemRoutes(ctx: ApiRoutesContext, deps: SystemRouteDep
   /** GET /api/system/info — capability discovery for the System panel. */
   router.get("/system/info", (_req, res) => {
     const fromSource = Boolean(systemControl?.sourceWorkspaceRoot);
-    const releaseRoot = systemControl?.sourceWorkspaceRoot
-      ?? (() => {
-        const versionInfo = resolveCliPackageVersionInfo(dirname(fileURLToPath(import.meta.url)));
-        return versionInfo ? dirname(versionInfo.packageJsonPath) : undefined;
-      })();
-    const managedMetadata = getManagedSourcePublicMetadata(releaseRoot);
-    const appsolinoReleaseLabel = managedMetadata.managedSource
-      ? resolveAppsolinoReleaseDisplayLabel(managedMetadata)
-      : null;
     res.json({
       supervised: systemControl?.supervised ?? false,
       restartSupported: systemControl?.supervised ?? false,
@@ -296,16 +285,6 @@ export function registerSystemRoutes(ctx: ApiRoutesContext, deps: SystemRouteDep
       memoryRssBytes: process.memoryUsage().rss,
       activeRebuild: activeJob ? jobSnapshot(activeJob, false) : null,
       lastRebuild: lastJob ? jobSnapshot(lastJob, false) : null,
-      ...(managedMetadata.managedSource
-        ? {
-            managedSource: true,
-            managedMessage: managedMetadata.managedMessage,
-            managedStatusPath: managedMetadata.statusPath,
-            managedStatus: managedMetadata.status,
-            appsolinoProvenance: managedMetadata.provenance,
-            appsolinoReleaseLabel,
-          }
-        : {}),
     });
   });
 

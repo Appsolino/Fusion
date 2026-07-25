@@ -36,11 +36,7 @@ vi.mock("../../update-cache.js", () => ({
 // channel helpers, but importing the @fusion/core barrel would drag core's
 // git-binary through this file's node:child_process mock. Substitute the
 // barrel with the actual app-version source module (the only part used here).
-vi.mock("@fusion/core", async () => {
-  const appVersion = await vi.importActual("../../../../core/src/app-version.js");
-  const managedSource = await vi.importActual("../../../../core/src/managed-source.js");
-  return { ...appVersion, ...managedSource };
-});
+vi.mock("@fusion/core", async () => await vi.importActual("../../../../core/src/app-version.js"));
 
 import { runUpdate } from "../update.js";
 
@@ -480,17 +476,5 @@ describe("runUpdate", () => {
       });
       expect(logSpy.mock.calls.flat().join("\n")).not.toContain("A newer beta");
     });
-  });
-
-  it("refuses fn update when Appsolino managed source is enabled", async () => {
-    process.env.FUSION_MANAGED_SOURCE = "appsolino";
-    process.env.FUSION_MANAGED_SOURCE_STATUS = "/tmp/appsolino-status.json";
-
-    await expect(runUpdate()).rejects.toThrow("process.exit:1");
-
-    expect(execAsyncMock).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("/tmp/appsolino-status.json"));
-    delete process.env.FUSION_MANAGED_SOURCE;
-    delete process.env.FUSION_MANAGED_SOURCE_STATUS;
   });
 });

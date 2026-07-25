@@ -348,15 +348,6 @@ so the readiness check never opens a session on the golden template.
 */
 /** Schema-qualified readiness marker table; a compile-time constant, safe to inline in SQL. */
 const GOLDEN_MARKER_QUALIFIED = "public._fusion_golden_templates";
-/**
- * Global session advisory-lock key for creating {@link GOLDEN_MARKER_QUALIFIED}.
- * Distinct golden names mean a lock keyed only on `goldenName` cannot serialize
- * the shared `CREATE TABLE IF NOT EXISTS` across concurrent vitest processes
- * that share one maintenance database — that race surfaces as
- * `pg_type_typname_nsp_index` duplicate-key errors on the composite row type.
- * Hold this lock only for marker-table DDL, never for the full golden schema build.
- */
-const GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY = "fusion_pg_test_golden_marker_bootstrap";
 
 /** Lowercase-alnum, bounded suffix safe for a database identifier. */
 function sanitizeTemplateToken(raw: string): string {
@@ -446,34 +437,9 @@ async function withMaintenanceSql<T>(
   }
 }
 
-/**
- * Serialize `CREATE TABLE IF NOT EXISTS` of the shared golden readiness marker
- * across every maintenance session. Must use the same client for lock + DDL +
- * unlock (session advisory locks). Does not swallow creation failures; always
- * attempts unlock in `finally`.
- */
-async function ensureGoldenMarkerTableOnClient(
-  client: ReturnType<typeof postgres>,
-  options?: { failAfterLock?: boolean },
-): Promise<void> {
-  await client`SELECT pg_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
-  try {
-    if (options?.failAfterLock) {
-      throw new Error("injected golden-marker bootstrap failure");
-    }
-    await client.unsafe(
-      `CREATE TABLE IF NOT EXISTS ${GOLDEN_MARKER_QUALIFIED} (name text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now())`,
-    );
-  } finally {
-    await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
-  }
-}
-
 /** Test-only lifecycle controls for deterministic template-state regression tests. */
 export const __pgTestTemplateTestHooks = {
   templateName: templateDbName,
-  goldenMarkerBootstrapLockKey: GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY,
-  goldenMarkerQualified: GOLDEN_MARKER_QUALIFIED,
   async templateExists(): Promise<boolean> {
     const templateName = templateDbName();
     return withMaintenanceSql(async (client) => {
@@ -494,52 +460,6 @@ export const __pgTestTemplateTestHooks = {
     await withMaintenanceSql(async (client) => {
       await client.unsafe(`DROP DATABASE IF EXISTS "${templateName}" WITH (FORCE)`);
       await client.unsafe(`CREATE DATABASE "${templateName}"`);
-    });
-  },
-  /** Ensure the shared golden marker table exists (opens its own maintenance session). */
-  async ensureGoldenMarkerTable(options?: { failAfterLock?: boolean }): Promise<void> {
-    await withMaintenanceSql(async (client) => {
-      await ensureGoldenMarkerTableOnClient(client, options);
-    });
-  },
-  async goldenMarkerTableExists(): Promise<boolean> {
-    return withMaintenanceSql(async (client) => {
-      const rows = await client<{ exists: boolean }[]>`
-        SELECT EXISTS (
-          SELECT 1
-          FROM pg_class c
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = 'public' AND c.relname = '_fusion_golden_templates'
-        ) AS exists
-      `;
-      return rows[0]?.exists === true;
-    });
-  },
-  /** Drop the shared marker table under the bootstrap lock (test isolation only). */
-  async dropGoldenMarkerTable(): Promise<void> {
-    await withMaintenanceSql(async (client) => {
-      await client`SELECT pg_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
-      try {
-        await client.unsafe(`DROP TABLE IF EXISTS ${GOLDEN_MARKER_QUALIFIED}`);
-      } finally {
-        await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
-      }
-    });
-  },
-  /**
-   * Return true if this session can immediately acquire the bootstrap lock
-   * (proves a prior failed init released it). Unlocks again when acquired.
-   */
-  async tryAcquireGoldenMarkerBootstrapLock(): Promise<boolean> {
-    return withMaintenanceSql(async (client) => {
-      const rows = await client<{ acquired: boolean }[]>`
-        SELECT pg_try_advisory_lock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY})) AS acquired
-      `;
-      const acquired = rows[0]?.acquired === true;
-      if (acquired) {
-        await client`SELECT pg_advisory_unlock(hashtext(${GOLDEN_MARKER_BOOTSTRAP_LOCK_KEY}))`;
-      }
-      return acquired;
     });
   },
 };
@@ -596,9 +516,33 @@ function ensureGoldenTemplate(): Promise<string> {
     // the lock. A sibling fork blocks on pg_advisory_lock until the winner has
     // fully built the golden template and recorded its ready marker.
     await withMaintenanceSql(async (client) => {
-      // Serialize marker-table creation across ALL concurrent vitest processes
-      // that share this maintenance DB (lock key is constant, not per-golden).
-      await ensureGoldenMarkerTableOnClient(client);
+      /*
+      FNXC:PgTestTemplateDb 2026-07-22-23:45:
+      Ensure the readiness marker table exists before any read/write of it.
+      `CREATE TABLE IF NOT EXISTS` is NOT concurrency-safe in PostgreSQL: two
+      sessions that both observe "not exists" race to insert the table's
+      composite-type row, and the loser aborts with `duplicate key value
+      violates unique constraint "pg_type_typname_nsp_index"`. On a fresh CI
+      cluster the gate's vitest forks all reach this line together on first
+      contact, which turned the merge gate red repo-wide (first seen
+      2026-07-23 01:25 UTC); long-lived local clusters already have the table,
+      so the race never reproduces locally. Serialize the one-time DDL under
+      its own advisory lock (this session already uses session-level advisory
+      locks for the golden build below), and additionally swallow the two
+      benign "lost the race" errors — duplicate_table (42P07) and the pg_type
+      unique violation (23505) — since either one proves a sibling created it.
+      */
+      await client`SELECT pg_advisory_lock(hashtext('fusion_golden_marker_table_ddl'))`;
+      try {
+        await client.unsafe(
+          `CREATE TABLE IF NOT EXISTS ${GOLDEN_MARKER_QUALIFIED} (name text PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now())`,
+        );
+      } catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code !== "42P07" && code !== "23505") throw error;
+      } finally {
+        await client`SELECT pg_advisory_unlock(hashtext('fusion_golden_marker_table_ddl'))`;
+      }
       // Sweep templates orphaned by crashed/finished processes and drop marker
       // rows whose golden database no longer exists.
       const rows = await client<{ datname: string }[]>`
@@ -1060,6 +1004,19 @@ export function createSharedPgTaskStoreTestHarness(options?: {
            ON CONFLICT (project_id) DO UPDATE SET next_id = 1, next_workflow_step_id = 1, settings = EXCLUDED.settings, workflow_steps = '[]'::jsonb, updated_at = now()`,
         ),
       );
+      /*
+      FNXC:PgTestHarnessIsolation 2026-07-22-17:40:
+      TRUNCATE ... RESTART IDENTITY resets next_id so the next created task reuses
+      the same ID (KB-001) as prior tests in this describe. The DB reset is not
+      enough on its own: task creation also materializes an on-disk
+      `<rootDir>/.fusion/tasks/<ID>/` directory (task.json + PROMPT.md), which the
+      truncate leaves behind. A later test that reuses that ID then sees a stale
+      canonical directory it never created, so rollback/atomicity assertions like
+      store-reservation-atomicity's `existsSync(.fusion/tasks/<ID>)` toBe(false)
+      fail on leftover files. Wipe the task-directory tree so filesystem isolation
+      matches the identity reset.
+      */
+      await rm(join(harness.rootDir, ".fusion", "tasks"), { recursive: true, force: true });
       // Drop any in-memory caches so the store doesn't serve stale rows.
       resetStorePrivateState(store);
       // Force allocator reconciliation to re-seed the distributed state row.

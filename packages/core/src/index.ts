@@ -570,6 +570,7 @@ export {
 export {
   resolveEffectiveSettings,
   resolveEffectiveSettingsDetailed,
+  resolveEffectiveSettingsDetailedById,
   resolveProjectWorkflowModelLaneBaseline,
   resolveEffectiveSettingsById,
   resolveOptionalReviewRevisionBudget,
@@ -1665,6 +1666,11 @@ export {
   SLICE_PLAN_STATES,
   FEATURE_LOOP_STATES,
   VALIDATOR_RUN_STATUSES,
+  VALIDATION_DIAGNOSTICS_MAX_EVIDENCE_PER_ASSERTION,
+  VALIDATION_DIAGNOSTICS_MAX_TEXT_BYTES,
+  normalizeValidationDiagnostics,
+  renderValidationFailureDescription,
+  renderValidationCause,
   MISSION_ASSERTION_STATUSES,
   MISSION_ASSERTION_TYPES,
   DEFAULT_MISSION_ASSERTION_TYPE,
@@ -1681,7 +1687,15 @@ export type {
   SlicePlanState,
   FeatureLoopState,
   ValidatorRunStatus,
+  ValidationAssertionVerdict,
+  ValidationEvidenceReference,
+  ValidationAssertionDiagnostic,
+  ValidationDiagnostics,
+  ValidationDiagnosticsInput,
   MissionEventType,
+  MissionTransitionActorType,
+  MissionTransitionActor,
+  MissionUpdateOptions,
   AutopilotStatus,
   Mission,
   MissionBranchStrategy,
@@ -1731,7 +1745,7 @@ export type {
 } from "./mission-types.js";
 export { MissionStore } from "./mission-store.js";
 export type { MissionStoreEvents, MissionSummary } from "./mission-store.js";
-export { AsyncMissionStore, TerminalTaskReconciliationError } from "./async-mission-store.js";
+export { AsyncMissionStore, MissionRemediationStoppedError, MissionResumeConflictError, TerminalTaskReconciliationError } from "./async-mission-store.js";
 export type { TerminalTaskReconciliationErrorCode } from "./async-mission-store.js";
 export { AsyncIdeationStore } from "./async-ideation-store.js";
 export { IDEATION_SESSION_STATUSES, IDEATION_CANDIDATE_ORIGINS } from "./ideation-types.js";
@@ -1767,27 +1781,6 @@ export { getAvailableMemoryBytes, getAvailableMemoryInfo, type AvailableMemoryRe
 export { collectSystemMetrics } from "./system-metrics.js";
 export { getAppVersion, parseSemver, compareVersions, isVersionNewer, resolveUpdateTargetVersion } from "./app-version.js";
 export type { UpdateChannel, UpdateDistTags } from "./app-version.js";
-export {
-  APPSOLINO_MANAGED_SOURCE_ENV,
-  DEFAULT_MANAGED_SOURCE_STATUS_PATH,
-  MANAGED_SOURCE_UPDATE_MESSAGE,
-  getManagedSourcePublicMetadata,
-  getManagedSourceRefusalMessage,
-  getManagedSourceStatusPath,
-  isManagedSourceMode,
-  readAppsolinoReleaseProvenance,
-  readManagedSourceStatus,
-  resolveAppsolinoReleaseDisplayLabel,
-} from "./managed-source.js";
-export type {
-  AppsolinoProvenanceField,
-  AppsolinoReleaseProvenance,
-  ManagedSourcePublicMetadata,
-  ManagedSourceStatus,
-  ManagedSourceStatusField,
-  ReadAppsolinoReleaseProvenanceOptions,
-  ReadManagedSourceStatusOptions,
-} from "./managed-source.js";
 export { DockerClientService } from "./docker-client.js";
 export { MeshConfigGenerator } from "./mesh-config-generator.js";
 export { DockerProvisioningService } from "./docker-provisioning.js";

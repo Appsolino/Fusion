@@ -27,15 +27,11 @@ import {
   DEFAULT_TASK_PRIORITY,
   TASK_PRIORITIES,
   THINKING_LEVELS,
+  formatPlanningPlanMd,
   summarizeTitle,
-  builtinSeamPrompt,
-  renderTriagePolicyPlaceholders,
-  resolveAgentPrompt,
-  resolveEffectivePlannerHeartbeatPatrolEnabled,
-  resolvePlanningPromptFromIr,
-  resolveWorkflowIrById,
   type PromptOverrideMap,
 } from "@fusion/core";
+import type { Task } from "@fusion/core";
 import type { SubtaskItem } from "./subtask-breakdown.js";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -233,29 +229,34 @@ async function ensureNtfyHelpersReady(): Promise<void> {
 // ── Constants ───────────────────────────────────────────────────────────────
 
 /*
-FNXC:PlanningMode 2026-07-20-00:55:
-Planning Mode is user-terminated: each answered turn must produce one consequential, novel question with alternatives and trade-offs.
-The model may update the running plan but must never infer completion; only the visible Proceed with plan action can make a session terminal.
+FNXC:PlanningMode 2026-07-23-14:00:
+Planning Mode is a collaborative, user-terminated discovery session, not task triage. Its dedicated prompt must not inherit workflow or assigned-triage execution instructions, because those instructions can turn exploratory responses into executor specifications and child-task directives.
+
+A selected direction is a durable plan-backbone decision: every affected running-plan field must be rebuilt around accumulated selections, then exactly one repository-grounded question must narrow that direction another consequential level. The model may update the running plan but must never infer completion; only the visible Proceed with plan action can make a session terminal.
 */
-/** Planning system prompt for the AI agent */
-export const PLANNING_SYSTEM_PROMPT = `## Planning Mode interaction adapter
+/** Self-contained system prompt for the separate collaborative Planning Mode. */
+export const PLANNING_SYSTEM_PROMPT = `## Collaborative Planning Mode
 
-First analyze the codebase and active board with the available readonly tools, fn_task_list, and fn_task_show. Treat the workflow planning template above as the quality bar and PROMPT.md structure for the evolving plan, but do not write PROMPT.md or use write tools during this interview.
+Help the operator iteratively turn an idea into a clear, useful plan. First investigate relevant repository and active-board context with the available readonly tools, fn_task_list, and fn_task_show when that context can reduce uncertainty. Explore the problem before assuming a solution: identify assumptions, unknowns, constraints, affected surfaces, and meaningful risks. Compare viable approaches and their trade-offs. Discuss decomposition when it clarifies scope, sequencing, ownership, or deliverables, but do not automatically split work or direct the creation of child tasks.
 
-Start by producing a concrete initial plan and exactly one high-impact question. Author the operator-facing plan in Markdown: write the description as concise GitHub-flavored Markdown, while the structured change, acceptance, dependency, and deliverable fields become its Markdown sections and lists. After every answer, regenerate the plan and ask exactly one consequential next question. A refine turn uses the selected or free-text focus to choose that next question. The model never validates or terminates the session. Only the user can validate it through the visible Proceed with plan action.
+Build an evolving operator-facing plan, not an executor-ready task specification. Focus on intended outcomes, concrete deliverables, alternatives considered, and observable acceptance criteria. Do not produce task-specification bookkeeping or execution-process instructions such as task-size policy, commit guidance, no-code-change caveats, or task-creation directives. Author the operator-facing plan in Markdown: write the description as concise GitHub-flavored Markdown, while the structured change, acceptance, dependency, and deliverable fields become its Markdown sections and lists.
+
+Use a deliberate iterative narrowing loop: analyze → concrete options → operator selection → plan rebuild → one deeper question. When the opener is vague, subjective, preference-based, or symptom-only, inspect the relevant implementation surface before proposing at least two materially distinct actionable directions grounded in those findings, plus exactly one Other option. Do not ask a generic clarification question or silently select a direction. Keep the provisional plan honest about unselected alternatives.
+
+After every selected option, multi-selection, or free-text Other answer, treat the choice as a durable decision and rebuild every affected running-plan field around all accumulated decisions. The title, description, proposedChanges, acceptanceCriteria, keyDeliverables, and suggestedRefinements must make the selected direction—not the original vague complaint or an unselected alternative—the central intended outcome. Preserve Other text verbatim as steering. Then inspect the selected direction and relevant repository context and ask exactly one consequential next question that narrows it one level further with concrete, materially distinct options. A refine turn uses the selected or free-text focus to choose that next question. Continue this loop until the operator chooses Proceed with plan. The model never validates or terminates the session. Only the user can validate it through the visible Proceed with plan action.
 
 For every initial, answer, or refine turn respond only with JSON: {"type":"question","data":{"id":"unique-id","type":"single_select|multi_select","question":"...","description":"...","options":[{"id":"option-a","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"option-b","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"other","label":"...","isOther":true}],"runningPlan":{"title":"...","description":"...","proposedChanges":["specific change"],"acceptanceCriteria":["observable outcome"],"suggestedSize":"S|M|L","priority":"normal","suggestedDependencies":[],"keyDeliverables":["concrete work item"],"suggestedRefinements":["next focus 1","next focus 2"]}}}.
 
-Every turn must include the running-plan fields: only title, description, concrete proposedChanges, observable acceptanceCriteria, suggestedSize, optional priority, suggestedDependencies, concrete keyDeliverables, and concise suggestedRefinements informed by the idea and answers so far. Include every distinct, high-value unresolved refinement area; do not cap the list at three. Never use interview question text as a deliverable. Do not put PROMPT.md sections (Mission, Before → After, Steps, File Scope, Review Level, Completion Criteria, or Do NOT) in runningPlan or free text: triage writes PROMPT.md only after the operator proceeds with the plan. Proceed with plan serializes the plan as plan.md without priority or suggestedRefinements; priority remains a task field. Every question must provide at least two alternatives, each with non-empty pros and cons, plus exactly one Other/write-your-own option. Write every label, option, and Other label in the language of the user's original input. Incorporate free-text Other answers verbatim as steering context for the following question.`;
+Every turn must include the running-plan fields: only title, description, concrete proposedChanges, observable acceptanceCriteria, suggestedSize, optional priority, suggestedDependencies, concrete keyDeliverables, and concise suggestedRefinements informed by the idea and answers so far. Include every distinct, high-value unresolved refinement area; do not cap the list at three. Never use interview question text as a deliverable. Proceed with plan serializes the plan as plan.md without priority or suggestedRefinements; priority remains a task field. Every question must provide at least two alternatives, each with non-empty pros and cons, plus exactly one Other/write-your-own option. Write every label, option, and Other label in the language of the user's original input. Incorporate free-text Other answers verbatim as steering context for the following question.`;
 
 /*
-FNXC:PlanningMode 2026-07-20-14:30:
-Planning Mode must use the same workflow planning seam as triage for a newly added task, then layer its infinite JSON interview contract over that template. A catalog defaultContent is Settings UI documentation, not proof that an operator explicitly replaced the full system prompt.
+FNXC:PlanningMode 2026-07-23-11:35:
+The separate Planning Mode prompt has sole default authority. Workflow selection still resolves models and task creation, but workflow planning seams and triage assignments remain execution-task concerns and must never leak into collaborative planning turns.
 */
 export async function resolvePlanningModeSystemPrompt(
   store: TaskStore,
   promptOverrides?: PromptOverrideMap,
-  workflowId?: string,
+  _workflowId?: string,
 ): Promise<string> {
   const settings: Partial<Settings> = (await store.getSettings().catch(() => ({}))) ?? {};
   const overrides = promptOverrides ?? settings.promptOverrides;
@@ -264,23 +265,8 @@ export async function resolvePlanningModeSystemPrompt(
     && overrides["planning-system"].trim().length > 0
     ? overrides["planning-system"]
     : undefined;
-  if (explicitOverride) return explicitOverride;
 
-  const plannerHeartbeatPatrolEnabled = resolveEffectivePlannerHeartbeatPatrolEnabled(settings);
-  const assignedTriagePrompt = settings.agentPrompts?.roleAssignments?.triage
-    ? resolveAgentPrompt("triage", settings.agentPrompts, { plannerHeartbeatPatrolEnabled })
-    : "";
-  let workflowPrompt: string | undefined;
-  try {
-    const ir = await resolveWorkflowIrById(store, workflowId || settings.defaultWorkflowId || "builtin:coding");
-    workflowPrompt = resolvePlanningPromptFromIr(ir);
-  } catch {
-    // Resolve fail-soft below so a missing custom workflow cannot prevent planning.
-  }
-  const fallback = builtinSeamPrompt("planning")
-    || resolveAgentPrompt("triage", undefined, { plannerHeartbeatPatrolEnabled });
-  const base = assignedTriagePrompt || workflowPrompt || fallback;
-  return `${renderTriagePolicyPlaceholders(base, settings)}\n\n${PLANNING_SYSTEM_PROMPT}`;
+  return explicitOverride ?? PLANNING_SYSTEM_PROMPT;
 }
 
 
@@ -323,6 +309,8 @@ export interface DraftInputPayload {
   createClaimStatus?: "none" | "creating" | "created";
   claimOwnerToken?: string;
   claimStartedAt?: string;
+  taskCreationEpoch?: number;
+  createdTaskIds?: string[];
 }
 
 /** Session TTL in milliseconds (7 days) */
@@ -348,6 +336,7 @@ export const GENERATION_LOOP_REPEAT_LIMIT = 8;
 
 const PLANNING_STUCK_ERROR_MESSAGE = "AI generation appears stuck with no new output. You can retry or start a new session.";
 const PLANNING_LOOP_ERROR_MESSAGE = "AI generation appears stuck repeating the same output. You can retry or start a new session.";
+export const PLANNING_INTERRUPTED_ERROR_MESSAGE = "Planning generation was interrupted before it finished. Retry to continue this session.";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -410,6 +399,16 @@ interface Session {
   createClaimStatus?: "none" | "creating" | "created";
   claimOwnerToken?: string;
   claimStartedAt?: string;
+  /*
+  FNXC:PlanningMultiTask 2026-07-24-00:20:
+  One plan may produce multiple tasks. Each creation attempt belongs to an epoch: epoch 0 uses
+  the legacy `planning-session:{id}` proposalClaimId, epoch N uses `planning-session:{id}#N`.
+  Replaying Proceed without editing stays idempotent within the current epoch (same task,
+  alreadyCreated); editing the plan after a task exists ROTATES the epoch so the next Proceed
+  creates a fresh task. createdTaskIds records every task created from this plan.
+  */
+  taskCreationEpoch?: number;
+  createdTaskIds?: string[];
   /** Whether the current generation must end at plan review rather than a question. */
   generationPurpose?: "initial_plan" | "plan_update" | "question";
   /** Durable start time for the active turn so each concurrent session owns its elapsed clock. */
@@ -693,6 +692,25 @@ export function setAiSessionStore(store: AiSessionStore): void {
   _aiSessionStore.on("ai_session:deleted", _aiSessionDeletedListener);
 }
 
+/*
+FNXC:PlanningMultiTask 2026-07-24-03:40:
+Review P1: `fn task plan --resume` / fn_task_plan resumeSessionId advertised cross-invocation
+resume, but setAiSessionStore only ever ran inside the dashboard server — CLI planning
+sessions were never persisted, getSession always missed in a fresh process, and dashboard
+sessions were unreachable from the CLI. Non-server callers wire the same durable
+AiSessionStore over their resolved board store's public asyncLayer here. Returns false when
+no async layer exists (legacy SQLite mode): planning then stays in-memory and resume is
+single-process only — callers must say so instead of failing silently.
+*/
+export async function ensureDurablePlanningSessionStore(store: TaskStore): Promise<boolean> {
+  if (_aiSessionStore) return true;
+  const layer = (store as { asyncLayer?: unknown }).asyncLayer;
+  if (!layer) return false;
+  const { AiSessionStore: DurableAiSessionStore } = await import("./ai-session-store.js");
+  setAiSessionStore(new DurableAiSessionStore(layer as ConstructorParameters<typeof DurableAiSessionStore>[0]));
+  return true;
+}
+
 function cleanupInMemorySession(sessionId: string): boolean {
   const session = sessions.get(sessionId);
   if (!session) {
@@ -749,6 +767,8 @@ function persistSession(session: Session, status: "generating" | "awaiting_input
       ...(session.createClaimStatus ? { createClaimStatus: session.createClaimStatus } : {}),
       ...(session.claimOwnerToken ? { claimOwnerToken: session.claimOwnerToken } : {}),
       ...(session.claimStartedAt ? { claimStartedAt: session.claimStartedAt } : {}),
+      ...(session.taskCreationEpoch ? { taskCreationEpoch: session.taskCreationEpoch } : {}),
+      ...(session.createdTaskIds?.length ? { createdTaskIds: session.createdTaskIds } : {}),
       ...(typeof session.clarificationEnabled === "boolean"
         ? { clarificationEnabled: session.clarificationEnabled }
         : {}),
@@ -924,6 +944,12 @@ function buildSessionFromRow(row: AiSessionRow): Session {
     validated: payload.validated === true,
     createdTaskId: typeof payload.createdTaskId === "string" ? payload.createdTaskId : undefined,
     createClaimStatus: payload.createClaimStatus,
+    taskCreationEpoch: typeof payload.taskCreationEpoch === "number" && Number.isInteger(payload.taskCreationEpoch) && payload.taskCreationEpoch > 0
+      ? payload.taskCreationEpoch
+      : undefined,
+    createdTaskIds: Array.isArray(payload.createdTaskIds)
+      ? payload.createdTaskIds.filter((id): id is string => typeof id === "string")
+      : undefined,
     claimOwnerToken: typeof payload.claimOwnerToken === "string" ? payload.claimOwnerToken : undefined,
     claimStartedAt: typeof payload.claimStartedAt === "string" ? payload.claimStartedAt : undefined,
     thinkingOutput: row.thinkingOutput,
@@ -1261,6 +1287,33 @@ export async function createSession(
   beginPlanningGeneration(session, "initial_plan");
   persistSession(session, "generating");
 
+  /*
+  FNXC:PlanningProviderErrors 2026-07-23-20:10:
+  Once the session row is persisted "generating", every failure on the way to the first
+  question (system-prompt resolution, agent construction, the provider prompt itself) must
+  land the session in a retryable persisted "error" state before rethrowing to the route.
+  Previously a provider error thrown here left the row "generating" forever with no error
+  and no watchdog, so the session appeared stuck on "Generating plan" until a server restart.
+  */
+  try {
+    return await runCreateSessionFirstTurn(session, rootDir, store, promptOverrides, pluginRunner);
+  } catch (err) {
+    if (!(err instanceof Error && err.name === "AbortError") && !session.error) {
+      setSessionError(session, err instanceof Error ? err.message : "Failed to initialize AI agent");
+    }
+    throw err;
+  }
+}
+
+/** First turn of the legacy synchronous planning start; see the provider-error guard in createSession. */
+async function runCreateSessionFirstTurn(
+  session: Session,
+  rootDir: string,
+  store: TaskStore,
+  promptOverrides?: PromptOverrideMap,
+  pluginRunner?: SkillPluginRunner,
+): Promise<{ sessionId: string; firstQuestion: PlanningQuestion; summary: PlanningSummary; validated: boolean }> {
+  const sessionId = session.id;
   const systemPrompt = await resolvePlanningModeSystemPrompt(store, promptOverrides, session.workflowId);
 
   // Create AI agent and get the first question
@@ -1309,7 +1362,7 @@ export async function createSession(
   session.agent = agentResult;
   session.updatedAt = new Date();
 
-  const firstResponse = await getFirstQuestionFromAgent(session, formatInitialPlanRequestForAgent(initialPlan));
+  const firstResponse = await getFirstQuestionFromAgent(session, formatInitialPlanRequestForAgent(session.initialPlan));
 
   const firstQuestion = firstResponse.data;
   session.currentQuestion = firstQuestion;
@@ -1429,7 +1482,9 @@ async function getFirstQuestionFromAgent(
               }
             }
           }
-        } catch {
+        } catch (retryPromptErr) {
+          // FNXC:PlanningProviderErrors 2026-07-23-20:10: a provider failure on the reformat prompt must surface as itself, not as a misleading "no valid JSON" parse error.
+          lastError = retryPromptErr instanceof Error ? retryPromptErr : new Error(String(retryPromptErr));
           break;
         }
       }
@@ -2085,7 +2140,7 @@ function buildHistoryReplayPrompt(
   return [
     "Previous conversation summary:",
     interviewSummary,
-    "Use this as context for the next response. Do not repeat prior questions unless necessary.",
+    "Treat every recorded selection and Other answer as an accumulated durable decision. Rebuild affected plan fields around those decisions; do not preserve superseded or unselected alternatives as the plan backbone. Use this as context for the next response. Do not repeat prior questions unless necessary.",
   ].join("\n\n");
 }
 
@@ -2211,6 +2266,40 @@ function createAbortError(): Error {
   const error = new Error("Generation aborted");
   error.name = "AbortError";
   return error;
+}
+
+/*
+FNXC:PlanningProviderErrors 2026-07-23-20:10:
+Terminal-state reconciliation for SSE stream connects. Two hang shapes ended with the Planning
+modal pinned on "Thinking/Generating plan" with a stream that will never emit again:
+1. The session already holds a terminal error, but the buffered error event is gone (the
+   client's reconnect loop treats a persisted "generating" row as healthy and the 8s poll only
+   reacts to persisted status changes).
+2. The session is persisted "generating" with generation metadata set, but no turn is active
+   or pending and the generation started longer ago than the inactivity watchdog window — a
+   stranded run (e.g. a pre-fix provider-error escape or a crashed generation promise) that no
+   watchdog owns anymore.
+Returns the terminal error message the stream route must emit before closing, or undefined
+when the session is healthy. Only the stale case writes state: it persists the same retryable
+error contract as every other planning failure so Retry and the bounded auto-retry recover it.
+*/
+export function reconcileStalePlanningGeneration(sessionId: string): string | undefined {
+  const session = sessions.get(sessionId);
+  if (!session || session.validated) return undefined;
+  if (isPlanningTurnActive(sessionId) || planningStreamManager.hasPendingInitialTurn(sessionId)) return undefined;
+  if (session.error) return session.error;
+  if (session.generationPurpose === undefined) return undefined;
+  const startedAtMs = session.generationStartedAt ? Date.parse(session.generationStartedAt) : Number.NaN;
+  const ageMs = Number.isNaN(startedAtMs) ? Number.POSITIVE_INFINITY : Date.now() - startedAtMs;
+  if (ageMs < GENERATION_TIMEOUT_MS) return undefined;
+  diagnostics.warn("Reconciling stranded planning generation to a retryable error", {
+    sessionId,
+    generationPurpose: session.generationPurpose,
+    generationStartedAt: session.generationStartedAt,
+    operation: "reconcile-stale-generation",
+  });
+  setSessionError(session, PLANNING_INTERRUPTED_ERROR_MESSAGE);
+  return PLANNING_INTERRUPTED_ERROR_MESSAGE;
 }
 
 /*
@@ -2376,8 +2465,9 @@ for both agent entry points because system instructions alone can be displaced b
 export function formatInitialPlanRequestForAgent(initialPlan: string): string {
   return [
     "Create the initial running plan from this operator idea before asking the first interview question.",
+    "If the idea is vague, subjective, preference-based, or symptom-only, first inspect the relevant implementation surface and turn those findings into at least two concrete, materially distinct first-level directions plus exactly one Other option. Do not ask a generic question, invent repository findings, or commit the provisional plan to an unselected direction.",
     "Return only type:\"question\" JSON with a full runningPlan: a work-product title, a concise implementation description, and concrete work-item keyDeliverables derived from the idea.",
-    "Then ask exactly one high-impact clarifying question with alternatives and pros/cons. Never use that question text as a deliverable. Do not complete or validate the plan; only the user can validate it.",
+    "Then ask exactly one high-impact, option-driven question with alternatives and pros/cons. Never use that question text as a deliverable. Do not complete or validate the plan; only the user can validate it.",
     "Operator idea:",
     initialPlan,
   ].join("\n\n");
@@ -2388,9 +2478,9 @@ export function formatInitialRunningPlanRequestForAgent(initialPlan: string): st
   return [
     "Create a concrete initial implementation plan from this operator idea.",
     "Author the operator-facing plan in Markdown. Write the description as concise GitHub-flavored Markdown; the structured proposed changes, acceptance criteria, dependencies, and deliverables will render as Markdown sections and lists.",
-    "Inspect the relevant codebase and active-board context before drafting it. Make the description specific about the affected behavior and intended outcome. Provide concrete proposedChanges that name what behavior, component, interface, data, or configuration should change, and acceptanceCriteria stated as observable pass/fail outcomes. Make every key deliverable an actionable work item rather than generic planning advice.",
+    "Inspect the relevant codebase and active-board context before drafting it. For a vague, subjective, preference-based, or symptom-only idea, turn that inspection into at least two concrete, materially distinct direction options plus exactly one Other option; do not invent findings or preselect a direction. Make the provisional description specific about the affected behavior and intended outcome without falsely committing to an unselected direction. Provide concrete proposedChanges that name what behavior, component, interface, data, or configuration should change, and acceptanceCriteria stated as observable pass/fail outcomes. Make every key deliverable an actionable work item rather than generic planning advice.",
     "Also propose concise suggestedRefinements covering every distinct, high-value unresolved area the operator could explore next; do not cap the list at three.",
-    "Return only type:\"question\" JSON with the complete plan in runningPlan and exactly one high-impact next question. Give that question at least two useful alternatives with pros and cons plus one write-your-own option. Do not validate the plan; only the operator can proceed with it.",
+    "Return only type:\"question\" JSON with the complete plan in runningPlan and exactly one high-impact, option-driven next question. Give that question at least two useful alternatives with pros and cons plus one write-your-own option. Do not validate the plan; only the operator can proceed with it.",
     "Operator idea:",
     initialPlan,
   ].join("\n\n");
@@ -2696,6 +2786,8 @@ async function continueAgentConversation(session: Session, message: string): Pro
               retryErr,
               { sessionId: session.id, operation: "retry-prompt" }
             );
+            // FNXC:PlanningProviderErrors 2026-07-23-20:10: report the provider failure itself instead of a misleading "no valid JSON" parse error.
+            lastError = retryErr instanceof Error ? retryErr : new Error(String(retryErr));
             break;
           }
         }
@@ -3013,8 +3105,8 @@ function getContextualComments(responses: Record<string, unknown>): ContextualCo
 export function formatContextualCommentsForAgent(summary: PlanningSummary, comments: ContextualComment[]): string {
   return [
     "The operator reviewed the running plan and submitted contextual comments.",
-    "Revise the running plan using every comment below, preserve unaffected content, and continue the established Planning Mode response contract.",
-    "Return the revised plan in Markdown and ask exactly one next question when more input is needed.",
+    "Revise the running plan using every comment below, preserve unaffected content, and continue the established Planning Mode response contract. Treat each accepted comment as a durable decision: rebuild every affected plan field around it rather than appending contradictory notes.",
+    "Return the revised plan in Markdown and ask exactly one concrete option-driven next question that narrows the updated direction when more input is needed.",
     "Current summary:",
     JSON.stringify(summary),
     "Contextual comments, in submitted order:",
@@ -3025,10 +3117,39 @@ export function formatContextualCommentsForAgent(summary: PlanningSummary, comme
 function formatRefineRequestForAgent(summary: PlanningSummary, focus?: string): string {
   return [
     "The user clicked Refine Further on the planning summary.",
-    "Continue the planning interview from the existing context.",
-    "Ask exactly one focused, high-impact follow-up question with alternatives and pros/cons.",
+    "Continue the planning interview from the existing context. Rebuild affected plan fields around every accumulated selection, Other answer, and requested focus; do not retain an unselected alternative as the plan backbone.",
+    "Inspect the selected direction and relevant repository context, then ask exactly one focused, high-impact option-driven follow-up question that narrows it one consequential level further with alternatives and pros/cons.",
     "Do not return a completion response: only the user can validate a plan.",
     ...(focus ? ["The operator wants this next question to focus on:", focus] : []),
+    "Current summary:",
+    JSON.stringify(summary),
+  ].join("\n\n");
+}
+
+/*
+FNXC:PlanningQuestionRegeneration 2026-07-23-21:40:
+A submission that arrives while the session has no active question (the previous question was
+already answered, cleared by a retry, or lost with a cleared summary) must not surface
+"No active question in session" to the operator. Instead the turn reprompts the agent to
+continue the interview and generate a fresh option-driven question from the accumulated
+context, honoring any submitted operator input as context rather than dropping it.
+*/
+export function formatQuestionRegenerationForAgent(
+  summary: PlanningSummary,
+  responses: Record<string, unknown>,
+): string {
+  const operatorInput = Object.entries(responses)
+    .filter(([key, value]) =>
+      key !== "refine" && key !== "focus" && key !== "contextualComments"
+      && value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`);
+  return [
+    "The planning session currently has no active interview question; continue the interview instead of treating this as an error.",
+    "Rebuild affected plan fields around every accumulated selection and Other answer, then ask exactly one new high-impact, option-driven question that narrows the current direction, with at least two useful alternatives (pros and cons) plus one write-your-own option.",
+    'Return only type:"question" JSON with the complete runningPlan. Do not return a completion response: only the user can validate a plan.',
+    ...(operatorInput.length
+      ? ["The operator submitted this input while no question was active; honor it as context for the plan and the next question:", operatorInput.join("\n")]
+      : []),
     "Current summary:",
     JSON.stringify(summary),
   ].join("\n\n");
@@ -3072,10 +3193,6 @@ export async function submitResponse(
     throw new SessionNotFoundError(`Planning session ${sessionId} not found or expired`);
   }
 
-  if (session.validated) {
-    throw new InvalidSessionStateError("Planning session has already been validated");
-  }
-
   // Stash store/rootDir on the session so subsequent ensureSessionAgent calls
   // (after the agent is disposed for retry/rewind) can rebuild without the
   // caller having to thread context through every API.
@@ -3092,6 +3209,28 @@ export async function submitResponse(
   const releaseTurn = reservePlanningTurn(session.id);
 
   /*
+  FNXC:PlanningReopenAfterValidate 2026-07-23-23:30:
+  A validated plan must never be a read-only dead end: the operator can keep refining,
+  commenting, or answering, and create the task whenever they choose. A new turn on a
+  validated session REOPENS it (clears the terminal marker; the turn's own
+  persistSession("generating") durably writes validated:false and moves the row out of
+  "complete"), rather than rejecting with "already been validated". validateSession remains
+  the only terminalizer.
+
+  FNXC:PlanningMultiTask 2026-07-24-01:40:
+  Reopen (validated flip) and epoch rotation run only AFTER turn admission succeeds. Review
+  finding (3 reviewers): mutating the shared in-memory session before the admission guards
+  meant a rejected request (GenerationInProgressError, duplicate submit) burned a phantom
+  rotation that was never persisted — in-memory epoch N+1 vs durable N — and a later Proceed
+  could derive the wrong claim key. Past admission, every branch reaches
+  persistSession("generating"), so the rotation always lands durably with its turn.
+  */
+  if (session.validated) {
+    session.validated = false;
+  }
+  rotateTaskCreationEpochOnReopen(session);
+
+  /*
   FNXC:PlanningRetry 2026-07-14-00:00:
   Reported bug: planning got stuck cycling retry/regeneration after the user had already answered.
   Root cause: session.currentQuestion kept the just-answered question all through the next
@@ -3105,10 +3244,30 @@ export async function submitResponse(
   generation-error case so the modal's submit path keeps its existing SSE-driven recovery.
   */
   let answeredQuestion: PlanningQuestion | undefined;
+  /*
+  FNXC:PlanningProviderErrors 2026-07-23-20:10:
+  ensureSessionAgent (agent construction + history-replay prompt) throws provider errors AFTER
+  the session row was persisted "generating". continueAgentConversation converts its own
+  failures to a persisted session error, but a throw between persist("generating") and that
+  call previously escaped to the route with the row left "generating" forever — no error
+  event, no watchdog — so the Planning modal hung on "Thinking/Generating plan" (its SSE
+  reconnect + 8s poll both treat "generating" as healthy). Track the generating transition and
+  convert any non-abort escape into the same retryable persisted error state.
+  */
+  let enteredGenerating = false;
 
   try {
     const contextualComments = getContextualComments(responses);
-    if (contextualComments && session.summary) {
+    /*
+    FNXC:PlanningQuestionRegeneration 2026-07-23-21:40:
+    Refine, contextual comments, and the no-active-question fallback must never depend on
+    session.summary being set: a retry that failed mid-regeneration clears it, and the old
+    `&& session.summary` guards dropped those submissions into the terminal
+    "No active question in session" error. Rebuild the running summary from persisted
+    history instead so the interview always continues.
+    */
+    const effectiveSummary = session.summary ?? buildRunningSummary(session.initialPlan, session.history);
+    if (contextualComments) {
       /*
       FNXC:PlanningComments 2026-07-23-12:00:
       Comment batches deliberately reuse the existing session, active-turn reservation, SSE, and
@@ -3119,22 +3278,38 @@ export async function submitResponse(
       session.error = undefined;
       session.pendingContextualComments = contextualComments;
       await persistSession(session, "generating");
+      enteredGenerating = true;
       await ensureSessionAgent(session, rootDir, session.history, promptOverrides, store);
-      await continueAgentConversation(session, formatContextualCommentsForAgent(session.summary, contextualComments));
-    } else if (isRefineRequest(responses) && session.summary) {
+      await continueAgentConversation(session, formatContextualCommentsForAgent(effectiveSummary, contextualComments));
+    } else if (isRefineRequest(responses)) {
       // Refinement steers which question comes next; it is never an answer to the
       // currently displayed question and therefore must not create a history entry.
       beginPlanningGeneration(session, "question");
       session.currentQuestion = undefined;
       session.error = undefined;
       await persistSession(session, "generating");
+      enteredGenerating = true;
 
       await ensureSessionAgent(session, rootDir, session.history, promptOverrides, store);
       const focus = typeof responses.focus === "string" ? responses.focus.trim() : undefined;
-      const refineMessage = formatRefineRequestForAgent(session.summary, focus);
+      const refineMessage = formatRefineRequestForAgent(effectiveSummary, focus);
       await continueAgentConversation(session, refineMessage);
     } else if (!session.currentQuestion) {
-      throw new InvalidSessionStateError("No active question in session");
+      /*
+      FNXC:PlanningQuestionRegeneration 2026-07-23-21:40:
+      A submission with no active question used to throw InvalidSessionStateError
+      ("No active question in session") to the operator. Requirement: regenerate instead —
+      reprompt the agent to continue the interview and produce a fresh question, carrying any
+      submitted operator input along as context. No history entry is recorded because there is
+      no question to pair the response with.
+      */
+      beginPlanningGeneration(session, "question");
+      session.error = undefined;
+      await persistSession(session, "generating");
+      enteredGenerating = true;
+
+      await ensureSessionAgent(session, rootDir, session.history, promptOverrides, store);
+      await continueAgentConversation(session, formatQuestionRegenerationForAgent(effectiveSummary, responses));
     } else {
       const currentQuestion = captureOtherCustomText(session.currentQuestion, responses);
       const historyEntry = {
@@ -3169,6 +3344,7 @@ export async function submitResponse(
       beginPlanningGeneration(session, "plan_update");
       session.currentQuestion = undefined;
       await persistSession(session, "generating");
+      enteredGenerating = true;
       if (!session.agent) {
         // An edited older answer must be replayed in its original position with every
         // later answer retained; only a newly appended answer is sent after replay.
@@ -3181,10 +3357,15 @@ export async function submitResponse(
         );
       }
       const message = isEditingPriorAnswer
-        ? "An earlier answer was edited. Use the complete preserved interview context above, regenerate the running plan, and ask exactly one next question."
+        ? "An earlier answer was edited. Use the complete preserved interview context above, discard downstream assumptions contradicted by the edit, rebuild every affected running-plan field around the accumulated decisions, and ask exactly one concrete option-driven next question that narrows the selected direction."
         : formatResponseForAgent(currentQuestion, responses);
       await continueAgentConversation(session, message);
     }
+  } catch (err) {
+    if (enteredGenerating && !session.error && !(err instanceof Error && err.name === "AbortError")) {
+      setSessionError(session, err instanceof Error ? err.message : "AI processing failed");
+    }
+    throw err;
   } finally {
     releaseTurn();
   }
@@ -3249,6 +3430,8 @@ export async function retrySession(
   JSON" failure. Admission is reserved synchronously before any turn state is touched.
   */
   const releaseTurn = reservePlanningTurn(session.id);
+  // FNXC:PlanningProviderErrors 2026-07-23-20:10: same generating-strand guard as submitResponse — see the comment there.
+  let enteredGenerating = false;
   try {
     disposeSessionAgentForRetry(session);
 
@@ -3268,6 +3451,7 @@ export async function retrySession(
     session.updatedAt = new Date();
     beginPlanningGeneration(session, session.history.length === 0 ? "initial_plan" : "plan_update");
     await persistSession(session, "generating");
+    enteredGenerating = true;
 
     if (pendingContextualComments) {
       await ensureSessionAgent(session, rootDir, session.history, promptOverrides, store);
@@ -3296,6 +3480,11 @@ export async function retrySession(
       coerceResponseRecord(lastEntry.question, lastEntry.response),
     );
     await continueAgentConversation(session, replayMessage);
+  } catch (err) {
+    if (enteredGenerating && !session.error && !(err instanceof Error && err.name === "AbortError")) {
+      setSessionError(session, err instanceof Error ? err.message : "AI processing failed");
+    }
+    throw err;
   } finally {
     releaseTurn();
   }
@@ -3316,10 +3505,6 @@ export async function rewindSession(
   const session = await getSession(sessionId);
   if (!session) {
     throw new SessionNotFoundError(`Planning session ${sessionId} not found or expired`);
-  }
-
-  if (session.validated) {
-    throw new InvalidSessionStateError("Planning session has already been validated");
   }
 
   if (store && !session.store) session.store = store;
@@ -3355,6 +3540,15 @@ export async function rewindSession(
     throw new GenerationInProgressError("Generation already in progress");
   }
   const releaseTurn = reservePlanningTurn(session.id);
+
+  /*
+  FNXC:PlanningReopenAfterValidate 2026-07-23-23:30: editing an earlier answer reopens a validated plan — see submitResponse.
+  FNXC:PlanningMultiTask 2026-07-24-01:40: reopen + rotation only after admission and the empty-history precondition, so a rejected rewind never mutates claim state (see submitResponse).
+  */
+  if (session.validated) {
+    session.validated = false;
+  }
+  rotateTaskCreationEpochOnReopen(session);
 
   try {
     /*
@@ -3414,17 +3608,33 @@ export async function rewindSession(
 
 export function stopGeneration(sessionId: string): boolean {
   const session = sessions.get(sessionId);
-  const activeGeneration = activeGenerations.get(sessionId);
-
-  if (!session || !activeGeneration) {
+  if (!session) {
     return false;
   }
 
-  activeGeneration.abortReason = "user-stop";
-  clearTimeout(activeGeneration.timer);
-  activeGeneration.abortTeardown();
-  activeGeneration.abortController.abort();
-  activeGenerations.delete(sessionId);
+  /*
+  FNXC:PlanningStopMultiSession 2026-07-23-23:50:
+  Stop must work for every generation shape, keyed strictly to this session id so stopping one
+  plan never touches other concurrently generating sessions. A just-started session whose
+  initial turn is still PENDING (registered by start-streaming but not yet consumed by a
+  stream connect) has no activeGenerations record; without discarding that pending turn here,
+  Stop returned false and the "stopped" generation sprang back to life on the next stream
+  connect. Consuming (and dropping) the callback cancels the future turn.
+  */
+  const discardedInitialTurn = planningStreamManager.consumeInitialTurn(sessionId) !== undefined;
+  const activeGeneration = activeGenerations.get(sessionId);
+
+  if (!activeGeneration && !discardedInitialTurn) {
+    return false;
+  }
+
+  if (activeGeneration) {
+    activeGeneration.abortReason = "user-stop";
+    clearTimeout(activeGeneration.timer);
+    activeGeneration.abortTeardown();
+    activeGeneration.abortController.abort();
+    activeGenerations.delete(sessionId);
+  }
 
   const returnQuestion = session.generationReturnQuestion;
   const stoppedPurpose = session.generationPurpose;
@@ -3529,11 +3739,10 @@ export function formatResponseForAgent(
 
   const answerContext = comment.length > 0 ? `${formatted}\n\nAdditional context: ${comment}` : formatted;
   /*
-  FNXC:PlanningMode 2026-07-20-00:55:
-  System prompts can be displaced by long tool/context turns. Repeat the per-answer contract at the invocation boundary
-  so every submitted answer steers the following high-impact question instead of inviting a model-generated completion.
+  FNXC:PlanningMode 2026-07-23-14:10:
+  System prompts can be displaced by long tool/context turns. Repeat the selection-as-plan-backbone contract at the invocation boundary so every submitted option, multi-selection, or Other answer rebuilds the work product before the one deeper question, instead of becoming an append-only note or inviting model-authored completion.
   */
-  return `${answerContext}\n\nRegenerate the runningPlan fields (title, description, concrete proposedChanges, observable acceptanceCriteria, suggestedSize, optional priority, suggestedDependencies, concrete keyDeliverables, and all distinct high-value suggestedRefinements) informed by this answer; do not cap suggestedRefinements at three. Author the operator-facing plan in Markdown: use concise GitHub-flavored Markdown in the description, with the structured fields supplying its Markdown sections and lists. Never list interview questions as deliverables or PROMPT.md sections such as Mission, Steps, File Scope, Review Level, Completion Criteria, or Do NOT. Return type:"question" with that complete runningPlan and ask exactly one next question. Do not validate the plan; only the user can proceed with it.`;
+  return `${answerContext}\n\nThis answer is a durable planning decision, not an append-only note. Regenerate the runningPlan fields (title, description, concrete proposedChanges, observable acceptanceCriteria, suggestedSize, optional priority, suggestedDependencies, concrete keyDeliverables, and all distinct high-value suggestedRefinements) around this selected label/description and every accumulated decision; do not cap suggestedRefinements at three. Rewrite every affected field so the selected direction is the central intended outcome, not the original vague complaint or an unselected alternative. Preserve free-text Other verbatim as steering. Author the operator-facing plan in Markdown: use concise GitHub-flavored Markdown in the description, with the structured fields supplying its Markdown sections and lists. Never list interview questions as deliverables or PROMPT.md sections such as Mission, Steps, File Scope, Review Level, Completion Criteria, or Do NOT. Inspect the selected direction and relevant repository context, return type:"question" with that complete runningPlan, and ask exactly one next question: a deeper concrete option-driven question with materially distinct alternatives and pros/cons. Do not validate the plan; only the user can proceed with it.`;
 }
 
 function coerceResponseRecord(question: PlanningQuestion, response: unknown): Record<string, unknown> {
@@ -3720,6 +3929,216 @@ function restoreClaimSession(row: import("./ai-session-store.js").AiSessionRow):
   return restored;
 }
 
+/*
+FNXC:PlanningMultiTask 2026-07-24-00:20:
+One plan may produce multiple tasks, one per creation epoch. The task table's partial unique
+proposalClaimId index stays the multi-process crash authority WITHIN an epoch: replaying
+Proceed without editing dedupes to the same task (alreadyCreated), while editing the plan
+after a task exists rotates to a new epoch/key so the next Proceed creates a fresh task.
+Epoch 0 keeps the legacy un-suffixed key so pre-existing linked sessions stay reconciled.
+*/
+export function planningProposalClaimId(sessionId: string, taskCreationEpoch?: number): string {
+  const epoch = taskCreationEpoch ?? 0;
+  return epoch > 0 ? `planning-session:${sessionId}#${epoch}` : `planning-session:${sessionId}`;
+}
+
+/*
+Reopen-time rotation: a plan edited after its current epoch created a task starts a new epoch.
+
+FNXC:PlanningMultiTask 2026-07-24-01:40:
+Rotation is rotate-on-intent: it commits with the edit turn's persistSession("generating"),
+so an edit turn that later FAILS still leaves the epoch advanced — a subsequent Proceed on
+the unchanged plan then creates a second task with identical content. Accepted trade-off
+(review finding): the alternative (rotate only on turn success) would let a failed edit
+silently re-link the edited plan to the pre-edit task, which is worse. The guard below also
+deliberately requires finalize's "created" status or a set createdTaskId, so a crash between
+claim ("creating") and finalize can never rotate away from the epoch whose task row needs
+reconciliation.
+*/
+function rotateTaskCreationEpochOnReopen(session: Session): void {
+  const currentEpochHasTask = Boolean(session.createdTaskId) || session.createClaimStatus === "created";
+  if (!currentEpochHasTask) return;
+  if (session.createdTaskId) {
+    const history = session.createdTaskIds ?? [];
+    if (!history.includes(session.createdTaskId)) {
+      session.createdTaskIds = [...history, session.createdTaskId];
+    }
+  }
+  session.taskCreationEpoch = (session.taskCreationEpoch ?? 0) + 1;
+  session.createdTaskId = undefined;
+  session.createClaimStatus = "none";
+  session.claimOwnerToken = undefined;
+  session.claimStartedAt = undefined;
+}
+
+/*
+FNXC:PlanningMultiTask 2026-07-24-02:30:
+Agent-surface twin of POST /planning/create-task (review finding: fn task plan / fn_task_plan
+created tasks via a raw store.createTask with no proposalClaimId, so agent-created tasks had
+no idempotency, no session linkage, and lived outside the epoch sequence — a later dashboard
+Proceed would create a duplicate). This function shares every invariant primitive with the
+route (planningProposalClaimId, claim/finalize/reconcile/release CAS lifecycle including the
+30s stale-lease takeover, formatPlanningPlanMd task shape, validate-on-create); only the HTTP
+concerns (branch selection, workflow lane, GitHub tracking dispatch) stay route-only. The
+route remains the dashboard authority — keep the two orchestrations semantically aligned.
+*/
+export async function createTaskFromPlanSession(
+  sessionId: string,
+  store: TaskStore,
+  options?: { baseBranch?: string; sourceType?: "cli" | "api" },
+): Promise<{ task: Task; alreadyCreated: boolean }> {
+  let session = (await getDurablePlanningSession(sessionId).catch(() => undefined)) ?? await getSession(sessionId);
+  if (!session) throw new SessionNotFoundError(`Planning session ${sessionId} not found or expired`);
+  if (isPlanningTurnActive(sessionId) || planningStreamManager.hasPendingInitialTurn(sessionId)) {
+    throw new GenerationInProgressError("Plan is still generating — wait for the current turn to finish, then create the task.");
+  }
+  // FNXC:PlanningMultiTask 2026-07-24-03:40: cross-process guard (review finding) — mirror the route's durable status check so a turn generating in ANOTHER process cannot have its linkage torn by this creation.
+  if (_aiSessionStore) {
+    const liveRow = await _aiSessionStore.get(sessionId).catch(() => null);
+    if (liveRow?.type === "planning" && liveRow.status === "generating") {
+      throw new GenerationInProgressError("Plan is still generating — wait for the current turn to finish, then create the task.");
+    }
+  }
+  const summary = session.summary ?? buildRunningSummary(session.initialPlan, session.history);
+  if (!summary) throw new InvalidSessionStateError("Planning session has no plan to create a task from");
+
+  const claimEpoch = session.taskCreationEpoch ?? 0;
+  const proposalClaimId = planningProposalClaimId(sessionId, claimEpoch);
+  const findCreatedTask = async (): Promise<Task | undefined> =>
+    (await store.listTasks({ includeArchived: true })).find((candidate) => candidate.proposalClaimId === proposalClaimId);
+  const markSessionComplete = async (): Promise<void> => {
+    const current = await getSession(sessionId);
+    if (current && !current.validated) {
+      await validateSession(sessionId).catch((err) => {
+        diagnostics.warn("Planning create-task session completion failed", { sessionId, message: err instanceof Error ? err.message : String(err), operation: "create-task-session" });
+      });
+    }
+  };
+  const returnExisting = async (task: Task): Promise<{ task: Task; alreadyCreated: true }> => {
+    await reconcilePlanningTaskCreation(sessionId, task.id, claimEpoch).catch((err) => {
+      diagnostics.warn("Planning create-task linkage reconcile failed", { sessionId, taskId: task.id, message: err instanceof Error ? err.message : String(err), operation: "create-task-session" });
+    });
+    await markSessionComplete();
+    return { task, alreadyCreated: true };
+  };
+  /*
+  FNXC:PlanningMultiTask 2026-07-24-03:20:
+  Reported bug (dashboard surface, same contract here): deleting the task created from a plan
+  dead-ended the session forever. When the linked task is absent from the include-archived
+  task list (task-row authority — a successful scan proves deletion, not a flaky read), clear
+  the stale linkage so this attempt creates a fresh task; a transient read failure keeps
+  failing closed so we never fork on a hiccup.
+  */
+  const clearStaleLinkedTask = async (staleTaskId: string): Promise<boolean> => {
+    const allTasks = await store.listTasks({ includeArchived: true }).catch(() => null);
+    if (allTasks === null || allTasks.some((candidate) => candidate.id === staleTaskId)) return false;
+    diagnostics.warn("Planning session linked task no longer exists; clearing stale linkage", {
+      sessionId,
+      staleTaskId,
+      operation: "create-task-session",
+    });
+    await updatePlanningCreateClaim(sessionId, { createClaimStatus: "none", createdTaskId: undefined, claimOwnerToken: undefined, claimStartedAt: undefined }).catch(() => undefined);
+    if (session) {
+      session.createdTaskId = undefined;
+      session.createClaimStatus = "none";
+      session.claimOwnerToken = undefined;
+      session.claimStartedAt = undefined;
+    }
+    return true;
+  };
+
+  // The task row under this epoch's key is the crash-window authority.
+  const existingTask = await findCreatedTask();
+  if (existingTask) return returnExisting(existingTask);
+  if (session.createdTaskId) {
+    const linked = await store.getTask(session.createdTaskId).catch(() => null);
+    if (linked) {
+      await markSessionComplete();
+      return { task: linked, alreadyCreated: true };
+    }
+    if (!(await clearStaleLinkedTask(session.createdTaskId))) {
+      throw new InvalidSessionStateError("PLANNING_CREATED_TASK_MISSING");
+    }
+  }
+
+  const claimOwnerToken = randomUUID();
+  let claimed = await claimPlanningTaskCreation(sessionId, claimOwnerToken, new Date().toISOString(), claimEpoch);
+  if (!claimed) {
+    session = (await getDurablePlanningSession(sessionId).catch(() => undefined)) ?? session;
+    const recovered = await findCreatedTask();
+    if (recovered) return returnExisting(recovered);
+    if (session.createdTaskId) {
+      const linked = await store.getTask(session.createdTaskId).catch(() => null);
+      if (linked) {
+        await markSessionComplete();
+        return { task: linked, alreadyCreated: true };
+      }
+      if (await clearStaleLinkedTask(session.createdTaskId)) {
+        claimed = await claimPlanningTaskCreation(sessionId, claimOwnerToken, new Date().toISOString(), claimEpoch);
+      }
+      if (!claimed) {
+        throw new GenerationInProgressError("Planning task creation is already in progress");
+      }
+    }
+    if (!claimed) {
+      const startedAt = session.claimStartedAt ? Date.parse(session.claimStartedAt) : Number.NaN;
+      const leaseExpired = session.createClaimStatus === "creating" && Number.isFinite(startedAt) && Date.now() - startedAt >= 30_000;
+      if (!leaseExpired || !session.claimOwnerToken) {
+        throw new GenerationInProgressError("Planning task creation is already in progress");
+      }
+      await releasePlanningTaskCreation(sessionId, session.claimOwnerToken);
+      claimed = await claimPlanningTaskCreation(sessionId, claimOwnerToken, new Date().toISOString(), claimEpoch);
+      if (!claimed) throw new GenerationInProgressError("Planning task creation is already in progress");
+    }
+  }
+
+  // FNXC:PlanningMultiTask 2026-07-24-03:40: review finding — a post-insert failure (e.g. finalize) lands in the raced-insert catch; without this marker the task WE created was mislabeled alreadyCreated:true.
+  let insertedTask: Task | undefined;
+  try {
+    const planMd = formatPlanningPlanMd(summary);
+    const originalRequest = session.initialPlan?.trim() || summary.description.trim();
+    const task = await store.createTask({
+      title: summary.title,
+      description: planMd,
+      dependencies: summary.suggestedDependencies?.length ? summary.suggestedDependencies : undefined,
+      priority: isTaskPriority(summary.priority) ? summary.priority : DEFAULT_TASK_PRIORITY,
+      source: { sourceType: options?.sourceType ?? "cli" },
+      ...(options?.baseBranch?.trim() ? { baseBranch: options.baseBranch.trim() } : {}),
+      proposalClaimId,
+    });
+    insertedTask = task;
+    // FNXC:PlanningMultiTask 2026-07-24-03:20: best-effort side effects must be LOUD on failure (review finding) — a task missing its plan document with no signal is undebuggable.
+    const sideEffect = async (label: string, work: () => Promise<unknown> | unknown): Promise<void> => {
+      try {
+        await work();
+      } catch (err) {
+        diagnostics.warn(label, { sessionId, taskId: task.id, message: err instanceof Error ? err.message : String(err), operation: "create-task-session" });
+      }
+    };
+    if (summary.suggestedSize) {
+      await sideEffect("Planning create-task size update failed", () => store.updateTask?.(task.id, { size: summary.suggestedSize }));
+    }
+    await sideEffect("Planning create-task plan document write failed", () => store.upsertTaskDocument?.(task.id, { key: "plan", content: planMd, author: "planning", metadata: { planningSessionId: sessionId, source: "planning-mode" } }));
+    if (originalRequest) {
+      await sideEffect("Planning create-task original description document write failed", () => store.upsertTaskDocument?.(task.id, { key: "original-description", content: originalRequest, author: "planning", metadata: { planningSessionId: sessionId, source: "planning-mode-initial-plan" } }));
+    }
+    await sideEffect("Planning create-task log entry failed", () => store.logEntry?.(task.id, "Created via Planning Mode", `Initial plan: ${(session.initialPlan ?? "").slice(0, 200)}`));
+    await finalizePlanningTaskCreation(sessionId, claimOwnerToken, task.id, claimEpoch);
+    await markSessionComplete();
+    return { task, alreadyCreated: false };
+  } catch (err) {
+    // A raced insert under the same key is the idempotent success case; anything else releases the claim.
+    const raced = await findCreatedTask().catch(() => undefined);
+    await releasePlanningTaskCreation(sessionId, claimOwnerToken).catch(() => undefined);
+    if (raced) {
+      const recovered = await returnExisting(raced);
+      // A post-insert failure (e.g. finalize) lands here for the task WE just created — it is not "already created".
+      return insertedTask && raced.id === insertedTask.id ? { task: recovered.task, alreadyCreated: false } : recovered;
+    }
+    throw err;
+  }
+}
+
 /** Read durable claim state rather than trusting a process-local session cache. */
 export async function getDurablePlanningSession(sessionId: string): Promise<Session | undefined> {
   if (!_aiSessionStore) return getSession(sessionId);
@@ -3727,36 +4146,41 @@ export async function getDurablePlanningSession(sessionId: string): Promise<Sess
   return row?.type === "planning" ? restoreClaimSession(row) : undefined;
 }
 
-/** Atomically claim a planning session for its one task creation. */
-export async function claimPlanningTaskCreation(sessionId: string, ownerToken: string, startedAt: string): Promise<Session | undefined> {
+/** Atomically claim a planning session for one creation epoch's task. */
+export async function claimPlanningTaskCreation(sessionId: string, ownerToken: string, startedAt: string, expectedTaskCreationEpoch?: number): Promise<Session | undefined> {
   if (!_aiSessionStore || typeof (_aiSessionStore as unknown as { claimPlanningTaskCreation?: unknown }).claimPlanningTaskCreation !== "function") {
     const session = await getSession(sessionId);
     if (!session || session.createClaimStatus === "creating" || session.createClaimStatus === "created") return undefined;
+    if (expectedTaskCreationEpoch !== undefined && (session.taskCreationEpoch ?? 0) !== expectedTaskCreationEpoch) return undefined;
     Object.assign(session, { createClaimStatus: "creating", claimOwnerToken: ownerToken, claimStartedAt: startedAt });
     return session;
   }
-  const row = await _aiSessionStore.claimPlanningTaskCreation(sessionId, ownerToken, startedAt);
+  const row = await _aiSessionStore.claimPlanningTaskCreation(sessionId, ownerToken, startedAt, expectedTaskCreationEpoch);
   return row ? restoreClaimSession(row) : undefined;
 }
 
-export async function finalizePlanningTaskCreation(sessionId: string, ownerToken: string, taskId: string): Promise<Session | undefined> {
+export async function finalizePlanningTaskCreation(sessionId: string, ownerToken: string, taskId: string, expectedTaskCreationEpoch?: number): Promise<Session | undefined> {
   if (!_aiSessionStore || typeof (_aiSessionStore as unknown as { finalizePlanningTaskCreation?: unknown }).finalizePlanningTaskCreation !== "function") {
     const session = await getSession(sessionId);
     if (!session || session.claimOwnerToken !== ownerToken) return undefined;
+    if (expectedTaskCreationEpoch !== undefined && (session.taskCreationEpoch ?? 0) !== expectedTaskCreationEpoch) return undefined;
     Object.assign(session, { createClaimStatus: "created", createdTaskId: taskId, claimOwnerToken: undefined, claimStartedAt: undefined });
     return session;
   }
-  const row = await _aiSessionStore.finalizePlanningTaskCreation(sessionId, ownerToken, taskId);
+  const row = await _aiSessionStore.finalizePlanningTaskCreation(sessionId, ownerToken, taskId, expectedTaskCreationEpoch);
   return row ? restoreClaimSession(row) : undefined;
 }
 
-export async function reconcilePlanningTaskCreation(sessionId: string, taskId: string): Promise<Session | undefined> {
+// FNXC:PlanningMultiTask 2026-07-24-01:40: expectedTaskCreationEpoch makes reconcile a no-op when the plan was edited (epoch rotated) since the task's claim key was derived — never re-link an archived task to the new epoch.
+export async function reconcilePlanningTaskCreation(sessionId: string, taskId: string, expectedTaskCreationEpoch?: number): Promise<Session | undefined> {
   if (!_aiSessionStore || typeof (_aiSessionStore as unknown as { reconcilePlanningTaskCreation?: unknown }).reconcilePlanningTaskCreation !== "function") {
     const session = await getSession(sessionId);
-    if (session) Object.assign(session, { createClaimStatus: "created", createdTaskId: taskId, claimOwnerToken: undefined, claimStartedAt: undefined });
+    if (session && (expectedTaskCreationEpoch === undefined || (session.taskCreationEpoch ?? 0) === expectedTaskCreationEpoch)) {
+      Object.assign(session, { createClaimStatus: "created", createdTaskId: taskId, claimOwnerToken: undefined, claimStartedAt: undefined });
+    }
     return session;
   }
-  const row = await _aiSessionStore.reconcilePlanningTaskCreation(sessionId, taskId);
+  const row = await _aiSessionStore.reconcilePlanningTaskCreation(sessionId, taskId, expectedTaskCreationEpoch);
   return row ? restoreClaimSession(row) : undefined;
 }
 

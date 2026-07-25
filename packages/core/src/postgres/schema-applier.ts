@@ -50,7 +50,7 @@ Advance the PostgreSQL schema ceiling for the durable wedge episode column. The
 forward migration must run before TaskStore writes the new field on fresh and
 upgraded databases.
 */
-export const SCHEMA_BASELINE_VERSION = "0033";
+export const SCHEMA_BASELINE_VERSION = "0035";
 /** FNXC:SymbolLock 2026-07-31-10:00: upgrades need durable task declarations before admission resolves symbols. */
 export const TASK_DECLARED_SYMBOLS_VERSION = "0028";
 const INITIAL_SCHEMA_VERSION = "0000";
@@ -146,12 +146,10 @@ export const WORKFLOW_TASK_CONTINUATIONS_VERSION = "0031";
 export const LEGACY_ADOPTION_DRAINED_MARKER_RUNTIME_GRANTS_VERSION = "0032";
 /** FNXC:TaskWedgeNotifications 2026-10-19-00:00: manually register the durable wedge episode migration for PostgreSQL upgrades. */
 export const TASK_WEDGE_NOTIFICATION_VERSION = "0033";
-/**
- * Appsolino-only non-numeric bookkeeping identity: restrict fusion_runtime
- * inserts into fusion_schema_migrations to the legacy-adoption drained marker.
- * Kept alongside numeric upstream migrations 0031–0033 (no version collision).
- */
-export const APPSOLINO_RUNTIME_MARKER_GRANTS_VERSION = "appsolino-0001-runtime-marker-grants";
+/** FNXC:MissionValidation 2026-07-23-14:30: provenance-safe milestone criteria require an explicit upgrade. */
+export const MILESTONE_ASSERTION_PROVENANCE_VERSION = "0034";
+/** FNXC:MissionLineageBudget 2026-07-22-12:00: migration is explicit because upgraded clusters need durable root stop tombstones. */
+export const MISSION_LINEAGE_STOP_VERSION = "0035";
 
 /** SECURITY DEFINER helper that only inserts LEGACY_ADOPTION_DRAINED_MARKER. */
 export const LEGACY_ADOPTION_DRAINED_MARKER_FUNCTION = "fusion_mark_legacy_adoption_drained";
@@ -356,10 +354,11 @@ const TASK_WEDGE_NOTIFICATION_MIGRATION_PATH = join(
   MIGRATIONS_DIR,
   "0033_fn-8505_wedge_notification.sql",
 );
-const APPSOLINO_RUNTIME_MARKER_GRANTS_PATH = join(
+const MILESTONE_ASSERTION_PROVENANCE_MIGRATION_PATH = join(
   MIGRATIONS_DIR,
-  "appsolino_0001_runtime_marker_grants.sql",
+  "0034_milestone_assertion_provenance.sql",
 );
+const MISSION_LINEAGE_STOP_MIGRATION_PATH = join(MIGRATIONS_DIR, "0035_fn_8543_mission_lineage_stop.sql");
 
 /**
  * Ensure the migration bookkeeping table exists. Lives in the public schema so
@@ -463,7 +462,8 @@ export async function applySchemaBaseline(
       LEGACY_ADOPTION_DRAINED_MARKER_RUNTIME_GRANTS_VERSION,
     );
     const taskWedgeNotificationAlreadyApplied = applied.includes(TASK_WEDGE_NOTIFICATION_VERSION);
-    const appsolinoRuntimeMarkerGrantsAlreadyApplied = applied.includes(APPSOLINO_RUNTIME_MARKER_GRANTS_VERSION);
+    const milestoneAssertionProvenanceAlreadyApplied = applied.includes(MILESTONE_ASSERTION_PROVENANCE_VERSION);
+    const missionLineageStopAlreadyApplied = applied.includes(MISSION_LINEAGE_STOP_VERSION);
     assertBinaryNotOlderThanDatabase(applied);
     let schemaChanged = false;
 
@@ -951,15 +951,29 @@ export async function applySchemaBaseline(
     }
 
     /*
-    Appsolino: preserve runtime marker insert guard after upstream 0031–0033.
-    Non-numeric bookkeeping id avoids colliding with SCHEMA_BASELINE_VERSION.
+    FNXC:MissionValidation 2026-07-23-14:30:
+    Register every forward migration explicitly: discovery is intentionally
+    disabled, and an unregistered provenance migration would silently leave
+    upgraded clusters unable to identify the canonical milestone assertion.
     */
-    if (!appsolinoRuntimeMarkerGrantsAlreadyApplied) {
-      const migrationSql = await readFile(APPSOLINO_RUNTIME_MARKER_GRANTS_PATH, "utf8");
+    if (!milestoneAssertionProvenanceAlreadyApplied) {
+      const migrationSql = await readFile(MILESTONE_ASSERTION_PROVENANCE_MIGRATION_PATH, "utf8");
       await tx.execute(sql.raw(migrationSql));
       await tx.execute(
-        sql`INSERT INTO public.${sql.identifier(MIGRATION_BOOKKEEPING_TABLE)} (version) VALUES (${APPSOLINO_RUNTIME_MARKER_GRANTS_VERSION}) ON CONFLICT (version) DO NOTHING`,
+        sql`INSERT INTO public.${sql.identifier(MIGRATION_BOOKKEEPING_TABLE)} (version) VALUES (${MILESTONE_ASSERTION_PROVENANCE_VERSION}) ON CONFLICT (version) DO NOTHING`,
       );
+      schemaChanged = true;
+    }
+
+    /*
+    FNXC:MissionLineageBudget 2026-07-22-12:00:
+    PostgreSQL migrations are deliberately registered, never discovered. Apply the
+    durable tombstone before any store can make a generated-fix decision.
+    */
+    if (!missionLineageStopAlreadyApplied) {
+      const migrationSql = await readFile(MISSION_LINEAGE_STOP_MIGRATION_PATH, "utf8");
+      await tx.execute(sql.raw(migrationSql));
+      await tx.execute(sql`INSERT INTO public.${sql.identifier(MIGRATION_BOOKKEEPING_TABLE)} (version) VALUES (${MISSION_LINEAGE_STOP_VERSION}) ON CONFLICT (version) DO NOTHING`);
       schemaChanged = true;
     }
 
