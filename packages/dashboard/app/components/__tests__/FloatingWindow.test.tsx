@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAllAppCss, loadStylesCss } from "../../test/cssFixture";
 import { FLOATING_WINDOW_GEOMETRY_CHANGE_EVENT, FloatingWindow } from "../FloatingWindow";
+import { readAppFile } from "../../test/cssFixture";
 
-const floatingWindowCss = readFileSync("app/components/FloatingWindow.css", "utf8");
-const chatViewCss = readFileSync("app/components/ChatView.css", "utf8");
+const floatingWindowCss = readAppFile("components/FloatingWindow.css");
+const chatViewCss = readAppFile("components/ChatView.css");
 const allAppCss = loadAllAppCss();
 const stylesCss = loadStylesCss();
 

@@ -8,6 +8,7 @@ import { useNodes } from "../../hooks/useNodes";
 import { scopedKey } from "../../utils/projectStorage";
 import { getPriorityColorVar } from "../../utils/priorityIndicator";
 import { loadAllAppCss } from "../../test/cssFixture";
+import { readAppFile } from "../../test/cssFixture";
 
 // FNXC:VoiceInput 2026-07-26-05:05: Keep legacy quick-entry tests focused on task creation settings; voice behavior has dedicated suites.
 vi.mock("../../hooks/useComposerDictation", () => ({
@@ -33,7 +34,7 @@ const MOCK_MODELS = [
 
 const TEST_PROJECT_ID = "proj-123";
 const QUICK_ENTRY_STORAGE_KEY = scopedKey("kb-quick-entry-text", TEST_PROJECT_ID);
-const QUICK_ENTRY_BOX_CSS = readFileSync("app/components/QuickEntryBox.css", "utf8");
+const QUICK_ENTRY_BOX_CSS = readAppFile("components/QuickEntryBox.css");
 const ALL_APP_CSS = loadAllAppCss();
 const GLOBAL_DESCRIPTION_TEXTAREA_SELECTOR = ".description-with-refine textarea";
 const QUICK_ENTRY_TEXTAREA_RECLAIM_SELECTOR = ".quick-entry-box .description-with-refine .quick-entry-textarea-wrap .quick-entry-input";

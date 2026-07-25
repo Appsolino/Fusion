@@ -10,8 +10,9 @@ import { writeLastSelectedWorkflowId } from "../../utils/lastSelectedWorkflow";
 import { GITHUB_SETUP_WARNING_DELAY_MS, GITHUB_SETUP_WARNING_MISSING_SINCE_KEY } from "../../hooks/useGithubSetupWarningDelay";
 import { __test_clearCache as clearSetupReadinessCache } from "../../hooks/useSetupReadiness";
 import { scopedKey } from "../../utils/projectStorage";
+import { readAppFile } from "../../test/cssFixture";
 
-const newTaskModalCss = readFileSync("app/components/NewTaskModal.css", "utf8");
+const newTaskModalCss = readAppFile("components/NewTaskModal.css");
 
 // Mock lucide-react
 vi.mock("lucide-react", () => ({
