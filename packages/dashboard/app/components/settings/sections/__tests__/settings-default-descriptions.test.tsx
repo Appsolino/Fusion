@@ -87,6 +87,7 @@ const SETTING_DESCRIPTION_KEYS: Record<string, string> = {
   updateCheckFrequency: "globalGeneral.controlsHowOftenTheDashboardReFetchesThe",
   autoReloadOnVersionChange: "globalGeneral.whenEnabledDefaultTheDashboardAutomaticallyReloadsWhen",
   updateChannel: "globalGeneral.releaseChannelHelp",
+  autoUpdateAndRestart: "globalGeneral.autoUpdateAndRestartHelp",
   // AppearanceSection
   openTasksInRightSidebar: "appearance.openTasksInRightSidebarHelp",
   openMobileTasksInPopup: "appearance.openMobileTasksInPopupHelp",

@@ -208,6 +208,12 @@ export const DEFAULT_GLOBAL_SETTINGS = {
   // FNXC:UpdateChannels 2026-07-19-12:30: release track for update surfaces;
   // "stable" follows npm dist-tag `latest`, "beta" follows max(latest, beta).
   updateChannel: "stable",
+  /*
+  FNXC:AutoUpdate 2026-07-25-10:05:
+  Unattended update install + supervised restart. Default OFF — an operator must
+  opt in before Fusion replaces its own binary and bounces the process under them.
+  */
+  autoUpdateAndRestart: false,
   autoReloadOnVersionChange: true,
   githubTrackingDefaultRepo: undefined,
   reportRoadmapDedupeEnabled: undefined,

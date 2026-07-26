@@ -600,6 +600,20 @@ export interface GlobalSettings {
    * is the explicit downgrade escape hatch). Default: `stable`.
    */
   updateChannel?: UpdateChannel;
+  /**
+   * FNXC:AutoUpdate 2026-07-25-10:05:
+   * When true, the dashboard host installs available updates on its own
+   * (channel-aware, same install path as the Settings "Update now" button) and
+   * then requests the supervised in-place restart so the new version is actually
+   * running. Default false: unattended self-replacement + process bounce must be
+   * an explicit operator choice.
+   *
+   * Only honored on a supervised host (`fn dashboard` — supervision is the
+   * default). Without a supervising parent the install would leave a running
+   * process whose on-disk code no longer matches, so the watcher skips the
+   * install entirely and logs why instead.
+   */
+  autoUpdateAndRestart?: boolean;
   /** When true (default), the dashboard automatically reloads when a new build
    *  version is detected via /version.json polling or service worker activation.
    *  Set to false to suppress automatic reloads — the user must manually

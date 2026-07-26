@@ -320,30 +320,43 @@ describe("SettingsModal", () => {
       expect(await screen.findByText(/Restarting… Your connection will close shortly/)).toBeInTheDocument();
     });
 
-    it("keeps the restart button disabled with manual guidance when unsupported", async () => {
+    /*
+    FNXC:SettingsUpdate 2026-07-25-10:05:
+    Capability is advisory, not a hard block. An unsupported host shows the manual
+    guidance but the button still reaches the server, so the operator gets the real
+    refusal instead of a control that silently does nothing when clicked.
+    */
+    it("shows manual guidance but still surfaces the server refusal when unsupported", async () => {
       mockFetchSystemInfo.mockResolvedValue({ supervised: false, restartSupported: false });
+      mockRequestSystemRestart.mockRejectedValue(new Error("Restart is not available: no supervising parent."));
 
       const restartButton = await renderUpdatedSettings();
 
-      expect(restartButton).toBeDisabled();
-      expect(screen.getByText(/Needs a supervising parent/)).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText(/Needs a supervising parent/)).toBeInTheDocument());
+      expect(restartButton).toBeEnabled();
+
+      await settingsModalUser.click(restartButton);
+
+      expect(mockRequestSystemRestart).toHaveBeenCalledWith("settings-update");
+      expect(await screen.findByText(/Restart is not available: no supervising parent\./)).toBeInTheDocument();
     });
 
-    it("keeps the restart button disabled while system information is loading", async () => {
+    it("still allows a restart attempt while system information is loading", async () => {
       mockFetchSystemInfo.mockReturnValue(new Promise(() => {}));
 
       const restartButton = await renderUpdatedSettings();
 
-      expect(restartButton).toBeDisabled();
+      expect(restartButton).toBeEnabled();
+      expect(screen.queryByText(/Needs a supervising parent/)).not.toBeInTheDocument();
     });
 
-    it("fails closed with manual guidance when system information cannot load", async () => {
+    it("shows manual guidance when system information cannot load", async () => {
       mockFetchSystemInfo.mockRejectedValue(new Error("unavailable"));
 
       const restartButton = await renderUpdatedSettings();
 
-      await waitFor(() => expect(restartButton).toBeDisabled());
-      expect(screen.getByText(/Needs a supervising parent/)).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText(/Needs a supervising parent/)).toBeInTheDocument());
+      expect(restartButton).toBeEnabled();
     });
 
     it("disables the restart button and shows a spinner while scheduling", async () => {
@@ -374,6 +387,45 @@ describe("SettingsModal", () => {
 
       expect(await screen.findByText(/Restart could not be scheduled/)).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Restart Fusion" })).toBeEnabled();
+    });
+
+    /*
+    FNXC:SettingsUpdate 2026-07-25-10:05:
+    Regression: restart capability is a property of the HOST, not of a particular
+    update check. Clicking "Check for updates" repeatedly (same updateAvailable
+    result each time) used to strand restartSupported at `undefined` — the probe
+    was keyed on updateAvailable flipping — so the post-install "Restart Fusion"
+    button was disabled with "Needs a supervising parent" on a supervised host.
+    The invariant asserted here is: on a supervised host the restart button is
+    enabled after an install regardless of how many checks preceded it.
+    */
+    it("keeps the restart button enabled after repeated update checks", async () => {
+      mockCheckForUpdates.mockResolvedValue(availableUpdate);
+      renderModal();
+      await waitForSettingsModalReady();
+
+      const checkButton = screen.getByRole("button", { name: "Check for updates" });
+      await settingsModalUser.click(checkButton);
+      await screen.findByRole("button", { name: "Update now" });
+      await settingsModalUser.click(checkButton);
+      await screen.findByRole("button", { name: "Update now" });
+
+      await settingsModalUser.click(screen.getByRole("button", { name: "Update now" }));
+
+      const restartButton = await screen.findByRole("button", { name: "Restart Fusion" });
+      await waitFor(() => expect(restartButton).toBeEnabled());
+      expect(screen.queryByText(/Needs a supervising parent/)).not.toBeInTheDocument();
+    });
+
+    it("clears stale unsupported guidance by re-probing after a successful install", async () => {
+      // Mount probe fails (fails closed to "unsupported"); the post-install re-probe
+      // proves the host is supervised after all.
+      mockFetchSystemInfo.mockRejectedValueOnce(new Error("unavailable"));
+
+      const restartButton = await renderUpdatedSettings();
+
+      await waitFor(() => expect(screen.queryByText(/Needs a supervising parent/)).not.toBeInTheDocument());
+      expect(restartButton).toBeEnabled();
     });
 
     it("keeps the retry path and hides restart when update installation fails", async () => {

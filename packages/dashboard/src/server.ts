@@ -73,6 +73,7 @@ import type { CliRelaunchRegistry } from "./cli-session-transport.js";
 import { validateRemoteAuthToken } from "./remote-auth.js";
 import { getCliPackageVersion, isUnresolvedCliPackageVersion } from "./cli-package-version.js";
 import { performUpdateCheck } from "./update-check.js";
+import { startAutoUpdateWatcher } from "./auto-update.js";
 import {
   dayHasSamples,
   fileScopeInvariantFailuresPerDay,
@@ -154,6 +155,13 @@ const MIN_AI_SESSION_CLEANUP_INTERVAL_MS = 60 * 1000;
 const MAX_AI_SESSION_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 let aiSessionCleanupIntervalHandle: ReturnType<typeof setInterval> | undefined;
+
+/*
+FNXC:AutoUpdate 2026-07-25-10:05:
+Module-scoped so a second createServer() in the same process (tests, embedded
+desktop server) replaces the previous watcher instead of stacking npm installs.
+*/
+let stopAutoUpdateWatcher: (() => void) | undefined;
 
 function clearAiSessionCleanupInterval(): void {
   if (!aiSessionCleanupIntervalHandle) {
@@ -1707,6 +1715,35 @@ export function createServer(store: TaskStore, options?: ServerOptions): ReturnT
         DEFAULT_AI_SESSION_TTL_MS,
       );
     }
+  }
+
+  /*
+  FNXC:AutoUpdate 2026-07-25-10:05:
+  Optional unattended update install + supervised restart (global setting
+  `autoUpdateAndRestart`, default OFF). Started only when the host CLI wired
+  systemControl — that injection is what makes an in-place restart possible at
+  all, and the watcher itself re-reads the setting every cycle, so toggling it in
+  Settings takes effect without a restart. Skipped under NODE_ENV=test for the
+  same reason as the AI-session sweep: unit servers must not schedule timers or
+  reach npm.
+  */
+  if (options?.systemControl && shouldScheduleAiSessionCleanup()) {
+    const systemControl = options.systemControl;
+    stopAutoUpdateWatcher?.();
+    stopAutoUpdateWatcher = startAutoUpdateWatcher({
+      getSettings: async () => {
+        const globalStore = store.getGlobalSettingsStore?.();
+        return globalStore ? await globalStore.getSettings() : {};
+      },
+      currentVersion: cliPackageVersion,
+      supervised: systemControl.supervised,
+      requestRestart: (reason) => systemControl.requestRestart(reason),
+      log: {
+        info: (message, context) => runtimeLogger.info(message, context),
+        warn: (message, context) => runtimeLogger.warn(message, context),
+        error: (message, context) => runtimeLogger.error(message, context),
+      },
+    });
   }
 
   /*

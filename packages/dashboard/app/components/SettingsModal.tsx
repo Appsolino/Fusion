@@ -1953,7 +1953,16 @@ export function SettingsModal({
   const handleCheckForUpdates = useCallback(async () => {
     setUpdateCheckLoading(true);
     setUpdateInstallResult(null);
-    setRestartSupported(undefined);
+    /*
+    FNXC:SettingsUpdate 2026-07-25-10:05:
+    Do NOT clear restartSupported here. It is a property of the HOST (is there a
+    supervising parent?), not of this update check, and clearing it stranded the
+    post-update "Restart Fusion" button: the capability effect was keyed on
+    updateAvailable, so a second "Check now" that returned the same
+    updateAvailable=true left restartSupported permanently `undefined` and the
+    button disabled with "Needs a supervising parent" on a perfectly supervised
+    host. The probe below owns this state for the modal's lifetime.
+    */
     setRestartLoading(false);
     setRestartScheduled(false);
     setRestartError(null);
@@ -1997,6 +2006,17 @@ export function SettingsModal({
 
       if (result.updated) {
         addToast(t("settings.general.updateSuccessToast", "Update installed. Restart Fusion to apply it."), "success");
+        /*
+        FNXC:SettingsUpdate 2026-07-25-10:05:
+        Re-probe capability right before the restart button appears so a transient
+        /system/info failure at mount (which fails closed to `false`) cannot leave a
+        supervised host permanently unable to restart from Settings.
+        */
+        void fetchSystemInfo()
+          .then((info) => setRestartSupported(info.restartSupported))
+          .catch(() => {
+            // Keep whatever the mount probe resolved; the guidance text covers it.
+          });
       }
     } catch (error) {
       const message = getErrorMessage(error) || t("settings.general.updateFailed", "Update failed");
@@ -2012,13 +2032,17 @@ export function SettingsModal({
     }
   }, [addToast, appVersion, projectId, t, updateCheckResult]);
 
+  /*
+  FNXC:SettingsUpdate 2026-07-25-10:05:
+  Probe host restart capability once when Settings mounts — same unconditional
+  shape UpdateAvailableBanner and the Command Center System panel use. It used to
+  run only after an update became available, which made the state order-dependent
+  and left the restart button dead in the re-check case described above. Fetching
+  on mount means the capability is already resolved by the time an install
+  finishes, so the button is enabled the moment it appears.
+  */
   useEffect(() => {
-    if (!updateCheckResult?.updateAvailable && updateInstallResult?.updated !== true) {
-      return;
-    }
-
     let cancelled = false;
-    setRestartSupported(undefined);
 
     void fetchSystemInfo()
       .then((info) => {
@@ -2032,16 +2056,23 @@ export function SettingsModal({
     return () => {
       cancelled = true;
     };
-  }, [updateCheckResult?.updateAvailable, updateInstallResult?.updated]);
+  }, []);
 
   /*
   FNXC:SettingsUpdate 2026-07-16-00:00:
   After a successful in-app update, the Settings footer must offer the same supervised
-  one-click restart as SystemControlsArea. The FN-8134-deferred Settings surface keeps
-  the control disabled with manual-restart guidance unless restartSupported is true.
+  one-click restart as SystemControlsArea.
+
+  FNXC:SettingsUpdate 2026-07-25-10:05:
+  The control must never silently do nothing. It used to be hard-disabled on
+  `restartSupported !== true`, so any host whose capability probe answered false —
+  including a probe that merely failed, or a stale answer — left the operator with a
+  dead button and no way to learn why ("the restart button does nothing"). Now the
+  click always reaches the server and the server's own refusal is shown inline; the
+  supervising-parent line stays as advisory guidance rather than a hard block.
   */
   const handleRestart = useCallback(async () => {
-    if (restartLoading || restartSupported !== true) return;
+    if (restartLoading) return;
 
     setRestartLoading(true);
     setRestartError(null);
@@ -2057,7 +2088,7 @@ export function SettingsModal({
     } finally {
       setRestartLoading(false);
     }
-  }, [restartLoading, restartSupported, t]);
+  }, [restartLoading, t]);
 
   const renderUpdateCheckResultContent = useCallback(() => {
     if (!updateCheckResult) {
@@ -2103,7 +2134,7 @@ export function SettingsModal({
                   onClick={() => {
                     void handleRestart();
                   }}
-                  disabled={restartSupported !== true || restartLoading}
+                  disabled={restartLoading}
                 >
                   {restartLoading ? (
                     <>
@@ -2118,7 +2149,14 @@ export function SettingsModal({
                   )}
                 </button>
               )}
-              {restartSupported !== true && (
+              {/*
+                FNXC:SettingsUpdate 2026-07-25-10:05:
+                Advisory, not a block. The probe says this host reported no supervising
+                parent, so restarting will likely be refused — but the operator can still
+                press the button and read the server's actual reason instead of facing a
+                dead control.
+              */}
+              {restartSupported === false && (
                 <span className="settings-update-install-status" aria-live="polite">
                   {t("settings.general.restartUnavailable", "Needs a supervising parent — restart Fusion manually without --no-supervise.")}
                 </span>
