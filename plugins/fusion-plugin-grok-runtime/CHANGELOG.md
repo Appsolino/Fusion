@@ -1,5 +1,12 @@
 # @fusion-plugin-examples/grok-runtime
 
+## 0.2.10-beta.4
+
+### Patch Changes
+
+- @fusion/core@0.74.0-beta.4
+- @fusion/plugin-sdk@0.74.0-beta.4
+
 ## 0.2.10-beta.3
 
 ### Patch Changes
