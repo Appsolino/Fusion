@@ -23,4 +23,5 @@
 - Improved core engine reliability
 - Task terminal
 - Grok cli support
-- GPT 4.6 support
+- GPT 5.6 support
+- Opus 5 and Fable support
