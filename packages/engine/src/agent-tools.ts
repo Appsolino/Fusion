@@ -24,6 +24,8 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "@earendil-works/pi-ai";
 import type { AgentReflectionService } from "./agent-reflection.js";
 import { createLogger } from "./logger.js";
+// FNXC:PlanArtifactPersistence 2026-07-26-03:55: PROMPT.md is filesystem-only; mirror plan writes into the DB.
+import { mirrorPlanToProjectDb } from "./plan-artifact-writeback.js";
 import { fetchWebContent, WebFetchError } from "./web-fetch.js";
 import type { RunAuditor } from "./run-audit.js";
 import { computeApprovalDedupeKey } from "./agent-action-gate.js";
@@ -1913,6 +1915,16 @@ export function createTaskPromptWriteTool(store: TaskStore, taskId: string, runC
         if (persisted?.prompt !== params.content) {
           throw new Error("authoritative PROMPT.md read-back did not match the requested content; persistence could not be verified");
         }
+        /*
+        FNXC:PlanArtifactPersistence 2026-07-26-03:55:
+        `updateTask({ prompt })` writes the project-root PROMPT.md and task.json, but `project.tasks` has
+        no `prompt` column — the spec would live only as a file in the project checkout. Mirror it into the
+        `plan` task document so the plan is durable in the project database too. Best-effort: a mirror
+        failure must not fail a write whose authoritative persistence was just verified above.
+        */
+        await mirrorPlanToProjectDb(store, taskId, params.content, {
+          author: runContext?.agentId ?? "agent",
+        });
         return {
           content: [{ type: "text" as const, text: `Updated PROMPT.md for ${taskId}.` }],
           details: {},

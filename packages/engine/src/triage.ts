@@ -146,6 +146,9 @@ import {
 import { buildPromptLayers, collapsePromptLayers } from "./prompt-layers.js";
 import { createFallbackModelObserver } from "./fallback-model-observer.js";
 import { planLog, formatError } from "./logger.js";
+// FNXC:PlanArtifactPersistence 2026-07-26-03:55: worktree-stranded plans are copied back into the project
+// .fusion folder and mirrored into the project DB before finalization reads the spec.
+import { mirrorPlanToProjectDb, persistPlanArtifact, relativePromptPath } from "./plan-artifact-writeback.js";
 import { resolveMcpServersForStore } from "./mcp-resolution.js";
 import {
   isUsageLimitError,
@@ -1549,7 +1552,9 @@ export class TriageProcessor {
       // planning-phase reads (requirePlanApproval, planning/validator model lanes)
       // pick up workflow values. Behavior-inert when nothing is customized.
       const settings = await mergeEffectiveSettings(this.store, currentTask, await this.store.getSettings());
-      const promptPath = `.fusion/tasks/${task.id}/PROMPT.md`;
+      // FNXC:PlanArtifactPersistence 2026-07-26-03:55: one definition of the cwd-relative spec path, shared
+      // with the worktree write-back so the rescue reads exactly the path the planner was handed.
+      const promptPath = relativePromptPath(task.id);
 
       /*
       FNXC:PlanReview 2026-07-19-00:22 (U3):
@@ -2086,6 +2091,31 @@ export class TriageProcessor {
           FNXC:PlanReview 2026-06-29-01:52:
           Workflow Plan Review is the single operator-controlled AI plan gate. Triage must not remind agents to call fn_review_spec or retry planning only because that legacy tool was not approved; after PROMPT.md is written, triage itself runs optional Plan Review before releasing the task to execution.
           */
+
+          /*
+          FNXC:PlanArtifactPersistence 2026-07-26-03:55:
+          Planning ran with the coding tool surface inside the task worktree, so a planner that ignored
+          `fn_task_prompt_write` and used the generic write tool resolved the relative spec path against
+          the WORKTREE. Finalization reads `<rootDir>/<promptPath>`, so that spec would read as missing,
+          fail deterministic validation, and then be destroyed with the worktree. Copy any worktree-local
+          spec back into the project `.fusion/` folder BEFORE the finalize read, and mirror whatever is
+          authoritative into the project database (PROMPT.md has no `tasks` column and is otherwise
+          filesystem-only). Both halves are best-effort — validation below still owns the verdict.
+          */
+          const planPersistence = await persistPlanArtifact({
+            store: this.store,
+            taskId: task.id,
+            rootDir: this.rootDir,
+            planningCwd,
+            author: "triage",
+            logger: { log: (m: string) => planLog.log(m), warn: (m: string) => planLog.warn(m) },
+          });
+          if (planPersistence.outcome === "recovered") {
+            await this.store.logEntry(
+              task.id,
+              "Recovered the plan written inside the task worktree into the project .fusion folder",
+            ).catch(() => undefined);
+          }
 
           const written = await readFile(
             join(this.rootDir, promptPath),
@@ -3097,6 +3127,18 @@ export class TriageProcessor {
         }
       }
     }
+
+    /*
+    FNXC:PlanArtifactPersistence 2026-07-26-03:55:
+    Finalization is where the ACCEPTED spec content is known (post hygiene rewrite), and it is the last
+    writer that touches the root PROMPT.md on a planning pass. Mirror it into the project database here so
+    the DB copy is the finalized plan, not the pre-hygiene draft. Identical content is skipped, so a pass
+    whose hygiene rewrite was a no-op produces exactly one document revision.
+    */
+    await mirrorPlanToProjectDb(this.store, task.id, written, {
+      author: "triage",
+      logger: { warn: (m: string) => planLog.warn(m) },
+    });
 
     let taskIntentSignature: ReturnType<typeof extractIntentSignature> = {
       routePaths: [],
