@@ -607,6 +607,7 @@ async function issueRelease(
   task: Task,
   target: string,
   ir: WorkflowIr,
+  options: { allowUnplanned?: boolean } = {},
 ): Promise<boolean> {
   const targetColumn = findColumn(ir, target);
   const targetIsProcessing = targetColumn ? resolveColumnFlags(targetColumn).countsTowardWip === true : false;
@@ -621,8 +622,14 @@ async function issueRelease(
   PROMPT.md, `status: "planning"`, or resident in an `intake`-trait column)
   must never be moved into a processing column, no matter which surface
   requested the release (FN-7648).
+
+  FNXC:WorkflowScheduling 2026-07-25-04:55:
+  `allowUnplanned` is the ONLY way past this check, and it is set exclusively by
+  an explicit operator force-promote (`promoteHeldTask({ force: true })`). The
+  automatic surfaces — the sweep and the webhook release — never pass it, so
+  FN-7648's invariant still holds for every non-operator release.
   */
-  if (targetIsProcessing && (await isUnplannedForExecution(store, task, ir))) {
+  if (targetIsProcessing && !options.allowUnplanned && (await isUnplannedForExecution(store, task, ir))) {
     schedulerLog.log(`Hold release for ${task.id} blocked — card is unplanned and cannot enter processing column ${target}`);
     return false;
   }
@@ -691,12 +698,27 @@ async function issueRelease(
  * and it is also accepted for other kinds as an operator override. The move
  * still serializes through the in-txn capacity check (KTD-10): a promote into a
  * full column rejects with `capacity-exhausted`, surfaced to the caller.
+ *
+ * FNXC:WorkflowScheduling 2026-07-25-04:55:
+ * `options.force` is the operator's "start it anyway" override for the
+ * `unplanned-for-execution` rejection: an operator who has read the card and
+ * decided the pending replan / Plan Review is not worth waiting for can push it
+ * straight into execution. Force ONLY relaxes the unplanned gate — the hold
+ * membership, release target, capacity check, and slot reservation are all still
+ * enforced, so a forced promote into a full column still rejects on capacity.
+ * Force also CLEARS a durable replan signal (`needs-replan` /
+ * `plan-review-unavailable`) before the move: those statuses are read by triage's
+ * todo rediscovery and by this module's own gate, so leaving one in place would
+ * let the card be pulled back for the very replan the operator just waived.
+ * `status: "planning"` is deliberately NOT cleared — triage is mid-write on
+ * PROMPT.md and clearing it would race the writer; the card still releases.
  */
 export async function promoteHeldTask(
   store: TaskStore,
   taskId: string,
   deps: Pick<HoldReleaseDeps, "reserveSlot" | "allocateWorktree"> = {},
-): Promise<{ released: boolean; toColumn?: string; rejection?: string }> {
+  options: { force?: boolean } = {},
+): Promise<{ released: boolean; toColumn?: string; rejection?: string; forcedUnplanned?: boolean }> {
   const task = await store.getTask(taskId);
   if (!task) return { released: false, rejection: "task-not-found" };
 
@@ -717,18 +739,56 @@ export async function promoteHeldTask(
   const targetIsProcessing = targetColumn
     ? resolveColumnFlags(targetColumn).countsTowardWip === true
     : false;
-  if (targetIsProcessing && (await isUnplannedForExecution(store, task, ir))) {
+  const unplanned = targetIsProcessing && (await isUnplannedForExecution(store, task, ir));
+  if (unplanned && options.force !== true) {
     return { released: false, rejection: "unplanned-for-execution", toColumn: target };
+  }
+
+  let promoted = task;
+  if (unplanned) {
+    // Clear the durable replan signal so triage's todo rediscovery and this
+    // module's own gate do not pull the card back into the waived replan.
+    if (task.status === "needs-replan" || task.status === "plan-review-unavailable") {
+      try {
+        await store.updateTask(task.id, { status: null });
+        promoted = { ...task, status: undefined };
+      } catch (error) {
+        schedulerLog.warn(
+          `Force-promote for ${task.id} could not clear replan status: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    // ids/outcomes-only audit of the override (no prompt or reason prose).
+    if (typeof store.recordRunAuditEvent === "function") {
+      try {
+        await store.recordRunAuditEvent({
+          domain: "database",
+          mutationType: "task:promote-forced-unplanned",
+          target: task.id,
+          taskId: task.id,
+          agentId: "system",
+          runId: `promote-force-${task.id}`,
+          metadata: { fromColumn: task.column, toColumn: target, priorStatus: task.status ?? null },
+        });
+      } catch {
+        // Audit is best-effort — never block the operator's override on it.
+      }
+    }
+    schedulerLog.log(`Force-promote for ${task.id} bypassing unplanned gate into ${target} (operator override)`);
   }
 
   const released = await issueRelease(
     store,
     { now: () => Date.now(), reserveSlot: deps.reserveSlot, allocateWorktree: deps.allocateWorktree },
-    task,
+    promoted,
     target,
     ir,
+    { allowUnplanned: unplanned },
   );
-  return released ? { released: true, toColumn: target } : { released: false, rejection: "capacity-exhausted-or-no-slot" };
+  if (!released) {
+    return { released: false, rejection: "capacity-exhausted-or-no-slot" };
+  }
+  return { released: true, toColumn: target, forcedUnplanned: unplanned || undefined };
 }
 
 /**

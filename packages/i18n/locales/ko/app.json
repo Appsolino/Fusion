@@ -1195,6 +1195,7 @@
       "mergeBlocked": "",
       "promoteRejected": "",
       "unknownColumn": "",
+      "unplannedForExecution": "",
       "workflowMismatch": ""
     },
     "todo": "할 일",
@@ -1505,6 +1506,10 @@
     "preserveProgressMessage": "이 작업에는 완료된 단계가 있습니다. 이동하기 전에 진행 상황을 유지하시겠습니까?",
     "preserveProgressMoveTodoMessage": "일부 작업에 완료된 단계가 있습니다. 할 일로 이동하기 전에 진행 상황을 유지하시겠습니까?",
     "preserveProgressTitle": "진행 상황을 유지하시겠습니까?",
+    "promoteUnplannedCancel": "",
+    "promoteUnplannedConfirm": "",
+    "promoteUnplannedMessage": "",
+    "promoteUnplannedTitle": "",
     "replanAll": "모두 재계획",
     "replanAllHint_one": "",
     "replanAllHint_other": "",

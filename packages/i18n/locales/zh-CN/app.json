@@ -1195,6 +1195,7 @@
       "mergeBlocked": "",
       "promoteRejected": "",
       "unknownColumn": "",
+      "unplannedForExecution": "",
       "workflowMismatch": ""
     },
     "todo": "待办",
@@ -1505,6 +1506,10 @@
     "preserveProgressMessage": "此任务已完成步骤。在移动前保留进度？",
     "preserveProgressMoveTodoMessage": "某些任务已完成步骤。在移至待办前保留进度？",
     "preserveProgressTitle": "保留进度？",
+    "promoteUnplannedCancel": "",
+    "promoteUnplannedConfirm": "",
+    "promoteUnplannedMessage": "",
+    "promoteUnplannedTitle": "",
     "replanAll": "全部重新计划",
     "replanAllHint_one": "",
     "replanAllHint_other": "",

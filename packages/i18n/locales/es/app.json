@@ -1195,6 +1195,7 @@
       "mergeBlocked": "",
       "promoteRejected": "",
       "unknownColumn": "",
+      "unplannedForExecution": "",
       "workflowMismatch": ""
     },
     "todo": "Por hacer",
@@ -1505,6 +1506,10 @@
     "preserveProgressMessage": "Esta tarea tiene pasos completados. ¿Preservar progreso antes de mover?",
     "preserveProgressMoveTodoMessage": "Algunas tareas tienen pasos completados. ¿Preservar progreso antes de mover a Tareas pendientes?",
     "preserveProgressTitle": "¿Preservar progreso?",
+    "promoteUnplannedCancel": "",
+    "promoteUnplannedConfirm": "",
+    "promoteUnplannedMessage": "",
+    "promoteUnplannedTitle": "",
     "replanAll": "Replanificar todo",
     "replanAllHint_one": "",
     "replanAllHint_other": "",

@@ -1205,6 +1205,7 @@
       "mergeBlocked": "This task is blocked from completing until its merge step finishes.",
       "promoteRejected": "This card could not be promoted.",
       "unknownColumn": "That column doesn't exist in this task's workflow.",
+      "unplannedForExecution": "This task isn't ready for execution yet — planning or plan review is still outstanding.",
       "workflowMismatch": "Drag can't move a card between workflows. Use the workflow switcher instead."
     },
     "todo": "To Do",
@@ -1515,6 +1516,10 @@
     "preserveProgressMessage": "This task has completed steps. Keep progress before moving?",
     "preserveProgressMoveTodoMessage": "Some tasks have completed steps. Keep progress before moving to Todo?",
     "preserveProgressTitle": "Preserve Progress?",
+    "promoteUnplannedCancel": "Keep Waiting",
+    "promoteUnplannedConfirm": "Start Anyway",
+    "promoteUnplannedMessage": "{{taskId}} is still waiting on planning or plan review. Promoting now starts execution with the current plan and cancels the pending replan.",
+    "promoteUnplannedTitle": "Start execution anyway?",
     "replanAll": "Replan All",
     "replanAllHint_one": "Move {{count}} task{{plural}} to Planning",
     "replanAllHint_other": "Move {{count}} task{{plural}} to Planning",

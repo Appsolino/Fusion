@@ -1195,6 +1195,7 @@
       "mergeBlocked": "",
       "promoteRejected": "",
       "unknownColumn": "",
+      "unplannedForExecution": "",
       "workflowMismatch": ""
     },
     "todo": "À faire",
@@ -1505,6 +1506,10 @@
     "preserveProgressMessage": "Cette tâche a des étapes terminées. Conserver la progression avant de déplacer ?",
     "preserveProgressMoveTodoMessage": "Certaines tâches ont des étapes terminées. Conserver la progression avant de déplacer vers À faire ?",
     "preserveProgressTitle": "Conserver la progression ?",
+    "promoteUnplannedCancel": "",
+    "promoteUnplannedConfirm": "",
+    "promoteUnplannedMessage": "",
+    "promoteUnplannedTitle": "",
     "replanAll": "Replanifier tout",
     "replanAllHint_one": "",
     "replanAllHint_other": "",
