@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkflowColumnsEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, resolveWorkflowIrForTask, resolveReboundTarget, planLegacyAdoption, resolveOrphanedPendingStepResults, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult } from "@fusion/core";
+import { resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkflowColumnsEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, resolveWorkflowIrForTask, resolveReboundTarget, planLegacyAdoption, resolveOrphanedPendingStepResults, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, DEFAULT_MAX_POST_REVIEW_FIXES, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult } from "@fusion/core";
 import { finalizePlanningSegment } from "@fusion/core";
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
 import { createLogger, schedulerLog } from "./logger.js";
@@ -2882,6 +2882,18 @@ export class SelfHealingManager {
           { name: "recover-stranded-completed-todo", fn: () => this.recoverStrandedCompletedTodoTasks() },
           { name: "recover-advanced-triage", fn: () => this.recoverAdvancedTriageTasks() },
           { name: "recover-stale-incomplete-review", fn: () => this.recoverStaleIncompleteReviewTasks() },
+          /*
+          FNXC:OrphanedPendingSteps 2026-07-26-19:20:
+          Ordering is load-bearing: this sweep PRODUCES the `failed` results that
+          `recover-failed-pre-merge-steps` CONSUMES, so it must run first. It used to sit ~15
+          entries later in this list, which meant a step orphaned in cycle N was rewritten to
+          `failed` only after recovery had already scanned — nothing re-ran it until cycle N+1.
+          Combined with the lease-staleness wait that is a multi-cycle hole for a card whose
+          review session died (observed: FN-8603 sat ~36 min after an engine restart killed its
+          Code Review session 34s in). Startup recovery already orders these two correctly.
+          Keep them adjacent and in this order.
+          */
+          { name: "reconcile-orphaned-pending-step-results", fn: () => this.reconcileOrphanedPendingStepResults() },
           { name: "recover-failed-pre-merge-steps", fn: () => this.recoverReviewTasksWithFailedPreMergeSteps() },
           { name: "recover-missing-worktree-review-failures", fn: () => this.recoverMissingWorktreeReviewFailures() },
           { name: "recover-interrupted-merging", fn: () => this.recoverInterruptedMergingTasks() },
@@ -2897,7 +2909,10 @@ export class SelfHealingManager {
           // steady-state — a step session can die without an engine restart, and startup-only
           // cadence left that case riding the 3×30-min stall escalator to a deadlock park.
           // Live sessions register their worktree path, so the liveness veto holds here.
-          { name: "reconcile-orphaned-pending-step-results", fn: () => this.reconcileOrphanedPendingStepResults() },
+          // FNXC:OrphanedPendingSteps 2026-07-26-19:22: this entry MOVED up to immediately
+          // before `recover-failed-pre-merge-steps` (see the ordering note there). It is not
+          // duplicated here — running it twice per cycle would re-scan every in-review task for
+          // no benefit.
           { name: "reconcile-stranded-hold-continuations", fn: () => this.reconcileStrandedHoldContinuations() },
           { name: "recover-mergeable-review", fn: () => this.recoverMergeableReviewTasks() },
           // FNXC:Workspace 2026-06-22-09:30 (Phase D U1) — workspace-mode reconcilers.
@@ -7770,7 +7785,7 @@ export class SelfHealingManager {
       };
       for (const task of tasks) {
         const eff = await mergeEffectiveSettings(this.store, task, settings);
-        const fallback = eff.maxPostReviewFixes ?? 3;
+        const fallback = eff.maxPostReviewFixes ?? DEFAULT_MAX_POST_REVIEW_FIXES;
         let rawMaxRevisions: unknown;
         const target = latestFailedPreMergeStep(task);
         if (target?.workflowStepId) {

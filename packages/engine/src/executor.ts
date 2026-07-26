@@ -14,7 +14,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type { TaskStore, Task, TaskDetail, TaskTokenUsage, StepStatus, Settings, WorkflowStep, MissionStore, AsyncMissionStore, Slice, AgentState, AgentCapability, RunMutationContext, AgentHeartbeatConfig, Agent, AgentMemoryInclusionMode, ProjectSettings, MergeResult, WorkflowIrNode, WorkflowIrNodeKind, WorkflowStepResult as CoreWorkflowStepResult, ThinkingLevel } from "@fusion/core";
 import { getUnmetSchedulingDependencies } from "./scheduler.js";
-import { RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, COMPLETION_SUMMARY_NODE_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel } from "@fusion/core";
+import { RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, DEFAULT_MAX_POST_REVIEW_FIXES, COMPLETION_SUMMARY_NODE_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel } from "@fusion/core";
 import { finalizeProvenAutoMergeTask } from "./auto-merge-finalization.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
 import { generateFeatureVideo, type GenerateFeatureVideoOptions } from "./review-artifacts/feature-video.js";
@@ -5038,9 +5038,9 @@ export class TaskExecutor {
         optionalGroupId: info.nodeId ?? "plan-review",
         workflowSettings: settings as Record<string, unknown>,
         nodeMaxRevisions: info.maxRevisions,
-        fallbackMaxRevisions: settings.maxPostReviewFixes ?? 3,
+        fallbackMaxRevisions: settings.maxPostReviewFixes ?? DEFAULT_MAX_POST_REVIEW_FIXES,
       });
-      const budget = resolveOptionalStepRevisionBudget(maxRevisions, settings.maxPostReviewFixes ?? 3);
+      const budget = resolveOptionalStepRevisionBudget(maxRevisions, settings.maxPostReviewFixes ?? DEFAULT_MAX_POST_REVIEW_FIXES);
       if (!budget.unbounded && (!Number.isFinite(budget.max) || budget.max <= 0)) {
         // FNXC:RemediationVisibility 2026-07-26-19:20 (FN-8596 follow-up): returning false here
         // makes the graph's plan-replan node fail with `remediation-not-scheduled` and leaves the
@@ -5130,9 +5130,9 @@ export class TaskExecutor {
       optionalGroupId: info.nodeId ?? "",
       workflowSettings: settings as Record<string, unknown>,
       nodeMaxRevisions: info.maxRevisions,
-      fallbackMaxRevisions: settings.maxPostReviewFixes ?? 3,
+      fallbackMaxRevisions: settings.maxPostReviewFixes ?? DEFAULT_MAX_POST_REVIEW_FIXES,
     });
-    const budget = resolveOptionalStepRevisionBudget(maxRevisions, settings.maxPostReviewFixes ?? 3);
+    const budget = resolveOptionalStepRevisionBudget(maxRevisions, settings.maxPostReviewFixes ?? DEFAULT_MAX_POST_REVIEW_FIXES);
     if (!budget.unbounded && (!Number.isFinite(budget.max) || budget.max <= 0)) {
       executorLog.warn(
         `${taskId}: pre-merge remediation NOT scheduled for step "${info.stepName}" — revision budget is zero/invalid (max=${String(budget.max)}). Card left parked.`,
@@ -9694,7 +9694,7 @@ export class TaskExecutor {
     target: CoreWorkflowStepResult,
   ): Promise<{ unbounded: boolean; max: number; label: string; key: string; stepName?: string; attempts: number }> {
     const settings = await mergeEffectiveSettings(this.store, task, await this.store.getSettings());
-    const fallback = settings.maxPostReviewFixes ?? 3;
+    const fallback = settings.maxPostReviewFixes ?? DEFAULT_MAX_POST_REVIEW_FIXES;
     let rawMaxRevisions: unknown;
     try {
       const ir = await resolveWorkflowIrForTask(this.store, task.id);
