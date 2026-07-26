@@ -198,6 +198,39 @@ describe("FloatingWindow", () => {
     expect(cssRuleFor(floatingWindowCss, ".floating-window--chat.floating-window--headerless .floating-window__body")).toContain("overflow: hidden;");
   });
 
+  /*
+  FNXC:FloatingWindow 2026-07-25-00:00:
+  Regression guard for the landscape-tablet right-inset gap: the width-gated
+  769-1024px carve-out let iPad Air/Pro landscape (1180-1366 CSS px) fall back to
+  the desktop contract and keep FN-8015's body gutter, so the task pop-up's
+  content stopped short of the right edge while the left edge stayed flush.
+  Assert the input-device-gated block covers the same two declarations at ANY
+  width, and that it stays scoped to task-detail so other floating-window callers
+  (whose right resize handles remain live) keep their scrollbar clearance.
+  */
+  it("removes task-detail resize clearance on touch-primary pointers at any width", () => {
+    const coarseBlock = mediaBlockFor(floatingWindowCss, "(pointer: coarse)");
+
+    expect(coarseBlock).not.toBe("");
+    expect(cssRuleFor(coarseBlock, ".floating-window--task-detail .floating-window__body")).toContain("margin-inline-end: 0;");
+    expect(cssRuleFor(coarseBlock, ".floating-window--task-detail .floating-window__resize-handle")).toContain("display: none;");
+
+    // The carve-out is task-detail only: every other shared caller keeps the gutter.
+    for (const callerClass of [
+      "floating-window--automation",
+      "floating-window--mission-interview",
+      "floating-window--pr-create",
+      "floating-window--file-browser",
+      "floating-window--workflow-editor",
+      "artifacts-gallery-window",
+    ]) {
+      expect(cssRulesForClass(coarseBlock, callerClass), callerClass).toHaveLength(0);
+    }
+
+    // No width bound may creep back into the coarse-pointer query.
+    expect(floatingWindowCss).toContain("@media (pointer: coarse) {");
+  });
+
   it("removes only tablet task-detail resize clearance and handles for empty and populated popups", () => {
     const tabletBlock = mediaBlockFor(floatingWindowCss, "(min-width: 769px) and (max-width: 1024px)");
     const mobileBlock = mediaBlockFor(floatingWindowCss, "(max-width: 768px)");
