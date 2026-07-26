@@ -56,6 +56,21 @@ export function hasAdvancedPastPlanning(
     return true;
   }
   /*
+  FNXC:WorkflowReplan 2026-07-26-06:10:
+  An explicit parked-for-planning STATUS outranks execution evidence, because that evidence is
+  STICKY while a replan is a legitimate BACKWARD move. `firstExecutionAt`/`executionStartedAt` are
+  never cleared once implementation starts, so a card that executed, failed Plan Review, and was
+  rebounded to a planner lane (`needs-replan`) read as "advanced past planning" forever: triage's
+  discovery filter (`column === "triage" && isTaskStillInPlanningStage`) never re-admitted it and
+  the card sat in triage/needs-replan permanently — "stuck in planning" on the board (FN-8594). It
+  hit every triage-column workflow (builtin:coding, the default); plan-in-place Ideas cards escaped
+  only because todo discovery admits `needs-replan` without consulting this guard.
+  This check covers BOTH planner lanes — the "triage" column and the plan-in-place "todo" lane.
+  */
+  if (task.status != null && PLANNING_STAGE_STATUSES.has(task.status)) {
+    return false;
+  }
+  /*
   FNXC:NodeWorktreeIsolation 2026-07-25-22:40:
   A worktree NO LONGER proves an executor claimed the card. Planning acquires the task's own
   worktree up front (so no lane runs in the shared checkout), which means a card being planned right
@@ -63,16 +78,17 @@ export function hasAdvancedPastPlanning(
   `status:"planning"` never lands, the spec finalization is refused, and the card is re-claimed
   forever while occupying a maxTriageConcurrent slot. Execution TIMESTAMPS are the durable evidence
   instead; they are written when implementation actually starts, never by worktree acquisition.
+
+  A triage card carrying a timestamp with NO planning status is the stranded-advanced class that
+  self-healing's advanced recovery owns (PR #2360): planning must exclude it so it cannot burn a
+  maxTriageConcurrent slot in a claim/skip loop.
   */
   if (task.firstExecutionAt != null || task.executionStartedAt != null) {
     return true;
   }
-  // The planner column itself is never "advanced" — nothing executes out of triage.
+  // The planner column itself is never "advanced" — nothing executes out of triage, and the steps
+  // below belong to the card's previous planning pass.
   if (task.column === "triage") {
-    return false;
-  }
-  // Plan-in-place planner lane ("todo"): a card explicitly parked for planning has not advanced.
-  if (task.status != null && PLANNING_STAGE_STATUSES.has(task.status)) {
     return false;
   }
   return (task.steps?.length ?? 0) > 0;
