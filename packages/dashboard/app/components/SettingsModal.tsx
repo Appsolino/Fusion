@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties, type Dispatch, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type SetStateAction } from "react";
 import { Globe, Folder, GitBranch, Power, RefreshCw, Star, Settings as SettingsIcon, Search, X as SearchToggleCloseIcon } from "lucide-react";
 import {
   getErrorMessage,
@@ -66,14 +66,13 @@ import { DatabaseBackupsSection } from "./settings/sections/DatabaseBackupsSecti
 import { LoadingSpinner } from "./LoadingSpinner";
 import { PluginsSection } from "./settings/sections/PluginsSection";
 import { useMemoryBackendStatus } from "../hooks/useMemoryBackendStatus";
-import { useOverlayDismiss } from "../hooks/useOverlayDismiss";
 import type { ToastType } from "../hooks/useToast";
 import { useTranslation } from "react-i18next";
 import { useSessionBannersHidden, setSessionBannersHidden } from "../hooks/useSessionBannerPref";
 import "./SettingsModal.css";
 import { FileBrowser } from "./FileBrowser";
 import { useWorkspaceFileBrowser } from "../hooks/useWorkspaceFileBrowser";
-import { useModalResizePersist } from "../hooks/useModalResizePersist";
+import { FloatingWindow } from "./FloatingWindow";
 import { ProviderIcon } from "./ProviderIcon";
 import { generateUniquePresetId } from "../utils/modelPresets";
 import { copyTextToClipboard } from "../utils/copyToClipboard";
@@ -1122,7 +1121,7 @@ export function SettingsModal({
   onOpenWorkflowSettings,
   presentation = "modal",
 }: SettingsModalProps) {
-  const { isEmbedded, scrollLockEnabled, resizePersistEnabled, escapeEnabled, overlayDismissEnabled } = useEmbeddedPresentation(presentation);
+  const { isEmbedded, scrollLockEnabled, escapeEnabled, overlayDismissEnabled } = useEmbeddedPresentation(presentation);
   const { t } = useTranslation("app");
   const { confirm } = useConfirm();
   const viewportMode = useViewportMode();
@@ -1138,7 +1137,6 @@ export function SettingsModal({
         ...(viewportHeight !== null ? { "--vv-height": `${viewportHeight}px` } : {}),
       } as CSSProperties)
     : {};
-  const modalRef = useRef<HTMLDivElement>(null);
   const settingsContentRef = useRef<HTMLDivElement>(null);
   const workflowLaneSaverRef = useRef<SectionSaveHandler | null>(null);
   /*
@@ -1162,8 +1160,7 @@ export function SettingsModal({
       workflowLaneSaverRef.current = saver;
     }
   }, []);
-  // Modal-only: persist user-resized dialog dimensions. Embedded view fills its host and is not resizable.
-  useModalResizePersist(modalRef, resizePersistEnabled, "fusion:settings-modal-size");
+  // FNXC:ModalTouchGeometry 2026-07-26-14:10: FloatingWindow owns movable, clamped geometry for the modal branch; the embedded Settings view remains an inline, chrome-free destination.
   const sessionBannersHidden = useSessionBannersHidden();
   const [form, setForm] = useState<SettingsFormState>({
     maxConcurrent: 2,
@@ -3909,14 +3906,6 @@ export function SettingsModal({
     return () => document.removeEventListener("keydown", handleKey);
   }, [escapeEnabled, requestClose, resetDialogOpen]);
 
-  const modalOverlayDismissProps = useOverlayDismiss(() => { void requestClose(); });
-  /*
-  FNXC:SettingsAutoSave 2026-08-02-21:45:
-  Backdrop dismissal remains preference-gated, but every enabled modal path
-  shares requestClose so its latest dirty snapshot is flushed before unmount.
-  */
-  const overlayDismissProps = !isEmbedded && overlayDismissEnabled ? modalOverlayDismissProps : {};
-
 
   /*
   FNXC:SettingsReset 2026-07-04-00:25:
@@ -4630,18 +4619,39 @@ export function SettingsModal({
   FNXC:Settings 2026-06-22-00:00:
   Embedded settings is a main-content destination, not a dialog. It drops the fixed `.modal-overlay` backdrop and the inner card chrome (modal-overlay/modal/settings-modal classes), and instead uses `settings-embedded right-dock-embedded-view` (host) + `settings-modal--embedded` (panel) to fill the pane flush like other embedded views (Planning, Command Center). The modal path stays byte-identical.
   */
-  return (
+  const ModalShell = ({ children }: { children: ReactNode }) => isEmbedded ? (
     <div
-      className={isEmbedded ? "settings-embedded right-dock-embedded-view" : "modal-overlay open settings-modal-overlay"}
-      {...overlayDismissProps}
-      data-testid={isEmbedded ? "settings-view" : undefined}
-      role={isEmbedded ? "region" : "dialog"}
-      aria-label={isEmbedded ? t("settings.title", "Settings") : undefined}
-      aria-modal={isEmbedded ? undefined : "true"}
+      className="settings-embedded right-dock-embedded-view"
+      data-testid="settings-view"
+      role="region"
+      aria-label={t("settings.title", "Settings")}
     >
+      {children}
+    </div>
+  ) : (
+    <FloatingWindow
+      windowKey="settings"
+      title={t("settings.title", "Settings")}
+      ariaLabel={`${t("settings.title", "Settings")} dialog`}
+      onClose={() => void requestClose()}
+      hideHeader
+      dragHandleSelector=".settings-modal > .modal-header"
+      className="floating-window--settings"
+      defaultSize={{ width: 1100, height: 720 }}
+      minSize={{ width: 520, height: 480 }}
+      persistGeometryKey="floating-window:settings"
+      suspendGeometryPersistenceOnMobile
+      suspendGeometryPersistenceOnShortViewport
+      closeOnOutsidePointerDown={overlayDismissEnabled}
+    >
+      {children}
+    </FloatingWindow>
+  );
+
+  return (
+    <ModalShell>
       <div
         className={isEmbedded ? "modal modal-lg settings-modal settings-modal--embedded" : "modal modal-lg settings-modal"}
-        ref={modalRef}
         style={isEmbedded ? undefined : keyboardStyle}
       >
         <div className={isEmbedded ? "modal-header modal-header--embedded" : "modal-header"}>
@@ -5381,7 +5391,7 @@ export function SettingsModal({
           </div>
         </div>
       )}
-    </div>
+    </ModalShell>
   );
 }
 

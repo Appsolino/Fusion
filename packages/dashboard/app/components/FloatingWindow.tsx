@@ -72,6 +72,12 @@ export interface FloatingWindowProps {
   layer?: "utility" | "task-detail";
   // FNXC:FloatingWindow 2026-07-11-11:30: accessible name for the dialog overlay so headerless windows (e.g. artifact viewers with their own header chrome) stay queryable/announcable by label.
   ariaLabel?: string;
+  /*
+  FNXC:ModalTouchGeometry 2026-07-26-14:09:
+  Headerless migrated dialogs may own a step-dependent title inside custom chrome. Forward its
+  id to the shared dialog so screen readers retain that live name instead of a stale seed title.
+  */
+  ariaLabelledBy?: string;
 }
 
 const DEFAULT_WIDTH = 720;
@@ -196,6 +202,7 @@ export function FloatingWindow({
   hidden = false,
   layer = "utility",
   ariaLabel,
+  ariaLabelledBy,
 }: FloatingWindowProps) {
   const resolvedMinSize: FloatingWindowSize = minSize ?? { width: DEFAULT_MIN_WIDTH, height: DEFAULT_MIN_HEIGHT };
   const viewportMode = useViewportMode();
@@ -275,7 +282,14 @@ export function FloatingWindow({
 
   const handleDragPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if ((event.target as HTMLElement).closest("button")) return;
+      /*
+      FNXC:ModalTouchGeometry 2026-07-26-13:35:
+      FN-8606 sheet callers must expose neither movable geometry nor resize chrome on phone and
+      short viewports. Do not begin a delegated or built-in header drag while persistence is
+      suspended; CSS alone cannot prevent the panel-level pointer handler from receiving touches.
+      */
+      /* FNXC:ModalTouchGeometry 2026-07-26-14:20: Delegated headers commonly contain links (for example Settings' GitHub/Discord actions), which must retain native activation rather than starting a window drag. */
+      if (geometryPersistenceSuspended || (event.target as HTMLElement).closest("button, a, input, select, textarea, [contenteditable=\"true\"], [role=\"button\"], [role=\"link\"]")) return;
       event.preventDefault();
       event.stopPropagation();
       /*
@@ -336,7 +350,7 @@ export function FloatingWindow({
       captureTarget.addEventListener("pointerup", handlePointerUp);
       captureTarget.addEventListener("pointercancel", handlePointerUp);
     },
-    [bringToFront, position, size]
+    [bringToFront, geometryPersistenceSuspended, position, size]
   );
 
   const handlePanelPointerDown = useCallback(
@@ -535,6 +549,7 @@ export function FloatingWindow({
       aria-modal="false"
       aria-hidden={hidden || undefined}
       aria-label={ariaLabel}
+      aria-labelledby={ariaLabelledBy}
       data-testid={`floating-window-overlay-${windowKey}`}
       // FNXC:FloatingWindow 2026-06-22-23:00: The z-index MUST live on the position:fixed overlay (which creates a stacking context), not the panel. A panel z-index is trapped inside the overlay's context and loses to page elements that are stacking contexts in body's context (e.g. the right dock at position:absolute z-index:20). With z on the overlay, the whole window sits at the shared floating band in body's stacking context and reliably paints above page content + tap-to-front reorders correctly.
       style={{ zIndex }}
@@ -548,7 +563,13 @@ export function FloatingWindow({
         onPointerDown={handlePanelPointerDown}
         onFocusCapture={bringToFront}
       >
-        {RESIZE_DIRECTIONS.map((direction) => (
+        {/*
+        FNXC:ModalTouchGeometry 2026-07-26-16:54:
+        Phone and short-viewport callers opt into a full-screen sheet. Do not merely hide resize
+        handles with CSS there: removing them from the accessibility tree ensures those sheets
+        expose no floating-window affordance or touch gesture surface.
+        */}
+        {!geometryPersistenceSuspended && RESIZE_DIRECTIONS.map((direction) => (
           <div
             key={direction}
             className={`floating-window__resize-handle floating-window__resize-handle--${direction}`}

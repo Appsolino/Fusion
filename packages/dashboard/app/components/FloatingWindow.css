@@ -214,15 +214,69 @@ Phone sheets are strictly below 768px. At exactly 768px this query must not matc
 FNXC:ChatModal 2026-06-22-14:49:
 On mobile/narrow app viewports, opening Quick Chat should present the full Chat modal as a full-screen sheet instead of a small draggable desktop window. Scope this to the chat FloatingWindow and override the inline desktop geometry only at the mobile breakpoint; desktop pop-out behavior remains movable/resizable.
 */
-@media (max-width: 767.98px) {
+/*
+FNXC:ModalTouchGeometry 2026-07-26-13:25:
+FN-8606 migrated core and workflow dialogs share FloatingWindow's pointer contract. Their
+caller-owned headers remain the drag target on desktop/tablet; true phones and short sheets hide
+all floating affordances so persisted desktop geometry cannot imply a draggable sheet.
+*/
+.floating-window--activity-log .floating-window__body,
+.floating-window--scripts .floating-window__body,
+.floating-window--add-node .floating-window__body,
+.floating-window--connect-node .floating-window__body,
+.floating-window--node-detail .floating-window__body,
+.floating-window--workflow-add-step .floating-window__body,
+.floating-window--group-task .floating-window__body,
+.floating-window--changes-diff .floating-window__body,
+.floating-window--model-onboarding .floating-window__body,
+.floating-window--git-manager .floating-window__body,
+.floating-window--settings .floating-window__body,
+.floating-window--planning-mode .floating-window__body {
+  overflow: hidden;
+}
+
+.floating-window--activity-log .modal,
+.floating-window--scripts .modal,
+.floating-window--add-node .modal,
+.floating-window--connect-node .modal,
+.floating-window--node-detail .modal,
+.floating-window--group-task .modal,
+.floating-window--workflow-add-step .wf-add-step-dialog,
+.floating-window--changes-diff .changes-diff-modal,
+.floating-window--model-onboarding .model-onboarding-modal,
+.floating-window--git-manager .gm-modal,
+.floating-window--settings .settings-modal,
+.floating-window--planning-mode .planning-modal {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border-radius: inherit;
+}
+
+@media (max-width: 767.98px), (max-height: 480px) {
   /*
   FNXC:FloatingWindow 2026-07-12-17:35:
   Mobile keeps the global `styles.css` pan-y lockdown so the dashboard cannot drift, but movable FloatingWindow headers must still resolve to an effective `touch-action: none`. Reassert the drag-handle contract at the mobile breakpoint, excluding full-screen sheet variants, so a single-finger header drag stays on the captured pointermove stream instead of being intersected back into page pan by the ancestor chain. Desktop drag/resize and mobile sheet variants are unchanged.
   */
-  .floating-window:not(.floating-window--chat):not(.floating-window--github-import-detail):not(.floating-window--task-detail):not(.floating-window--workflow-editor):not(.floating-window--automation):not(.floating-window--mission-interview):not(.floating-window--file-browser):not(.floating-window--pr-create):not(.artifacts-gallery-window) .floating-window__header {
+  .floating-window:not(.floating-window--chat):not(.floating-window--github-import-detail):not(.floating-window--task-detail):not(.floating-window--workflow-editor):not(.floating-window--automation):not(.floating-window--mission-interview):not(.floating-window--file-browser):not(.floating-window--pr-create):not(.floating-window--activity-log):not(.floating-window--scripts):not(.floating-window--add-node):not(.floating-window--connect-node):not(.floating-window--node-detail):not(.floating-window--workflow-add-step):not(.floating-window--group-task):not(.floating-window--changes-diff):not(.floating-window--model-onboarding):not(.floating-window--git-manager):not(.floating-window--settings):not(.floating-window--planning-mode):not(.artifacts-gallery-window) .floating-window__header {
     touch-action: none;
   }
 
+  /* FNXC:ModalTouchGeometry 2026-07-26-16:10: Automations shares every FN-8606 sheet breakpoint: a short viewport must not expose desktop geometry even when it remains wider than a phone. */
+  .floating-window--automation,
+  .floating-window--activity-log,
+  .floating-window--scripts,
+  .floating-window--add-node,
+  .floating-window--connect-node,
+  .floating-window--node-detail,
+  .floating-window--workflow-add-step,
+  .floating-window--group-task,
+  .floating-window--changes-diff,
+  .floating-window--model-onboarding,
+  .floating-window--git-manager,
+  .floating-window--settings,
+  .floating-window--planning-mode,
   .floating-window--chat {
     inset: 0 !important;
     width: 100vw !important;
@@ -236,6 +290,19 @@ On mobile/narrow app viewports, opening Quick Chat should present the full Chat 
     box-shadow: none;
   }
 
+  .floating-window--automation .floating-window__resize-handle,
+  .floating-window--activity-log .floating-window__resize-handle,
+  .floating-window--scripts .floating-window__resize-handle,
+  .floating-window--add-node .floating-window__resize-handle,
+  .floating-window--connect-node .floating-window__resize-handle,
+  .floating-window--node-detail .floating-window__resize-handle,
+  .floating-window--workflow-add-step .floating-window__resize-handle,
+  .floating-window--group-task .floating-window__resize-handle,
+  .floating-window--changes-diff .floating-window__resize-handle,
+  .floating-window--model-onboarding .floating-window__resize-handle,
+  .floating-window--git-manager .floating-window__resize-handle,
+  .floating-window--settings .floating-window__resize-handle,
+  .floating-window--planning-mode .floating-window__resize-handle,
   .floating-window--chat .floating-window__resize-handle {
     display: none;
   }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { NodeDetailModal } from "../NodeDetailModal";
+import { assertModalGeometryRecoveryAndSheetContracts, assertRenderedModalTouchGeometry } from "./floatingWindowMigration.test-helpers";
 import type { DockerNodeConfig, ManagedDockerNodeInfo, NodeInfo, ProjectInfo } from "../../api";
 
 vi.mock("lucide-react", () => ({
@@ -204,5 +205,13 @@ describe("NodeDetailModal docker section", () => {
     fireEvent.click(screen.getByText("Volume Mounts"));
     expect(screen.getByText("/host → /data")).toBeInTheDocument();
     expect(screen.getByText("Read-only")).toBeInTheDocument();
+  });
+});
+
+describe("NodeDetailModal floating geometry", () => {
+  it("uses its production header for touch drag and resize", () => {
+    render(<NodeDetailModal {...baseProps} />);
+    assertRenderedModalTouchGeometry("node-detail", screen.getByText("Node Details").closest(".modal-header") as HTMLElement);
+    assertModalGeometryRecoveryAndSheetContracts("node-detail", () => render(<NodeDetailModal {...baseProps} />));
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { AddNodeModal } from "../AddNodeModal";
+import { assertModalGeometryRecoveryAndSheetContracts, assertRenderedModalTouchGeometry } from "./floatingWindowMigration.test-helpers";
 
 describe("AddNodeModal", () => {
   const defaultProps = {
@@ -217,8 +218,7 @@ describe("AddNodeModal", () => {
     render(<AddNodeModal {...defaultProps} />);
 
     // Click on the overlay (not the modal itself)
-    const overlay = screen.getByRole("dialog").parentElement!;
-    fireEvent.click(overlay);
+    fireEvent.pointerDown(document.body);
 
     expect(defaultProps.onClose).toHaveBeenCalled();
   });
@@ -456,5 +456,13 @@ describe("AddNodeModal", () => {
 
     fireEvent.click(checkbox);
     expect(screen.queryByDisplayValue("/workspace/project-one")).not.toBeInTheDocument();
+  });
+});
+
+describe("AddNodeModal floating geometry", () => {
+  it("uses its production header for touch drag and resize", () => {
+    render(<AddNodeModal isOpen onClose={vi.fn()} onSubmit={vi.fn()} onDiscoverRemoteProjects={vi.fn()} addToast={vi.fn()} projects={[]} />);
+    assertRenderedModalTouchGeometry("add-node", screen.getByTestId("floating-window-add-node").querySelector(".modal-header") as HTMLElement);
+    assertModalGeometryRecoveryAndSheetContracts("add-node", () => render(<AddNodeModal isOpen onClose={vi.fn()} onSubmit={vi.fn()} onDiscoverRemoteProjects={vi.fn()} addToast={vi.fn()} projects={[]} />));
   });
 });

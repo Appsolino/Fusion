@@ -23,7 +23,7 @@ import {
   type GitCliStatus,
 } from "../api";
 import type { ToastType } from "../hooks/useToast";
-import { useModalResizePersist } from "../hooks/useModalResizePersist";
+import { FloatingWindow } from "./FloatingWindow";
 import { CustomModelDropdown } from "./CustomModelDropdown";
 import { ProviderIcon } from "./ProviderIcon";
 import { ClaudeCliProviderCard } from "./ClaudeCliProviderCard";
@@ -780,7 +780,6 @@ export function ModelOnboardingModal({
   const [shellConnectionError, setShellConnectionError] = useState<string | null>(null);
   const apiKeySuccessTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const onboardingContentRef = useRef<HTMLDivElement | null>(null);
-  const modalRef = useRef<HTMLDivElement | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const agentErrorRef = useRef<HTMLDivElement | null>(null);
   const [loginOutcomes, setLoginOutcomes] = useState<Record<string, LoginOutcome>>({});
@@ -796,7 +795,7 @@ export function ModelOnboardingModal({
   const resumedFromStep = persistedState?.currentStep;
   const isResumedFlow = !!persistedState && persistedState.currentStep !== "complete";
 
-  useModalResizePersist(modalRef, isOpen, "fusion:model-onboarding-modal-size");
+  // FNXC:ModalTouchGeometry 2026-07-26-13:30: Shared FloatingWindow replaces the legacy resize-only persistence path with clamped movable geometry.
 
   // Scroll the content area to the top whenever the step changes so the user
   // always lands at the start of the next page instead of mid-scroll from the
@@ -2436,13 +2435,22 @@ export function ModelOnboardingModal({
   };
 
   return (
-    <div
-      className="modal-overlay open"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="onboarding-title"
+    <FloatingWindow
+      windowKey="model-onboarding"
+      title={t("setup.titleAiSetup", "Set Up AI")}
+      onClose={handleDismiss}
+      hideHeader
+      dragHandleSelector=".model-onboarding-header"
+      className="floating-window--model-onboarding"
+      defaultSize={{ width: 720, height: 640 }}
+      minSize={{ width: 360, height: 280 }}
+      persistGeometryKey="floating-window:model-onboarding"
+      suspendGeometryPersistenceOnMobile
+      suspendGeometryPersistenceOnShortViewport
+      ariaLabel={`${t("setup.titleAiSetup", "Set Up AI")} dialog`}
+      ariaLabelledBy="onboarding-title"
     >
-      <div className="modal model-onboarding-modal" ref={modalRef}>
+      <div className="modal model-onboarding-modal">
         {/* Header */}
         <div className="model-onboarding-header">
           <h2 id="onboarding-title" className="model-onboarding-title">
@@ -3589,6 +3597,6 @@ export function ModelOnboardingModal({
           </Suspense>
         </ErrorBoundary>
       )}
-    </div>
+    </FloatingWindow>
   );
 }

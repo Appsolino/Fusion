@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConnectNodeModal } from "../ConnectNodeModal";
+import { assertModalGeometryRecoveryAndSheetContracts, assertRenderedModalTouchGeometry } from "./floatingWindowMigration.test-helpers";
 import type { NodeInfo } from "../../api";
 
 const mockFetch = vi.fn();
@@ -45,6 +46,12 @@ describe("ConnectNodeModal", () => {
     expect(screen.getByLabelText("Connect to Node")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Build Server")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("192.0.2.10 or my-server.local")).toBeInTheDocument();
+  });
+
+  it("uses its real header as a touch-actuable FloatingWindow drag handle", () => {
+    render(<ConnectNodeModal {...defaultProps} />);
+    assertRenderedModalTouchGeometry("connect-node", screen.getByText("Connect to Node").closest(".modal-header") as HTMLElement);
+    assertModalGeometryRecoveryAndSheetContracts("connect-node", () => render(<ConnectNodeModal {...defaultProps} />));
   });
 
   it("does not render when closed", () => {
