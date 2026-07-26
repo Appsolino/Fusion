@@ -28,9 +28,10 @@ import { exec, execSync } from "node:child_process";
 import { promisify } from "node:util";
 import { setImmediate as setImmediateCb } from "node:timers";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkflowColumnsEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, resolveWorkflowIrForTask, resolveReboundTarget, planLegacyAdoption, resolveOrphanedPendingStepResults, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult } from "@fusion/core";
+import { resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkflowColumnsEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, resolveWorkflowIrForTask, resolveReboundTarget, planLegacyAdoption, resolveOrphanedPendingStepResults, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult } from "@fusion/core";
 import { finalizePlanningSegment } from "@fusion/core";
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
 import { createLogger, schedulerLog } from "./logger.js";
@@ -63,6 +64,8 @@ import { finalizeProvenAutoMergeTask, validateWorkflowDoneMergeProof } from "./a
 import { AutoRecoveryDispatcher } from "./auto-recovery.js";
 import { activeSessionRegistry, executingTaskLock } from "./active-session-registry.js";
 import { isTaskStillInPlanningStage } from "./replan-target.js";
+import { getPromptPath } from "./spec-staleness.js";
+import { evaluateStrandedHoldContinuation, seedPreReleasePlanReviewContinuation } from "./plan-review-continuation.js";
 /*
 FNXC:Workspace 2026-06-22-14:10 (Phase D review G — cycle dissolved):
 `isRepoLanded` is the CANONICAL per-repo landed predicate (Phase C, exported A6). It now lives in
@@ -866,6 +869,14 @@ export class SelfHealingManager {
    * because the task leaves the promotable state before returning to it.
    */
   private strandedCompletedFailureProvenanceWarned = new Set<string>();
+  /*
+   * FNXC:StrandedHoldContinuation 2026-07-26-14:15:
+   * FN-8592 no-action findings are candidate-only but can persist across
+   * maintenance passes. Keep their `(taskId, reason)` memo on the manager,
+   * rather than recreating it per sweep, so periodic recovery stays visible
+   * without flooding run-audit.
+   */
+  private strandedHoldContinuationNoActionAudited = new Set<string>();
   /* FNXC:SymbolLock 2026-07-30-14:20: idle symbol-lock sweeps emit one no-action audit until a stale lock re-arms the diagnostic. */
   private symbolLockNoActionAudited = false;
   private metaResolvedSkipAuditMemo = new Map<string, string>();
@@ -1477,6 +1488,11 @@ export class SelfHealingManager {
           settings.globalPause ? "global pause" : "engine pause"
         } is active`,
       );
+      // FNXC:StrandedHoldContinuation 2026-07-26-16:40:
+      // FN-8592's sweep must still inspect candidate cards while the engine is
+      // globally paused. Its predicate emits the deduped engine-paused audit
+      // signal and never seeds, while all other startup recovery remains stopped.
+      await this.reconcileStrandedHoldContinuations();
       return;
     }
 
@@ -1494,6 +1510,7 @@ export class SelfHealingManager {
       // flight" to all of them (the merge gate included), which is the two-hour
       // stall-deadlock ride this sweep exists to prevent.
       { name: "reconcile-orphaned-pending-step-results", fn: () => this.reconcileOrphanedPendingStepResults().then(() => undefined) },
+      { name: "reconcile-stranded-hold-continuations", fn: () => this.reconcileStrandedHoldContinuations().then(() => undefined) },
       { name: "no-progress-no-task-done", fn: () => this.recoverNoProgressNoTaskDoneFailures().then(() => undefined) },
       { name: "completed-tasks", fn: () => this.recoverCompletedTasks().then(() => undefined) },
       { name: "recover-stranded-completed-todo", fn: () => this.recoverStrandedCompletedTodoTasks().then(() => undefined) },
@@ -2799,6 +2816,10 @@ export class SelfHealingManager {
             recoverySettings.globalPause ? "global pause" : "engine pause"
           } is active`,
         );
+        // FNXC:StrandedHoldContinuation 2026-07-26-16:40:
+        // Preserve the global pause for recovery mutations, but run this
+        // read-only-under-pause classifier so stranded candidates are visible.
+        await this.reconcileStrandedHoldContinuations();
       } else {
         // Batch 2 — Task recovery (operations are independent of each other)
         const batch2Fns: Array<{ name: string; fn: () => Promise<unknown> }> = [
@@ -2849,6 +2870,7 @@ export class SelfHealingManager {
           // cadence left that case riding the 3×30-min stall escalator to a deadlock park.
           // Live sessions register their worktree path, so the liveness veto holds here.
           { name: "reconcile-orphaned-pending-step-results", fn: () => this.reconcileOrphanedPendingStepResults() },
+          { name: "reconcile-stranded-hold-continuations", fn: () => this.reconcileStrandedHoldContinuations() },
           { name: "recover-mergeable-review", fn: () => this.recoverMergeableReviewTasks() },
           // FNXC:Workspace 2026-06-22-09:30 (Phase D U1) — workspace-mode reconcilers.
           { name: "reconcile-workspace-partial-lands", fn: () => this.reconcileWorkspacePartialLands() },
@@ -6838,6 +6860,82 @@ export class SelfHealingManager {
       return adopted;
     } catch (error) {
       log.error(`adoptLegacyTaskRows failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 0;
+    }
+  }
+
+  /**
+   * FNXC:StrandedHoldContinuation 2026-07-26-12:00:
+   * A real prompt can survive a hard planning cancel after its continuation is
+   * lost. Re-seed only candidate cards through the conditional store operation;
+   * never force-promote or replace an active continuation. Healthy cards remain
+   * silent so run-audit is not flooded by normal graph ownership.
+   */
+  async reconcileStrandedHoldContinuations(): Promise<number> {
+    try {
+      const graceMs = 60_000;
+      let offset = 0;
+      let repaired = 0;
+      const live = (taskId: string) => activeSessionRegistry.pathsForTask(taskId).some((path) => activeSessionRegistry.isPathActive(path)) || executingTaskLock.has(taskId) || this.options.isTaskActive?.(taskId) === true;
+      const evaluate = async (taskId: string) => {
+        const task = await this.store.getTask(taskId);
+        if (!task) return null;
+        const freshSettings = await this.store.getSettings();
+        const freshEnginePaused = freshSettings.globalPause === true || freshSettings.enginePaused === true;
+        const ir = await resolveWorkflowIrForTask(this.store, task.id);
+        if (!("columns" in ir)) return null;
+        const column = ir.columns.find((entry) => entry.id === task.column);
+        if (!column) return null;
+        const continuations = await this.store.listWorkflowWorkItemsForTask(task.id);
+        let promptContent: string | null = null;
+        try { promptContent = await readFile(getPromptPath(this.store.getTasksDir(), task.id), "utf8"); } catch { /* missing prompts are quiet non-candidates */ }
+        return {
+          task,
+          ir,
+          continuations,
+          result: evaluateStrandedHoldContinuation({
+            task, columnFlags: resolveColumnFlags(column), ir, continuations,
+            stepResults: task.workflowStepResults, effectiveSettings: { autoMerge: resolveEffectiveAutoMerge(task, freshSettings) },
+            enginePaused: freshEnginePaused, promptContent, live: live(task.id),
+            stalenessMs: Date.now() - new Date(task.columnMovedAt ?? task.updatedAt).getTime(), graceMs,
+          }),
+        };
+      };
+      for (;;) {
+        const tasks = await this.store.listTasks({ slim: false, includeArchived: false, includeDeleted: false, limit: 500, offset });
+        for (const snapshot of tasks) {
+          try {
+            const initial = await evaluate(snapshot.id);
+            if (!initial || !initial.result.candidate) continue;
+            const audit = async (type: "task:reconcile-stranded-hold-continuation" | "task:reconcile-stranded-hold-continuation-no-action", reason?: string, state = initial) => {
+              const key = `${state.task.id}:${reason ?? "seeded"}`;
+              if (type.endsWith("no-action") && this.strandedHoldContinuationNoActionAudited.has(key)) return;
+              await createRunAuditor(this.store, { runId: generateSyntheticRunId("reconcile-stranded-hold-continuation", state.task.id), agentId: "self-healing", taskId: state.task.id, taskLineageId: state.task.lineageId, phase: "reconcile-stranded-hold-continuation" }).database({ type: type as DatabaseMutationType, target: state.task.id, metadata: type.endsWith("no-action") ? { taskId: state.task.id, column: state.task.column, reason } : { taskId: state.task.id, column: state.task.column, nodeId: "plan-review", workflowName: state.ir.name, continuationCount: state.continuations.length, stalenessMs: Math.max(0, Date.now() - new Date(state.task.columnMovedAt ?? state.task.updatedAt).getTime()) } });
+              // FNXC:StrandedHoldContinuation 2026-07-26-23:59: Mark only a successfully persisted no-action event so a transient audit failure remains visible on the next maintenance pass.
+              if (type.endsWith("no-action")) this.strandedHoldContinuationNoActionAudited.add(key);
+            };
+            if (!initial.result.stranded) { await audit("task:reconcile-stranded-hold-continuation-no-action", initial.result.reason); continue; }
+            // FNXC:StrandedHoldContinuation 2026-07-26-14:15:
+            // Re-read every predicate input immediately before the atomic insert.
+            // This reduces stale pause/liveness/settings decisions; the shared
+            // store lock remains the correctness guard for continuation/results.
+            const fresh = await evaluate(snapshot.id);
+            if (!fresh || !fresh.result.stranded) {
+              if (fresh) await audit("task:reconcile-stranded-hold-continuation-no-action", fresh.result.reason, fresh);
+              continue;
+            }
+            const seeded = await seedPreReleasePlanReviewContinuation(this.store, fresh.task, fresh.ir, { atomic: true });
+            if (!seeded.seeded) { await audit("task:reconcile-stranded-hold-continuation-no-action", seeded.reason, fresh); continue; }
+            repaired += 1;
+            await audit("task:reconcile-stranded-hold-continuation", undefined, fresh);
+          } catch (error) { log.warn(`reconcileStrandedHoldContinuations: failed for ${snapshot.id}: ${error instanceof Error ? error.message : String(error)}`); }
+        }
+        if (tasks.length < 500) break;
+        offset += tasks.length;
+      }
+      return repaired;
+    } catch (error) {
+      log.warn(`reconcileStrandedHoldContinuations failed: ${error instanceof Error ? error.message : String(error)}`);
       return 0;
     }
   }

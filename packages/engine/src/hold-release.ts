@@ -47,6 +47,7 @@ import {
   TransitionRejectionError,
   resolveWorkflowIrForTask,
   isUnplannedSeedPrompt,
+  resolveEffectiveAutoMerge,
   type TaskStore,
   type Task,
   type WorkflowIr,
@@ -57,6 +58,13 @@ import {
 import { readFile } from "node:fs/promises";
 import { schedulerLog } from "./logger.js";
 import { getPromptPath } from "./spec-staleness.js";
+import { activeSessionRegistry, executingTaskLock } from "./active-session-registry.js";
+import { evaluateStrandedHoldContinuation } from "./plan-review-continuation.js";
+
+// FNXC:StrandedHoldContinuation 2026-07-26-14:15:
+// A genuine stranded-plan fault is warned once per held location; ordinary
+// unplanned cards remain quiet even when the release sweep revisits them.
+const strandedHoldWarningMemo = new Set<string>();
 
 /** A reservation handle returned by {@link HoldReleaseDeps.reserveSlot}. The
  *  sweep calls `release()` if the subsequent move rejects on capacity. */
@@ -86,6 +94,8 @@ export interface HoldReleaseDeps {
   /** Allocate a worktree path for a release into a processing column (passed
    *  through to `moveTask`'s `allocateWorktree`). */
   allocateWorktree?: (task: Task, reservedNames: Set<string>) => string | null;
+  /** Optional third leg of the canonical liveness triple for diagnostics. */
+  isTaskActive?: (taskId: string) => boolean;
 }
 
 /** Outcome of one sweep pass (for tests + observability). */
@@ -177,7 +187,11 @@ export async function isUnplannedForExecution(store: TaskStore, task: Task, ir: 
     );
     if (!legacyPassed) {
       if (typeof store.listWorkflowWorkItemsForTask !== "function") return true;
-      const continuations = await store.listWorkflowWorkItemsForTask(task.id, { kinds: ["task"] });
+      // FNXC:StrandedHoldContinuation 2026-07-26-15:45:
+      // FN-8592 defines graph idleness over every active continuation kind;
+      // filtering to task continuations would allow a live non-task run to be
+      // mistaken for an idle graph and receive a duplicate plan-review seed.
+      const continuations = await store.listWorkflowWorkItemsForTask(task.id);
       const active = continuations.filter((item) => ACTIVE_WORKFLOW_WORK_ITEM_STATES.includes(item.state));
       // Readiness is represented by the graph's durable boundary continuation,
       // not by a special-case review result. Optional groups that are disabled
@@ -630,7 +644,46 @@ async function issueRelease(
   FN-7648's invariant still holds for every non-operator release.
   */
   if (targetIsProcessing && !options.allowUnplanned && (await isUnplannedForExecution(store, task, ir))) {
-    schedulerLog.log(`Hold release for ${task.id} blocked — card is unplanned and cannot enter processing column ${target}`);
+    /*
+    FNXC:StrandedHoldContinuation 2026-07-26-14:15:
+    Before FN-8592 this was an undeduplicated `schedulerLog.log`, not debug.
+    A real-spec card with no continuation is a repairable fault, so warn only
+    when the exact shared predicate confirms every guard; ordinary unplanned
+    and capacity-held cards remain quiet. Global/Engine pause participates in
+    the predicate and suppresses this warning.
+    */
+    try {
+      const column = findColumn(ir, task.column);
+      const tasksDir = typeof store.getTasksDir === "function" ? store.getTasksDir() : undefined;
+      if (column && tasksDir) {
+        let promptContent: string | null = null;
+        try { promptContent = await readFile(getPromptPath(tasksDir, task.id), "utf8"); } catch { /* missing prompt is a quiet non-candidate */ }
+        const settings = await store.getSettings();
+        const continuations = await store.listWorkflowWorkItemsForTask(task.id);
+        const live = activeSessionRegistry.pathsForTask(task.id).some((path) => activeSessionRegistry.isPathActive(path)) || executingTaskLock.has(task.id) || deps.isTaskActive?.(task.id) === true;
+        const stranded = evaluateStrandedHoldContinuation({
+          task,
+          columnFlags: resolveColumnFlags(column),
+          ir,
+          continuations,
+          stepResults: task.workflowStepResults,
+          effectiveSettings: { autoMerge: resolveEffectiveAutoMerge(task, settings) },
+          enginePaused: settings.globalPause === true || settings.enginePaused === true,
+          promptContent,
+          live,
+          stalenessMs: deps.now() - new Date(task.columnMovedAt ?? task.updatedAt).getTime(),
+          graceMs: 60_000,
+        });
+        const key = `${task.id}:${task.column}`;
+        if (stranded.stranded && !strandedHoldWarningMemo.has(key)) {
+          strandedHoldWarningMemo.add(key);
+          schedulerLog.warn(`Stranded hold continuation for ${task.id} in ${task.column}; self-healing reconciliation will re-seed Plan Review`);
+        }
+      }
+    } catch {
+      // Diagnostics must never widen the release gate or prevent its normal refusal.
+    }
+    schedulerLog.debug(`Hold release for ${task.id} blocked — card is unplanned and cannot enter processing column ${target}`);
     return false;
   }
 

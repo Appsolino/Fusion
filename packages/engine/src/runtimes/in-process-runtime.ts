@@ -19,8 +19,6 @@ import type {
 import {
   AsyncCentralClaimStore,
   ChatStore,
-  computeWorkflowIrPin,
-  ACTIVE_WORKFLOW_WORK_ITEM_STATES,
   isEphemeralAgent,
   resolveWorkflowIrForTask,
 } from "@fusion/core";
@@ -61,7 +59,7 @@ import { validateProjectNodeMapping } from "../node-dispatch-validation.js";
 import { attachAgentLinkSync } from "../task-agent-sync.js";
 import { createRunAuditor, generateSyntheticRunId } from "../run-audit.js";
 import { setImmediate as setImmediateCb } from "node:timers";
-import { resolvePreReleasePlanReviewNode } from "../hold-release.js";
+import { seedPreReleasePlanReviewContinuation } from "../plan-review-continuation.js";
 
 const yieldEventLoop = (): Promise<void> => new Promise((resolve) => setImmediateCb(resolve));
 
@@ -1106,31 +1104,7 @@ export class InProcessRuntime
               const live = await this.taskStore.getTask(t.id);
               if (!live || live.paused || live.userPaused) return;
               const ir = await resolveWorkflowIrForTask(this.taskStore, live.id);
-              const planReview = resolvePreReleasePlanReviewNode(ir);
-              if (!planReview || planReview.column !== live.column) return;
-
-              /*
-              FNXC:PlanReview 2026-07-21-12:20:
-              Specification completion creates a planning continuation only
-              when the review node belongs to the card's current column and no
-              active continuation already owns the task.
-              */
-              const active = await this.taskStore.listWorkflowWorkItemsForTask(live.id, { kinds: ["task"] });
-              if (!active.some((item) => ACTIVE_WORKFLOW_WORK_ITEM_STATES.includes(item.state))) {
-                await this.taskStore.replaceActiveTaskWorkflowContinuation({
-                  runId: `${live.id}:planning-continuation:${planReview.id}:${active.length}`,
-                  taskId: live.id,
-                  nodeId: planReview.id,
-                  kind: "task",
-                  state: "runnable",
-                  stableWorkflowRunId: `${live.id}:${ir.name}`,
-                  continuationSequence: active.length,
-                  waitReason: "planning",
-                  sourceColumn: live.column,
-                  targetColumn: live.column,
-                  irHash: computeWorkflowIrPin(ir, planReview.id).irHash,
-                });
-              }
+              await seedPreReleasePlanReviewContinuation(this.taskStore, live, ir);
               this.kickWorkflowContinuationProcessor();
             })().catch((error) => {
               runtimeLog.error(`Failed to start Todo plan review for ${t.id}:`, error);
