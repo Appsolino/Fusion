@@ -1446,6 +1446,9 @@ export function GitHubImportModal({ isOpen, onClose, onImport, onPlanningMode, o
         key: `gitlab:${selectedGitlabKey ?? ""}`,
         title: selectedGitlabItem.title ?? "",
         body: selectedGitlabItem.description ?? "",
+        identity: selectedGitlabItem.projectPath
+          ? { provider: "gitlab" as const, repoKey: selectedGitlabItem.projectPath, issueNumber: selectedGitlabItem.iid }
+          : null,
       };
     }
     if (provider === "github" && activeTab === "issues" && selectedIssue) {
@@ -1453,6 +1456,9 @@ export function GitHubImportModal({ isOpen, onClose, onImport, onPlanningMode, o
         key: `issue:${selectedIssue.number}`,
         title: selectedIssue.title ?? "",
         body: selectedIssue.body ?? "",
+        identity: owner.trim() && repo.trim()
+          ? { provider: "github" as const, repoKey: `${owner.trim()}/${repo.trim()}`, issueNumber: selectedIssue.number }
+          : null,
       };
     }
     if (provider === "github" && activeTab === "pulls" && selectedPull) {
@@ -1460,10 +1466,13 @@ export function GitHubImportModal({ isOpen, onClose, onImport, onPlanningMode, o
         key: `pull:${selectedPull.number}`,
         title: selectedPull.title ?? "",
         body: selectedPull.body ?? "",
+        identity: owner.trim() && repo.trim()
+          ? { provider: "github" as const, repoKey: `${owner.trim()}/${repo.trim()}`, issueNumber: selectedPull.number }
+          : null,
       };
     }
-    return { key: null as string | null, title: "", body: "" };
-  }, [provider, selectedGitlabItem, selectedGitlabKey, activeTab, selectedIssue, selectedPull]);
+    return { key: null as string | null, title: "", body: "", identity: null };
+  }, [provider, selectedGitlabItem, selectedGitlabKey, activeTab, selectedIssue, selectedPull, owner, repo]);
 
   /*
   FNXC:GitHubImportTranslate 2026-07-17-12:50:
@@ -1499,6 +1508,7 @@ export function GitHubImportModal({ isOpen, onClose, onImport, onPlanningMode, o
     body: translateSelection.body,
     dashboardLocale: translateTargetLocale,
     projectId,
+    identity: translateSelection.identity,
     autoTranslation: selectedAutoTranslation,
     autoTranslateEnabled,
   });

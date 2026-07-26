@@ -25,6 +25,8 @@ import {
   fetchGitRemotes,
   createTask,
   translateImportContent,
+  getTranslateErrorMessage,
+  fetchCachedImportTranslation,
   autoTranslateImportIssues,
 } from "../../api";
 import type { Task } from "@fusion/core";
@@ -56,6 +58,7 @@ vi.mock("../../api", async (importOriginal) => {
     fetchGitRemotes: vi.fn(),
     createTask: vi.fn(),
     translateImportContent: vi.fn(),
+    fetchCachedImportTranslation: vi.fn(),
     autoTranslateImportIssues: vi.fn(),
   };
 });
@@ -208,6 +211,8 @@ describe("GitHubImportModal", () => {
     vi.mocked(fetchSettings).mockReset();
     vi.mocked(createTask).mockReset();
     vi.mocked(autoTranslateImportIssues).mockReset();
+    vi.mocked(fetchCachedImportTranslation).mockReset();
+    vi.mocked(fetchCachedImportTranslation).mockResolvedValue(null);
     vi.mocked(createTask).mockResolvedValue(mockTask);
     vi.mocked(fetchSettings).mockResolvedValue({ gitlabEnabled: true } as never);
     vi.mocked(autoTranslateImportIssues).mockImplementation(async (_owner, _repo, items) => ({
@@ -1092,6 +1097,43 @@ describe("GitHubImportModal", () => {
     expect(within(previewCard).getByText(/Problème d'aperçu d'importation/)).toBeTruthy();
     // Toggling back to the original must revert the bar too, not strand it on the translation.
     expect(titleBar.textContent).toContain("#7 — Problème d'aperçu d'importation");
+  });
+
+  it("hydrates a persisted manual translation on reselect without another Translate click", async () => {
+    const frenchBody = "Cette issue contient assez de texte français pour déclencher la traduction dans le panneau d'importation.";
+    const issues = [
+      { number: 70, title: "Problème traduit", body: frenchBody, html_url: "https://github.com/owner/repo/issues/70", labels: [] },
+      { number: 71, title: "Autre problème", body: frenchBody, html_url: "https://github.com/owner/repo/issues/71", labels: [] },
+    ];
+    vi.mocked(fetchGitRemotes).mockResolvedValueOnce(singleRemote);
+    vi.mocked(apiFetchGitHubIssues).mockResolvedValueOnce(issues);
+    vi.mocked(fetchCachedImportTranslation).mockImplementation(async (fields, _locale, identity) =>
+      identity.issueNumber === 70 ? { title: "Persisted translation", body: fields.body } : null,
+    );
+
+    render(<GitHubImportModal isOpen onClose={onClose} onImport={onImport} tasks={[]} />);
+    await screen.findByText("Problème traduit");
+    fireEvent.click(screen.getByRole("button", { name: /Select issue #70/i }));
+    await waitFor(() => expect(screen.getByText("Persisted translation")).toBeTruthy());
+    expect(translateImportContent).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Select issue #71/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Select issue #70/i }));
+    await waitFor(() => expect(screen.getByText("Persisted translation")).toBeTruthy());
+    expect(translateImportContent).not.toHaveBeenCalled();
+    expect(fetchCachedImportTranslation).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Problème traduit" }),
+      "en",
+      expect.objectContaining({ provider: "github", issueNumber: 70 }),
+      undefined,
+    );
+  });
+
+  it("maps rate-limit, validation, and service failures to distinct translation banner copy", () => {
+    const withStatus = (message: string, status: number) => Object.assign(new Error(message), { status });
+    expect(getTranslateErrorMessage(withStatus("TRANSLATE_RATE_LIMIT", 429))).toBe("Too many translation requests. Please wait an hour.");
+    expect(getTranslateErrorMessage(withStatus("TRANSLATE_VALIDATION_ERROR", 400))).toBe("Translation request is invalid. Check the selected content and try again.");
+    expect(getTranslateErrorMessage(withStatus("TRANSLATE_SERVICE_ERROR", 503))).toBe("Translation service is temporarily unavailable. Please try again shortly.");
   });
 
   it("does not show translate controls for English content when dashboard language is English", async () => {
