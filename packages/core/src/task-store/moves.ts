@@ -93,6 +93,39 @@ function resolveTransitionColumnFacts(ir: WorkflowIr, columnId: string): Transit
 }
 
 /*
+FNXC:WorkflowReviewGates 2026-07-26-16:40:
+Single authority for "is this move a RECOGNISED entry into `in-review`?", consumed by both the
+backend-transaction and SQLite-transaction emit sites of `task:handoff-invariant-violation`.
+
+Requirement history: the invariant dates from when `TaskStore.handoffToReview(...)` was the ONLY
+legal way into `in-review`, so any other arrival was genuinely suspicious and worth auditing. After
+the U1 IR-driven lifecycle cutover the workflow GRAPH owns column transitions — node column
+assignment is the authority and the graph column boundary (`workflow-column-boundary.ts`
+`onNodeEntry`) performs the move via `store.moveTask`. Moving the pre-merge review gates
+(`code-review`, `browser-verification`) into the `in-review` column then made the graph cross that
+boundary on EVERY gate entry, so a legitimate, fully-provenanced transition emitted a violation
+audit on each crossing (observed on FN-8596 15:19:22: a violation immediately followed by the
+`browser-verification` `task:column-transition`).
+
+The fix is narrow ON PURPOSE: the invariant is NOT retired, because it still catches the movers it
+was written for — operator drags, merge bounces, self-healing rehomes, and any future call site
+that lands a card in review without going through handoff. Only a move carrying the graph's own
+provenance is recognised. `workflowMoveSource: "workflow-graph"` is produced at four call sites,
+ALL inside the executor's own graph / column-boundary machinery (the boundary hook plus the
+graph-owned merge-boundary moves). No non-graph mover writes that literal — operator drags carry
+`moveSource:"user"` and recovery sweeps use their own provenance (e.g.
+`"self-healing-advanced-triage"`) — so neither can spoof it.
+*/
+function isRecognizedInReviewEntry(
+  options: MoveTaskOptions | undefined,
+  internal: MoveTaskInternalOptions,
+): boolean {
+  if (internal.fromHandoff) return true;
+  if (options?.allowDirectInReviewMove === true) return true;
+  return options?.workflowMoveSource === "workflow-graph";
+}
+
+/*
 FNXC:WorkflowCapacity 2026-07-19-10:35:
 Shared pooled-capacity enforcement (U4/KTD-9/KTD-10), extracted from the async
 (backend transaction) and sync (SQLite transaction) move paths, which had the
@@ -994,7 +1027,9 @@ export async function moveTaskInternalImpl(store: TaskStore, id: string, toColum
         // Dequeue from merge queue on column exit (if leaving in-review).
         await dequeueMergeQueueOnColumnExitInTransaction(tx, id, fromColumn, toColumn, movedAt);
 
-        if (toColumn === "in-review" && !internal.fromHandoff && options?.allowDirectInReviewMove !== true) {
+        // FNXC:WorkflowReviewGates 2026-07-26-16:40: see isRecognizedInReviewEntry — a
+        // graph-owned crossing into the review column is a legitimate arrival, not a violation.
+        if (toColumn === "in-review" && !isRecognizedInReviewEntry(options, internal)) {
           await recordRunAuditEventWithinTransaction(tx, {
             taskId: id,
             agentId: internal.runContext?.agentId ?? "system",
@@ -1128,7 +1163,9 @@ export async function moveTaskInternalImpl(store: TaskStore, id: string, toColum
         );
       }
 
-      if (toColumn === "in-review" && !internal.fromHandoff && options?.allowDirectInReviewMove !== true) {
+      // FNXC:WorkflowReviewGates 2026-07-26-16:40: SQLite-path twin of the backend emit site
+      // above; both consult the one isRecognizedInReviewEntry authority so they cannot drift.
+      if (toColumn === "in-review" && !isRecognizedInReviewEntry(options, internal)) {
         store.insertRunAuditEventRow({
           taskId: id,
           agentId: internal.runContext?.agentId,

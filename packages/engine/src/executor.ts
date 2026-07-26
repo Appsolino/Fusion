@@ -289,6 +289,26 @@ import { createFallbackModelObserver } from "./fallback-model-observer.js";
 import { recordRetry } from "./retry-burned-logger.js";
 import type { AgentActionGateContext } from "./agent-action-gate.js";
 
+/*
+FNXC:WorkflowLifecycle 2026-07-26-11:20:
+KB-PROV: Provenance of a pause/abort marker, in one named union so the ~10 signatures that pass it around cannot drift apart.
+
+- `hard-cancel` — OPERATOR withdrawal only. AGENTS.md "Move-Task contract": user `moveTask(in-progress -> todo)`, task soft-delete, and a user-sourced move out of a planning lane. These carry `userCanceled: true` into `awaitAbortInFlightTaskWork`.
+- `engine-abort` — ENGINE/lifecycle teardown with no operator intent: workflow rerun bounces, archive disposal, approval-gate suspension, engine-sourced moves, `abortAllInFlight` (shutdown/global stop), stuck-kill force-requeue. Before KB-PROV these were mislabeled `hard-cancel`.
+- `global-pause` / `merge-seam` / `completion-finalize` — unchanged FN-6568/FN-6625 seams.
+
+`hard-cancel` and `engine-abort` are the two "generic" aborts; test them together with `isGenericAbortProvenance()`.
+*/
+export type PausedAbortProvenance = "global-pause" | "merge-seam" | "hard-cancel" | "engine-abort" | "completion-finalize";
+
+/*
+FNXC:WorkflowLifecycle 2026-07-26-11:20:
+KB-PROV: The benign-abort classifiers in handleGraphFailure were written against the pre-split `hard-cancel` catch-all and exist PRECISELY to recover engine-initiated aborts (FN-6796, FN-6735, FN-7143, FN-7214, FN-7749). Splitting the label must not narrow them, so every former `=== "hard-cancel"` test routes through this predicate. Operator intent is still discriminated where it matters by `userCanceledTaskIds` / `live.userPaused`, never by the label alone.
+*/
+function isGenericAbortProvenance(provenance: PausedAbortProvenance | undefined): boolean {
+  return provenance === "hard-cancel" || provenance === "engine-abort";
+}
+
 // Re-export for backward compatibility (tests import from executor.ts)
 export { summarizeToolArgs } from "./agent-logger.js";
 export {
@@ -1878,8 +1898,13 @@ export class TaskExecutor {
    *
    * FNXC:WorkflowLifecycle 2026-06-17-23:31:
    * FN-6625 adds completion-finalize provenance for the FN-6614 symptom where a completed/no-commit execution already handed off to in-review, then a trailing graph abort looked like a pause/resume engine abort and re-parked the task failed. Completion-finalize is sibling provenance to FN-6568 merge-seam, not operator pause intent.
+   *
+   * FNXC:WorkflowLifecycle 2026-07-26-11:20:
+   * KB-PROV: `hard-cancel` had become a catch-all bucket: `awaitAbortInFlightTaskWork` stamped it unconditionally, so an ENGINE-initiated teardown was labeled with the provenance AGENTS.md reserves for the operator Move-Task hard cancel ("User moveTask(in-progress -> todo) is a hard cancel ... Engine rebounds must not set userPaused"). Observed on FN-8596: the graph's own `performWorkflowRerunBounce` (in-progress -> todo -> in-progress re-dispatch, moveSource "engine") logged `provenance=hard-cancel source=abort-in-flight:parent moved from in-progress to todo` even though `userCanceled` was correctly false and `userPaused` was never set. Behaviour was right, the LABEL lied.
+   *
+   * `engine-abort` splits that bucket: `hard-cancel` now means ONLY an operator withdrawal (`options.userCanceled === true`), `engine-abort` means an engine/lifecycle teardown. Both are "generic" (non-global-pause, non-merge-seam, non-completion-finalize) aborts, so every downstream classifier that used to accept `hard-cancel` must accept BOTH via `isGenericAbortProvenance()` — those classifiers exist FOR the engine case (see FN-6796's note that "an engine restart/pause-resume abort reaches graph-failure handling as `hard-cancel` provenance even when no user canceled the task") and discriminate real user intent through `userCanceledTaskIds`, not through the provenance label. Narrowing them to `hard-cancel` alone would strand benign engine aborts as operator-action failures.
    */
-  private pausedAbortProvenance = new Map<string, "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize">();
+  private pausedAbortProvenance = new Map<string, PausedAbortProvenance>();
   /**
    * FNXC:WorkflowLifecycle 2026-06-18-10:56:
    * FN-6644 makes completed/no-commit finalize-to-review state durable beyond volatile pause provenance. FN-6641 showed FN-6625 was incomplete because teardown can re-mark `completion-finalize` as `hard-cancel`; this marker keeps the already-finalized handoff from being re-parked as an operator-action pause abort while preserving genuine live pauses and active hard-cancels.
@@ -1931,7 +1956,7 @@ export class TaskExecutor {
 
   private markPausedAborted(
     taskId: string,
-    provenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" = "hard-cancel",
+    provenance: PausedAbortProvenance = "hard-cancel",
     source = "unspecified",
   ): void {
     const previousProvenance = this.pausedAbortProvenance.get(taskId);
@@ -2810,7 +2835,11 @@ export class TaskExecutor {
     if (options.userCanceled) {
       this.userCanceledTaskIds.add(taskId);
     }
-    this.markPausedAborted(taskId, "hard-cancel", `abort-in-flight:${reason}`);
+    /*
+    FNXC:WorkflowLifecycle 2026-07-26-11:20:
+    KB-PROV: Stamp the provenance the caller actually reported instead of a blanket `hard-cancel`. `options.userCanceled` is already the truthful operator-intent signal every caller computes (`source === "user"`, soft-delete, the registered move disposer), so derive the label from it: operator withdrawal keeps `hard-cancel`, everything else is an `engine-abort`. Without this, the FN-8596 engine rerun bounce told the operator `provenance=hard-cancel` for work the engine itself re-dispatched, and any future consumer branching on `hard-cancel` would read an engine bounce as an operator withdrawal. Behaviour is unchanged: `userPaused` is still never set by engine rebounds, and the downstream classifiers accept both labels via `isGenericAbortProvenance()`.
+    */
+    this.markPausedAborted(taskId, options.userCanceled ? "hard-cancel" : "engine-abort", `abort-in-flight:${reason}`);
     this.options.stuckTaskDetector?.untrackTask(taskId);
     this.clearWorkflowRerunWatchdog(taskId);
     this.clearCompletedTaskWatchdog(taskId);
@@ -9712,7 +9741,7 @@ export class TaskExecutor {
   private async isRetryableBenignMergePauseAbort(
     live: TaskDetail,
     result: WorkflowGraphTaskRunResult,
-    abortProvenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" | undefined,
+    abortProvenance: PausedAbortProvenance | undefined,
     pausedAborted: boolean,
   ): Promise<boolean> {
     /*
@@ -9746,16 +9775,19 @@ export class TaskExecutor {
   private isBenignInReviewPauseAbort(
     live: TaskDetail,
     result: WorkflowGraphTaskRunResult,
-    abortProvenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" | undefined,
+    abortProvenance: PausedAbortProvenance | undefined,
     pausedAborted: boolean,
     userCanceled: boolean,
   ): boolean {
     /*
     FNXC:WorkflowLifecycle 2026-06-20-00:00:
-    FN-6796: an engine restart/pause-resume abort reaches graph-failure handling as `hard-cancel` provenance even when no user canceled the task. A clean completed `in-review` row in that shape is already handed off for review and must not be stranded with the operator-action pause-abort marker; the discriminator is the in-memory `userCanceledTaskIds` set plus the resting column and clean row state, while global/user pause, merge-seam, terminal merge values, merge-confirmed partial landings, and pre-existing status/error still park exactly as before.
+    FNXC:WorkflowLifecycle 2026-07-26-11:20:
+    KB-PROV: post-split the engine case arrives as `engine-abort` and an operator withdrawal as `hard-cancel`; this classifier still accepts BOTH (`isGenericAbortProvenance`) because the `userCanceled` guard below — not the label — is the load-bearing operator-intent discriminator FN-6796 designed. Narrowing to `engine-abort` would change behaviour for the operator path.
+
+    FN-6796: an engine restart/pause-resume abort reaches graph-failure handling as `hard-cancel`/`engine-abort` provenance even when no user canceled the task. A clean completed `in-review` row in that shape is already handed off for review and must not be stranded with the operator-action pause-abort marker; the discriminator is the in-memory `userCanceledTaskIds` set plus the resting column and clean row state, while global/user pause, merge-seam, terminal merge values, merge-confirmed partial landings, and pre-existing status/error still park exactly as before.
     */
     if (!pausedAborted) return false;
-    if (abortProvenance !== "hard-cancel") return false;
+    if (!isGenericAbortProvenance(abortProvenance)) return false;
     if (userCanceled) return false;
     if (live.column !== "in-review") return false;
     if (live.userPaused === true) return false;
@@ -9780,15 +9812,15 @@ export class TaskExecutor {
   private async isBenignManualMergeHoldPauseAbort(
     live: TaskDetail,
     result: WorkflowGraphTaskRunResult,
-    abortProvenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" | undefined,
+    abortProvenance: PausedAbortProvenance | undefined,
     pausedAborted: boolean,
   ): Promise<boolean> {
     /*
     FNXC:WorkflowLifecycle 2026-07-09-14:54:
-    FN-7749 / Runfusion#1979: with auto-merge off, a manual merge hold is the healthy `in-review` resting state for Merge & Close. A benign hard-cancel pause/resume abort at any merge-region node must not park the task failed; FN-5147 forbids moving, failing, or re-enqueueing the row, so this classifier only permits preserving `in-review` and clearing a stale pause-abort status/error.
+    FN-7749 / Runfusion#1979: with auto-merge off, a manual merge hold is the healthy `in-review` resting state for Merge & Close. A benign generic (`hard-cancel`/`engine-abort`, KB-PROV 2026-07-26) pause/resume abort at any merge-region node must not park the task failed; FN-5147 forbids moving, failing, or re-enqueueing the row, so this classifier only permits preserving `in-review` and clearing a stale pause-abort status/error.
     */
     if (!pausedAborted) return false;
-    if (abortProvenance !== "hard-cancel") return false;
+    if (!isGenericAbortProvenance(abortProvenance)) return false;
     if (live.paused || live.userPaused === true) return false;
     if (live.column !== "in-review") return false;
     if (live.mergeDetails?.mergeConfirmed === true) return false;
@@ -9812,7 +9844,7 @@ export class TaskExecutor {
   private async handleStaleInReviewPlanPauseAbortReplay(
     live: TaskDetail,
     result: WorkflowGraphTaskRunResult,
-    abortProvenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" | undefined,
+    abortProvenance: PausedAbortProvenance | undefined,
     pausedAborted: boolean,
     userCanceled: boolean,
   ): Promise<boolean> {
@@ -9821,7 +9853,7 @@ export class TaskExecutor {
     FN-7143 showed that a stale graph lifecycle replay can surface at `plan` after an in-review pause/resume even though planning is not actually running anymore. Plan is not a safe re-entry point for review rows, typed or generic, so this classifier is clear/log-only: preserve in-review, never route to triage/todo, and keep genuine user/global pauses plus real plan failures on the operator-action path.
     */
     if (!pausedAborted) return false;
-    if (abortProvenance !== "hard-cancel" && abortProvenance !== "global-pause") return false;
+    if (!isGenericAbortProvenance(abortProvenance) && abortProvenance !== "global-pause") return false;
     if (userCanceled) return false;
     if (live.column !== "in-review") return false;
     if (live.paused || live.userPaused === true) return false;
@@ -9884,7 +9916,7 @@ export class TaskExecutor {
   private async handleStaleInReviewParsePauseAbortReplay(
     live: TaskDetail,
     result: WorkflowGraphTaskRunResult,
-    abortProvenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" | undefined,
+    abortProvenance: PausedAbortProvenance | undefined,
     pausedAborted: boolean,
     userCanceled: boolean,
   ): Promise<boolean> {
@@ -9893,7 +9925,7 @@ export class TaskExecutor {
     A stale in-review pause/resume replay at `parse` is not an operator action. Unlike `plan`, parse is a safe workflow re-entry point for review rows, so auto-retry the graph with the shared transient resume budget and suppress the parked failure notification.
     */
     if (!pausedAborted) return false;
-    if (abortProvenance !== "hard-cancel" && abortProvenance !== "global-pause") return false;
+    if (!isGenericAbortProvenance(abortProvenance) && abortProvenance !== "global-pause") return false;
     if (userCanceled) return false;
     if (live.column !== "in-review") return false;
     if (live.paused || live.userPaused === true) return false;
@@ -9990,7 +10022,7 @@ export class TaskExecutor {
   private async isReentrantPausedAbortedInFlightNode(
     live: TaskDetail,
     result: WorkflowGraphTaskRunResult,
-    abortProvenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" | undefined,
+    abortProvenance: PausedAbortProvenance | undefined,
     pausedAborted: boolean,
     userCanceled: boolean,
   ): Promise<boolean> {
@@ -10002,7 +10034,7 @@ export class TaskExecutor {
     A global engine pause aborts active workflow graph controllers with `global-pause` provenance; after the global pause is lifted, the typed interrupted-node marker is sufficient to re-enter that node. Only active global-pause settings and explicit task/user pauses remain terminal so resume never runs behind an operator-controlled pause.
     */
     if (!pausedAborted) return false;
-    if (abortProvenance !== "hard-cancel" && abortProvenance !== "global-pause") return false;
+    if (!isGenericAbortProvenance(abortProvenance) && abortProvenance !== "global-pause") return false;
     if (userCanceled) return false;
     if (live.paused || live.userPaused === true) return false;
     if (live.status != null || live.error != null) return false;
@@ -10035,7 +10067,7 @@ export class TaskExecutor {
   private async reenterPausedAbortedWorkflowNode(
     live: TaskDetail,
     result: WorkflowGraphTaskRunResult,
-    abortProvenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" | undefined,
+    abortProvenance: PausedAbortProvenance | undefined,
   ): Promise<boolean> {
     const nodeId = result.interruptedNodeId ?? result.visitedNodeIds[result.visitedNodeIds.length - 1] ?? "unknown";
     const priorRetries = live.graphResumeRetryCount ?? 0;
@@ -10116,13 +10148,13 @@ export class TaskExecutor {
   private async routeGraphMergeFailureToRetry(
     live: TaskDetail,
     result: WorkflowGraphTaskRunResult,
-    abortProvenance: "global-pause" | "merge-seam" | "hard-cancel" | "completion-finalize" | undefined,
+    abortProvenance: PausedAbortProvenance | undefined,
   ): Promise<boolean> {
     if (!this.mergeRequester) return false;
     /* FNXC:WorkflowMerge 2026-07-12-17:38: FN-1165 defense in depth — implementation-incomplete merge graph failures must never reach the merge requester, because a no-branch task can otherwise be finalized as an intentional no-op. */
     if (this.graphFailureValue(result) === "implementation-incomplete") return false;
     const failedNode = result.visitedNodeIds[result.visitedNodeIds.length - 1] ?? "unknown";
-    const message = `Workflow graph merge failure at node '${failedNode}' routed to bounded auto-merge retry${abortProvenance === "merge-seam" ? " after merge-seam abort" : abortProvenance === "hard-cancel" || abortProvenance === undefined ? " after benign pause/resume abort" : ""}`;
+    const message = `Workflow graph merge failure at node '${failedNode}' routed to bounded auto-merge retry${abortProvenance === "merge-seam" ? " after merge-seam abort" : isGenericAbortProvenance(abortProvenance) || abortProvenance === undefined ? " after benign pause/resume abort" : ""}`;
     executorLog.warn(`${live.id}: ${message}`);
     await this.store.logEntry(live.id, message, undefined, this.getRunContextFor(live.id));
     try {
@@ -10524,7 +10556,8 @@ export class TaskExecutor {
                 : "task pause";
         // Typed discriminant for the engine-internal abort case (mirrors the
         // `pauseProvenance === "engine abort during pause/resume"` arm above):
-        // a hard-cancel teardown that is NOT a user pause or global pause. Used
+        // a generic (`hard-cancel`/`engine-abort`, KB-PROV 2026-07-26) teardown that is
+        // NOT a user pause or global pause. Used
         // to gate the auto-continue branch so the gate cannot silently drift if
         // the human-readable provenance label is ever revised.
         const isEngineInternalAbort =
@@ -10681,7 +10714,7 @@ export class TaskExecutor {
           benign teardown, not an operator problem. The live-acceptance repro:
           the workflow merge boundary hard-cancels the in-flight executor
           session when it moves the task in-progress → in-review
-          (abort-in-flight provenance=hard-cancel), the AI merge then lands and
+          (abort-in-flight provenance=engine-abort, formerly hard-cancel — KB-PROV 2026-07-26), the AI merge then lands and
           the task advances to done — and only afterwards does the aborted
           graph run reach this sink, where it logged "Workflow graph failure
           surfaced ... operator action required; retry or explicitly
@@ -20143,8 +20176,10 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
             executorLog.warn(`${taskId}: spawned child cleanup failed during force-requeue: ${err instanceof Error ? err.message : String(err)}`);
           });
           await this.awaitAbortInFlightTaskWork(taskId, "force-requeue after stuck-kill unwind timeout");
-          // awaitAbortInFlightTaskWork marks pausedAborted as a generic hard-cancel
-          // signal. The force-requeue path has already handled the task move, so
+          // awaitAbortInFlightTaskWork marks pausedAborted as a generic abort
+          // signal (KB-PROV 2026-07-26: `engine-abort`, since the force-requeue is
+          // engine-initiated and passes no `userCanceled`).
+          // The force-requeue path has already handled the task move, so
           // clear it to prevent a later subprocess unwind from logging/moving as a pause.
           this.clearPausedAborted(taskId);
 
