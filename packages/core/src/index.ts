@@ -812,6 +812,7 @@ export {
 } from "./near-duplicate.js";
 export { getTaskDuplicateLineage } from "./duplicate-lineage.js";
 export {
+  parseDuplicateMarkerFromSessionText,
   parseExplicitDuplicateMarker,
   type ExplicitDuplicateMarker,
 } from "./explicit-duplicate-marker.js";

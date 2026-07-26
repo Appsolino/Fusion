@@ -1401,6 +1401,14 @@ export class TriageProcessor {
   /** Coalescing window for requestImmediatePoll, so a multi-card drag causes one poll, not N. */
   private static readonly NUDGE_DEBOUNCE_MS = 150;
 
+  /**
+   * FNXC:DuplicateIntake 2026-07-26-10:40:
+   * How much of the planner's visible reply is retained for duplicate-verdict recovery. The marker
+   * convention places the verdict in the closing summary, so a tail is sufficient and keeps a long
+   * planning run from accumulating every streamed token in memory.
+   */
+  private static readonly SESSION_TEXT_TAIL_CHARS = 4000;
+
   private async poll(): Promise<void> {
     if (!this.running) return;
     if (this.polling) return;
@@ -1696,6 +1704,13 @@ export class TriageProcessor {
     checkout). Declared at method scope because registration happens deep inside the try.
     */
     let registeredPlanningPath: string | null = null;
+
+    /*
+    FNXC:DuplicateIntake 2026-07-26-10:40:
+    Bounded tail of the planner's visible reply, used only to recover a duplicate verdict the planner
+    announced in prose instead of writing to PROMPT.md (FN-8600).
+    */
+    let sessionTextTail = "";
 
     planLog.log(
       `Specifying ${task.id}: ${task.title || task.description.slice(0, 60)}`,
@@ -2062,7 +2077,20 @@ export class TriageProcessor {
           systemPromptLayers: triageLayers,
           tools: "coding",
           customTools,
-          onText: agentLogger.onText,
+          onText: (text: string) => {
+            /*
+            FNXC:DuplicateIntake 2026-07-26-10:40:
+            Tee the planner's visible text into a bounded tail so a duplicate verdict announced in the
+            REPLY (rather than written to PROMPT.md) is still recoverable at finalize — see the
+            recovery block below. AgentLogger flushes and clears its own buffer on a timer, so it
+            cannot be read back for this; this tail is independent of it and never replaces it.
+            Bounded to the last SESSION_TEXT_TAIL_CHARS characters because the marker convention puts
+            the verdict in the closing summary, and an unbounded accumulator would grow with every
+            streamed token of a long planning run.
+            */
+            sessionTextTail = `${sessionTextTail}${text}`.slice(-TriageProcessor.SESSION_TEXT_TAIL_CHARS);
+            agentLogger.onText(text);
+          },
           onThinking: agentLogger.onThinking,
           onToolStart: agentLogger.onToolStart,
           onToolEnd: agentLogger.onToolEnd,
@@ -2320,7 +2348,7 @@ export class TriageProcessor {
             ).catch(() => undefined);
           }
 
-          const written = await readFile(
+          let written = await readFile(
             join(this.rootDir, promptPath),
             "utf-8",
           ).catch((err: unknown) => {
@@ -2328,6 +2356,46 @@ export class TriageProcessor {
             planLog.warn(`${task.id}: failed to read generated PROMPT.md before finalization (${promptPath}): ${msg}`);
             return "";
           });
+
+          /*
+          FNXC:DuplicateIntake 2026-07-26-10:40:
+          Recover a duplicate verdict the planner reported in its REPLY instead of writing it to
+          PROMPT.md. FN-8600: the planner found the duplicate, said `DUPLICATE: FN-8595`, and stated
+          "No new PROMPT.md written" — a reasonable reading of an instruction that said not to write a
+          spec. The engine reads the verdict only from the file, so it saw no plan at all, failed
+          deterministic validation, retried, terminalized, self-healed to todo, and re-planned in a
+          loop, never recording the operator's keep-or-delete decision.
+
+          Recovery WRITES the canonical marker file rather than routing the verdict through a second
+          code path, so everything downstream — marker parse, keep/delete resolution, the
+          `nearDuplicateOf` metadata the dashboard decision renders from — runs unchanged and cannot
+          drift from the file-based contract.
+
+          Gated on a genuinely absent plan: only when the file read produced nothing does prose get a
+          vote. A planner that wrote a real spec is never second-guessed by something it said, and the
+          line-anchored parser ignores a marker merely mentioned mid-sentence.
+          */
+          if (!written.trim()) {
+            const recoveredMarker = fusionCore.parseDuplicateMarkerFromSessionText(sessionTextTail);
+            if (recoveredMarker) {
+              const markerBody = `DUPLICATE: ${recoveredMarker.canonicalId}\n`;
+              const recovered = await writeFile(join(this.rootDir, promptPath), markerBody, "utf-8")
+                .then(() => true)
+                .catch((err: unknown) => {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  planLog.warn(`${task.id}: failed to persist recovered duplicate marker: ${msg}`);
+                  return false;
+                });
+              if (recovered) {
+                written = markerBody;
+                planLog.log(`${task.id}: recovered duplicate verdict ${recoveredMarker.canonicalId} from the planner's reply (no PROMPT.md was written)`);
+                await this.store.logEntry(
+                  task.id,
+                  `Recovered duplicate verdict from the planning reply — the planner reported ${recoveredMarker.canonicalId} without writing PROMPT.md`,
+                ).catch(() => undefined);
+              }
+            }
+          }
 
           // FN-5220: planning agents that emit a `DUPLICATE: FN-NNNN` redirect
           // short-circuit normal spec finalization.
