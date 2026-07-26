@@ -141,7 +141,10 @@ While the sidebar is active on desktop/tablet project screens, Board and List wo
 
 The active nav-item highlight and the resize-handle hover/focus accent track the active color theme's `--accent` token across all themes, so shadcn, forest, ocean, and other themes no longer show a fixed blue selected state. The Header retains the Fusion brand and project selector, keeps non-navigation controls, and hides duplicate desktop view-toggle entries while the sidebar is active.
 
-On mobile viewports (`<=768px`), the sidebar is not rendered even when the default-on setting is enabled. The existing bottom `MobileNavBar` remains the navigation surface, with mobile-only More-sheet entries for compact tools such as Git Manager, Terminal, Files, and **Import from GitHub**.
+On mobile viewports (`<=768px`), the sidebar is not rendered even when the default-on setting is enabled. The existing bottom `MobileNavBar` remains the navigation surface on project task screens, with mobile-only More-sheet entries for compact tools such as Git Manager, Terminal, Files, and **Import from GitHub**.
+
+<!-- FNXC:DashboardResponsiveDocs 2026-07-25-22:57: Project overview has no task destinations, so the mobile navigation and its published height must be absent rather than leaving dead bottom space. Document the 320px responsive and token conventions alongside the operator-visible behavior. -->
+On the **All Projects** overview, Fusion suppresses the mobile bottom nav because task tabs are not active there. It also clears `--mobile-nav-height`, so the overview does not reserve bottom-bar space. The overview reflows through 320px: headers, filters, stats, and card actions stack or wrap, while long project names and paths truncate rather than overflowing. Dashboard component styles use literal pixel values for media-query breakpoints (including `480px` and `380px`); declaration values within those blocks stay token-based.
 
 ## Right Dock (experimental, default on)
 
