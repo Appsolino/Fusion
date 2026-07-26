@@ -466,6 +466,14 @@ export type DatabaseMutationType =
   | "task:checkout"
   /** Metadata: { taskId, artifactKeys, owner, source, action, attempt, maxAttempts, nodeId? } */
   | "task:required-artifact-missing"
+  /**
+   * Planning admission was withheld because no top-level slot was reservable.
+   * Metadata: { blockedBy, maxConcurrent, claimed, projectRoom, eligibleCount, eligibleTaskIds,
+   * processingCount, processingTaskIds, semaphoreActiveCount?, semaphoreLimit?,
+   * semaphoreAvailableCount?, semaphoreWaitingCount? } — ids/counts/outcomes only.
+   * Deduped on the gate signature, so a sustained stall emits one row, not one per poll.
+   */
+  | "task:plan-admission-throttled"
   | "agent:auto-recover-error-state"
   | "agent:reset-error-state-on-startup"
   | "agent:error-retry-exhausted"
