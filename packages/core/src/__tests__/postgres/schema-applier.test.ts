@@ -25,7 +25,6 @@ import { describe, it, expect, afterEach, beforeAll } from "vitest";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { sql } from "drizzle-orm";
-import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -270,15 +269,55 @@ function uniqueDbName(): string {
 /*
 FNXC:PgTestAuthFix 2026-07-14-00:00:
 The inline adminExec used process.env.USER for the psql -U flag, which is 'runner' on GitHub Actions (not 'postgres'). Use the PG_TEST_URL_BASE connection string instead so credentials are always correct.
+
+FNXC:PgSchemaApplierSlowTest 2026-07-23-17:30:
+Slow-test fix: adminExec previously spawned a fresh `psql` subprocess per call via
+execSync. setupFreshDb made two such spawns (a redundant DROP + the CREATE) and
+teardownDb a third, so ~55 tests paid ~165 process starts — dominating this file's
+~90s wall-time. Route admin CREATE/DROP DATABASE through a short-lived postgres.js
+maintenance connection instead (postgres.js sends each statement as a simple query,
+so CREATE/DROP DATABASE runs fine outside any transaction — empirically verified).
+This mirrors the shared pg-test-harness `adminExecAsync` rationale: no shell
+children to orphan past the test timeout, and the call is timeout-bounded with a
+forced socket close so a stuck catalog lock cannot hang the vitest worker.
 */
-function adminExec(statement: string): void {
-  // psql via execSync for DDL that the postgres.js connection pool can't run
-  // (CREATE/DROP DATABASE cannot run inside a transaction). This is short
-  // deterministic DDL, the acceptable execSync use per AGENTS.md.
-  execSync(`psql "${PG_TEST_URL_BASE}/postgres" -v ON_ERROR_STOP=1 -c "${statement.replace(/"/g, '\\"')}"`, {
-    stdio: "pipe",
-    env: process.env,
-  });
+async function adminExec(statement: string, timeoutMs = 15_000): Promise<void> {
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let client: ReturnType<typeof postgres> | undefined;
+  try {
+    await Promise.race([
+      (async () => {
+        client = postgres(`${PG_TEST_URL_BASE}/postgres`, {
+          max: 1,
+          prepare: false,
+          onnotice: () => {},
+        });
+        // Server-side cancel slightly before the JS race so PG stops the statement.
+        const serverTimeoutMs = Math.max(1_000, timeoutMs - 500);
+        await client.unsafe(`SET statement_timeout = ${serverTimeoutMs}`);
+        await client.unsafe(statement);
+      })(),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          // Force-close the socket so a late DROP/CREATE cannot outlive this call.
+          void client?.end({ timeout: 0 }).catch(() => {});
+          reject(new Error(`adminExec timed out after ${timeoutMs}ms: ${statement}`));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (timedOut) throw error;
+    throw new Error(
+      `adminExec failed: ${error instanceof Error ? error.message : String(error)}\nstatement: ${statement}`,
+    );
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (client) {
+      await client.end({ timeout: 5 }).catch(() => {});
+    }
+  }
 }
 
 interface TestContext {
@@ -290,12 +329,10 @@ interface TestContext {
 
 async function setupFreshDb(): Promise<TestContext> {
   const dbName = uniqueDbName();
-  try {
-    adminExec(`DROP DATABASE IF EXISTS "${dbName}"`);
-  } catch {
-    // ignore — may not exist
-  }
-  adminExec(`CREATE DATABASE "${dbName}"`);
+  // FNXC:PgSchemaApplierSlowTest 2026-07-23-17:30: uniqueDbName is pid+random, so
+  // the database can never pre-exist — the former DROP-before-CREATE was a pure
+  // wasted admin round-trip per test and is removed.
+  await adminExec(`CREATE DATABASE "${dbName}"`);
   const testUrl = `${PG_TEST_URL_BASE}/${dbName}`;
   const sqlConn = postgres(testUrl, { max: 2, prepare: false, onnotice: () => {} });
   const db = drizzle(sqlConn);
@@ -310,7 +347,7 @@ async function teardownDb(ctx: TestContext | null): Promise<void> {
     // best-effort
   }
   try {
-    adminExec(`DROP DATABASE IF EXISTS "${ctx.dbName}"`);
+    await adminExec(`DROP DATABASE IF EXISTS "${ctx.dbName}"`);
   } catch {
     // best-effort
   }
