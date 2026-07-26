@@ -87,6 +87,10 @@ Press `Escape` to close the current/topmost dashboard popup. Popped-out task win
 Movable dashboard pop-outs remember their last desktop location and size, while centered resizable dialogs remember their size. When a pop-out becomes a full-screen sheet at mobile widths (or, for Artifact Gallery, its short-height sheet breakpoint), it leaves that desktop record untouched; reopening it on desktop restores the prior floating geometry.
 
 <!-- FNXC:TaskModalResizeDocs 2026-07-26-15:55: Known touch tablets at the 768px CSS boundary use the shared physical-screen-aware viewport classification, so documentation must distinguish their resize contract from true phones that share the CSS media query. Tablet target expansion is hit-area-only and must never add a visible panel inset. -->
+### Dashboard modal inventory
+
+The grep-backed [dashboard modal inventory](./dashboard-modal-inventory.md) is the canonical migration plan for every dashboard modal surface, including explicit static-dialog opt-outs.
+
 ### Task modal resizing on tablets
 
 Task Detail and New Task remain resizable on known touch tablets, including a 768px-wide tablet viewport. Task Detail exposes its accessible bottom-right resize grip; New Task keeps its draggable header and edge/corner resize controls. On that tablet-touch surface, the painted control remains compact but its explicit resize hit target is at least 44px, sits outside the panel content, and owns touch gestures with pointer capture. The touch target is hit-area-only: task-modal headers and bodies retain desktop density without a visible tablet padding band. Their geometry stays within the viewport and is restored from browser storage on later tablet or desktop opens. True phones, narrow folded panes, and desktop coarse-pointer devices do not receive the enlarged target: phones remain full-screen sheets and desktop preserves cursor-sized resize chrome.
