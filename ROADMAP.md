@@ -7,6 +7,9 @@
 - All work backed by tasks and workflows
 - New granular workflows (bug fix, new feature, refsctor, design doc, redesign, etc)
 - CEO as overall orchestrator
+- Dashboard API redesign
+- Dashboard websocket migration
+- React remount cleanup
 - Import from Beads
 - Improved overseer
 - Orca integration
