@@ -49,7 +49,10 @@ export async function getSettingsImpl(store: TaskStore): Promise<Settings> {
       } catch {
         merged.secretsSyncPassphraseConfigured = false;
       }
-      return canonicalizeSettings(merged);
+      const canonical = canonicalizeSettings(merged);
+      // FNXC:IncompletePgPorts 2026-07-26-20:40: feed getSettingsSync cache for sync ntfy/prompt readers.
+      store.settingsSyncCache = canonical;
+      return canonical;
     }
     const [globalSettings, config] = await Promise.all([
       store.globalSettingsStore.getSettings(),
@@ -107,7 +110,10 @@ export async function getSettingsFastImpl(store: TaskStore): Promise<Settings> {
       } catch {
         merged.secretsSyncPassphraseConfigured = false;
       }
-      return canonicalizeSettings(merged);
+      const canonical = canonicalizeSettings(merged);
+      // FNXC:IncompletePgPorts 2026-07-26-20:40: feed getSettingsSync cache (fast path).
+      store.settingsSyncCache = canonical;
+      return canonical;
     }
     const [globalSettings, row] = await Promise.all([
       store.globalSettingsStore.getSettings(),

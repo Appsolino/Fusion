@@ -213,6 +213,21 @@ export function applyBuiltInPromptOverridesSyncImpl(store: TaskStore, workflowId
     return applyPromptOverridesToIr(ir, overrides);
 }
 
+/*
+FNXC:IncompletePgPorts 2026-07-26-20:40:
+Async sibling for applyBuiltInPromptOverridesSyncImpl. Backend mode must load
+workflow_prompt_overrides via Drizzle; the sync reader returns {} on PG and
+silently dropped operator customizations from getWorkflowDefinition / move IR.
+*/
+export async function applyBuiltInPromptOverridesAsyncImpl(store: TaskStore, workflowId: string, ir: WorkflowIr): Promise<WorkflowIr> {
+    if (!isBuiltinWorkflowId(workflowId)) return ir;
+    const projectId = store.getWorkflowSettingsProjectId();
+    const overrides = store.backendMode
+      ? await store.getWorkflowPromptOverridesAsync(workflowId, projectId)
+      : store.getWorkflowPromptOverrides(workflowId, projectId);
+    return applyPromptOverridesToIr(ir, overrides);
+}
+
 export async function getDefaultWorkflowIdImpl(store: TaskStore): Promise<string | undefined> {
     const settings = await store.getSettingsFast();
     const id = (settings as { defaultWorkflowId?: string }).defaultWorkflowId;
@@ -238,16 +253,48 @@ export async function clearTaskWorkflowSelectionImpl(store: TaskStore, taskId: s
 
 export function refreshDatabaseHealthImpl(store: TaskStore): ReturnType<TaskStore["getDatabaseHealth"]> {
     /*
-     * FNXC:SqliteFinalRemoval 2026-06-25-16:30:
-     * In backend mode, the SQLite integrity_check refresh path is not
-     * applicable (PostgreSQL manages its own integrity). Delegate to
-     * getDatabaseHealth() which returns the healthy sentinel.
-     */
+    FNXC:IncompletePgPorts 2026-07-26-20:40:
+    Sync refresh cannot await PostgreSQL. Kick a background async refresh when
+    a layer is present, then return the last snapshot (or optimistic healthy
+    until the first probe completes). Prefer refreshDatabaseHealthAsync from
+    async callers (self-healing surfaceDbCorruption).
+    */
     if (store.backendMode) {
+      void refreshDatabaseHealthAsyncImpl(store).catch(() => undefined);
       return store.getDatabaseHealth();
     }
     store.db.refreshIntegrityCheck();
     return store.getDatabaseHealth();
+}
+
+/*
+FNXC:IncompletePgPorts 2026-07-26-20:40:
+Probe AsyncDataLayer.ping + pg_stat_database via checkPostgresHealth and store
+the result on TaskStore.postgresHealthSnapshot for sync getDatabaseHealth /
+healthCheck readers.
+*/
+export async function refreshDatabaseHealthAsyncImpl(store: TaskStore): Promise<ReturnType<TaskStore["getDatabaseHealth"]>> {
+    if (!store.backendMode || !store.asyncLayer) {
+      return refreshDatabaseHealthImpl(store);
+    }
+    store.postgresHealthSnapshot = {
+      healthy: store.postgresHealthSnapshot?.healthy ?? true,
+      corruptionDetected: store.postgresHealthSnapshot?.corruptionDetected ?? false,
+      corruptionErrors: store.postgresHealthSnapshot?.corruptionErrors ?? [],
+      lastCheckedAt: store.postgresHealthSnapshot?.lastCheckedAt ?? null,
+      isRunning: true,
+    };
+    const { checkPostgresHealth } = await import("../postgres/postgres-health.js");
+    const errors = await checkPostgresHealth(store.asyncLayer);
+    const now = new Date();
+    store.postgresHealthSnapshot = {
+      healthy: errors.length === 0,
+      corruptionDetected: errors.length > 0,
+      corruptionErrors: errors.slice(0, 5),
+      lastCheckedAt: now,
+      isRunning: false,
+    };
+    return store.postgresHealthSnapshot;
 }
 
 export async function clearActivityLogImpl(store: TaskStore): Promise<void> {
