@@ -202,7 +202,8 @@ export class PeerExchangeService {
   async syncWithAllPeers(): Promise<SyncResult[]> {
     // Single-flight: if a sync is already running, return that
     if (this.activeSync) {
-      peerExchangeLog.log("Sync already in progress, skipping");
+      // FNXC:EngineDiagnostics 2026-07-26-08:17: overlapping sync ticks are expected under load — not operator-actionable.
+      peerExchangeLog.debug("Sync already in progress, skipping");
       await this.activeSync;
       return [];
     }
@@ -226,7 +227,7 @@ export class PeerExchangeService {
       );
 
       if (onlineRemoteNodes.length === 0) {
-        peerExchangeLog.log("No online remote nodes to sync with");
+        peerExchangeLog.debug("No online remote nodes to sync with");
         return;
       }
 

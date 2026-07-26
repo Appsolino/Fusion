@@ -433,6 +433,7 @@ describe("createFnAgent skills parameter", () => {
   });
 
   it("skills auto-derivation logs the convenience parameter", async () => {
+    const piDebugSpy = vi.spyOn(piLog, "debug").mockImplementation(() => {});
     const options: AgentOptions = {
       cwd: "/test/project",
       systemPrompt: "Test",
@@ -441,10 +442,14 @@ describe("createFnAgent skills parameter", () => {
 
     await createFnAgent(options);
 
-    // Verify the log message includes the skill names
-    expect(piLogSpy).toHaveBeenCalledWith(
+    // Steady-state skill-request chatter is debug-gated so it does not fill the TUI.
+    expect(piDebugSpy).toHaveBeenCalledWith(
       expect.stringContaining("Using skills from convenience parameter: [review, fusion]")
     );
+    expect(piLogSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("Using skills from convenience parameter: [review, fusion]")
+    );
+    piDebugSpy.mockRestore();
   });
 
   it("resolves project root via resolvePiExtensionProjectRoot for non-worktree paths", async () => {

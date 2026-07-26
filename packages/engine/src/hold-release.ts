@@ -729,8 +729,9 @@ async function issueRelease(
   } catch (error) {
     if (error instanceof TransitionRejectionError && error.rejection.code === "capacity-exhausted") {
       // Lost the in-txn race for the slot — release the reservation, stay held.
+      // FNXC:EngineDiagnostics 2026-07-26-08:17: capacity races re-hit every sweep while full; same class as deferred-no-slot → debug.
       reservation?.release();
-      schedulerLog.log(`Hold release for ${task.id} rejected on capacity for ${target} — staying held`);
+      schedulerLog.debug(`Hold release for ${task.id} rejected on capacity for ${target} — staying held`);
       return false;
     }
     // Any other failure: release the reservation and let the card stay held.

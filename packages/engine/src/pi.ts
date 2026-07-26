@@ -2329,7 +2329,11 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
   // Resolve skill selection: explicit skillSelection wins over convenience `skills`
   let effectiveSkillSelection: SkillSelectionContext | undefined = options.skillSelection;
   if (!effectiveSkillSelection && options.skills && options.skills.length > 0) {
-    piLog.log(`Using skills from convenience parameter: [${options.skills.join(", ")}]`);
+    /*
+    FNXC:EngineDiagnostics 2026-07-26-08:01:
+    Per-session "Using skills from convenience parameter" and "Requested skill: <name>" lines fire on every agent start and filled the TUI log pane. Keep them on debug (FUSION_DEBUG=pi); missing/not-found and warn/error skill diagnostics stay visible.
+    */
+    piLog.debug(`Using skills from convenience parameter: [${options.skills.join(", ")}]`);
     effectiveSkillSelection = {
       projectRootDir: resolvedProjectRoot,
       requestedSkillNames: options.skills,
@@ -2348,6 +2352,8 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
         const msg = `[skills] [${purpose}] ${diag.type}: ${diag.message}`;
         if (diag.type === "error") piLog.error(msg);
         else if (diag.type === "warning") piLog.warn(msg);
+        // Steady-state listing of each requested name (not the 'not found' miss diagnostics).
+        else if (diag.type === "info" && diag.message.startsWith("Requested skill:")) piLog.debug(msg);
         else piLog.log(msg);
       }
     }

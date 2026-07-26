@@ -179,7 +179,8 @@ export class RoutineScheduler {
       for (const routine of dueRoutines) {
         // Skip if already executed this tick (de-duplication across scopes)
         if (executedIds.has(routine.id)) {
-          logger.log(`[${routine.id}] Skipped: already executed from another scope this tick`);
+          // FNXC:EngineDiagnostics 2026-07-26-08:17: multi-scope skip chatter is expected; processing/execute stays at info.
+          logger.debug(`[${routine.id}] Skipped: already executed from another scope this tick`);
           continue;
         }
         executedIds.add(routine.id);
@@ -187,7 +188,7 @@ export class RoutineScheduler {
         // Log which scope this routine is from
         const routineScope = routine.scope ?? "project";
         if (routineScope !== this.scope && this.scope !== "all") {
-          logger.log(`[${routine.id}] Skipped: belongs to ${routineScope} scope, not polling`);
+          logger.debug(`[${routine.id}] Skipped: belongs to ${routineScope} scope, not polling`);
           continue;
         }
 
@@ -232,7 +233,7 @@ export class RoutineScheduler {
 
     // Skip if disabled
     if (!routine.enabled) {
-      logger.log(`[${routineId}] Skipped: routine is disabled`);
+      logger.debug(`[${routineId}] Skipped: routine is disabled`);
       return;
     }
 

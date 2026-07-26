@@ -386,6 +386,15 @@ function isMissingConfiguredPatternDiagnostic(diag: ResourceDiagnostic): boolean
     && diag.message.includes("' not found in discovered skills");
 }
 
+/*
+FNXC:EngineDiagnostics 2026-07-26-08:01:
+"Requested skill: <name>" is a per-session listing diagnostic (not a miss). Emitting it at info filled the TUI with one line per skill on every session start. Keep the ResourceDiagnostic for programmatic consumers; mirror only to piLog.debug (FUSION_DEBUG=pi). Distinct from `Requested skill '…' not found…` miss diagnostics, which stay at info.
+*/
+function isRequestedSkillListingDiagnostic(diag: ResourceDiagnostic): boolean {
+  const diagnosticType = diag.type as string;
+  return diagnosticType === "info" && diag.message.startsWith("Requested skill:");
+}
+
 /**
  * Options for skills override filtering.
  * We track requested names here so we can validate against base.skills.
@@ -538,6 +547,7 @@ export function createSkillsOverrideFromSelection(
         const msg = `[skills] ${diag.type}: ${diag.message}`;
         if (diag.type === "error") piLog.error(msg);
         else if (diag.type === "warning") piLog.warn(msg);
+        else if (isRequestedSkillListingDiagnostic(diag)) piLog.debug(msg);
         else piLog.log(msg);
       }
     }

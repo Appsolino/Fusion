@@ -274,7 +274,11 @@ export class StuckTaskDetector {
   start(): void {
     if (this.interval) return;
     this.interval = setInterval(() => {
-      stuckLog.log("Running periodic stuck task check (polling)");
+      /*
+      FNXC:EngineDiagnostics 2026-07-26-08:20:
+      The poll tick fires every pollIntervalMs with no state change. Logging it at info filled the TUI with steady-state "Running periodic stuck task check" lines. Keep on debug (FUSION_DEBUG=stuck-detector); real stuck detections and check errors stay on log/warn/error.
+      */
+      stuckLog.debug("Running periodic stuck task check (polling)");
       this.checkStuckTasks().catch((err) => {
         stuckLog.error("Error checking stuck tasks:", err);
       });
@@ -387,8 +391,12 @@ export class StuckTaskDetector {
           this.pushToolFingerprint(entry, fingerprint);
         }
       }
+      /*
+      FNXC:EngineDiagnostics 2026-07-26-08:14:
+      Text/tool heartbeats fire many times per session. These sampled "Activity recorded" lines are steady-state liveness chatter and filled the TUI log pane; keep them on debug (FUSION_DEBUG=stuck-detector). Real stuck detections and track/untrack state changes stay on log/warn/error.
+      */
       if (entry.activitySinceProgress <= 3 || entry.activitySinceProgress % 50 === 0) {
-        stuckLog.log(
+        stuckLog.debug(
           `Activity recorded for ${taskId} (sinceProgress=${entry.activitySinceProgress}` +
           `${toolName ? `, tools=${entry.toolFingerprints.length}` : ""})`,
         );
