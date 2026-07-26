@@ -977,6 +977,30 @@ async function getAgentMemoryWindow(rootDir: string, agentMemory: AgentMemoryCon
 
 // ── Tool factory functions ────────────────────────────────────────────────
 
+/**
+ * FNXC:EphemeralAgentTaskCreation 2026-07-26-06:20:
+ * When the project policy is `deny`, an ephemeral/runtime task-worker must not merely
+ * be REFUSED at execute time — `fn_task_create` must not be registered for that session
+ * at all, so the model never sees the tool in its tool list.
+ *
+ * Incident: an executing agent under a `deny` project fired five parallel `fn_task_create`
+ * calls, reported them as timed out, retried them sequentially, and left ten tasks on a
+ * board whose operator had switched follow-up creation off. An execute-time-only refusal
+ * still invites the model to plan around the tool, burn turns retrying it, and — on any
+ * lane where `callerIsEphemeral` fails to reach the factory — create the tasks anyway.
+ * Suppressing registration makes the operator's Deny structural instead of advisory.
+ *
+ * `upon_validation` keeps the tool registered: that policy routes a proposal to the
+ * operator mailbox and is a supported agent action, not a prohibition.
+ */
+export function isAgentTaskCreateToolAvailable(
+  settings: Pick<Settings, "ephemeralAgentTaskCreationPolicy" | "ephemeralAgentsCanCreateTasks"> | undefined | null,
+  callerIsEphemeral: boolean | undefined,
+): boolean {
+  if (!callerIsEphemeral) return true;
+  return fusionCore.resolveEphemeralTaskCreationPolicy(settings ?? {}) !== "deny";
+}
+
 type AgentTaskCreationOptions = {
   rootDir?: string;
   bypassDuplicateCheck?: boolean;

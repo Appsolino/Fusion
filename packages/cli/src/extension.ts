@@ -729,18 +729,30 @@ FNXC:EphemeralAgentTaskCreation 2026-07-01-00:00:
 fn_task_create runs inside whatever agent loaded the pi extension. When the caller is an ephemeral/runtime task-worker (executor-FN-XXXX and friends), the project setting `ephemeralAgentsCanCreateTasks` decides whether it may open new tasks.
 Human/dashboard/CLI callers have no `ctx.agentId`, so they are never gated here — the setting only constrains runtime-managed agents.
 Resolution is fail-open on lookup errors: a missing/unresolvable caller is treated as non-ephemeral so a store hiccup never blocks legitimate task creation.
+
+FNXC:EphemeralAgentTaskCreation 2026-07-26-06:20:
+Fail-open was too generous for the identity signal itself. A runtime task-worker session always
+carries a caller id; only a human/dashboard/CLI caller has none. So an id that is PRESENT but does
+not resolve to an agent row (deleted ephemeral row, cross-project store, transient read failure) is
+a runtime caller with an unknown identity, and is now classified ephemeral so the project policy
+still applies. An absent id keeps the old human pass-through, and a resolved permanent agent is
+still never gated.
+
+Incident: with the project policy on Deny, an executing agent still filed ten follow-up tasks —
+an execute-time gate that answers "not ephemeral" whenever identity resolution comes up empty is
+indistinguishable from no gate at all on exactly the sessions the setting exists to constrain.
 */
 async function isEphemeralCallerAgent(cwd: string, callerAgentId: string | undefined): Promise<boolean> {
   if (!callerAgentId) return false;
   try {
-    
+
     const agentStore = await getAgentStore(cwd);
     await agentStore.init();
     const agent = await agentStore.resolveAgent(callerAgentId);
-    if (!agent) return false;
+    if (!agent) return true;
     return isEphemeralAgent(agent);
   } catch {
-    return false;
+    return true;
   }
 }
 

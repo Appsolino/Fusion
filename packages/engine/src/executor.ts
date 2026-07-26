@@ -256,6 +256,7 @@ import {
   createArtifactRegisterTool as sharedCreateArtifactRegisterTool,
   createArtifactViewTool as sharedCreateArtifactViewTool,
   createTaskCreateTool as sharedCreateTaskCreateTool,
+  isAgentTaskCreateToolAvailable,
   createTaskDocumentReadTool as sharedCreateTaskDocumentReadTool,
   createTaskDocumentWriteTool as sharedCreateTaskDocumentWriteTool,
   createTaskPromptWriteTool as sharedCreateTaskPromptWriteTool,
@@ -12642,11 +12643,19 @@ export class TaskExecutor {
       };
       await runPendingTaskVerification();
 
+      /*
+      FNXC:EphemeralAgentTaskCreation 2026-07-26-06:20:
+      A `deny` project policy removes fn_task_create from the session's tool list instead of
+      registering a tool that only refuses at execute time; see isAgentTaskCreateToolAvailable.
+      */
+      const executionCallerIsEphemeral = !identityAgent || isEphemeralAgent(identityAgent);
       const customTools = [
         this.createTaskUpdateTool(task.id, codeReviewVerdicts, sessionRef, stuckDetector),
         this.createTaskLogTool(task.id),
         this.createTaskLogsReadTool(task.id),
-        this.createTaskCreateTool(!identityAgent || isEphemeralAgent(identityAgent), task.id, identityAgent?.id),
+        ...(isAgentTaskCreateToolAvailable(settings, executionCallerIsEphemeral)
+          ? [this.createTaskCreateTool(executionCallerIsEphemeral, task.id, identityAgent?.id)]
+          : []),
         this.createTaskAddDepTool(task.id),
         this.createTaskDoneTool(task.id, worktreePath, detail.prompt ?? "", codeReviewVerdicts, () => { taskDone = true; }, audit),
         createRunVerificationTool({

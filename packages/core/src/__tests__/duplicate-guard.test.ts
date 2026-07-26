@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Column, Task } from "../types.js";
 import type { TaskStore } from "../store.js";
+import { computeContentFingerprint } from "../duplicate-detection.js";
 import {
   __getDeterministicGuardMutexSize,
   reconcileDeterministicDuplicate,
@@ -31,7 +32,8 @@ function makeStore(seed: Task[] = []): { tasks: Task[]; store: TaskStore } {
   const tasks = [...seed];
   const store = {
     findRecentTasksByContentFingerprint: vi.fn().mockImplementation(async (fp: string, options?: { windowMs?: number; includeArchived?: boolean }) => {
-      const windowMs = Math.max(1, Math.min(300_000, Math.trunc(options?.windowMs ?? 60_000)));
+      // Mirrors clampWindowMs in duplicate-guard.ts (default 10m, ceiling 1h).
+      const windowMs = Math.max(1, Math.min(3_600_000, Math.trunc(options?.windowMs ?? 600_000)));
       const cutoff = Date.now() - windowMs;
       return tasks
         .filter((task) => task.source?.sourceMetadata?.contentFingerprint === fp)
@@ -208,6 +210,23 @@ describe("runDeterministicDuplicateGuard", () => {
     vi.spyOn(store, "findRecentTasksByContentFingerprint").mockResolvedValueOnce([]);
     const result = await runDeterministicDuplicateGuard(store, INPUT, { lockScope: "p-1", windowMs: 60_000 });
     expect(result.action).toBe("proceed");
+    result.releaseLock();
+  });
+
+  /*
+  FNXC:TaskCreationDeduplication 2026-07-26-06:45:
+  Regression for the ten-duplicate incident: an agent's parallel fn_task_create calls appeared to
+  time out, it retried them minutes later, and the retries fell outside the old 60s window. The
+  default window must cover a full timeout-and-retry cycle on every entry point — the guard's
+  pre-check AND the post-create reconciliation.
+  */
+  it("catches a retry of the same content minutes after the original committed", async () => {
+    const originalTs = new Date(Date.now() - 150_000).toISOString();
+    const original = mkTask({ id: "FN-1", title: INPUT.title, description: INPUT.description, column: "todo", createdAt: originalTs, updatedAt: originalTs, source: { sourceType: "api", sourceMetadata: { contentFingerprint: computeContentFingerprint(INPUT)! } } });
+    const { store } = makeStore([original]);
+    const result = await runDeterministicDuplicateGuard(store, INPUT, { lockScope: "p-1" });
+    expect(result.action).toBe("duplicate");
+    expect(result.existing?.id).toBe("FN-1");
     result.releaseLock();
   });
 
