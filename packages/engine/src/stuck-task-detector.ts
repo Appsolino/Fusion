@@ -466,7 +466,8 @@ export class StuckTaskDetector {
     entry.verificationActiveCount++;
     const deadline = now + Math.max(0, timeoutMs) + VERIFICATION_DEADLINE_GRACE_MS;
     entry.verificationDeadlineAt = Math.max(entry.verificationDeadlineAt ?? 0, deadline);
-    stuckLog.log(`Verification started for ${taskId} (active=${entry.verificationActiveCount})`);
+    // FNXC:EngineDiagnostics 2026-07-26-09:33: start/end brackets every fn_run_verification — steady-state liveness, not operator events.
+    stuckLog.debug(`Verification started for ${taskId} (active=${entry.verificationActiveCount})`);
   }
 
   /**
@@ -487,7 +488,7 @@ export class StuckTaskDetector {
     if (entry.verificationActiveCount === 0) {
       entry.verificationDeadlineAt = null;
     }
-    stuckLog.log(`Verification ended for ${taskId} (active=${entry.verificationActiveCount})`);
+    stuckLog.debug(`Verification ended for ${taskId} (active=${entry.verificationActiveCount})`);
   }
 
   /**

@@ -790,7 +790,7 @@ async function runDeterministicVerification(
     if (cacheHit) {
       const sha7 = treeSha.slice(0, 7);
       const msg = `Skipping deterministic verification — cached pass for tree ${sha7} (recorded at ${cacheHit.recordedAt}, by ${cacheHit.taskId ?? "unknown"})`;
-      mergerLog.log(`${taskId}: ${msg}`);
+      mergerLog.debug(`${taskId}: ${msg}`);
       await store.logEntry(taskId, msg);
       await store.appendAgentLog(taskId, msg, "status", undefined, "merger");
       const syntheticResult: VerificationCommandResult = {
@@ -812,7 +812,7 @@ async function runDeterministicVerification(
   const testSourceLabel = (testSource === "inferred" || testSource === "inferred-scoped") ? ` [${testSource}]` : "";
   const buildSourceLabel = buildSource === "inferred" ? " [inferred]" : "";
 
-  mergerLog.log(
+  mergerLog.debug(
     `${taskId}: running deterministic verification` +
     (hasTestCommand ? ` [test:${testSourceLabel} ${normalizedTestCommand}]` : "") +
     (hasBuildCommand ? ` [build:${buildSourceLabel} ${normalizedBuildCommand}]` : ""),
@@ -1009,7 +1009,8 @@ async function runDeterministicVerification(
     }
   }
 
-  mergerLog.log(`${taskId}: deterministic verification passed`);
+  // FNXC:EngineDiagnostics 2026-07-26-09:33: merge verification success/cache bookkeeping is expected steady-state; failures stay error/warn.
+  mergerLog.debug(`${taskId}: deterministic verification passed`);
   await store.logEntry(taskId, "Deterministic merge verification passed");
   await store.appendAgentLog(taskId, "Deterministic merge verification passed", "status", undefined, "merger");
 
@@ -1017,7 +1018,7 @@ async function runDeterministicVerification(
   if (treeSha) {
     try {
       await store.recordVerificationCachePass(treeSha, effectiveTestCommand, effectiveBuildCommand, taskId);
-      mergerLog.log(`${taskId}: Recorded verification pass for tree ${treeSha.slice(0, 7)}`);
+      mergerLog.debug(`${taskId}: Recorded verification pass for tree ${treeSha.slice(0, 7)}`);
       await store.logEntry(taskId, `Recorded verification pass for tree ${treeSha.slice(0, 7)}`);
     } catch (err) {
       mergerLog.warn(`${taskId}: could not record verification cache pass: ${String(err)}`);

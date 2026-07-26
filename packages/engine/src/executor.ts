@@ -2740,7 +2740,7 @@ export class TaskExecutor {
     const msg = err instanceof Error ? err.message : String(err);
     const lower = msg.toLowerCase();
     if (lower.includes("not found") || lower.includes("already deleted") || lower.includes("does not exist")) {
-      executorLog.log(`Skip spawned-agent cleanup for ${agentId}: already deleted by another pathway`);
+      executorLog.debug(`Skip spawned-agent cleanup for ${agentId}: already deleted by another pathway`);
       return true;
     }
     return false;
@@ -3088,7 +3088,7 @@ export class TaskExecutor {
     try {
       const pauseLabel = await this.getExecutionPauseLabel();
       if (pauseLabel) {
-        executorLog.log(`Skipping unpause resume for ${task.id} — ${pauseLabel} active`);
+        executorLog.debug(`Skipping unpause resume for ${task.id} — ${pauseLabel} active`);
         return false;
       }
 
@@ -3235,7 +3235,11 @@ export class TaskExecutor {
     private rootDir: string,
     private options: TaskExecutorOptions = {},
   ) {
-    executorLog.log(`TaskExecutor constructed (rootDir=${rootDir}, hasSemaphore=${!!options.semaphore}, hasStuckDetector=${!!options.stuckTaskDetector})`);
+    /*
+    FNXC:EngineDiagnostics 2026-07-26-09:39:
+    Executor bookkeeping that fires on every dispatch/session (construct, execute() entry, worktree ready, session create/register, prompt start, graph event stream, column-boundary warns-as-info, model/plugin setup, skip/duplicate/no-op guards) is debug-only (FUSION_DEBUG=executor). Keep log/warn/error for lifecycle outcomes operators act on: Starting task, ✓/✗ completion, failures, requeues, handoffs, stuck kills, verification failures, real moves.
+    */
+    executorLog.debug(`TaskExecutor constructed (rootDir=${rootDir}, hasSemaphore=${!!options.semaphore}, hasStuckDetector=${!!options.stuckTaskDetector})`);
     this.unregisterTaskMoveDisposer = registerTaskMoveDisposer(store, async (task) => {
       // Start both paths without awaiting between them. Each synchronously
       // detaches its current targets before its first await, fencing late
@@ -3277,7 +3281,7 @@ export class TaskExecutor {
       if (to === "in-progress") {
         this.userCanceledTaskIds.delete(task.id);
         if (this.recoveringCompleted.has(task.id)) {
-          executorLog.log(`[event:task:moved] Skipping execute() for ${task.id} — completed-task recovery in progress`);
+          executorLog.debug(`[event:task:moved] Skipping execute() for ${task.id} — completed-task recovery in progress`);
           return;
         }
         this.clearWorkflowRerunWatchdog(task.id);
@@ -4714,7 +4718,7 @@ export class TaskExecutor {
         || this.resumingUnpaused.has(task.id)
         || TaskExecutor.processWideGraphRouting.has(task.id)
       ) {
-        executorLog.log(`${task.id}: skipping recoverCompletedTask — task has active execution in flight`);
+        executorLog.debug(`${task.id}: skipping recoverCompletedTask — task has active execution in flight`);
         return false;
       }
 
@@ -4734,7 +4738,7 @@ export class TaskExecutor {
       recovery re-launch execution instead.
       */
       if (this.workflowRerunWatchdogs.has(task.id) || this.workflowRerunPending.has(task.id)) {
-        executorLog.log(`${task.id}: skipping recoverCompletedTask — workflow remediation bounce already scheduled`);
+        executorLog.debug(`${task.id}: skipping recoverCompletedTask — workflow remediation bounce already scheduled`);
         return false;
       }
       const liveForCompletenessCheck = await this.store.getTask(task.id).catch(() => task);
@@ -4743,7 +4747,7 @@ export class TaskExecutor {
         && (liveForCompletenessCheck.steps?.length ?? 0) > 0
         && !this.isTaskWorkComplete(liveForCompletenessCheck)
       ) {
-        executorLog.log(`${task.id}: skipping recoverCompletedTask — task has incomplete steps awaiting executor remediation`);
+        executorLog.debug(`${task.id}: skipping recoverCompletedTask — task has incomplete steps awaiting executor remediation`);
         return false;
       }
       /*
@@ -4780,7 +4784,7 @@ export class TaskExecutor {
       */
       const failureProvenance = evaluateCompletedPromotionFailureProvenance(liveForCompletenessCheck ?? task);
       if (failureProvenance.blocked) {
-        executorLog.log(`${task.id}: skipping recoverCompletedTask — most recent execution ended in a failure/refusal park (operator-decides)`);
+        executorLog.debug(`${task.id}: skipping recoverCompletedTask — most recent execution ended in a failure/refusal park (operator-decides)`);
         return false;
       }
 
@@ -4866,7 +4870,7 @@ export class TaskExecutor {
           FNXC:FastOptionalSteps 2026-06-30-12:00:
           Fast recovery can hand off completed implementation directly only when the operator did not explicitly enable optional workflow steps, or when those enabled steps already have passed pre-merge results. Explicit optional selections are stronger than the fast default, so completed-task recovery must re-enter the workflow graph before review when any selected optional group is still unsatisfied.
           */
-          executorLog.log(`${task.id}: fast mode — no unsatisfied explicit workflow steps on auto-recovery`);
+          executorLog.debug(`${task.id}: fast mode — no unsatisfied explicit workflow steps on auto-recovery`);
         }
       }
 
@@ -5550,11 +5554,11 @@ export class TaskExecutor {
       // move it directly to in-review instead of re-executing from scratch.
       if (this.isTaskWorkComplete(task) && !task.mergeDetails) {
         if (this.recoveringCompleted.has(task.id)) {
-          executorLog.log(`${task.id} completed-task recovery already running - skipping duplicate startup recovery`);
+          executorLog.debug(`${task.id} completed-task recovery already running - skipping duplicate startup recovery`);
           continue;
         }
         if (TaskExecutor.processWideGraphRouting.has(task.id)) {
-          executorLog.log(`${task.id} owned by the workflow graph interpreter — skipping completed-task fast-path`);
+          executorLog.debug(`${task.id} owned by the workflow graph interpreter — skipping completed-task fast-path`);
           continue;
         }
         executorLog.log(`${task.id} is already complete — fast-pathing to in-review`);
@@ -5993,7 +5997,7 @@ export class TaskExecutor {
             return update;
           });
         },
-        onEvent: (event) => executorLog.log(`[workflow-graph] ${event.type} ${event.taskId}: ${event.detail}`),
+        onEvent: (event) => executorLog.debug(`[workflow-graph] ${event.type} ${event.taskId}: ${event.detail}`),
         signal: graphAbortController.signal,
         // Wire SQLite-backed per-branch persistence in production (#1407): the
         // executor writes each branch's currentNodeId/status to
@@ -6427,7 +6431,7 @@ export class TaskExecutor {
         });
       },
       onWarn: (message, detail) => {
-        executorLog.log(`[workflow-column-boundary] ${task.id}: ${message} ${JSON.stringify(detail)}`);
+        executorLog.debug(`[workflow-column-boundary] ${task.id}: ${message} ${JSON.stringify(detail)}`);
       },
     };
   }
@@ -8857,7 +8861,7 @@ export class TaskExecutor {
     Fast mode skips review/validation work, not the agent-authored completion summary. FN-7335 reached review with "Fast mode — custom graph node 'completion-summary' skipped"; keep summary nodes executable so fast tasks still produce the same review/done card summary as standard tasks.
     */
     if (live.executionMode === "fast" && !isCompletionSummaryNode && !optionalGroupId && !cfg.seam && (node.kind === "prompt" || node.kind === "script" || node.kind === "gate")) {
-      executorLog.log(`${live.id}: fast mode — skipping custom graph node '${node.id}'`);
+      executorLog.debug(`${live.id}: fast mode — skipping custom graph node '${node.id}'`);
       await this.store.logEntry(
         live.id,
         `Fast mode — custom graph node '${node.id}' skipped`,
@@ -10034,7 +10038,7 @@ export class TaskExecutor {
             || this.activeWorkflowGraphAbortControllers.has(live.id)
             || TaskExecutor.processWideGraphRouting.has(live.id)
           ) {
-            executorLog.log(`${live.id}: skipping stale parse graph retry — task is no longer in a safe in-review resume state`);
+            executorLog.debug(`${live.id}: skipping stale parse graph retry — task is no longer in a safe in-review resume state`);
             return;
           }
           await this.executeWorkflowGraph(resumeTask);
@@ -10154,7 +10158,7 @@ export class TaskExecutor {
             || this.activeWorkflowGraphAbortControllers.has(live.id)
             || TaskExecutor.processWideGraphRouting.has(live.id)
           ) {
-            executorLog.log(`${live.id}: skipping paused-node graph re-entry — task is no longer in a safe resume state`);
+            executorLog.debug(`${live.id}: skipping paused-node graph re-entry — task is no longer in a safe resume state`);
             return;
           }
           if (preservedInReview) {
@@ -11471,7 +11475,7 @@ export class TaskExecutor {
     if (this.graphRouting.has(task.id)) {
       // Duplicate dispatch while the graph runner owns this task — drop it,
       // mirroring the executingTaskLock duplicate-invocation behavior.
-      executorLog.log(`execute() called for ${task.id} while graph routing is active — skipping duplicate`);
+      executorLog.debug(`execute() called for ${task.id} while graph routing is active — skipping duplicate`);
       return;
     }
     this.graphRouting.add(task.id);
@@ -11554,7 +11558,7 @@ export class TaskExecutor {
     // multi-project hybrid runtime, etc.). This is `executingTaskLock` in
     // active-session-registry.ts, a module-level Set.
     const claimed = executingTaskLock.tryClaim(task.id);
-    executorLog.log(`execute() called for ${task.id} (claimed=${claimed}, perInstanceExecuting=${this.executing.has(task.id)})`);
+    executorLog.debug(`execute() called for ${task.id} (claimed=${claimed}, perInstanceExecuting=${this.executing.has(task.id)})`);
     if (!claimed) {
       // FNXC:GlobalConcurrencyControls 2026-07-15-02:55: graph fallback may have re-registered a pre-held slot; drop it when this process cannot claim the executor lock.
       dropPreHeldExecutorSlot(task.id, this.options.semaphore);
@@ -11594,7 +11598,7 @@ export class TaskExecutor {
     // byte-identical to before.
     const deferralPrincipalId = this.resolveEffectivePrincipalId(task, task);
     if (deferralPrincipalId && await this.shouldDeferForHeartbeat(deferralPrincipalId)) {
-      executorLog.log(`${task.id}: skipping execute — agent ${deferralPrincipalId} has active heartbeat run (allowParallelExecution=false)`);
+      executorLog.debug(`${task.id}: skipping execute — agent ${deferralPrincipalId} has active heartbeat run (allowParallelExecution=false)`);
       // Release the slot we just claimed — we never actually ran.
       this.executing.delete(task.id);
       executingTaskLock.release(task.id);
@@ -12043,7 +12047,7 @@ export class TaskExecutor {
 
       // FNXC:Workspace 2026-06-21-12:00: KTD2 — register the worktree path under the task's Set. In workspace mode `worktreePath` is the browse-only root; per-repo sub-repo worktree paths ARE now added to the same Set as the agent acquires them (F2: fn_acquire_repo_worktree's onAcquired callback → addActiveWorktree), so the Set holds root + N sub-repo paths, not just the root. Non-workspace tasks add exactly one path → a one-element set (unchanged liveness/owner semantics).
       this.addActiveWorktree(task.id, worktreePath);
-      executorLog.log(`${task.id}: worktree ready at ${worktreePath}`);
+      executorLog.debug(`${task.id}: worktree ready at ${worktreePath}`);
 
       const injected = await this.buildInjectedRuntimeEnv(task.id, worktreePath, acquisition.branch ?? undefined);
       taskEnv = injected.env;
@@ -12054,7 +12058,7 @@ export class TaskExecutor {
       this.options.onStart?.(task, worktreePath);
 
       const detail = await this.store.getTask(task.id);
-      executorLog.log(`${task.id}: fetched task detail (${detail.steps.length} steps, prompt length=${detail.prompt?.length ?? 0})`);
+      executorLog.debug(`${task.id}: fetched task detail (${detail.steps.length} steps, prompt length=${detail.prompt?.length ?? 0})`);
 
       // Initialize steps from PROMPT.md if empty
       if (detail.steps.length === 0) {
@@ -12124,7 +12128,7 @@ export class TaskExecutor {
       const forceStepSession = this.graphStepSessionPinned.has(task.id);
       if (settings.runStepsInNewSessions || forceStepSession) {
         // ── Step-Session Path ──────────────────────────────────────────
-        executorLog.log(`${task.id}: using step-session mode (maxParallel=${settings.maxParallelSteps ?? 2}${forceStepSession ? ", graph-pinned" : ""})`);
+        executorLog.debug(`${task.id}: using step-session mode (maxParallel=${settings.maxParallelSteps ?? 2}${forceStepSession ? ", graph-pinned" : ""})`);
 
         const stepSessionAgent = await this.getAuthoritativeAssignedAgent(detail.assignedAgentId);
 
@@ -12734,7 +12738,7 @@ export class TaskExecutor {
 
       // Log fast mode status
       if (executionMode === "fast") {
-        executorLog.log(`${task.id}: fast mode`);
+        executorLog.debug(`${task.id}: fast mode`);
       }
 
       /*
@@ -12824,6 +12828,7 @@ export class TaskExecutor {
           onVerificationEnd: () => stuckDetector?.endVerification(task.id),
           log: {
             info: (s) => executorLog.log(s),
+            debug: (s) => executorLog.debug(s),
             warn: (s) => executorLog.warn(s),
             error: (s) => executorLog.warn(s),
           },
@@ -13035,7 +13040,7 @@ export class TaskExecutor {
           ? SessionManager.open(task.sessionFile!)
           : SessionManager.create(worktreePath);
 
-        executorLog.log(`${task.id}: creating agent session (provider=${executorProvider ?? "default"}, model=${executorModelId ?? "default"}, resuming=${isResuming})`);
+        executorLog.debug(`${task.id}: creating agent session (provider=${executorProvider ?? "default"}, model=${executorModelId ?? "default"}, resuming=${isResuming})`);
 
         // Resolve per-agent custom instructions for the executor role.
         // Column-agent session identity (U4, R3/KTD-6): when a column agent governs,
@@ -13053,7 +13058,7 @@ export class TaskExecutor {
           this.options.pluginRunner,
         );
         if (executorPluginContributions) {
-          executorLog.log(`${task.id}: applied plugin prompt contributions for executor-system surface`);
+          executorLog.debug(`${task.id}: applied plugin prompt contributions for executor-system surface`);
         }
 
         const executorGoalResolution = await resolveAndEmitGoalContext({
@@ -13136,10 +13141,10 @@ export class TaskExecutor {
         const executorModelDetails = formatModelMarkerDetails(executorModelDesc, executorThinkingLevel);
         const executorModelMarker = `Executor using model: ${executorModelDetails}`;
         if (isResuming) {
-          executorLog.log(`${task.id}: resumed session from ${task.sessionFile}`);
+          executorLog.debug(`${task.id}: resumed session from ${task.sessionFile}`);
           await this.store.logEntry(task.id, `Resumed agent session after unpause (model: ${executorModelDesc})`, undefined, this.getRunContextFor(task.id));
         } else {
-          executorLog.log(`${task.id}: using model ${executorModelDesc}`);
+          executorLog.debug(`${task.id}: using model ${executorModelDesc}`);
           await this.store.logEntry(task.id, executorModelMarker, undefined, this.getRunContextFor(task.id));
           // Persist session file path so pause/resume can reopen it
           if (sessionFile) {
@@ -13197,7 +13202,7 @@ export class TaskExecutor {
 
         // Register with stuck task detector for heartbeat monitoring
         stuckDetector?.trackTask(task.id, session);
-        executorLog.log(`${task.id}: session registered (model=${describeModel(session)}, stuckDetector=${!!stuckDetector})`);
+        executorLog.debug(`${task.id}: session registered (model=${describeModel(session)}, stuckDetector=${!!stuckDetector})`);
 
         // Invoke plugin onAgentRunStart hook (fire-and-forget)
         void this.options.pluginRunner?.invokeHookSafe("onAgentRunStart", task.id);
@@ -13206,7 +13211,7 @@ export class TaskExecutor {
           // Record activity on prompt start (heartbeat for stuck detection)
           stuckDetector?.recordActivity(task.id);
 
-          executorLog.log(`${task.id}: calling promptWithFallback()...`);
+          executorLog.debug(`${task.id}: calling promptWithFallback()...`);
           if (isResuming) {
             // Session already has full conversation history — just tell the
             // agent it was paused and should pick up where it left off.
@@ -13260,10 +13265,10 @@ export class TaskExecutor {
               },
             );
             if (capResult.triggered) {
-              executorLog.log(`${task.id} token cap check: ${capResult.message}`);
+              executorLog.debug(`${task.id} token cap check: ${capResult.message}`);
             }
           } catch (err) {
-            executorLog.log(`${task.id} token cap check failed (non-fatal): ${err}`);
+            executorLog.debug(`${task.id} token cap check failed (non-fatal): ${err}`);
           }
 
           // If loop recovery is pending (compact-and-resume was triggered by
@@ -13870,7 +13875,7 @@ export class TaskExecutor {
         if (fromColumn === "in-review" && toColumn === "in-review") {
           try {
             const finalizeResult = await this.finalizeAlreadyReviewedTask(task.id);
-            executorLog.log(`${task.id} duplicate in-review finalization result: ${finalizeResult}`);
+            executorLog.debug(`${task.id} duplicate in-review finalization result: ${finalizeResult}`);
           } catch (finalizeErr: unknown) {
             const finalizeErrMessage = finalizeErr instanceof Error ? finalizeErr.message : String(finalizeErr);
             executorLog.warn(`${task.id} failed to finalize duplicate in-review transition: ${finalizeErrMessage}`);
@@ -13895,7 +13900,7 @@ export class TaskExecutor {
           latestTask.paused === true &&
           ((latestTask.currentStep ?? 0) > 0 || latestTask.steps?.some((step) => step.status === "done" || step.status === "in-progress"))
         ) {
-          executorLog.log(`${task.id} paused-abort cleanup skipped — incomplete task is already parked with progress preserved`);
+          executorLog.debug(`${task.id} paused-abort cleanup skipped — incomplete task is already parked with progress preserved`);
           await this.store.logEntry(
             task.id,
             "Execution abort cleanup skipped — incomplete stuck-loop task is already parked with progress preserved",
@@ -14572,7 +14577,7 @@ export class TaskExecutor {
         */
         const cleanupClaimed = executingTaskLock.tryClaim(task.id);
         if (!cleanupClaimed) {
-          executorLog.log(`${task.id} stale assistant-continuation requeue skipped — a fresh executor already claimed the task`);
+          executorLog.debug(`${task.id} stale assistant-continuation requeue skipped — a fresh executor already claimed the task`);
         } else {
           let cleanupLockHeld = true;
           try {
@@ -14594,7 +14599,7 @@ export class TaskExecutor {
               }
               executorLog.log(`${task.id} stale assistant-continuation session cleared — requeued to todo with progress preserved`);
             } else {
-              executorLog.log(`${task.id} stale assistant-continuation requeue skipped — task is now in '${latestTask.column}'`);
+              executorLog.debug(`${task.id} stale assistant-continuation requeue skipped — task is now in '${latestTask.column}'`);
             }
           } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : String(err);
@@ -14678,7 +14683,7 @@ export class TaskExecutor {
               await audit.database({ type: "task:move", target: task.id, metadata: { to: "todo" } });
               executorLog.log(`${task.id} moved to todo for retry after stuck kill${preserveProgress ? " (progress preserved)" : ""}`);
             } else {
-              executorLog.log(`${task.id} already in todo — skipping redundant move`);
+              executorLog.debug(`${task.id} already in todo — skipping redundant move`);
             }
           }
           } catch (err: unknown) {
@@ -15221,7 +15226,7 @@ export class TaskExecutor {
           ? workspacePromptEligibility.reason ?? "prompt-derived no-commit eligibility"
           : null);
       if (workspaceNoCommitEligibilityReason) {
-        executorLog.log(`${task.id}: workspace fn_task_done no_commits guard skipped (${workspaceNoCommitEligibilityReason})`);
+        executorLog.debug(`${task.id}: workspace fn_task_done no_commits guard skipped (${workspaceNoCommitEligibilityReason})`);
       }
       // FNXC:Workspace 2026-06-21-15:00: F6 — iterate sorted repo keys so the FIRST failing repo
       // returned here is deterministic across runs/rehydrate (the value is surfaced to the operator).
@@ -15491,7 +15496,7 @@ export class TaskExecutor {
         ? promptDerivedEligibility.reason ?? "prompt-derived no-commit eligibility"
         : null);
     if (noCommitEligibilityReason) {
-      executorLog.log(`${task.id}: fn_task_done no_commits guard skipped (${noCommitEligibilityReason})`);
+      executorLog.debug(`${task.id}: fn_task_done no_commits guard skipped (${noCommitEligibilityReason})`);
       try {
         await this.store.logEntry(
           task.id,
@@ -15553,7 +15558,7 @@ export class TaskExecutor {
     audit?: RunAuditor,
   ): Promise<{ blocked: false } | { blocked: true; message: string }> {
     if (task.scopeOverride === true) {
-      executorLog.log(`${task.id}: scope-leak guard bypassed (scopeOverride=true)`);
+      executorLog.debug(`${task.id}: scope-leak guard bypassed (scopeOverride=true)`);
       await this.store.logEntry(task.id, "[scope-leak] scope guard bypassed via task.scopeOverride", undefined, this.getRunContextFor(task.id));
       return { blocked: false };
     }
@@ -16298,14 +16303,15 @@ export class TaskExecutor {
     const buildCommand = settings.buildCommand?.trim();
 
     if (!testCommand && !buildCommand) {
-      executorLog.log(`${task.id}: no test/build commands configured — skipping verification`);
+      executorLog.debug(`${task.id}: no test/build commands configured — skipping verification`);
       return { allPassed: true };
     }
 
     const parts: string[] = [];
     if (testCommand) parts.push(`test: ${testCommand}`);
     if (buildCommand) parts.push(`build: ${buildCommand}`);
-    executorLog.log(`${task.id}: [verification] running deterministic verification (${parts.join(", ")})`);
+    // FNXC:EngineDiagnostics 2026-07-26-09:33: green path verification start/pass is expected work — debug so failures stay prominent.
+    executorLog.debug(`${task.id}: [verification] running deterministic verification (${parts.join(", ")})`);
     await this.store.logEntry(
       task.id,
       `[verification] Running deterministic verification (${parts.join(", ")})`,
@@ -16345,7 +16351,7 @@ export class TaskExecutor {
       }
     }
 
-    executorLog.log(`${task.id}: [verification] passed`);
+    executorLog.debug(`${task.id}: [verification] passed`);
     await this.store.logEntry(
       task.id,
       `[verification] Deterministic verification passed`,
@@ -16777,7 +16783,7 @@ ${scopeGuard}
       await audit.git({ type: "commit:create", target: baseCommitSha, metadata: { purpose: "base", preserved: false } });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      executorLog.log(`Failed to capture baseCommitSha for ${task.id}: ${errorMessage}`);
+      executorLog.debug(`Failed to capture baseCommitSha for ${task.id}: ${errorMessage}`);
       // Non-fatal: task can continue without baseCommitSha
     }
   }
@@ -16844,7 +16850,7 @@ ${scopeGuard}
       });
       return stdout.trim() || undefined;
     } catch {
-      executorLog.log(`Could not determine base commit for diff in ${worktreePath}`);
+      executorLog.debug(`Could not determine base commit for diff in ${worktreePath}`);
       return undefined;
     }
   }
@@ -16900,7 +16906,7 @@ ${scopeGuard}
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      executorLog.log(`Failed to capture modified files: ${errorMessage}`);
+      executorLog.debug(`Failed to capture modified files: ${errorMessage}`);
       return [];
     }
   }
@@ -17633,7 +17639,7 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
           attemptLabel === "fallback" ? "fallback after timeout" : "",
         ],
       );
-      executorLog.log(`${task.id}: workflow step '${workflowStep.name}' using model ${workflowModelDetails}`);
+      executorLog.debug(`${task.id}: workflow step '${workflowStep.name}' using model ${workflowModelDetails}`);
       await this.store.logEntry(
         task.id,
         `Workflow step '${workflowStep.name}' using model: ${workflowModelDetails}`,
@@ -18846,7 +18852,7 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
           throw new Error(`Failed to remove existing directory ${path}: ${eMessage}`);
         }
       } else {
-        executorLog.log(`Worktree already exists: ${path}`);
+        executorLog.debug(`Worktree already exists: ${path}`);
         await installGuardOrCleanup();
         return { path, branch };
       }
@@ -20888,7 +20894,7 @@ git log --oneline
 
   const pluginTaskContributions = options?.pluginTaskContributions ?? "";
   if (pluginTaskContributions) {
-    executorLog.log(`${task.id}: applied plugin prompt contributions for executor-task surface`);
+    executorLog.debug(`${task.id}: applied plugin prompt contributions for executor-task surface`);
   }
 
   const executionPrompt = `Execute this task.

@@ -2176,7 +2176,11 @@ function withMcpPromptOptions(promptOptions: unknown, mcpServers: ResolvedMcpSer
 }
 
 export async function createFnAgent(options: AgentOptions): Promise<AgentResult> {
-  piLog.log(`createFnAgent called (tools=${options.tools}, provider=${options.defaultProvider}, model=${options.defaultModelId})`);
+  /*
+  FNXC:EngineDiagnostics 2026-07-26-09:55:
+  createFnAgent is invoked on every agent/session start (executor, triage, chat, heartbeat, etc.). The entry log is steady-state bookkeeping — debug-only (FUSION_DEBUG=pi). Failures and auth issues stay on warn/error.
+  */
+  piLog.debug(`createFnAgent called (tools=${options.tools}, provider=${options.defaultProvider}, model=${options.defaultModelId})`);
   // FNXC:McpConfig 2026-06-25-22:02:
   // The pi session is the final shared forwarding seam for direct createFnAgent lanes. Forward the resolved MCP set only to MCP-capable provider/runtime combinations and keep unsupported lanes content-free by logging just provider/runtime/count metadata.
   const requestedMcpServers = options.mcpServers ?? [];
@@ -2348,12 +2352,18 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
     if (selectionResult.diagnostics.length > 0) {
       const purpose = effectiveSkillSelection.sessionPurpose ?? "skills";
       for (const diag of selectionResult.diagnostics) {
+        // Configured allow-list pattern listings are non-actionable noise; skip entirely.
         if (diag.type === "info" && diag.message.startsWith("Configured skill pattern:")) continue;
         const msg = `[skills] [${purpose}] ${diag.type}: ${diag.message}`;
         if (diag.type === "error") piLog.error(msg);
         else if (diag.type === "warning") piLog.warn(msg);
-        // Steady-state listing of each requested name (not the 'not found' miss diagnostics).
-        else if (diag.type === "info" && diag.message.startsWith("Requested skill:")) piLog.debug(msg);
+        /*
+        FNXC:EngineDiagnostics 2026-07-26-09:40:
+        All type=info skill diagnostics — `Requested skill: <name>` listings and
+        `Requested skill '…' not found…` — go to debug so the TUI is not filled with
+        `[skills] info: Requested skill…` on every session. warn/error stay visible.
+        */
+        else if (diag.type === "info") piLog.debug(msg);
         else piLog.log(msg);
       }
     }
@@ -2686,7 +2696,8 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
   let usingFallback = false;
   try {
     sessionResult = await createSessionWithModel(selectedModel);
-    piLog.log(`Session created successfully (model=${selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : "default"})`);
+    // FNXC:EngineDiagnostics 2026-07-26-10:00: every agent session start emitted this at info; steady-state bookkeeping → debug (FUSION_DEBUG=pi).
+    piLog.debug(`Session created successfully (model=${selectedModel ? `${selectedModel.provider}/${selectedModel.id}` : "default"})`);
   } catch (err: any) {
     if (!fallbackModel || !selectedModel || !hasDistinctFallback || !isRetryableModelSelectionError(err?.message || "")) {
       piLog.error(`Session creation failed: ${err.message}`);
@@ -2706,7 +2717,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
       }
     }
     await emitFallbackUsed("session-creation", err);
-    piLog.log("Fallback session created successfully");
+    piLog.debug("Fallback session created successfully");
   }
 
   let activeSession = sessionResult.session;

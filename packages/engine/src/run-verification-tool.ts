@@ -531,7 +531,11 @@ async function runVerificationCommandUnlocked(
     const quietTimer = setInterval(() => {
       const silenceMs = Date.now() - lastLineMs;
       if (silenceMs >= QUIET_HEARTBEAT_INTERVAL_MS) {
-        executorLog.log(
+        /*
+        FNXC:EngineDiagnostics 2026-07-26-09:33:
+        Quiet-interval heartbeats fire every 60s for the life of a long verify command. They keep the stuck detector alive but are not operator events — debug-only (FUSION_DEBUG=executor).
+        */
+        executorLog.debug(
           `[fn_run_verification] command quiet for ${Math.round(silenceMs / 1000)}s, still running... (${command})`,
         );
         onHeartbeat();
@@ -679,6 +683,8 @@ export interface CreateRunVerificationToolOpts {
   onVerificationEnd?: () => void;
   log: {
     info: (s: string) => void;
+    /** Steady-state start/done chatter; opt-in via FUSION_DEBUG=executor when wired to executorLog.debug. */
+    debug?: (s: string) => void;
     warn: (s: string) => void;
     error: (s: string) => void;
   };
@@ -800,7 +806,11 @@ export function createRunVerificationTool(
         }
       }
 
-      log.info(
+      /*
+      FNXC:EngineDiagnostics 2026-07-26-09:33:
+      Every agent verification tool call logged start + done at info and filled the TUI during normal green runs. Route success-path bookkeeping to debug; timeouts/warnings stay on warn.
+      */
+      (log.debug ?? log.info)(
         `[fn_run_verification] ${taskId}: scope=${scope} timeout=${timeoutSec}s cwd=${resolvedCwd} cmd=${effectiveCommand}`,
       );
 
@@ -857,9 +867,16 @@ export function createRunVerificationTool(
 
       const text = lines.join("\n");
 
-      log.info(
-        `[fn_run_verification] ${taskId}: done exit=${result.exitCode} duration=${result.durationMs}ms success=${result.success}`,
-      );
+      if (result.success) {
+        (log.debug ?? log.info)(
+          `[fn_run_verification] ${taskId}: done exit=${result.exitCode} duration=${result.durationMs}ms success=${result.success}`,
+        );
+      } else {
+        // Failures remain visible so operators see red verification without enabling FUSION_DEBUG.
+        log.info(
+          `[fn_run_verification] ${taskId}: done exit=${result.exitCode} duration=${result.durationMs}ms success=${result.success}`,
+        );
+      }
 
       return {
         content: [{ type: "text" as const, text }],

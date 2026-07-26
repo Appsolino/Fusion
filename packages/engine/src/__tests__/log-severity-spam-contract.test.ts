@@ -23,12 +23,13 @@ describe("log severity spam contract (source)", () => {
     expect(src).not.toMatch(/log\.log\(`Maintenance batch [123] step "\$\{fn\.name\}" succeeded`\)/);
   });
 
-  it("requested-skill listing diagnostics route to debug", () => {
+  it("all type=info skill diagnostics (Requested skill listings and not-found) route to debug", () => {
     const pi = readSrc("pi.ts");
     const resolver = readSrc("skill-resolver.ts");
-    expect(pi).toMatch(/diag\.message\.startsWith\("Requested skill:"\)[\s\S]*piLog\.debug/);
-    expect(resolver).toMatch(/isRequestedSkillListingDiagnostic/);
-    expect(resolver).toMatch(/piLog\.debug\(msg\)/);
+    expect(pi).toMatch(/else if \(diag\.type === "info"\) piLog\.debug\(msg\)/);
+    expect(resolver).toMatch(/isSkillInfoDiagnostic/);
+    expect(resolver).toMatch(/else if \(isSkillInfoDiagnostic\(diag\)\) piLog\.debug\(msg\)/);
+    expect(resolver).not.toMatch(/isRequestedSkillListingDiagnostic/);
   });
 
   it("activity-recorded heartbeats and periodic stuck poll use debug", () => {
@@ -81,6 +82,46 @@ describe("log severity spam contract (source)", () => {
     expect(src).toMatch(/else if \(totalAdded > 0 \|\| totalUpdated > 0\) \{\s*peerExchangeLog\.log\(/);
     expect(src).toMatch(/if \(errors\.length > 0\) \{\s*peerExchangeLog\.log\(/);
     expect(src).not.toMatch(/peerExchangeLog\.log\(`Starting sync with \$\{onlineRemoteNodes\.length\} peers`\)/);
+  });
+
+  it("executor high-frequency dispatch/session bookkeeping uses debug", () => {
+    const src = readSrc("executor.ts");
+    expect(src).toMatch(/executorLog\.debug\(`TaskExecutor constructed/);
+    expect(src).toMatch(/executorLog\.debug\(`execute\(\) called for \$\{task\.id\} \(claimed=/);
+    expect(src).toMatch(/executorLog\.debug\(`\$\{task\.id\}: worktree ready at/);
+    expect(src).toMatch(/executorLog\.debug\(`\$\{task\.id\}: session registered/);
+    expect(src).toMatch(/executorLog\.debug\(`\$\{task\.id\}: calling promptWithFallback/);
+    expect(src).toMatch(/executorLog\.debug\(`\[workflow-graph\] \$\{event\.type\}/);
+    expect(src).toMatch(/executorLog\.debug\(`\[workflow-column-boundary\]/);
+    // Lifecycle outcomes stay at log
+    expect(src).toMatch(/executorLog\.log\(`Starting \$\{task\.id\}:/);
+    expect(src).not.toMatch(/executorLog\.log\(`execute\(\) called for \$\{task\.id\} \(claimed=/);
+  });
+
+  it("MCP server connected success chatter uses logger.debug", () => {
+    const src = readSrc("mcp-session-tools.ts");
+    expect(src).toMatch(/opts\.logger\.debug\(connectMsg\)/);
+    expect(src).toMatch(/MCP server connected for pi session/);
+    // Must not route the success line only through log without preferring debug.
+    expect(src).toMatch(/if \(typeof opts\.logger\?\.debug === "function"\)/);
+  });
+
+  it("fn_run_verification and green verification result paths use debug", () => {
+    const tool = readSrc("run-verification-tool.ts");
+    const utils = readSrc("verification-utils.ts");
+    const stuck = readSrc("stuck-task-detector.ts");
+    const exec = readSrc("executor.ts");
+    expect(tool).toMatch(/executorLog\.debug\(\s*`\[fn_run_verification\] command quiet for/);
+    expect(tool).toMatch(/\(log\.debug \?\? log\.info\)\(/);
+    expect(tool).toMatch(/if \(result\.success\) \{\s*\(log\.debug \?\? log\.info\)\(/);
+    expect(utils).toMatch(/debugLog\(`\$\{taskId\}: running \$\{type\} command:/);
+    expect(utils).toMatch(/debugLog\(`\$\{taskId\}: \$\{type\} command succeeded in/);
+    expect(utils).toMatch(/logger\.error\(`\$\{taskId\}: \$\{type\} command failed/);
+    expect(stuck).toMatch(/stuckLog\.debug\(`Verification started for/);
+    expect(stuck).toMatch(/stuckLog\.debug\(`Verification ended for/);
+    expect(exec).toMatch(/executorLog\.debug\(`\$\{task\.id\}: \[verification\] running deterministic verification/);
+    expect(exec).toMatch(/executorLog\.debug\(`\$\{task\.id\}: \[verification\] passed`\)/);
+    expect(exec).toMatch(/executorLog\.log\(`\$\{task\.id\}: \[verification\] test failed/);
   });
 });
 
