@@ -157,6 +157,51 @@ const planningGuardCases: PlanningGuardCase[] = [
     },
     stillPlanning: false,
   },
+  /*
+  FNXC:WorkflowReplan 2026-07-26-18:40 (FN-8596 strand):
+  The stale-stamp case, and the exact shape that stranded a card in production. Triage CLAIMED a
+  rebounded replan card, overwriting `needs-replan` with the transient `planning`, so the durable-
+  park escape no longer applied and the card fell through to the execution stamps — which were set
+  on its FIRST pass and are never cleared. It read as advanced, every guarded planner write silently
+  no-opped, and the finalize never handed the card off.
+  The discriminator is arrival order: the stamp PREDATES `columnMovedAt`, so it belongs to the
+  previous pass. Contrast with the FN-8361 case above, where the stamp lands after arrival (there,
+  no `columnMovedAt` at all) and execution genuinely won the race.
+  */
+  {
+    label: "triage replan card claimed by triage, stamps left over from its previous pass",
+    task: {
+      column: "triage",
+      steps: [planStep("step-1")],
+      status: "planning",
+      worktree: "/tmp/brave-otter",
+      executionStartedAt: "2026-07-26T13:50:57.686Z",
+      firstExecutionAt: "2026-07-26T13:50:57.686Z",
+      columnMovedAt: "2026-07-26T13:51:33.266Z",
+    },
+    stillPlanning: true,
+  },
+  {
+    label: "triage planning card whose execution stamp lands AFTER arrival (live claim, FN-8361)",
+    task: {
+      column: "triage",
+      steps: [],
+      status: "planning",
+      columnMovedAt: "2026-07-26T13:51:33.266Z",
+      executionStartedAt: "2026-07-26T13:52:10.000Z",
+    },
+    stillPlanning: false,
+  },
+  {
+    label: "stranded-advanced triage card with stale stamps but NO planning status (PR #2360)",
+    task: {
+      column: "triage",
+      steps: [planStep("step-1")],
+      executionStartedAt: "2026-07-26T13:50:57.686Z",
+      columnMovedAt: "2026-07-26T13:51:33.266Z",
+    },
+    stillPlanning: false,
+  },
   {
     label: "triage card parked by a reviewer outage after an execution attempt",
     task: {

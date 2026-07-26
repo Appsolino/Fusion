@@ -67,7 +67,10 @@ const REPLAN_PARK_STATUSES = new Set(
 
 export function hasAdvancedPastPlanning(
   task: Pick<Task, "column" | "worktree" | "steps" | "status">
-    & Partial<Pick<Task, "firstExecutionAt" | "executionStartedAt">>,
+    // FNXC:WorkflowReplan 2026-07-26-18:30: `columnMovedAt` is the stale-stamp discriminator (see
+    // the execution-stamp branch). Optional so existing narrowed callers still compile; absent, the
+    // branch keeps its prior "stamps mean advanced" answer.
+    & Partial<Pick<Task, "firstExecutionAt" | "executionStartedAt" | "columnMovedAt">>,
 ): boolean {
   if (
     task.column === "in-progress"
@@ -106,7 +109,40 @@ export function hasAdvancedPastPlanning(
   maxTriageConcurrent slot in a claim/skip loop.
   */
   if (task.firstExecutionAt != null || task.executionStartedAt != null) {
-    return true;
+    /*
+    FNXC:WorkflowReplan 2026-07-26-18:30 (FN-8596 strand):
+    Distinguish a STALE stamp from a LIVE claim before treating the stamps as proof of advancement.
+    Both look identical in the fields above, and conflating them is what stranded FN-8596: Plan
+    Review returned REVISE, the graph rebounded the card to `triage` with `needs-replan`, triage
+    claimed it and overwrote the status to the TRANSIENT `"planning"` (so the durable-park escape
+    above no longer applied), and the stamps from the card's FIRST pass — never cleared — made the
+    replanning card read as "advanced past planning" for the rest of the session. Every guarded
+    planner write then silently no-opped, so the revision wrote PROMPT.md and the finalize never
+    handed the card off. It sat in triage until an engine restart.
+
+    The discriminator is arrival order: a stamp written BEFORE the card arrived in the planner
+    column belongs to a previous pass, while a stamp written AFTER it arrived means execution
+    genuinely won the FN-8361 race and recovery must not clear the status out from under it.
+    Requiring a planning-stage status too keeps the PR #2360 stranded-advanced class (triage card
+    with stamps and NO planning status) reading as advanced, so self-healing still owns it.
+    Missing/unparseable `columnMovedAt` falls through to the prior behavior (advanced), so this can
+    only ever narrow the strand, never widen the race.
+    */
+    const arrivedAtMs = Date.parse(task.columnMovedAt ?? "");
+    const newestStampMs = Math.max(
+      Date.parse(task.executionStartedAt ?? "") || Number.NEGATIVE_INFINITY,
+      Date.parse(task.firstExecutionAt ?? "") || Number.NEGATIVE_INFINITY,
+    );
+    const stampPredatesArrival = Number.isFinite(arrivedAtMs)
+      && Number.isFinite(newestStampMs)
+      && newestStampMs < arrivedAtMs;
+    const claimedInPlannerLane = task.column === "triage"
+      && task.status != null
+      && PLANNING_STAGE_STATUSES.has(task.status);
+    if (!(stampPredatesArrival && claimedInPlannerLane)) {
+      return true;
+    }
+    return false;
   }
   // The planner column itself is never "advanced" — nothing executes out of triage, and the steps
   // below belong to the card's previous planning pass.
@@ -130,7 +166,7 @@ the "not advanced" answer, and TypeScript could not flag it.
 */
 export function isTaskStillInPlanningStage(
   task: Pick<Task, "column" | "worktree" | "steps" | "status">
-    & Partial<Pick<Task, "firstExecutionAt" | "executionStartedAt">>,
+    & Partial<Pick<Task, "firstExecutionAt" | "executionStartedAt" | "columnMovedAt">>,
 ): boolean {
   return !hasAdvancedPastPlanning(task);
 }

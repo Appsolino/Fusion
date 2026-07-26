@@ -3237,7 +3237,25 @@ export class TriageProcessor {
     FN-8361 treats every delayed-finalization mutation as a live planning-stage
     transition. A normal scheduler advance skips and terminates this recovery body.
     */
-    if (!await this.updatePlanningStateIfStillCurrent(task, taskUpdates)) return;
+    /*
+    FNXC:TriageFinalizeVisibility 2026-07-26-18:20 (FN-8596 strand):
+    This guard aborting used to be COMPLETELY silent — a bare `return` with no log, no audit and no
+    requeue. That is how the FN-8596 strand stayed invisible: the planner wrote PROMPT.md (via the
+    store tool, which bypasses the guard), the finalize refused here, and the card sat in triage
+    with `status:"planning"` forever with nothing in any log explaining why. Skipping is a LEGITIMATE
+    outcome when the scheduler genuinely advanced the card (FN-8024 deliberately does not log that
+    case), but "the finalize declined to hand off" must be observable — so warn with the live state
+    that made the decision. Cheap: it fires at most once per finalize attempt, not per poll.
+    */
+    if (!await this.updatePlanningStateIfStillCurrent(task, taskUpdates)) {
+      const live = await this.store.getTask(task.id).catch(() => null);
+      planLog.warn(
+        `${task.id}: planning finalize skipped — task no longer in the planning stage `
+        + `(column=${live?.column ?? "unknown"}, status=${live?.status ?? "null"}, `
+        + `executionStartedAt=${live?.executionStartedAt ?? "null"}). Handoff NOT performed.`,
+      );
+      return;
+    }
 
     try {
       const preflightDecision = await Promise.race([
