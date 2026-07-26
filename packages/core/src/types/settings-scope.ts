@@ -797,6 +797,10 @@ export interface GlobalSettings {
    *  verbose `detail` payload is omitted to reduce log size/noise. Distinct
    *  from `persistAgentThinkingLog`, which controls `thinking` rows. */
   persistAgentToolOutput?: boolean;
+  /** Per-result engine-injected tool-output budget. Unset/null uses 16,000 characters;
+   * positive integers set a custom cap; 0 disables the shared clamp; invalid values
+   * fall back to the finite default. */
+  agentToolOutputMaxChars?: number | null;
   /** When true, task chat receives engine-authored progress, failure, and rollback updates. Default: false. */
   proactiveTaskChatEnabled?: boolean;
   /** When true, persist `thinking` log entries from agent reasoning deltas for
@@ -1071,6 +1075,10 @@ export interface ProjectSettings {
    * Records the last time the engine process proved it was alive so startup recovery can exclude process-down wall-clock time from active task duration without changing firstExecutionAt.
    */
   engineLastActiveAt?: string;
+  /** Per-result engine-injected tool-output budget. Unset/null uses 16,000 characters;
+   * positive integers set a custom cap; 0 disables the shared clamp; invalid values
+   * fall back to the finite default. */
+  agentToolOutputMaxChars?: number | null;
   /** Maximum number of concurrent AI agents across all activity types
    *  (triage specification, task execution, and merge operations). */
   maxConcurrent: number;

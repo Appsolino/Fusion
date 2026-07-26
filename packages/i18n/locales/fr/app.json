@@ -6044,7 +6044,11 @@
       "releaseChannel": "",
       "releaseChannelHelp": "",
       "channelStable": "",
-      "channelBeta": ""
+      "channelBeta": "",
+      "agentToolOutputLimit": "",
+      "agentToolOutputLimitHint": "",
+      "noLimitOnAgentToolOutput": "",
+      "noLimitOnAgentToolOutputHint": ""
     },
     "globalModels": {
       "allow": "",

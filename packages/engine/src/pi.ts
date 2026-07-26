@@ -1037,6 +1037,8 @@ export interface AgentOptions {
   systemPromptLayers?: SystemPromptLayers;
   tools?: "coding" | "readonly";
   customTools?: ToolDefinition[];
+  /** Per-result shared tool-output cap. `null` disables the wrapper; undefined uses the built-in default. */
+  toolOutputMaxChars?: number | null;
   /*
   FNXC:MergeQueue 2026-07-15-11:08:
   Merger sessions must not load host @runfusion/fusion extension tools. Extension fn_task_show boots a second PostgreSQL TaskStore (createTaskStoreForBackend) inside the engine process and can hang indefinitely without a tool timeout, wedging the single-flight merge pump (observed FN-7956).
@@ -1878,9 +1880,12 @@ export function wrapToolsWithBoundary(
 /*
 FNXC:ToolOutputBudget 2026-08-06-12:00:
 FN-8614 requires one finite budget for the total model-visible text in every
-engine-injected tool result. Overrides may choose only another finite positive
-integer cap; there is deliberately no unbounded sentinel or opt-out. The audit
-found no legitimate result that needs more than the shared 16,000-character cap.
+engine-injected tool result. Per-tool overrides remain finite positive integers;
+only the operator-level setting can select the explicit unlimited mode.
+
+FNXC:ToolOutputBudget 2026-08-06-16:00:
+FN-8616 makes the shared cap configurable at the session seam. A `null` resolved
+value returns the original tool list, avoiding all clamp/marker rewriting.
 */
 export const TOOL_OUTPUT_BUDGET_OVERRIDES: Readonly<Record<string, number>> = {};
 
@@ -1890,8 +1895,9 @@ export const TOOL_OUTPUT_BUDGET_OVERRIDES: Readonly<Record<string, number>> = {}
  */
 export function wrapToolsWithOutputBudget(
   tools: ToolDefinition[],
-  options: { overrides?: Readonly<Record<string, number | null | undefined>> } = {},
+  options: { overrides?: Readonly<Record<string, number | null | undefined>>; maxChars?: number | null } = {},
 ): ToolDefinition[] {
+  if (options.maxChars === null) return tools;
   return tools.map((tool) => {
     const originalExecute = tool.execute as any;
     return {
@@ -1910,7 +1916,11 @@ export function wrapToolsWithOutputBudget(
         });
         if (textPositions.length === 0) return result;
 
-        const budget = resolveToolOutputBudget(tool.name, options.overrides ?? TOOL_OUTPUT_BUDGET_OVERRIDES);
+        const budget = resolveToolOutputBudget(
+          tool.name,
+          options.overrides ?? TOOL_OUTPUT_BUDGET_OVERRIDES,
+          options.maxChars ?? undefined,
+        );
         const clamped = clampToolOutputBlocks(texts, { maxChars: budget });
         const content = result.content.map((block: unknown) => block);
         textPositions.forEach((position, index) => {
@@ -2574,9 +2584,12 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
       boundaryContext.worktreeProjectRoot,
       normalizedAdditionalSkillPaths,
     );
-    // FNXC:ToolOutputBudget 2026-08-06-12:00:
-    // Keep this outermost so policy-gate and boundary rejection text is bounded too.
-    const customToolList: ToolDefinition[] = wrapToolsWithOutputBudget(boundaryWrappedTools);
+    // FNXC:ToolOutputBudget 2026-08-06-16:00:
+    // Keep this outermost so policy-gate and boundary rejection text is bounded too;
+    // a null setting-derived budget intentionally returns the chain unchanged.
+    const customToolList: ToolDefinition[] = wrapToolsWithOutputBudget(boundaryWrappedTools, {
+      maxChars: options.toolOutputMaxChars,
+    });
     // Sort tools alphabetically by name for deterministic ordering.
     // Prompt caching requires the tool list to be byte-identical across
     // sessions — reordering breaks cache prefix matching.

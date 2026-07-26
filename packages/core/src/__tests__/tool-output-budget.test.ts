@@ -4,6 +4,7 @@ import {
   buildToolOutputTruncationMarker,
   clampToolOutputBlocks,
   clampToolOutputText,
+  resolveAgentToolOutputMaxChars,
   resolveToolOutputBudget,
 } from "../tool-output-budget.js";
 
@@ -47,12 +48,24 @@ describe("tool output budget", () => {
     expect(output.join("")).toHaveLength(maxChars);
   });
 
-  it("resolves only finite positive integer overrides", () => {
-    expect(resolveToolOutputBudget("missing", {})).toBe(DEFAULT_TOOL_OUTPUT_MAX_CHARS);
-    expect(resolveToolOutputBudget("large", { large: 20_000 })).toBe(20_000);
-    expect(resolveToolOutputBudget("small", { small: 10 })).toBe(10);
+  it("resolves the setting's default, bounded, and explicit unlimited states", () => {
+    for (const value of [undefined, null]) {
+      expect(resolveAgentToolOutputMaxChars({ agentToolOutputMaxChars: value })).toBe(DEFAULT_TOOL_OUTPUT_MAX_CHARS);
+    }
+    expect(resolveAgentToolOutputMaxChars({})).toBe(DEFAULT_TOOL_OUTPUT_MAX_CHARS);
+    expect(resolveAgentToolOutputMaxChars({ agentToolOutputMaxChars: 0 })).toBeNull();
+    expect(resolveAgentToolOutputMaxChars({ agentToolOutputMaxChars: 500 })).toBe(500);
+    for (const value of [-1, 1.5, Number.NaN, Infinity, "500"]) {
+      expect(resolveAgentToolOutputMaxChars({ agentToolOutputMaxChars: value })).toBe(DEFAULT_TOOL_OUTPUT_MAX_CHARS);
+    }
+  });
+
+  it("resolves only finite positive integer overrides over a supplied base budget", () => {
+    expect(resolveToolOutputBudget("missing", {}, 500)).toBe(500);
+    expect(resolveToolOutputBudget("large", { large: 20_000 }, 500)).toBe(20_000);
+    expect(resolveToolOutputBudget("small", { small: 10 }, 500)).toBe(10);
     for (const value of [Infinity, 0, -1, Number.NaN, null]) {
-      expect(() => resolveToolOutputBudget("bad", { bad: value })).toThrow(/finite positive integers/);
+      expect(() => resolveToolOutputBudget("bad", { bad: value }, 500)).toThrow(/finite positive integers/);
     }
   });
 });

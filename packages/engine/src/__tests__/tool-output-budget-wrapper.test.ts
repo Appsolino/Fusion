@@ -44,24 +44,51 @@ describe("tool output budget wrapper", () => {
     expect(result.content.map((block: any) => block.text)).toEqual(["abcd", marker, ""]);
   });
 
-  it("honors finite larger and smaller overrides, rejects invalid values, and does not double-mark", async () => {
-    const source = "x".repeat(200);
-    const large = await execute(wrapToolsWithOutputBudget([toolWithResult({ content: [{ type: "text", text: source }] })], { overrides: { fn_budget_test: 300 } })[0]);
-    const small = await execute(wrapToolsWithOutputBudget([toolWithResult({ content: [{ type: "text", text: source }] })], { overrides: { fn_budget_test: 100 } })[0]);
-    expect(large.content[0].text).toBe(source);
-    expect(small.content[0].text.length).toBeLessThanOrEqual(100);
+  it("honors a custom base budget and finite named overrides without double-marking", async () => {
+    const source = "x".repeat(700);
+    const custom = await execute(wrapToolsWithOutputBudget([toolWithResult({ content: [{ type: "text", text: source }] })], { maxChars: 500 })[0]);
+    const override = await execute(wrapToolsWithOutputBudget([toolWithResult({ content: [{ type: "text", text: source }] })], {
+      maxChars: 500,
+      overrides: { fn_budget_test: 100 },
+    })[0]);
+    expect(custom.content[0].text.length).toBeLessThanOrEqual(500);
+    expect(override.content[0].text.length).toBeLessThanOrEqual(100);
     await expect(execute(wrapToolsWithOutputBudget([toolWithResult({ content: [{ type: "text", text: source }] })], { overrides: { fn_budget_test: Infinity } })[0])).rejects.toThrow(/finite positive integers/);
-    const once = wrapToolsWithOutputBudget([toolWithResult({ content: [{ type: "text", text: source }] })], { overrides: { fn_budget_test: 100 } });
-    const twice = wrapToolsWithOutputBudget(once, { overrides: { fn_budget_test: 100 } });
+    const once = wrapToolsWithOutputBudget([toolWithResult({ content: [{ type: "text", text: source }] })], { maxChars: 100 });
+    const twice = wrapToolsWithOutputBudget(once, { maxChars: 100 });
     const result = await execute(twice[0]);
     expect(result.content[0].text.match(/Tool output truncated/g)).toHaveLength(1);
   });
 
-  it("applies the same clamp on the non-pi plugin-runtime path exactly once", async () => {
+  it("applies the same configurable clamp on the non-pi plugin-runtime path exactly once", async () => {
     const result = await execute(wrapCustomToolsForPluginRuntime([
       toolWithResult({ content: [{ type: "text", text: "x".repeat(DEFAULT_TOOL_OUTPUT_MAX_CHARS + 1) }] }),
     ], {})![0]);
+    const custom = await execute(wrapCustomToolsForPluginRuntime([
+      toolWithResult({ content: [{ type: "text", text: "x".repeat(700) }] }),
+    ], { toolOutputMaxChars: 500 })![0]);
     expect(result.content[0].text.length).toBeLessThanOrEqual(DEFAULT_TOOL_OUTPUT_MAX_CHARS);
     expect(result.content[0].text.match(/Tool output truncated/g)).toHaveLength(1);
+    expect(custom.content[0].text.length).toBeLessThanOrEqual(500);
+    expect(custom.content[0].text.match(/Tool output truncated/g)).toHaveLength(1);
+  });
+
+  it("returns pi and plugin tool lists unchanged when the resolved setting is unlimited", async () => {
+    const original = {
+      content: [
+        { type: "text", text: "a".repeat(800) },
+        { type: "image", data: "unchanged" },
+        { type: "text", text: "b".repeat(800) },
+      ],
+      details: { retained: true },
+      isError: true,
+    };
+    const piTools = [toolWithResult(original)];
+    const pluginTools = [toolWithResult(original)];
+    expect(wrapToolsWithOutputBudget(piTools, { maxChars: null })).toBe(piTools);
+    const piResult = await execute(wrapToolsWithOutputBudget(piTools, { maxChars: null })[0]);
+    const pluginResult = await execute(wrapCustomToolsForPluginRuntime(pluginTools, { toolOutputMaxChars: null })![0]);
+    expect(piResult).toBe(original);
+    expect(pluginResult).toBe(original);
   });
 });
