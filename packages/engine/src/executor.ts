@@ -12210,7 +12210,12 @@ export class TaskExecutor {
             }
           },
           onStepComplete: (stepIndex, result) => {
-            executorLog.log(`${task.id}: step ${stepIndex} ${result.success ? "succeeded" : "failed"} (${result.retries} retries)`);
+            // FNXC:EngineDiagnostics 2026-07-26-10:05: per-step success is expected bookkeeping (incl. foreach instances); failures stay at log.
+            if (result.success) {
+              executorLog.debug(`${task.id}: step ${stepIndex} succeeded (${result.retries} retries)`);
+            } else {
+              executorLog.log(`${task.id}: step ${stepIndex} failed (${result.retries} retries)`);
+            }
             try {
               this.store.updateStep(task.id, stepIndex, result.success ? "done" : "skipped", stepProjectionOptions).catch((err) => {
                 executorLog.warn(`${task.id}: failed to update step ${stepIndex} status: ${err}`);

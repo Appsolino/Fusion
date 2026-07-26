@@ -168,6 +168,10 @@ import {
 
 const log = createLogger("self-healing");
 const worktreeMetadataReconcileLog = createLogger("worktree-metadata-reconcile");
+/*
+FNXC:EngineDiagnostics 2026-07-26-10:25:
+Self-healing no-action/skip/defer/worktrunk-skip/maintenance lifecycle lines fire every sweep and drowned recoveries in the TUI. Those are debug (FUSION_DEBUG=self-healing). Keep log/warn/error for real recoveries (Recovered/Reclaimed/Cleaned/Revived/…), stuck kills, and failures.
+*/
 const execAsync = promisify(exec);
 const yieldEventLoop = (): Promise<void> => new Promise((resolve) => setImmediateCb(resolve));
 const DONE_TASK_INTEGRITY_SWEEP_LIMIT = 50;
@@ -1195,7 +1199,7 @@ export class SelfHealingManager {
         log.warn(`[${stage}] ${task.id}: wedge notification failed: ${message}`);
       }
     }
-    log.log(`[${stage}] ${task.id}: triple-proof not satisfied — no action (operator-decides)`);
+    log.debug(`[${stage}] ${task.id}: triple-proof not satisfied — no action (operator-decides)`);
   }
 
   /*
@@ -1256,7 +1260,7 @@ export class SelfHealingManager {
         log.warn(`[stranded-completed-provenance] ${taskId}: no-action audit emission failed: ${message}`);
       }
     }
-    log.log(`[stranded-completed-provenance] ${taskId}: withholding ${sweep} promotion — most recent execution ended in a failure/refusal park (operator-decides)`);
+    log.debug(`[stranded-completed-provenance] ${taskId}: withholding ${sweep} promotion — most recent execution ended in a failure/refusal park (operator-decides)`);
     return true;
   }
 
@@ -1430,7 +1434,7 @@ export class SelfHealingManager {
       const message = error instanceof Error ? error.message : String(error);
       log.warn(`[${stage}] ${task.id}: false-positive no-action audit emission failed: ${message}`);
     }
-    log.log(`[${stage}] ${task.id}: false-positive requeue suppressed (${reason})`);
+    log.debug(`[${stage}] ${task.id}: false-positive requeue suppressed (${reason})`);
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────
@@ -1471,7 +1475,7 @@ export class SelfHealingManager {
     // Start periodic maintenance
     this.startMaintenance();
 
-    log.log("Started");
+    log.debug("Started");
   }
 
   /**
@@ -1484,7 +1488,7 @@ export class SelfHealingManager {
   async runStartupRecovery(): Promise<void> {
     const settings = await this.store.getSettings();
     if (settings.globalPause || settings.enginePaused) {
-      log.log(
+      log.debug(
         `Startup recovery skipped — ${
           settings.globalPause ? "global pause" : "engine pause"
         } is active`,
@@ -1584,7 +1588,7 @@ export class SelfHealingManager {
     for (const step of steps) {
       try {
         await step.fn();
-        log.log(`Startup recovery step "${step.name}" completed`);
+        log.debug(`Startup recovery step "${step.name}" completed`);
       } catch (stepErr) {
         const stepErrMessage = stepErr instanceof Error ? stepErr.message : String(stepErr);
         log.error(`Startup recovery step "${step.name}" failed: ${stepErrMessage} — continuing with remaining steps`);
@@ -1650,7 +1654,7 @@ export class SelfHealingManager {
     this.metaResolvedSkipAuditMemo.clear();
     this.metaStalledSkipAuditMemo.clear();
     this.preservedQueuedOverlapLogged.clear();
-    log.log("Stopped");
+    log.debug("Stopped");
   }
 
   // ── Auto-unpause ───────────────────────────────────────────────────
@@ -1664,7 +1668,7 @@ export class SelfHealingManager {
       }
 
       if (settings.globalPauseReason === "manual") {
-        log.log("Global pause activated manually — auto-unpause skipped, requires manual intervention");
+        log.debug("Global pause activated manually — auto-unpause skipped, requires manual intervention");
         return;
       }
 
@@ -1714,7 +1718,7 @@ export class SelfHealingManager {
 
       // Already unpaused (manually or by another mechanism)
       if (!settings.globalPause) {
-        log.log("Auto-unpause: already unpaused — no action needed");
+        log.debug("Auto-unpause: already unpaused — no action needed");
         this.unpauseAttempt = 0;
         return;
       }
@@ -2025,11 +2029,11 @@ export class SelfHealingManager {
     const intervalMs = settings.maintenanceIntervalMs ?? 900_000;
 
     if (intervalMs <= 0) {
-      log.log("Periodic maintenance disabled (maintenanceIntervalMs <= 0)");
+      log.debug("Periodic maintenance disabled (maintenanceIntervalMs <= 0)");
       return;
     }
 
-    log.log(`Periodic maintenance every ${Math.round(intervalMs / 60_000)}m`);
+    log.debug(`Periodic maintenance every ${Math.round(intervalMs / 60_000)}m`);
     this.maintenanceInterval = setInterval(() => {
       void this.runMaintenance();
     }, intervalMs);
@@ -3050,7 +3054,7 @@ export class SelfHealingManager {
         if (!Number.isFinite(movedAt)) return false;
         if (movedAt >= cutoff) return false;
         if (tasksWithActiveDependents.has(t.id)) {
-          log.log(`Skipping auto-archive of ${t.id}: has active dependents`);
+          log.debug(`Skipping auto-archive of ${t.id}: has active dependents`);
           return false;
         }
         return true;
@@ -3130,7 +3134,7 @@ export class SelfHealingManager {
         // task:moved dispatch) may have claimed the task in between.
         const latestExecutingIds = this.options.getExecutingTaskIds?.() ?? new Set<string>();
         if (latestExecutingIds.has(task.id)) {
-          log.log(`${task.id} started executing concurrently — skipping recovery this cycle`);
+          log.debug(`${task.id} started executing concurrently — skipping recovery this cycle`);
           continue;
         }
         // FN-8141: never promote a stuck-in-progress task whose most recent execution ended in a
@@ -3199,7 +3203,7 @@ export class SelfHealingManager {
       for (const task of stranded) {
         const latestExecutingIds = this.options.getExecutingTaskIds?.() ?? new Set<string>();
         if (latestExecutingIds.has(task.id)) {
-          log.log(`${task.id} started executing concurrently — skipping stranded todo recovery this cycle`);
+          log.debug(`${task.id} started executing concurrently — skipping stranded todo recovery this cycle`);
           continue;
         }
         // FN-8141: never promote a stranded-todo task whose most recent execution ended in a
@@ -3894,11 +3898,11 @@ export class SelfHealingManager {
           continue;
         }
         if (task.column === "todo" && task.blockedBy) {
-          log.log(`[self-healing] skipping blocked todo task ${task.id} during self-owned branch reclaim (blockedBy=${task.blockedBy})`);
+          log.debug(`[self-healing] skipping blocked todo task ${task.id} during self-owned branch reclaim (blockedBy=${task.blockedBy})`);
           continue;
         }
         if (task.pausedReason === "worktrunk_operation_failed") {
-          log.log(`[self-healing] skipping worktrunk-paused task ${task.id}`);
+          log.debug(`[self-healing] skipping worktrunk-paused task ${task.id}`);
           continue;
         }
         // FN-4811 follow-up (FN-4819): defer reclaim when the worktree is currently bound
@@ -3910,7 +3914,7 @@ export class SelfHealingManager {
         // let the session complete — the reclaim will retry on a later sweep when no one
         // is using the worktree.
         if (activeSessionRegistry.isPathActive(task.worktree)) {
-          log.log(`[self-healing] deferring reclaim for ${task.id}: worktree ${task.worktree} has active session`);
+          log.debug(`[self-healing] deferring reclaim for ${task.id}: worktree ${task.worktree} has active session`);
           continue;
         }
         if (!await isUsableTaskWorktree(this.options.rootDir, task.worktree)) continue;
@@ -4472,13 +4476,13 @@ export class SelfHealingManager {
         const task = taskById.get(derivedTaskId.toUpperCase());
         if (!task || task.column === "archived" || task.checkedOutBy || task.userPaused) continue;
         if (task.pausedReason === "worktrunk_operation_failed") {
-          log.log(`[self-healing] skipping worktrunk-paused task ${task.id}`);
+          log.debug(`[self-healing] skipping worktrunk-paused task ${task.id}`);
           continue;
         }
         if (activeTaskIds.has(task.id.toUpperCase())) continue;
 
         const emitDeferredReclaimAudit = async (reason: "active-session" | "recent-execution-started" | "worktree-has-uncommitted-changes", hasActiveSession: boolean, hasUncommittedChanges: boolean): Promise<void> => {
-          log.log(`[self-healing] deferring stale-active-branch reclaim for ${task.id}: reason=${reason}`);
+          log.debug(`[self-healing] deferring stale-active-branch reclaim for ${task.id}: reason=${reason}`);
           try {
             const auditor = createRunAuditor(this.store, {
               runId: generateSyntheticRunId("self-heal", task.id),
@@ -4819,7 +4823,7 @@ export class SelfHealingManager {
           log.warn(`${prefix} failed to remove worktree ${worktreePath}: ${errorMessage}`);
         }
       } else {
-        log.log(`${prefix} no live worktree found for branch ${branchName}`);
+        log.debug(`${prefix} no live worktree found for branch ${branchName}`);
       }
 
       this.options.releaseExecutorWorktreeOwnership?.(taskId);
@@ -5201,7 +5205,7 @@ export class SelfHealingManager {
             previousBranch,
             newBranch: normalizedBranch,
           });
-          worktreeMetadataReconcileLog.log(
+          worktreeMetadataReconcileLog.debug(
             `rebound ${task.id}: ${previousWorktree} -> ${liveWorktree} (${previousBranch ?? "<none>"} -> ${normalizedBranch})`,
           );
           repaired++;
@@ -5228,7 +5232,7 @@ export class SelfHealingManager {
             previousBranch,
             newBranch: null,
           });
-          worktreeMetadataReconcileLog.log(
+          worktreeMetadataReconcileLog.debug(
             `cleared scopeOverride ${task.id}: ${previousWorktree} (${previousBranch ?? "<none>"})`,
           );
           repaired++;
@@ -5263,7 +5267,7 @@ export class SelfHealingManager {
           previousBranch,
           newBranch: null,
         });
-        worktreeMetadataReconcileLog.log(
+        worktreeMetadataReconcileLog.debug(
           `cleared ${task.id}: ${previousWorktree} (${previousBranch ?? "<none>"})`,
         );
         repaired++;
@@ -5538,7 +5542,7 @@ export class SelfHealingManager {
             metadata: { taskId: task.id, targetTaskId, targetColumn: target?.column ?? "unknown", chainDepth, blockedBy: guardResult.reasons },
           });
         }
-        log.log(`[self-healing] skipped meta-resolved auto-archive for ${task.id}: ${guardResult.reasons.join(",")}`);
+        log.debug(`[self-healing] skipped meta-resolved auto-archive for ${task.id}: ${guardResult.reasons.join(",")}`);
         continue;
       }
       this.clearReasonMemo(this.metaResolvedSkipAuditMemo, task.id);
@@ -5594,7 +5598,7 @@ export class SelfHealingManager {
             metadata: { taskId: task.id, targetTaskId, chainDepth, stalledMs: Math.max(ageMs, 0), blockedBy: guardResult.reasons },
           });
         }
-        log.log(`[self-healing] skipped meta-stalled auto-archive for ${task.id}: ${guardResult.reasons.join(",")}`);
+        log.debug(`[self-healing] skipped meta-stalled auto-archive for ${task.id}: ${guardResult.reasons.join(",")}`);
         continue;
       }
       this.clearReasonMemo(this.metaStalledSkipAuditMemo, task.id);
@@ -9336,7 +9340,7 @@ export class SelfHealingManager {
         */
         if (isWorkspaceTask(task)) continue;
         if (task.mergeDetails?.landedFilesAttributionRestricted || task.mergeDetails?.noOpVerifiedShortCircuit) {
-          log.log(`recoverDoneTaskMergeMetadata: skipped ${task.id} — attribution-restricted`);
+          log.debug(`recoverDoneTaskMergeMetadata: skipped ${task.id} — attribution-restricted`);
           continue;
         }
         try {
@@ -10594,7 +10598,7 @@ export class SelfHealingManager {
 
       const accepted = await requeueForAutoMerge(task.id);
       if (accepted !== true) {
-        log.log(
+        log.debug(
           `recoverCompletionHandoffLimbo: skipped recovery count for ${task.id} because merge requeue was not accepted`,
         );
         continue;
@@ -11419,7 +11423,7 @@ export class SelfHealingManager {
             },
           });
 
-          log.log(`[orphan-detected] ${task.id}: ${reason} — no action (operator-decides)`);
+          log.debug(`[orphan-detected] ${task.id}: ${reason} — no action (operator-decides)`);
         } catch (err: unknown) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           log.error(`Failed to annotate orphaned executor candidate ${task.id}: ${errorMessage}`);
@@ -12300,7 +12304,7 @@ export class SelfHealingManager {
       for (const task of candidates) {
         try {
           if (await this.hasRecoverableGitWork(task)) {
-            log.log(`${task.id} has recoverable git work — leaving in-progress for inspection`);
+            log.debug(`${task.id} has recoverable git work — leaving in-progress for inspection`);
             continue;
           }
 
@@ -13019,7 +13023,7 @@ export class SelfHealingManager {
           try {
             await backend.prune({ rootDir: this.options.rootDir });
             await auditor.git({ type: "worktree:worktrunk-prune", target: this.options.rootDir, metadata: { success: true } });
-            log.log("Worktree prune delegated to worktrunk backend");
+            log.debug("Worktree prune delegated to worktrunk backend");
             return;
           } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : String(err);
@@ -13037,7 +13041,7 @@ export class SelfHealingManager {
         cwd: this.options.rootDir,
         timeout: 30_000,
       });
-      log.log("Worktree prune completed");
+      log.debug("Worktree prune completed");
     } catch (err: unknown) { const errorMessage = err instanceof Error ? err.message : String(err);
       log.error(`Worktree prune failed: ${errorMessage}`);
     }
@@ -13059,7 +13063,7 @@ export class SelfHealingManager {
     try {
       const settings = await this.store.getSettings();
       if (settings.worktrunk?.enabled === true) {
-        log.log("[self-healing] skipped native orphan cleanup — worktrunk backend owns layout");
+        log.debug("[self-healing] skipped native orphan cleanup — worktrunk backend owns layout");
         const backend = resolveWorktreeBackend(settings, { logger: log });
         if (backend.kind === "worktrunk") {
           await backend.prune({ rootDir: this.options.rootDir });
@@ -13082,12 +13086,12 @@ export class SelfHealingManager {
         // null worktree metadata mid-transition) while the owning process is still
         // working in the checkout — scanIdleWorktrees would otherwise flag it idle.
         if (activeSessionRegistry.isPathActive(worktreePath) || activeSessionRegistry.isPathActive(resolve(worktreePath))) {
-          log.log(`[self-healing] deferring idle-sweep for ${worktreePath}: active session present`);
+          log.debug(`[self-healing] deferring idle-sweep for ${worktreePath}: active session present`);
           continue;
         }
         // U8: never reclaim a worktree backing a resume-eligible CLI session.
         if (this.isWorktreeResumeReserved(worktreePath)) {
-          log.log(`[self-healing] deferring idle-sweep for ${worktreePath}: resume-eligible CLI session present`);
+          log.debug(`[self-healing] deferring idle-sweep for ${worktreePath}: resume-eligible CLI session present`);
           continue;
         }
         try {
@@ -13124,7 +13128,7 @@ export class SelfHealingManager {
   private async reapUnregisteredOrphans(): Promise<number> {
     const settings = await this.store.getSettings();
     if (settings.worktrunk?.enabled === true) {
-      log.log("[self-healing] skipped native unregistered-orphan reap — worktrunk backend owns layout");
+      log.debug("[self-healing] skipped native unregistered-orphan reap — worktrunk backend owns layout");
       const backend = resolveWorktreeBackend(settings, { logger: log });
       if (backend.kind === "worktrunk") {
         await backend.prune({ rootDir: this.options.rootDir });
@@ -13159,12 +13163,12 @@ export class SelfHealingManager {
       // executor/merger/step session. The worktree may be unregistered in git's
       // admin file while the owning process is still running.
       if (activeSessionRegistry.isPathActive(path)) {
-        log.log(`[self-healing] deferring unregistered-orphan reap for ${path}: active session present`);
+        log.debug(`[self-healing] deferring unregistered-orphan reap for ${path}: active session present`);
         continue;
       }
       // U8: never reclaim a worktree backing a resume-eligible CLI session.
       if (this.isWorktreeResumeReserved(path)) {
-        log.log(`[self-healing] deferring unregistered-orphan reap for ${path}: resume-eligible CLI session present`);
+        log.debug(`[self-healing] deferring unregistered-orphan reap for ${path}: resume-eligible CLI session present`);
         continue;
       }
       try {
@@ -13193,7 +13197,7 @@ export class SelfHealingManager {
     try {
       const settings = await this.store.getSettings();
       if (settings.worktrunk?.enabled === true) {
-        log.log("[self-healing] temp-dir sweep: worktrunk enabled — AI merge clean-room worktrees use Fusion's dedicated clean-room root, proceeding with native sweep");
+        log.debug("[self-healing] temp-dir sweep: worktrunk enabled — AI merge clean-room worktrees use Fusion's dedicated clean-room root, proceeding with native sweep");
       }
 
       const roots = Array.from(new Set([resolveRepoLocalAiMergeRoot(this.options.rootDir, settings), resolveLegacyAiMergeRootPath(this.options.rootDir), tmpdir()]));
@@ -13265,7 +13269,7 @@ export class SelfHealingManager {
           }
 
           if (activeSessionRegistry.isPathActive(canonicalPath) || activeSessionRegistry.isPathActive(path)) {
-            log.log(`[self-healing] temp-dir sweep: deferring ${canonicalPath}: active session present`);
+            log.debug(`[self-healing] temp-dir sweep: deferring ${canonicalPath}: active session present`);
             await auditor.git({ type: "worktree:tempdir-sweep", target: canonicalPath, metadata: { path: canonicalPath, success: false, reason: "active-session" } });
             continue;
           }
@@ -13430,7 +13434,7 @@ export class SelfHealingManager {
     try {
       const settings = await this.store.getSettings();
       if (settings.worktrunk?.enabled === true) {
-        log.log("[self-healing] skipped native worktree cap enforcement — worktrunk backend owns layout");
+        log.debug("[self-healing] skipped native worktree cap enforcement — worktrunk backend owns layout");
         const backend = resolveWorktreeBackend(settings, { logger: log });
         if (backend.kind === "worktrunk") {
           await backend.prune({ rootDir: this.options.rootDir });
@@ -13471,12 +13475,12 @@ export class SelfHealingManager {
         // step/workflow session — cap pressure must not yank a checkout out from
         // under a process that is still working in it.
         if (activeSessionRegistry.isPathActive(worktreePath) || activeSessionRegistry.isPathActive(resolve(worktreePath))) {
-          log.log(`[self-healing] cap-enforcement skipping ${worktreePath}: active session present`);
+          log.debug(`[self-healing] cap-enforcement skipping ${worktreePath}: active session present`);
           continue;
         }
         // U8: never reclaim a worktree backing a resume-eligible CLI session.
         if (this.isWorktreeResumeReserved(worktreePath)) {
-          log.log(`[self-healing] cap-enforcement skipping ${worktreePath}: resume-eligible CLI session present`);
+          log.debug(`[self-healing] cap-enforcement skipping ${worktreePath}: resume-eligible CLI session present`);
           continue;
         }
         try {

@@ -2102,8 +2102,11 @@ export class TriageProcessor {
         /*
         FNXC:PlanningModelMarker 2026-07-21-12:00:
         Planning-lane provenance is operator-facing, so its task activity marker uses the board's Planning name while the persisted agent role remains the internal `triage` identifier.
+
+        FNXC:EngineDiagnostics 2026-07-26-10:30:
+        Engine TUI line `using model` fires on every planning session start and is steady-state — planLog.debug (FUSION_DEBUG=plan). Task activity (logEntry/appendAgentLog) stays so the board still shows which model planned.
         */
-        planLog.log(`${task.id}: using model ${modelDesc}`);
+        planLog.debug(`${task.id}: using model ${modelDesc}`);
         await this.store.logEntry(task.id, `Planning using model: ${modelDesc}`);
         await this.store.appendAgentLog(
           task.id,

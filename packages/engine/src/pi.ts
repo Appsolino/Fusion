@@ -2403,7 +2403,8 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
     const skipReason = isReadonly
       ? "readonly"
       : `sessionPurpose=${options.sessionPurpose ?? "unknown"}`;
-    piLog.log(`${skipReason} session — host extensions (${hostExtensionPaths.length}) skipped`);
+    // FNXC:EngineDiagnostics 2026-07-26-10:20: expected per-purpose setup; not an operator event.
+    piLog.debug(`${skipReason} session — host extensions (${hostExtensionPaths.length}) skipped`);
   }
 
   const resourceLoader = new DefaultResourceLoader({
@@ -2473,7 +2474,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
         piLog.warn(`MCP session continuing with unavailable servers: count=${bootstrapFailures.length}`);
       }
     } else if (forwardedMcpServers.length > 0 && isReadonly) {
-      piLog.log(`readonly session — MCP servers (${forwardedMcpServers.length}) skipped`);
+      piLog.debug(`readonly session — MCP servers (${forwardedMcpServers.length}) skipped`);
     }
 
     const mcpReadonlyTools = new Set(mcpToolset?.tools ?? []);

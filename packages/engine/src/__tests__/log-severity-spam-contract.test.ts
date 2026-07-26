@@ -84,6 +84,71 @@ describe("log severity spam contract (source)", () => {
     expect(src).not.toMatch(/peerExchangeLog\.log\(`Starting sync with \$\{onlineRemoteNodes\.length\} peers`\)/);
   });
 
+  it("planning using-model engine log is debug; task activity marker remains", () => {
+    const triage = readSrc("triage.ts");
+    expect(triage).toMatch(/planLog\.debug\(`\$\{task\.id\}: using model \$\{modelDesc\}`\)/);
+    expect(triage).toMatch(/Planning using model: \$\{modelDesc\}/);
+    expect(triage).not.toMatch(/planLog\.log\(`\$\{task\.id\}: using model \$\{modelDesc\}`\)/);
+  });
+
+  it("self-healing no-action/skip, worktree-pool probes, and ntfy bookkeeping use debug", () => {
+    const sh = readSrc("self-healing.ts");
+    const wt = readSrc("worktree-pool.ts");
+    const ntfy = readSrc("notification/ntfy-provider.ts");
+    const notify = readSrc("notification/notification-service.ts");
+    expect(sh).toMatch(/log\.debug\(`\[\$\{stage\}\] \$\{task\.id\}: triple-proof not satisfied — no action/);
+    expect(sh).toMatch(/log\.debug\("Started"\)/);
+    expect(sh).toMatch(/log\.log\(`Recovered \$\{recovered\}/);
+    expect(wt).toMatch(/worktreePoolLog\.debug\(`Rehydrate skipped \(not on disk\)/);
+    expect(ntfy).toMatch(/schedulerLog\.debug\(\s*`NtfyNotificationProvider send event=/);
+    expect(ntfy).toMatch(/schedulerLog\.debug\(\s*`NtfyNotificationProvider delivery event=/);
+    expect(notify).toMatch(/schedulerLog\.debug\(`NotificationService\.maybeNotify suppressed duplicate key=/);
+    expect(notify).toMatch(/schedulerLog\.log\(`NotificationService\.maybeNotify dispatch failed key=/);
+  });
+
+  it("pi session-purpose runtime routing and skip bookkeeping uses debug", () => {
+    const runtime = readSrc("runtime-resolution.ts");
+    const pi = readSrc("pi.ts");
+    expect(runtime).toMatch(/runtimeLog\.debug\(`\[\$\{sessionPurpose\}\] No runtime hint configured/);
+    expect(runtime).toMatch(/runtimeLog\.debug\(`\[\$\{sessionPurpose\}\] Runtime hint is "pi\/default"/);
+    expect(runtime).toMatch(/runtimeLog\.debug\(`\[\$\{sessionPurpose\}\] Using configured plugin runtime/);
+    expect(runtime).toMatch(/runtimeLog\.error\(`\[\$\{sessionPurpose\}\] Error resolving plugin runtime/);
+    expect(pi).toMatch(/piLog\.debug\(`\$\{skipReason\} session — host extensions/);
+    expect(pi).toMatch(/piLog\.debug\(`readonly session — MCP servers/);
+  });
+
+  it("checkpoint bookkeeping (self-improve + RETHINK rewind) uses debug", () => {
+    const improve = readSrc("agent-self-improve.ts");
+    const step = readSrc("step-runner.ts");
+    expect(improve).toMatch(/selfImproveLog\.debug\(`Recorded self-improve checkpoint for/);
+    expect(step).toMatch(/executorLog\.debug\(`\$\{taskId\}: RETHINK — session rewound to checkpoint/);
+    expect(step).toMatch(/executorLog\.debug\(`\$\{taskId\}: RETHINK — no session checkpoint for step/);
+    expect(step).toMatch(/executorLog\.error\(`\$\{taskId\}: RETHINK git reset failed/);
+  });
+
+  it("merger intermediate plumbing uses debug; outcomes stay at log", () => {
+    const merger = readSrc("merger.ts");
+    const conflict = readSrc("merger-conflict-resolution.ts");
+    expect(conflict).toMatch(/mergerLog\.debug\(`Auto-resolved \$\{filePath\} using --ours`\)/);
+    expect(merger).toMatch(/mergerLog\.debug\(`\$\{taskId\}: merge details stored/);
+    expect(merger).toMatch(/mergerLog\.debug\(`\$\{taskId\}: git pull --rebase succeeded/);
+    expect(merger).toMatch(/mergerLog\.debug\(`\$\{taskId\}: merge attempt \$\{attemptNum\}\/3/);
+    expect(merger).toMatch(/mergerLog\.log\(`\$\{taskId\}: completeTask — clearing status, moving to done`\)/);
+    expect(merger).toMatch(/mergerLog\.log\(`\$\{taskId\}: conflicts detected, AI will resolve`\)/);
+    expect(merger).toMatch(/mergerLog\.log\(`\$\{taskId\}: pushed merged result/);
+    expect(merger).not.toMatch(/mergerLog\.log\(`Auto-resolved \$\{filePath\} using --ours`\)/);
+  });
+
+  it("foreach step skip/rework and per-step success use debug", () => {
+    const foreach = readSrc("workflow-graph-foreach.ts");
+    const exec = readSrc("executor.ts");
+    expect(foreach).toMatch(/schedulerLog\.debug\(\s*`foreach \$\{foreachNode\.id\} for task \$\{env\.task\.id\}: skipping step/);
+    expect(foreach).toMatch(/schedulerLog\.debug\(\s*`foreach \$\{foreachNode\.id\} step \$\{inst\.stepIndex\}: integration-conflict/);
+    expect(foreach).not.toMatch(/schedulerLog\.log\(\s*`foreach \$\{foreachNode\.id\} for task/);
+    expect(exec).toMatch(/executorLog\.debug\(`\$\{task\.id\}: step \$\{stepIndex\} succeeded/);
+    expect(exec).toMatch(/executorLog\.log\(`\$\{task\.id\}: step \$\{stepIndex\} failed/);
+  });
+
   it("executor high-frequency dispatch/session bookkeeping uses debug", () => {
     const src = readSrc("executor.ts");
     expect(src).toMatch(/executorLog\.debug\(`TaskExecutor constructed/);
