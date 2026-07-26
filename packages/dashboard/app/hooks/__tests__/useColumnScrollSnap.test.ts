@@ -154,6 +154,39 @@ describe("resolvePageCount", () => {
     expect(resolvePageCount(-3.4)).toBe(3);
     expect(resolvePageCount(Number.NaN)).toBe(1);
   });
+
+  /*
+  FNXC:BoardNavigation 2026-07-25-09:40:
+  Reported symptom: a small swipe jumped several columns because a quick short flick reads fast.
+  Extra columns now require travel as well as speed.
+  */
+  describe("travel gate", () => {
+    const viewportWidth = 390;
+
+    it("keeps a fast but short flick to a single column", () => {
+      expect(resolvePageCount(3.4, { travelPx: 30, viewportWidth })).toBe(1);
+      expect(resolvePageCount(40, { travelPx: 60, viewportWidth })).toBe(1);
+    });
+
+    it("still allows multi-column reach when the swipe actually travelled", () => {
+      expect(resolvePageCount(1.7, { travelPx: viewportWidth, viewportWidth })).toBe(2);
+      expect(resolvePageCount(3.4, { travelPx: viewportWidth * 2, viewportWidth })).toBe(3);
+    });
+
+    it("never lets travel alone buy columns a slow gesture did not earn", () => {
+      expect(resolvePageCount(0.4, { travelPx: viewportWidth * 3, viewportWidth })).toBe(1);
+    });
+
+    it("ignores the gate when no usable viewport width is available", () => {
+      expect(resolvePageCount(3.4, { travelPx: 10, viewportWidth: 0 })).toBe(3);
+      expect(resolvePageCount(3.4, { travelPx: 10, viewportWidth: Number.NaN })).toBe(3);
+    });
+
+    it("treats travel as a magnitude and tolerates non-finite travel", () => {
+      expect(resolvePageCount(1.7, { travelPx: -viewportWidth, viewportWidth })).toBe(2);
+      expect(resolvePageCount(1.7, { travelPx: Number.NaN, viewportWidth })).toBe(1);
+    });
+  });
 });
 
 describe("resolvePageAnimationMs", () => {

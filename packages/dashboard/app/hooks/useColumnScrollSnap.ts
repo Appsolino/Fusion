@@ -61,6 +61,15 @@ const VELOCITY_SAMPLE_WINDOW_MS = 120;
 const FLING_VELOCITY_PER_EXTRA_PAGE = 1.6;
 /** Ceiling so a hard flick cannot fly across the whole board. */
 const MAX_PAGES_PER_SWIPE = 3;
+/*
+FNXC:BoardNavigation 2026-07-25-09:40:
+A SHORT swipe must never cross more than one column, however fast the flick was. Velocity alone
+over-reached: a quick thumb flick of ~30px reads as multiple px/ms and paged two or three columns,
+so the board jumped past what the user aimed at. Each extra column now also has to be earned with
+travel — the gesture must move at least this fraction of the viewport width per extra page — so
+reach stays proportional to the swipe the user actually made.
+*/
+const TRAVEL_FRACTION_PER_EXTRA_PAGE = 0.6;
 /** Below this the animation is pointless — jump. */
 const MIN_ANIMATED_DISTANCE_PX = 2;
 
@@ -91,12 +100,31 @@ function easeOutCubic(progress: number): number {
  *
  * A deliberate slow swipe pages exactly one column; faster releases buy extra columns so the
  * hook's owned animation keeps the reach a native fling used to provide.
+ *
+ * FNXC:BoardNavigation 2026-07-25-09:40:
+ * Extra columns must be earned by BOTH speed and distance. `travelPx` (net gesture travel — the
+ * larger of board scroll delta and horizontal finger travel) against `viewportWidth` caps the
+ * count, so a fast but short flick pages exactly one column instead of jumping across the board.
+ * The travel gate is skipped when the caller cannot supply a usable viewport width.
  */
-export function resolvePageCount(velocityPxPerMs: number): number {
+export function resolvePageCount(
+  velocityPxPerMs: number,
+  travel?: { travelPx: number; viewportWidth: number },
+): number {
   const speed = Math.abs(velocityPxPerMs);
   if (!Number.isFinite(speed) || speed <= 0) return 1;
-  const extra = Math.floor(speed / FLING_VELOCITY_PER_EXTRA_PAGE);
-  return Math.min(1 + extra, MAX_PAGES_PER_SWIPE);
+  const extraFromVelocity = Math.floor(speed / FLING_VELOCITY_PER_EXTRA_PAGE);
+
+  let extra = extraFromVelocity;
+  if (travel && Number.isFinite(travel.viewportWidth) && travel.viewportWidth > 0) {
+    const travelPx = Math.abs(travel.travelPx);
+    const extraFromTravel = Number.isFinite(travelPx)
+      ? Math.floor(travelPx / (travel.viewportWidth * TRAVEL_FRACTION_PER_EXTRA_PAGE))
+      : 0;
+    extra = Math.min(extraFromVelocity, extraFromTravel);
+  }
+
+  return Math.min(1 + Math.max(0, extra), MAX_PAGES_PER_SWIPE);
 }
 
 /** Duration for a `pageCount`-column hop. */
@@ -714,7 +742,22 @@ export function useColumnScrollSnap(
       const nearestIndex = nearestColumnIndex(scroller, columns);
       // A gesture begun mid-transit has no trustworthy origin: page from where it actually is.
       const originIndex = gestureStartCentered ? gestureStartColumnIndex : nearestIndex;
-      const pageCount = resolvePageCount(resolveReleaseVelocity());
+      /*
+      FNXC:BoardNavigation 2026-07-25-09:40:
+      Net gesture travel gates multi-column reach. Take the larger of the board's own scroll delta
+      and the finger's horizontal travel: on iOS the native pan owns the touch stream (scroll delta
+      is the faithful signal), while a finger that dragged against a rubber-banding edge shows
+      travel only in the client coordinates.
+      */
+      const scrollTravel = Math.abs(scroller.scrollLeft - gestureStartScrollLeft);
+      const fingerTravel =
+        gestureStartClientX !== null && lastClientX !== null
+          ? Math.abs(gestureStartClientX - lastClientX)
+          : 0;
+      const pageCount = resolvePageCount(resolveReleaseVelocity(), {
+        travelPx: Math.max(scrollTravel, fingerTravel),
+        viewportWidth,
+      });
       const targetIndex = resolveFlingTargetIndex({
         columnCount: columns.length,
         originIndex,
