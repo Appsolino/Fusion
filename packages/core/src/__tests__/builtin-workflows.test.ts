@@ -599,11 +599,23 @@ describe("built-in workflows", () => {
     });
     expect(byId.get("parse")?.column).toBe("in-progress");
     expect(byId.get("steps")?.column).toBe("in-progress");
-    // U6: the legacy `workflow-step` seam is replaced by the pre-merge
-    // `browser-verification` optional-group, placed in the implementation column.
+    /*
+    FNXC:WorkflowReviewGates 2026-07-26-11:40:
+    U6 replaced the legacy `workflow-step` seam with the pre-merge `browser-verification`
+    optional-group. Both pre-merge review gates sit in the REVIEW column, not the implementation
+    column: while a gate runs the card belongs in "In review" with the running step shown as a
+    card badge (the dashboard badge is lane-gated on `column === "in-review"`). Their paired
+    remediation nodes stay in "In progress" so a changes-requested verdict visibly sends the card
+    back to implementation.
+    */
     expect(byId.get("workflow-step")).toBeUndefined();
     expect(byId.get("browser-verification")?.kind).toBe("optional-group");
-    expect(byId.get("browser-verification")?.column).toBe("in-progress");
+    expect(byId.get("browser-verification")?.column).toBe("in-review");
+    expect(byId.get("browser-verification-remediation")?.column).toBe("in-progress");
+    expect(byId.get("code-review")?.kind).toBe("optional-group");
+    expect(byId.get("code-review")?.column).toBe("in-review");
+    expect(byId.get("code-review-remediation")?.column).toBe("in-progress");
+    expect(byId.get("completion-summary")?.column).toBe("in-review");
     expect(browserVerificationInnerConfig(ir)).toMatchObject({
       toolMode: "coding",
       gateMode: "advisory",

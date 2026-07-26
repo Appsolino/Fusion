@@ -734,6 +734,9 @@ export async function moveTaskInternalImpl(store: TaskStore, id: string, toColum
         fromColumn,
         toColumn,
         moveSource,
+        // FNXC:WorkflowReviewGates 2026-07-26-14:25: graph-owned-crossing discriminator consumed
+        // by applyReopenFieldClears; set only by the graph column boundary.
+        workflowMoveSource: options?.workflowMoveSource,
         bypassGuards,
         movedAt,
         settings: undefined,
@@ -865,9 +868,21 @@ export async function moveTaskInternalImpl(store: TaskStore, id: string, toColum
         task.overlapBlockedBy = undefined;
       }
 
+      /*
+      FNXC:WorkflowReviewGates 2026-07-26-14:25:
+      Parity mirror of the gate in `applyReopenFieldClears` (default-workflow-hooks.ts) — these two
+      blocks are deliberately kept byte-equivalent in behavior. The graph's own
+      in-review -> in-progress crossing (the remediation node entry, routine now that the pre-merge
+      review gates live in `in-review`) must retain `workflowStepResults`; every other reopen still
+      clears. See the hook for the full rationale.
+      */
+      const graphOwnedReviewToWip = options?.workflowMoveSource === "workflow-graph"
+        && fromColumn === "in-review"
+        && toColumn === "in-progress";
       if (
-        (fromColumn === "in-review" && (toColumn === "todo" || toColumn === "in-progress" || toColumn === "triage"))
-        || (fromColumn === "done" && (toColumn === "todo" || toColumn === "triage"))
+        !graphOwnedReviewToWip
+        && ((fromColumn === "in-review" && (toColumn === "todo" || toColumn === "in-progress" || toColumn === "triage"))
+          || (fromColumn === "done" && (toColumn === "todo" || toColumn === "triage")))
       ) {
         task.workflowStepResults = undefined;
       }

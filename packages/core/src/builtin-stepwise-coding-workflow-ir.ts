@@ -158,7 +158,28 @@ const RAW_BUILTIN_STEPWISE_CODING_WORKFLOW_IR: WorkflowIr = {
     // after every step-instance completes — never per step-instance — and when
     // disabled the group passes through inert. Both the normal foreach-success path
     // and the rework-exhausted manual-release path flow through this node.
-    browserVerificationOptionalGroupNode("in-progress"),
+    /*
+    FNXC:WorkflowReviewGates 2026-07-26-11:05:
+    Review gates belong in the "In review" column, not "In progress". Browser Verification and
+    Code Review are review surfaces: while one runs the operator should see the card sitting in
+    In review with the running step name as a card badge (the badge is lane-gated on
+    `column === "in-review"` in dashboard `taskProgress.getRunningOptionalGateBadge`, so the
+    column IS the badge switch). This mirrors the Coding (Ideas) preset, which already re-homed
+    `code-review` to in-review. The paired remediation nodes stay in "In progress": a gate that
+    requests changes must visibly send the card back to implementation.
+
+    Capacity consequence: `in-review` carries no `wip` trait, so a card under review releases its
+    concurrency/worktree slot even though its agent and checkout are still live. The pool can
+    therefore be full when the remediation node tries to cross back into `in-progress`, and
+    capacity is enforced in-transaction and is never bypassable — that move CAN be rejected. The
+    boundary controller handles it by PARKING the run on a capacity rejection rather than failing
+    it (`workflow-column-boundary.ts` onNodeEntry), so the card keeps its failed gate result and
+    the next graph run retries the crossing once a slot frees. Holding the slot through review via
+    occupancy accounting was tried and rejected: it cannot cover the failure -> remediation window
+    (occupancy keys on a `pending` lease that is already terminal by then) and it mis-assigns slots
+    on operator moves out of the review lane.
+    */
+    browserVerificationOptionalGroupNode("in-review"),
     browserVerificationRemediationNode("in-progress"),
     // FNXC:CodeReviewStep 2026-06-25-15:00:
     // Pre-merge Code Review as a DEFAULT-ON optional-group (blocking gate), on the post-foreach
@@ -167,7 +188,9 @@ const RAW_BUILTIN_STEPWISE_CODING_WORKFLOW_IR: WorkflowIr = {
     // (never per step-instance); both the foreach-success and rework-exhausted manual-
     // release paths flow through it. Runs for every task by default (defaultOn:true) but is
     // toggleable off per task; disabled → byte-inert pass-through.
-    codeReviewOptionalGroupNode("in-progress"),
+    // FNXC:WorkflowReviewGates 2026-07-26-11:05: in-review placement — see the note on
+    // browser-verification above.
+    codeReviewOptionalGroupNode("in-review"),
     codeReviewRemediationNode("in-progress"),
     completionSummaryNode("in-review"),
     { id: "merge-gate", kind: "merge-gate", column: "in-review", config: { gate: "auto-merge" } },
