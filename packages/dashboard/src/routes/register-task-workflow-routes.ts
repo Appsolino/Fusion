@@ -89,7 +89,10 @@ import { buildBoardWorkflowsPayload } from "./board-workflows.js";
 import { resolveNativeStructurePreview } from "../native-structure-preview.js";
 import { isBackwardMoveBlockedByOpenPr, PR_OPEN_BLOCKS_MOVE_BACK_MESSAGE } from "./register-pull-requests-routes.js";
 import { computePlanApprovalFingerprint, isWorkspaceTask, type RunAuditEventInput } from "@fusion/core";
+import { FUSION_CLIENT_HEADER, resolveHttpDeleteCallerKind } from "@fusion/core";
 import { ApiError, badRequest, conflict, notFound } from "../api-error.js";
+// FNXC:TaskLookup404 2026-07-26-11:40: shared task-miss -> 404 mapping seam.
+import { isTaskLookupMiss, rethrowTaskApiError } from "./task-lookup-error.js";
 import type { ApiRoutesContext } from "./types.js";
 import { deriveAutoTaskBranch, derivePerTaskBranch, getBranchSelectionMode, resolveBranchSelection } from "./branch-selection.js";
 import { isDaemonAuthActive } from "../auth-middleware.js";
@@ -1750,6 +1753,11 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
+      // FNXC:TaskLookup404 2026-07-26-11:45: moving an unknown task id is a 404,
+      // not a 500 — classify the miss before the transition-rejection mapping.
+      if (isTaskLookupMiss(err)) {
+        rethrowTaskApiError(err, req.params.id);
+      }
       // Flag-ON typed rejections surface as a structured 409 so the board can
       // resolve the i18n messageKey and decide snap-back vs no-move (U9/R17).
       // Flag-OFF legacy errors are unchanged (the legacy strings below).
@@ -1834,7 +1842,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
           retryable: err.rejection.retryable,
         });
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -2453,7 +2461,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         const status = err.code === "dirty-working-tree" || err.code === "branch-mismatch" ? 409 : 500;
         throw new ApiError(status, err.message, { code: err.code });
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -2676,7 +2684,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -2798,7 +2806,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -2813,7 +2821,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -2840,7 +2848,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404
+      const status = isTaskLookupMiss(errorWithCode) ? 404
         : (err instanceof Error ? err.message : String(err)).includes("must be in 'done' or 'in-review'") ? 400
         : (err instanceof Error ? err.message : String(err)).includes("Feedback is required") ? 400
         : 500;
@@ -3003,7 +3011,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
           if (err instanceof ApiError) {
             throw err;
           }
-          if ((err as NodeJS.ErrnoException).code === "ENOENT" || (err instanceof Error ? err.message : String(err)).includes("not found")) {
+          if (isTaskLookupMiss(err) || (err instanceof Error ? err.message : String(err)).includes("not found")) {
             throw notFound(`Task ${taskId} not found`);
           }
           throw err;
@@ -3129,7 +3137,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound("Attachment not found");
       } else {
         rethrowAsApiError(err);
@@ -3147,7 +3155,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound("Attachment not found");
       } else {
         rethrowAsApiError(err);
@@ -3194,7 +3202,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else {
         rethrowAsApiError(err);
@@ -3216,7 +3224,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else {
         rethrowAsApiError(err, "Internal server error");
@@ -3287,7 +3295,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else {
         rethrowAsApiError(err);
@@ -3356,7 +3364,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       res.json(await scopedStore.getTaskVerificationRequestAsync(req.params.id));
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
-      rethrowAsApiError(err, "Failed to read task verification status");
+      rethrowTaskApiError(err, req.params.id, "Failed to read task verification status");
     }
   });
 
@@ -3393,10 +3401,19 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      // ENOENT means the task directory/file genuinely doesn't exist → 404.
-      // Any other error (e.g. JSON parse failure from a concurrent partial write,
-      // or a transient FS error) should surface as 500 so clients can retry.
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      /*
+      FNXC:TaskLookup404 2026-07-26-11:55 (supersedes the ENOENT-only note):
+      A task that genuinely does not exist → 404; any other error (JSON parse
+      failure from a concurrent partial write, transient FS error) → 500 so
+      clients can retry.
+
+      The previous check was `code === "ENOENT"` alone, a file-backed-storage-era
+      leftover. In Postgres/backend mode nothing on the task read path sets an
+      errno code, so EVERY unknown/missing/soft-deleted task id fell through to
+      500. `isTaskLookupMiss` matches the typed `TaskNotFoundError` from
+      `@fusion/core` first and keeps ENOENT as a legacy fallback.
+      */
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else {
         rethrowAsApiError(err, "Internal server error");
@@ -3419,7 +3436,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -3434,7 +3451,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -3468,7 +3485,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -3485,7 +3502,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -3502,7 +3519,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -3525,7 +3542,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -3553,7 +3570,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -3613,7 +3630,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -3660,7 +3677,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -3721,7 +3738,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -3783,7 +3800,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -3798,7 +3815,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -3845,7 +3862,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -3867,7 +3884,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404
+      const status = isTaskLookupMiss(errorWithCode) ? 404
         : (err instanceof Error ? err.message : String(err)).includes("not found") ? 404
         : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
@@ -3884,7 +3901,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404
+      const status = isTaskLookupMiss(errorWithCode) ? 404
         : (err instanceof Error ? err.message : String(err)).includes("not found") ? 404
         : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
@@ -3907,7 +3924,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -3926,7 +3943,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -4005,7 +4022,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw new ApiError(409, err.message, { ...err.toDetails() });
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -4411,7 +4428,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404 : 500;
+      const status = isTaskLookupMiss(errorWithCode) ? 404 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
   });
@@ -4507,7 +4524,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404
+      const status = isTaskLookupMiss(errorWithCode) ? 404
         : (err instanceof Error ? err.message : String(err)).includes("Invalid transition") ? 400
         : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
@@ -4578,7 +4595,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw err;
       }
       const errorWithCode = err as NodeJS.ErrnoException;
-      const status = errorWithCode.code === "ENOENT" ? 404
+      const status = isTaskLookupMiss(errorWithCode) ? 404
         : (err instanceof Error ? err.message : String(err)).includes("Invalid transition") ? 400
         : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
@@ -5055,6 +5072,16 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
+      /*
+      FNXC:TaskLookup404 2026-07-26-11:45:
+      PATCH pre-checks the row with getTask, so an unknown id reaches this catch.
+      Classify the miss as 404 BEFORE the 400-vs-500 message classifier — that
+      classifier only recognises validation strings, so a missing task fell
+      through to 500.
+      */
+      if (isTaskLookupMiss(err)) {
+        rethrowTaskApiError(err, req.params.id);
+      }
       const status = (err instanceof Error ? err.message : String(err)).includes("must be a string") || (err instanceof Error ? err.message : String(err)).includes("must be a non-empty string") || (err instanceof Error ? err.message : String(err)).includes("must be a string or null") || (err instanceof Error ? err.message : String(err)).includes("must be an array of strings") || (err instanceof Error ? err.message : String(err)).includes("must be a boolean") || (err instanceof Error ? err.message : String(err)).includes("thinkingLevel must be one of") || (err instanceof Error ? err.message : String(err)).includes("validatorThinkingLevel must be one of") || (err instanceof Error ? err.message : String(err)).includes("planningThinkingLevel must be one of") || (err instanceof Error ? err.message : String(err)).includes("reviewLevel must be an integer") || (err instanceof Error ? err.message : String(err)).includes("executionMode must be one of") || (err instanceof Error ? err.message : String(err)).includes("priority must be one of") || (err instanceof Error ? err.message : String(err)).includes("sourceIssue") || (err instanceof Error ? err.message : String(err)).includes("gitlabTracking") || (err instanceof Error ? err.message : String(err)).includes("status may only be cleared") ? 400 : 500;
       throw new ApiError(status, err instanceof Error ? err.message : String(err));
     }
@@ -5109,7 +5136,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT" || (err instanceof Error ? err.message : String(err)).includes("not found")) {
+      if (isTaskLookupMiss(err) || (err instanceof Error ? err.message : String(err)).includes("not found")) {
         throw notFound(err instanceof Error ? err.message : String(err));
       } else {
         rethrowAsApiError(err);
@@ -5147,7 +5174,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT" || (err instanceof Error ? err.message : String(err)).includes("not found")) {
+      if (isTaskLookupMiss(err) || (err instanceof Error ? err.message : String(err)).includes("not found")) {
         throw notFound(err instanceof Error ? err.message : String(err));
       } else {
         rethrowAsApiError(err);
@@ -5195,7 +5222,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT" || (err instanceof Error ? err.message : String(err)).includes("not found")) {
+      if (isTaskLookupMiss(err) || (err instanceof Error ? err.message : String(err)).includes("not found")) {
         throw notFound(err instanceof Error ? err.message : String(err));
       }
       rethrowAsApiError(err);
@@ -5217,7 +5244,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT" || (err instanceof Error ? err.message : String(err)).includes("not found")) {
+      if (isTaskLookupMiss(err) || (err instanceof Error ? err.message : String(err)).includes("not found")) {
         throw notFound(err instanceof Error ? err.message : String(err));
       } else {
         rethrowAsApiError(err);
@@ -5247,7 +5274,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       res.json(reviewData);
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err);
@@ -5274,7 +5301,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       res.json(reviewData);
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err);
@@ -5447,7 +5474,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -5514,7 +5541,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -5535,7 +5562,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT" || (err instanceof Error ? err.message : String(err)).includes("not found")) {
+      if (isTaskLookupMiss(err) || (err instanceof Error ? err.message : String(err)).includes("not found")) {
         throw notFound(err instanceof Error ? err.message : String(err));
       } else {
         rethrowAsApiError(err);
@@ -5582,7 +5609,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if ((err instanceof Error ? err.message : String(err)).includes("not found")) {
         throw notFound(err instanceof Error ? err.message : String(err));
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -5640,7 +5667,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if ((err instanceof Error ? err.message : String(err)).includes("not found")) {
         throw notFound(err instanceof Error ? err.message : String(err));
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -5661,7 +5688,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -5690,8 +5717,21 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         allowResurrection,
         githubIssueAction,
         auditContext: {
+          /*
+          FNXC:TaskDeleteAttribution 2026-07-26-14:30:
+          This handler used to hardcode `agentId:"system"` with no caller field, so an operator
+          clicking Delete in the dashboard and any script or agent calling the same endpoint wrote
+          byte-identical audit rows — which is why a four-delete incident could not be attributed.
+          `callerKind` now records what the client SAID it was.
+
+          This is attribution, not authentication: `x-fusion-client` is self-reported and anything
+          can send it. A row therefore distinguishes "the client identified itself as the dashboard
+          UI" from "nothing identified itself" (`api-unattributed`, the default for absent or
+          unrecognized values). Do not gate deletes or permissions on it.
+          */
           agentId: "system",
           runId: `synthetic-dashboard-delete-${req.params.id}-${Date.now()}`,
+          callerKind: resolveHttpDeleteCallerKind(req.get(FUSION_CLIENT_HEADER)),
         },
       });
       scheduleReleaseExecutionAgentBindings(engine, req.params.id, runtimeLogger);
@@ -5728,7 +5768,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         });
       }
 
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 

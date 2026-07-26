@@ -352,6 +352,8 @@ export class InProcessRuntime
   private workflowContinuationTimer?: ReturnType<typeof setInterval>;
   private workflowContinuationDrainActive = false;
   private messageStore?: MessageStore;
+  /** FNXC:TaskDeleteNotice 2026-07-26-16:10: identity-guarded teardown for the delete-notice mailbox seam. */
+  private unregisterTaskDeleteNoticeMailbox?: () => void;
   private chatStore?: ChatStore;
   private detachAgentLinkSync?: () => void;
   private concurrencyChangedListener?: (state: { globalMaxConcurrent: number }) => void;
@@ -430,6 +432,7 @@ export class InProcessRuntime
         // the engine owns the result's shutdown() for process teardown.
         createTaskStoreForBackend,
         createProjectScopedPluginMcpProvider,
+        registerTaskDeleteNoticeMailbox,
       } = await import("@fusion/core");
       if (this.config.externalTaskStore) {
         this.taskStore = this.config.externalTaskStore;
@@ -486,6 +489,18 @@ export class InProcessRuntime
       }
 
       this.messageStore = new MessageStoreClass(null, { asyncLayer: messageLayer });
+
+      /*
+      FNXC:TaskDeleteNotice 2026-07-26-16:10:
+      Core owns the delete path but has no mailbox, so it exposes a store-scoped seam and the
+      runtime supplies the MessageStore. Registering here (rather than process-globally) keeps one
+      project's "a task was deleted by someone who is not you" notice out of another project's
+      inbox. A store with no registration degrades to no notice — never to a failed delete.
+      */
+      this.unregisterTaskDeleteNoticeMailbox = registerTaskDeleteNoticeMailbox(
+        this.taskStore,
+        this.messageStore,
+      );
 
       await yieldEventLoop();
 
@@ -1469,6 +1484,10 @@ export class InProcessRuntime
     */
     const backendShutdown = this.backendShutdown;
     this.backendShutdown = undefined;
+    // FNXC:TaskDeleteNotice 2026-07-26-16:10: drop the mailbox seam first so a stopping runtime
+    // cannot keep writing notices; the unregister is identity-guarded against a newer runtime.
+    this.unregisterTaskDeleteNoticeMailbox?.();
+    this.unregisterTaskDeleteNoticeMailbox = undefined;
     let stopError: Error | undefined;
     try {
       if (this.workflowContinuationTimer) {

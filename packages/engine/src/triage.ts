@@ -2295,8 +2295,11 @@ export class TriageProcessor {
               await this.store.deleteTask(task.id, {
                 removeLineageReferences: true,
                 auditContext: {
+                  // FNXC:TaskDeleteAttribution 2026-07-26-14:30: labelling only — this
+                  // split-close delete is intended engine behavior and is unchanged.
                   agentId: task.assignedAgentId ?? "triage",
                   runId: generateSyntheticRunId("triage-delete", task.id),
+                  callerKind: "engine",
                 },
               });
               planLog.log(`✓ ${task.id} split into subtasks (${childTaskIds}) and closed`);
@@ -3311,7 +3314,8 @@ export class TriageProcessor {
         if (typeof deleteTaskIf !== "function") return;
         const result = await deleteTaskIf.call(this.store, task.id, isTaskStillInPlanningStage, {
           removeLineageReferences: true,
-          auditContext: { agentId: task.assignedAgentId ?? "triage", runId: generateSyntheticRunId("triage-delete", task.id) },
+          // FNXC:TaskDeleteAttribution 2026-07-26-14:30: duplicate-resolution delete is engine-driven.
+          auditContext: { agentId: task.assignedAgentId ?? "triage", runId: generateSyntheticRunId("triage-delete", task.id), callerKind: "engine" },
         });
         if (!result.deleted) return;
         await this.store.recordActivity({

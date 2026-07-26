@@ -1438,8 +1438,11 @@ export async function runTaskDelete(id: string, force?: boolean, allowResurrecti
     await retryBoardCall(context, id, "delete task", () => context.store.deleteTask(id, {
       allowResurrection: allowResurrection === true,
       auditContext: {
+        // FNXC:TaskDeleteAttribution 2026-07-26-14:30: `fn task delete` prompts a human for
+        // confirmation at a terminal, so it is an operator surface, not unattributed automation.
         agentId: "cli",
         runId: `synthetic-cli-delete-${id}-${Date.now()}`,
+        callerKind: "operator-cli",
       },
     }));
     console.log();

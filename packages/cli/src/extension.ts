@@ -2174,9 +2174,17 @@ export default function kbExtension(pi: ExtensionAPI) {
         allowResurrection: params.allowResurrection === true,
         removeLineageReferences: params.removeLineageReferences === true,
         auditContext: {
+          /*
+          FNXC:TaskDeleteAttribution 2026-07-26-14:30:
+          `agentId` names the TOOL SURFACE, not the actor. Before callerKind/callerTaskId were
+          persisted, an agent deleting a task through this tool produced a row indistinguishable
+          from any other pi-extension write and the calling task was lost. `taskId` was already
+          passed here (the store's self-delete guard reads it) but never reached metadata.
+          */
           agentId: "pi-extension",
           runId: `synthetic-pi-delete-${params.id}-${Date.now()}`,
           taskId: callerTaskId,
+          callerKind: "agent-tool",
         },
       });
 

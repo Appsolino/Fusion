@@ -2,6 +2,8 @@ import type { WorkflowDefinition, WorkflowDefinitionKind, WorkflowIr, WorkflowIr
 import { ColumnTraitValidationError, OccupiedColumnsError, InvalidRehomeTargetError, WorkflowIrError, ColumnAgentBindingError, WorkflowSettingRejectionError, SCHEMA_VERSION, assertColumnTraitsValid, layoutForIr, listTraits, listStepParsers, parseWorkflowIr, resolvePlanningSettingsModel, stripApprovalBypassFlags, resolveWorkflowIrById, resolveEffectiveSettingValues, findOrphanedSettingValues, isBuiltinWorkflowId, getBuiltinWorkflow, BUILTIN_WORKFLOW_SETTINGS, AgentStore, validateColumnAgentBindings, resolveWorkflowOptionalSteps, enumeratePromptBearingWorkflowNodes, normalizeWorkflowIcon } from "@fusion/core";
 import { buildSessionSkillContextSync, createFnAgent as engineCreateFnAgent, validateCodeNodeSources, validateWorkflowIrDryRun } from "@fusion/engine";
 import { ApiError, badRequest, conflict, notFound, rateLimited } from "../api-error.js";
+// FNXC:TaskLookup404 2026-07-26-11:40: shared task-miss -> 404 mapping seam.
+import { rethrowTaskApiError } from "./task-lookup-error.js";
 import { emitWorkflowSseEvent } from "../sse.js";
 import type { ApiRoutesContext } from "./types.js";
 
@@ -687,7 +689,7 @@ export function registerWorkflowRoutes(ctx: ApiRoutesContext): void {
       res.json({ approved: command });
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.taskId);
     }
   });
 

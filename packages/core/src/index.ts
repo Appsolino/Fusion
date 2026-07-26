@@ -784,6 +784,10 @@ export {
   SelfDefeatingDependencyError,
   DependencyCycleError,
   TaskDeletedError,
+  // FNXC:TaskLookup404 2026-07-26-11:20: typed task-miss signal + guard so API
+  // boundaries can return 404 instead of 500 for an unknown task id.
+  TaskNotFoundError,
+  isTaskNotFoundError,
   TombstonedTaskResurrectionError,
   MergeQueueTaskNotFoundError,
   MergeQueueInvalidColumnError,
@@ -2648,3 +2652,26 @@ export { getTotalAgentActiveMs, startPlanningSegment, finalizePlanningSegment } 
 export { createLogger, type Logger } from "./logger.js";
 export { ACTIVE_WORKFLOW_WORK_ITEM_STATES } from "./types.js";
 export * from "./task-document-concurrency.js";
+/*
+FNXC:TaskDeleteAttribution 2026-07-26-14:30:
+Delete-caller attribution vocabulary. Exported from core because three packages must agree on it:
+the CLI/pi extension tags `agent-tool`, the engine tags `engine`, and the dashboard's browser client
+and Express route share the `x-fusion-client` header spelling across the wire.
+*/
+export * from "./task-delete-attribution.js";
+/*
+FNXC:TaskDeleteNotice 2026-07-26-16:10:
+Operator mailbox notice for non-operator deletes. Exported because the mailbox lives outside core:
+the engine runtime owns the MessageStore and registers it against its TaskStore through this seam.
+*/
+export {
+  NOTIFIED_TASK_DELETE_CALLER_KINDS,
+  shouldNotifyOperatorOfDelete,
+  registerTaskDeleteNoticeMailbox,
+  getTaskDeleteNoticeMailbox,
+  buildTaskDeleteNoticeContent,
+  buildTaskDeleteNoticeIdempotencyKey,
+  notifyOperatorOfNonOperatorDelete,
+  type TaskDeleteNoticeMailbox,
+  type TaskDeleteNoticeSnapshot,
+} from "./task-delete-notice.js";

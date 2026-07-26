@@ -8,8 +8,10 @@
  */
 import {TaskStore, storeLog} from "../store.js";
 import {MissionStore} from "../mission-store.js";
-import {TaskHasDependentsError, TaskHasLineageChildrenError, TaskSelfDeleteError} from "./errors.js";
+import {TaskHasDependentsError, TaskHasLineageChildrenError, TaskNotFoundError, TaskSelfDeleteError} from "./errors.js";
 import {isWorkspaceTask, type Task, type Column, type GithubIssueAction} from "../types.js";
+import {buildDeleteCallerAuditFields, type TaskDeleteAuditContext} from "../task-delete-attribution.js";
+import {notifyOperatorOfNonOperatorDelete, type TaskDeleteNoticeSnapshot} from "../task-delete-notice.js";
 import "../builtin-traits.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
 import {toJson} from "../db-helpers.js";
@@ -187,7 +189,7 @@ function scheduleDeleteBranchCleanup(store: TaskStore, task: Task): void {
     })();
   }
 
-export async function deleteTaskImpl(store: TaskStore, id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: { agentId: string; runId: string; sessionId?: string; taskId?: string }; },): Promise<Task> {
+export async function deleteTaskImpl(store: TaskStore, id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext; },): Promise<Task> {
     // FNXC:RuntimeLifecycleAsync 2026-06-24-12:00:
     // Backend-mode deleteTask: delegate the core async operations (task read,
     // lineage gate, lineage clear, soft-delete, audit) to the async helpers.
@@ -206,13 +208,24 @@ export async function deleteTaskImpl(store: TaskStore, id: string, options?: { r
     if (store.backendMode) {
       return store.deleteTaskBackend(id, options);
     }
+    /*
+    FNXC:TaskDeleteNotice 2026-07-26-16:10:
+    Pre-delete snapshot for the operator mailbox notice. It must be captured INSIDE the lock (the
+    row is mutated to `archived` a few lines below, so reading `task.column` afterwards would always
+    report `archived`) but the notice itself is sent AFTER the lock and after the transaction
+    commits — a mailbox write inside `store.db.transaction` would roll the soft-delete back if it
+    threw. Left `undefined` on the already-deleted short-circuit so an idempotent re-delete is silent.
+    */
+    let noticeSnapshot: TaskDeleteNoticeSnapshot | undefined;
     const deletedTask = await store.withTaskLock(id, async () => {
       // Flush buffered agent logs inside the lock so no new appends for this
       // task can sneak in between flush and soft-delete mutation.
       store.flushAgentLogBuffer();
       const task = store.readTaskFromDb(id, { includeDeleted: true });
       if (!task) {
-        throw new Error(`Task ${id} not found`);
+        // FNXC:TaskLookup404 2026-07-26-12:00: typed miss (message unchanged) so
+        // DELETE /api/tasks/:id answers 404 for an unknown id instead of 500.
+        throw new TaskNotFoundError(id);
       }
 
       if (task.deletedAt) {
@@ -232,6 +245,8 @@ export async function deleteTaskImpl(store: TaskStore, id: string, options?: { r
       if (lineageChildIds.length > 0 && !options?.removeLineageReferences) {
         throw new TaskHasLineageChildrenError(id, lineageChildIds);
       }
+
+      noticeSnapshot = { id: task.id, title: task.title, previousColumn: task.column, previousStatus: task.status ?? null };
 
       let rewrittenDependents: Task[] = [];
       let rewrittenBlockedByResidueDependents: Task[] = [];
@@ -259,6 +274,9 @@ export async function deleteTaskImpl(store: TaskStore, id: string, options?: { r
             removeLineageReferences: !!options?.removeLineageReferences,
             allowResurrection: options?.allowResurrection === true,
             sessionId: options?.auditContext?.sessionId,
+            // FNXC:TaskDeleteAttribution 2026-07-26-14:30: caller class + calling
+            // task id; `taskId` reached this function but was never persisted.
+            ...buildDeleteCallerAuditFields(options?.auditContext),
           },
         });
         store.clearLinkedAgentTaskIds(id, deletedAt);
@@ -319,6 +337,8 @@ export async function deleteTaskImpl(store: TaskStore, id: string, options?: { r
       deletedAt: deletedTask.deletedAt ?? new Date().toISOString(),
       reason: "deleted",
     });
+    // FNXC:TaskDeleteNotice 2026-07-26-16:10: best-effort, post-commit, never throws.
+    if (noticeSnapshot) await notifyOperatorOfNonOperatorDelete(store, noticeSnapshot, options?.auditContext);
     return deletedTask;
   }
 
@@ -337,10 +357,13 @@ export async function deleteTaskIfImpl(
   store: TaskStore,
   id: string,
   predicate: (live: Task) => boolean | Promise<boolean>,
-  options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: { agentId: string; runId: string; sessionId?: string; taskId?: string } },
+  options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext },
 ): Promise<DeleteTaskIfResult> {
   if (options?.auditContext?.taskId === id) throw new TaskSelfDeleteError(id);
   if (store.backendMode) return store.deleteTaskIf(id, predicate, options);
+  // FNXC:TaskDeleteNotice 2026-07-26-16:10: see deleteTaskImpl — snapshot inside the lock, notify
+  // after commit. Stays `undefined` when the predicate declines, so a skipped delete is silent.
+  let noticeSnapshot: TaskDeleteNoticeSnapshot | undefined;
   const result = await store.withTaskLock(id, async () => {
     store.flushAgentLogBuffer();
     const task = store.readTaskFromDb(id, { includeDeleted: true });
@@ -351,6 +374,7 @@ export async function deleteTaskIfImpl(
     const lineageChildIds = await store.findLiveLineageChildren(id);
     if (lineageChildIds.length > 0 && !options?.removeLineageReferences) throw new TaskHasLineageChildrenError(id, lineageChildIds);
     if (!await predicate(task)) return { task, deleted: false };
+    noticeSnapshot = { id: task.id, title: task.title, previousColumn: task.column, previousStatus: task.status ?? null };
     let deletedAt = "";
     let rewrittenDependents: Task[] = [];
     let rewrittenBlockedByResidueDependents: Task[] = [];
@@ -362,7 +386,7 @@ export async function deleteTaskIfImpl(
       deletedAt = new Date().toISOString();
       const allowResurrection = options?.allowResurrection === true ? 1 : 0;
       store.db.prepare("UPDATE tasks SET \"column\" = 'archived', deletedAt = ?, allowResurrection = ?, updatedAt = ? WHERE id = ?").run(deletedAt, allowResurrection, deletedAt, id);
-      void store.recordRunAuditEvent({ domain: "database", mutationType: "task:deleted", target: task.id, taskId: task.id, agentId: options?.auditContext?.agentId ?? "system", runId: options?.auditContext?.runId ?? store.makeSyntheticDeleteRunId(task.id), metadata: { previousColumn: task.column, previousStatus: task.status ?? null, githubIssueAction: options?.githubIssueAction ?? "auto", removeDependencyReferences: !!options?.removeDependencyReferences, removeLineageReferences: !!options?.removeLineageReferences, allowResurrection: options?.allowResurrection === true, sessionId: options?.auditContext?.sessionId } });
+      void store.recordRunAuditEvent({ domain: "database", mutationType: "task:deleted", target: task.id, taskId: task.id, agentId: options?.auditContext?.agentId ?? "system", runId: options?.auditContext?.runId ?? store.makeSyntheticDeleteRunId(task.id), metadata: { previousColumn: task.column, previousStatus: task.status ?? null, githubIssueAction: options?.githubIssueAction ?? "auto", removeDependencyReferences: !!options?.removeDependencyReferences, removeLineageReferences: !!options?.removeLineageReferences, allowResurrection: options?.allowResurrection === true, sessionId: options?.auditContext?.sessionId, ...buildDeleteCallerAuditFields(options?.auditContext) } });
       store.clearLinkedAgentTaskIds(id, deletedAt);
       store.db.bumpLastModified();
     });
@@ -384,6 +408,7 @@ export async function deleteTaskIfImpl(
     return { task, deleted: true };
   });
   if (result.deleted) await store.clearNearDuplicateReferencesToFailSoft(id, { column: "archived", deletedAt: result.task.deletedAt ?? new Date().toISOString(), reason: "deleted" });
+  if (result.deleted && noticeSnapshot) await notifyOperatorOfNonOperatorDelete(store, noticeSnapshot, options?.auditContext);
   return result;
 }
 

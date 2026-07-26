@@ -7,6 +7,8 @@ import type { Request, Router } from "express";
 import type { RunAuditEvent, RunAuditEventFilter } from "@fusion/core";
 import { isWorkspaceTask } from "@fusion/core";
 import { ApiError, notFound, rethrowAsApiError } from "../api-error.js";
+// FNXC:TaskLookup404 2026-07-26-11:40: shared task-miss -> 404 mapping seam.
+import { isTaskLookupMiss, rethrowTaskApiError } from "./task-lookup-error.js";
 import { resolveDiffBase, runGitCommand } from "./resolve-diff-base.js";
 import { countPatchLines } from "./diff-counts.js";
 import { filterFilesToOwnTaskCommits } from "./attribute-done-range-files.js";
@@ -948,7 +950,7 @@ export function registerSessionDiffRoutes(router: Router, deps: SessionDiffRoute
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err, "Internal server error");
@@ -1189,7 +1191,7 @@ export function registerSessionDiffRoutes(router: Router, deps: SessionDiffRoute
       if (err instanceof ApiError) {
         throw err;
       }
-      rethrowAsApiError(err);
+      rethrowTaskApiError(err, req.params.id);
     }
   });
 
@@ -1381,7 +1383,7 @@ export function registerSessionDiffRoutes(router: Router, deps: SessionDiffRoute
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err, "Internal server error");
@@ -1424,7 +1426,7 @@ export function registerSessionDiffRoutes(router: Router, deps: SessionDiffRoute
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err, "Internal server error");

@@ -23,6 +23,9 @@ import {getStalePausedTodoSignal} from "../stale-paused-todo.js";
 import {getTaskAgeStalenessSignal, type TaskAgeStalenessThresholds} from "../task-age-staleness.js";
 import {detectStalledReview} from "../stalled-review-detector.js";
 import {computeRetrySummary} from "../retry-summary.js";
+// FNXC:TaskLookup404 2026-07-26-11:20: typed miss signal so API boundaries can
+// answer 404 instead of 500 (see TaskNotFoundError in task-store/errors.ts).
+import {TaskNotFoundError} from "../task-store/errors.js";
 
 /** Merge storage tiers while preserving primary-source authority and order. */
 function mergePrimaryById<T extends { id: string }>(primary: T[], secondary: T[]): T[] {
@@ -121,7 +124,15 @@ export async function getTaskImpl(store: TaskStore, id: string, options?: { acti
           */
           const archived = await getArchivedTask(layer.db, id, layer.projectId);
           if (!archived) {
-            throw new Error(`Task ${id} not found`);
+            /*
+            FNXC:TaskLookup404 2026-07-26-11:20:
+            Backend/Postgres miss. Throw the typed TaskNotFoundError (message kept
+            byte-identical to the legacy `Task ${id} not found` string) so route
+            catches can map it to 404. Nothing on this path sets an errno `code`,
+            so the routes' legacy ENOENT check never fired and every unknown task
+            id 500'd.
+            */
+            throw new TaskNotFoundError(id);
           }
           const archivedTask = store.archiveEntryToTask(archived, false);
           return {
@@ -196,7 +207,9 @@ export async function getTaskImpl(store: TaskStore, id: string, options?: { acti
       if (!task) {
         const archived = store.archiveDb.get(id);
         if (!archived) {
-          throw new Error(`Task ${id} not found`);
+          // FNXC:TaskLookup404 2026-07-26-11:20: legacy/sync branch throws the same
+          // typed miss as the backend branch so 404 mapping is branch-independent.
+          throw new TaskNotFoundError(id);
         }
         const archivedTask = store.archiveEntryToTask(archived, false);
         return {

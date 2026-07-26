@@ -40,6 +40,8 @@ import {
   rateLimited,
   unauthorized,
 } from "../api-error.js";
+// FNXC:TaskLookup404 2026-07-26-11:40: shared task-miss -> 404 mapping seam.
+import { isTaskLookupMiss, rethrowTaskApiError } from "./task-lookup-error.js";
 import { GitHubClient, buildGitHubIssueSource, isGitHubIssueAlreadyImported, type PrReviewSnapshot, parseBadgeUrl } from "../github.js";
 import { importIssueImageAttachments, githubImagePolicy } from "../issue-image-attachments.js";
 import { GitHubIssueCommentService } from "../github-issue-comment.js";
@@ -102,6 +104,16 @@ function mapStructuredGhErrorToStatus(code: StructuredGhError["code"]): number {
 }
 
 function toPrApiError(err: unknown, fallbackMessage: string): ApiError {
+  /*
+  FNXC:TaskLookup404 2026-07-26-11:50:
+  Every PR route pre-checks its task with getTask, so a task miss can reach the
+  GitHub-error classifier. classifyGhError knows nothing about task ids and would
+  label the miss a generic PR failure (500). Map it to 404 first so an unknown
+  task id is reported as gone rather than as a broken PR integration.
+  */
+  if (isTaskLookupMiss(err)) {
+    return notFound(err instanceof Error && err.message ? err.message : fallbackMessage);
+  }
   const githubError = classifyGhError(err);
   return new ApiError(mapStructuredGhErrorToStatus(githubError.code), githubError.message || fallbackMessage, {
     githubError,
@@ -5171,7 +5183,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          if (isTaskLookupMiss(err)) {
             appendBatchStatusError(results, taskId, `Task ${taskId} not found`);
           } else {
             appendBatchStatusError(results, taskId, err instanceof Error ? err.message : String(err) || `Failed to load task ${taskId}`);
@@ -5399,7 +5411,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else if ((err instanceof Error ? err.message : String(err)).includes("already exists")) {
         throw conflict(err instanceof Error ? err.message : String(err));
@@ -5469,7 +5481,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       if ((err instanceof Error ? err.message : String(err)).includes("already exists")) {
@@ -5554,7 +5566,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       throw toPrApiError(err, "Failed to resolve PR conflicts");
@@ -5623,7 +5635,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err, "Failed to generate PR metadata");
@@ -5649,7 +5661,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err, "Failed to load PR preflight");
@@ -5740,7 +5752,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err, "Failed to load PR options");
@@ -5790,7 +5802,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else {
         rethrowAsApiError(err);
@@ -5945,7 +5957,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       });
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       throw toPrApiError(err, "Failed to refresh PR status");
@@ -5974,7 +5986,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       res.json({ task: updatedTask, prInfos: getTaskPrList(updatedTask) });
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       rethrowAsApiError(err, "Failed to unlink pull request");
@@ -6005,7 +6017,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       res.json({ queued: true });
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
-      rethrowAsApiError(err, "Failed to queue PR conflict reclaim");
+      rethrowTaskApiError(err, req.params.id, "Failed to queue PR conflict reclaim");
     }
   });
 
@@ -6073,7 +6085,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       res.json({ prInfo });
     } catch (err: unknown) {
       if (err instanceof ApiError) throw err;
-      rethrowAsApiError(err, "Failed to set PR auto-merge");
+      rethrowTaskApiError(err, req.params.id, "Failed to set PR auto-merge");
     }
   });
 
@@ -6144,7 +6156,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       }
       throw toPrApiError(err, "Failed to fetch PR reviews");
@@ -6216,7 +6228,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else {
         throw toPrApiError(err, "Failed to fetch PR checks");
@@ -6255,7 +6267,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else {
         rethrowAsApiError(err);
@@ -6331,7 +6343,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
       if (err instanceof ApiError) {
         throw err;
       }
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isTaskLookupMiss(err)) {
         throw notFound(`Task ${req.params.id} not found`);
       } else if ((err instanceof Error ? err.message : String(err)).includes("not found")) {
         throw notFound(err instanceof Error ? err.message : String(err));
