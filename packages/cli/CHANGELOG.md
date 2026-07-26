@@ -1,5 +1,28 @@
 # @runfusion/fusion
 
+## 0.74.0-beta.3
+
+### Minor Changes
+
+- 41d60f0: summary: Promote on a held card now explains why it was refused and can force execution past a pending replan.
+  category: feature
+  dev: `promoteHeldTask(store, id, deps, { force })` waives only the `unplanned-for-execution` gate (capacity, hold membership and slot reservation still arbitrate), clears a `needs-replan`/`plan-review-unavailable` status, and emits `task:promote-forced-unplanned`. `POST /tasks/:id/promote` accepts `{ force: true }` and `fn_task_promote` accepts `force: true`; the board asks for confirmation first. Adds the missing `board.rejection.unplannedForExecution` catalog entry that made the raw i18n key render.
+
+### Patch Changes
+
+- 82e0ce3: summary: Stop leaving cards stuck with stale worktree metadata when their branch inherited another task's commit.
+  category: fix
+  dev: The reclaim sweep's `tip-already-merged` arm vetoed on the branch tip's foreign `Fusion-Task-Id` trailer alone, so a task branch cut from the base that never committed anything (planning aborted, moved back to `todo`) was rejected as foreign contamination and re-logged `already-merged rejected ... reason=foreign-task-tip` every sweep. The merge-base diff-proof classification used by already-merged and branch-misbound recovery is now a shared `SelfHealingManager.foreignTipRejection` helper used by all three callers; rejection still fires when the branch has unique content or the base already carries the task's own commit.
+- 17b8bfe: summary: Small mobile board swipes no longer jump several columns at once.
+  category: fix
+  dev: `resolvePageCount` in `useColumnScrollSnap` now gates each extra fling page on net gesture travel (max of board scroll delta and horizontal finger travel) against viewport width, not release velocity alone.
+- 9f6aaa9: summary: Plans written inside a task worktree are now saved to the main project and stored in the database.
+  category: fix
+  dev: New `packages/engine/src/plan-artifact-writeback.ts` exposes `reconcileWorktreePlanArtifact`, `mirrorPlanToProjectDb`, and `persistPlanArtifact`. Planning sessions run in the task worktree with the coding tool surface, so a planner using the generic write tool resolved the relative `.fusion/tasks/<id>/PROMPT.md` against the worktree; triage finalization reads `<rootDir>/<promptPath>` and saw nothing. Triage now reconciles the worktree copy through `store.updateTask({ prompt })` before the finalize read. `project.tasks` has no `prompt` column, so the authoritative plan is also mirrored into the `plan` task document from triage finalization and from `fn_task_prompt_write`.
+- 20c5e1f: summary: Let the mobile Settings footer scroll sideways by touch when its buttons overflow the screen.
+  category: fix
+  dev: The footer rail already had `overflow-x: auto`, but the global mobile `* { touch-action: pan-y }` lock swallowed horizontal drags; the rail and its inner touch targets now opt back into `pan-x`, groups escape the mobile `max-width: 100%` reset, and the footer block tracks the full mobile breakpoint (`max-width: 768px, max-height: 480px`) so landscape phones get the same rail.
+
 ## 0.74.0-beta.2
 
 ### Minor Changes

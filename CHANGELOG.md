@@ -2,6 +2,27 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.74.0-beta.3
+
+### Highlights
+
+- Plans written in a task worktree now save back to the project and database
+- Promote on a held card says why it was refused and can force past a pending replan
+- Small mobile board swipes no longer jump several columns at once
+- Mobile Settings footer buttons scroll sideways by touch when they overflow
+- Cards no longer stay stuck with stale worktree metadata after an aborted plan
+
+### New
+
+- Promote on a held card now explains why the promotion was refused instead of showing a raw translation key, and offers a confirmed force option that pushes the card into execution past a pending replan. Force waives only the unplanned-for-execution gate — capacity, hold membership, and slot reservation still decide. Available from the board, the promote API, and the promote tool.
+
+### Fixed
+
+- Plans a planner writes inside a task worktree are now reconciled back to the main project before triage finalizes, and the authoritative plan is also stored as a task document, so plans no longer silently vanish.
+- Cards are no longer left with stale worktree metadata when their branch inherited another task's commit. A branch cut from the base that never committed anything — planning aborted, card moved back to todo — was repeatedly rejected as foreign contamination on every self-healing sweep.
+- Small horizontal swipes on the mobile board now advance one column instead of flinging several; extra pages require real gesture travel, not just release speed.
+- The mobile Settings footer rail scrolls sideways by touch again when its buttons overflow the screen, including on landscape phones.
+
 ## 0.74.0-beta.2
 
 ### Highlights
