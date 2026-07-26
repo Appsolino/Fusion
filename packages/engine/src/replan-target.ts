@@ -136,10 +136,23 @@ export function hasAdvancedPastPlanning(
     const stampPredatesArrival = Number.isFinite(arrivedAtMs)
       && Number.isFinite(newestStampMs)
       && newestStampMs < arrivedAtMs;
-    const claimedInPlannerLane = task.column === "triage"
-      && task.status != null
-      && PLANNING_STAGE_STATUSES.has(task.status);
-    if (!(stampPredatesArrival && claimedInPlannerLane)) {
+    /*
+    FNXC:WorkflowReplan 2026-07-26-20:30 (FN-8596, second strand):
+    The planner-lane test is the COLUMN, deliberately not the status. Requiring a planning-stage
+    status left a hole that stranded the same card a second time: after the stale-status sweep
+    cleared `planning` to null, the card had stale stamps and NO status, so planning excluded it
+    (stamps read as advanced) AND `recoverAdvancedTriageTasks` — the designated owner of that
+    "stranded-advanced" class — also excluded it, because it bails on
+    `workflowIrPinColumnId === "triage"` (it cannot resume a card into the column it already sits
+    in). Nobody owned the card and it sat indefinitely.
+    Arrival order alone is the honest signal: a stamp written BEFORE the card reached the planner
+    column belongs to a previous pass, whatever the status is now. A card that genuinely advanced
+    out of triage is caught by the column check at the top, and one that was claimed by execution
+    AFTER landing here has a stamp NEWER than its arrival, so it still reads advanced and stays with
+    the advanced-recovery sweep.
+    */
+    const inPlannerLane = task.column === "triage";
+    if (!(stampPredatesArrival && inPlannerLane)) {
       return true;
     }
     return false;

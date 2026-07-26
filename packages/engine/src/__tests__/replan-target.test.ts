@@ -192,15 +192,24 @@ const planningGuardCases: PlanningGuardCase[] = [
     },
     stillPlanning: false,
   },
+  /*
+  FNXC:WorkflowReplan 2026-07-26-20:30 (FN-8596, second strand):
+  A stale stamp with NO status is STILL plannable — this deliberately differs from the
+  no-`columnMovedAt` PR #2360 case above, and production forced the distinction. After the stale-
+  status sweep cleared `planning` to null, this exact shape was owned by NOBODY: planning excluded
+  it (stamps read as advanced) and `recoverAdvancedTriageTasks` also excluded it, because it bails
+  on `workflowIrPinColumnId === "triage"` — it cannot resume a card into the column it already
+  occupies. The card sat indefinitely. Arrival order is the honest signal regardless of status.
+  */
   {
-    label: "stranded-advanced triage card with stale stamps but NO planning status (PR #2360)",
+    label: "triage card with stale stamps and NO status is still plannable (nobody else owns it)",
     task: {
       column: "triage",
       steps: [planStep("step-1")],
       executionStartedAt: "2026-07-26T13:50:57.686Z",
-      columnMovedAt: "2026-07-26T13:51:33.266Z",
+      columnMovedAt: "2026-07-26T14:17:59.396Z",
     },
-    stillPlanning: false,
+    stillPlanning: true,
   },
   {
     label: "triage card parked by a reviewer outage after an execution attempt",
