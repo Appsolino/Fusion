@@ -11,6 +11,7 @@ The mailbox approval banner represents only real ApprovalRequest rows delivered 
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Task } from "@fusion/core";
+import { fetchApprovals } from "../api";
 import { subscribeSse } from "../sse-bus";
 import {
   type ApprovalBannerCandidate,
@@ -69,7 +70,50 @@ export function useApprovalBanner({
       setCandidate(next);
     };
 
-    return subscribeSse(`/api/events${query}`, {
+    let disposed = false;
+
+    /*
+    FNXC:ApprovalBanner 2026-07-26-14:20:
+    Missed-event recovery. The banner used to exist ONLY as a function of the `approval:requested`
+    event, with no refetch of any kind. Every SSE gap — an error reconnect, and since the mobile
+    hidden-tab suspend a routine backgrounded tab — therefore dropped approvals permanently: the
+    operator was never shown the request and the requesting agent blocked indefinitely on a decision
+    that could not be made. On every reopen, re-read the authoritative pending list and converge:
+    surface the newest undismissed pending request, and clear a banner whose request is no longer
+    pending (decided elsewhere while we were disconnected).
+    */
+    const resyncPendingApprovals = () => {
+      void fetchApprovals({ status: "pending", limit: 50 }, currentProjectId)
+        .then((list) => {
+          if (disposed) return;
+          const pending = [...list.requests].sort((a, b) =>
+            (b.updatedAt ?? b.createdAt ?? "").localeCompare(a.updatedAt ?? a.createdAt ?? ""),
+          );
+          const newest = pending.find((request) => {
+            const dedupeKey = `approval:${request.id}`;
+            const dismissedAt = approvalDismissalsRef.current.get(dedupeKey);
+            return dismissedAt === undefined || parseDateMs(request.updatedAt ?? request.createdAt) > dismissedAt;
+          });
+          if (!newest) {
+            // Server has nothing pending for us: any banner still on screen was decided while the
+            // stream was down.
+            setCandidate((current) => (current === null ? current : null));
+            return;
+          }
+          const dedupeKey = `approval:${newest.id}`;
+          seenApprovalKeysRef.current.add(dedupeKey);
+          triggerApprovalBanner({
+            dedupeKey,
+            updatedAtMs: parseDateMs(newest.updatedAt ?? newest.createdAt),
+          });
+        })
+        .catch(() => {
+          // A failed resync must not clear a banner we already have; the next reopen retries.
+        });
+    };
+
+    const unsubscribe = subscribeSse(`/api/events${query}`, {
+      onReconnect: resyncPendingApprovals,
       events: {
         "approval:requested": (event: MessageEvent) => {
           try {
@@ -109,6 +153,11 @@ export function useApprovalBanner({
         },
       },
     });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
   }, [currentProjectId, gitHubStarPromptShown, onStarPrompt]);
 
   const dismissApproval = useCallback((dismissed: ApprovalBannerCandidate) => {

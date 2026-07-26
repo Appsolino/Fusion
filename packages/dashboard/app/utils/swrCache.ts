@@ -1,8 +1,8 @@
 /**
  * Lightweight stale-while-revalidate cache helpers for dashboard reload hydration.
  *
- * Board task hydration uses a dedicated soft bound (`SWR_TASKS_MAX_AGE_MS`) so reloads do not present obviously stale task snapshots.
- * Chat messages and chat agents maps reuse that short TTL for fast-moving thread state, while models and discovered skills use the default 10-minute window for effectively session-static hydration.
+ * Board task hydration uses a dedicated bound (`SWR_TASKS_MAX_AGE_MS`) sized to outlive a mobile tab discard; see the TTL block below.
+ * Chat messages and chat agents maps reuse that bound for thread state, while models and discovered skills use the shared default window for effectively session-static hydration.
  * Room message/member hydration uses `SWR_CHAT_ROOM_MAX_AGE_MS` for warm-first room opens while keeping background revalidation mandatory.
  * Failed task revalidation clears the per-project tasks envelope to avoid re-hydrating stale data on the next reload.
  *
@@ -48,11 +48,30 @@ interface CacheEnvelope<T> {
   data: T;
 }
 
-// Shared default for non-live dashboard hydration paths.
-export const SWR_DEFAULT_MAX_AGE_MS = 10 * 60 * 1000;
-// Board hydration soft bound: keep stale tasks visible briefly while forcing immediate revalidation.
-export const SWR_TASKS_MAX_AGE_MS = 60_000;
-export const SWR_CHAT_ROOM_MAX_AGE_MS = 60_000;
+
+/*
+FNXC:MobileTabDiscard 2026-07-26-10:20:
+These hydration TTLs exist to survive an OS/browser TAB DISCARD, not to bound data freshness.
+On iOS Safari, iOS PWAs, and Chrome Android the dashboard tab is evicted after a few minutes in the
+background; returning to it re-executes the bundle from scratch. The previous 60s task/room bounds
+guaranteed the snapshot was ALWAYS expired on that return (the user was away "a few minutes"), so the
+board painted empty and re-fetched from [] — the reported white-then-empty restore.
+
+Correctness comes from the revalidation that every consumer issues immediately after hydrating, plus
+the failure path that CLEARS the entry when that revalidation fails; it does NOT come from a short TTL.
+A stale-for-one-frame board behind a visible revalidation indicator is strictly better than an empty one.
+
+All values stay strictly below SWR_LONG_MAX_AGE_MS (24h), which is the boot-time
+`pruneStaleCacheEntries()` window — a TTL at or above that window would be unreachable in practice
+because the prune deletes the entry before any hydration hook reads it.
+*/
+// Shared default for non-live dashboard hydration paths (projects, agents, documents, todos, models,
+// insights, evals, artifacts, room members). All of these revalidate on mount.
+export const SWR_DEFAULT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+// Board hydration bound: paint the last known board instantly on restore, then revalidate.
+export const SWR_TASKS_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+// Room message hydration bound; `loadRoomData` always refetches members+messages after hydrating.
+export const SWR_CHAT_ROOM_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 export const SWR_LONG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function getLocalStorage(): Storage | null {
@@ -65,7 +84,20 @@ function getLocalStorage(): Storage | null {
   return null;
 }
 
-export function readCache<T>(key: string, options?: { maxAgeMs?: number }): T | null {
+/**
+ * FNXC:MobileTabDiscard 2026-07-26-14:05:
+ * Envelope-aware read. `readCache` deliberately discards `savedAt`, which was fine while every
+ * hydration TTL was ~60s (any hydrated snapshot was younger than every downstream freshness
+ * threshold, so "as of now" was a harmless approximation). Raising `SWR_TASKS_MAX_AGE_MS` to hours
+ * for the mobile tab-discard restore broke that assumption: a consumer that hydrates an hours-old
+ * board and then reasons about elapsed time against `Date.now()` reports every in-progress card as
+ * stuck. Consumers deriving time-sensitive state from a hydrated snapshot MUST read through this
+ * function and carry `savedAt` as their "data as of" clock.
+ *
+ * Returns `null` for exactly the cases `readCache` treats as a miss (absent, malformed, expired);
+ * `readCache` is a thin wrapper so existing call sites are unchanged.
+ */
+export function readCacheEntry<T>(key: string, options?: { maxAgeMs?: number }): CacheReadResult<T> | null {
   const storage = getLocalStorage();
   if (!storage) {
     return null;
@@ -79,17 +111,17 @@ export function readCache<T>(key: string, options?: { maxAgeMs?: number }): T | 
 
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") {
-      return parsed as T;
+      return { data: parsed as T, savedAt: undefined };
     }
 
     const hasEnvelopeMarkers = "savedAt" in parsed || "data" in parsed;
     if (!hasEnvelopeMarkers) {
-      return parsed as T;
+      return { data: parsed as T, savedAt: undefined };
     }
 
     const envelope = parsed as Partial<CacheEnvelope<T>>;
     if (typeof envelope.savedAt !== "number" || Number.isNaN(envelope.savedAt)) {
-      return envelope.data ?? null;
+      return { data: (envelope.data ?? null) as T, savedAt: undefined };
     }
 
     const maxAgeMs = options?.maxAgeMs;
@@ -112,16 +144,30 @@ export function readCache<T>(key: string, options?: { maxAgeMs?: number }): T | 
       }
     }
 
-    return envelope.data ?? null;
+    return { data: (envelope.data ?? null) as T, savedAt: envelope.savedAt };
   } catch {
     return null;
   }
 }
 
-export function writeCache<T>(key: string, value: T, options?: { maxBytes?: number }): void {
+export function readCache<T>(key: string, options?: { maxAgeMs?: number }): T | null {
+  const entry = readCacheEntry<T>(key, options);
+  return entry === null ? null : entry.data;
+}
+
+/**
+ * FNXC:MobileTabDiscard 2026-07-26-10:26:
+ * Returns whether the snapshot was actually persisted. An over-budget payload is still dropped
+ * silently (that bound protects the localStorage quota), but the drop can no longer be INVISIBLE to
+ * the caller: a large board used to exceed `maxBytes`, write nothing, and therefore have no snapshot
+ * at all to hydrate from after a mobile tab discard — the exact restore this cache exists to fix.
+ * Callers that can shrink their payload (see `writeTaskCacheSnapshot` in useTasks) retry on `false`.
+ * The return value is additive; existing callers ignore it.
+ */
+export function writeCache<T>(key: string, value: T, options?: { maxBytes?: number }): boolean {
   const storage = getLocalStorage();
   if (!storage) {
-    return;
+    return false;
   }
 
   try {
@@ -131,12 +177,14 @@ export function writeCache<T>(key: string, value: T, options?: { maxBytes?: numb
     } satisfies CacheEnvelope<T>);
     const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
     if (new TextEncoder().encode(serialized).length > maxBytes) {
-      return;
+      return false;
     }
 
     storage.setItem(key, serialized);
+    return true;
   } catch {
     // Ignore quota and storage errors.
+    return false;
   }
 }
 

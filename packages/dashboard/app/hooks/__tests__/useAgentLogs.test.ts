@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useAgentLogs } from "../useAgentLogs";
+import { useAgentLogs, MAX_LOG_ENTRIES } from "../useAgentLogs";
 import { fetchAgentLogsWithMeta } from "../../api";
 
 // Mock the api module
@@ -245,7 +245,15 @@ describe("useAgentLogs", () => {
     expect(result.current.entries.at(-1)?.text).toBe(`entry-${oversizedCount - 1}`);
   });
 
-  it("keeps oversized live SSE history without truncation", async () => {
+  /*
+  FNXC:MobileTabRetention 2026-07-26-12:20:
+  This case previously asserted the live SSE tail was retained WITHOUT truncation. That contract is
+  deliberately reversed: an unbounded tail grows the resident set for the whole session, which is what
+  makes a mobile browser discard the backgrounded tab (white-splash reload on return). The tail is now
+  a bounded ring at MAX_LOG_ENTRIES, and `hasMore` is forced true once it trims so the reader always
+  keeps a "load older" affordance rather than seeing a silently-clipped tail.
+  */
+  it("bounds the live SSE tail at MAX_LOG_ENTRIES and signals truncation via hasMore", async () => {
     const streamedCount = 520;
     mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: [], total: streamedCount, hasMore: false });
 
@@ -268,11 +276,12 @@ describe("useAgentLogs", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.entries).toHaveLength(streamedCount);
+      expect(result.current.entries).toHaveLength(MAX_LOG_ENTRIES);
     });
 
-    expect(result.current.entries[0].text).toBe("live-0");
+    expect(result.current.entries[0].text).toBe(`live-${streamedCount - MAX_LOG_ENTRIES}`);
     expect(result.current.entries.at(-1)?.text).toBe(`live-${streamedCount - 1}`);
+    expect(result.current.hasMore).toBe(true);
   });
 
   it("does not fetch when taskId is null", () => {
@@ -402,7 +411,13 @@ describe("useAgentLogs", () => {
       ]);
     });
 
-    it("keeps full history across initial load, loadMore, and live streaming", async () => {
+    /*
+    FNXC:MobileTabRetention 2026-07-26-12:24:
+    A user-paged buffer (550 via loadMore) is HELD at its expanded size rather than collapsed back to
+    MAX_LOG_ENTRIES — capping a prepend of older pages would discard exactly what the user just asked
+    for. Streaming past that ceiling drops one oldest entry per new line so the buffer stops growing.
+    */
+    it("holds a user-paged buffer at its size while streaming, dropping the oldest entry", async () => {
       const initialLogs = Array.from({ length: 300 }, (_, index) => ({
         timestamp: `2026-01-02T00:${String(index).padStart(2, "0")}:00Z`,
         taskId: "FN-001",
@@ -445,11 +460,11 @@ describe("useAgentLogs", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.entries).toHaveLength(551);
+        expect(result.current.entries.at(-1)?.text).toBe("live-after-large-history");
       });
 
-      expect(result.current.entries[0].text).toBe("older-0");
-      expect(result.current.entries.at(-1)?.text).toBe("live-after-large-history");
+      expect(result.current.entries).toHaveLength(550);
+      expect(result.current.entries[0].text).toBe("older-1");
     });
 
     it("loadMore does not trigger when already loading more", async () => {

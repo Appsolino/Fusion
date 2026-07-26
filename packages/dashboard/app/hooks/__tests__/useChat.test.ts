@@ -296,7 +296,11 @@ describe("useChat", () => {
     localStorage.setItem(
       chatSessionsCacheKey(projectId),
       JSON.stringify({
-        savedAt: Date.now() - 120_000,
+        // FNXC:MobileTabDiscard 2026-07-26-12:10: this case needs an envelope that is genuinely PAST
+        // the hydration TTL so nothing hydrates and the in-memory session list stays empty. Derive the
+        // age from SWR_TASKS_MAX_AGE_MS instead of a literal so raising the TTL (12h, to survive a
+        // mobile tab discard) cannot silently turn this into the "cached sessions hydrate" case.
+        savedAt: Date.now() - (swrCacheModule.SWR_TASKS_MAX_AGE_MS + 120_000),
         data: [makeSession({ id: "session-stale", agentId: "agent-001" })],
       }),
     );

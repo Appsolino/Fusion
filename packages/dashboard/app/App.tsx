@@ -1897,7 +1897,17 @@ function AppInner() {
         </div>
         {rightDock.dock}
       </div>
-      {currentProject && (
+      {/*
+      FNXC:Terminal 2026-07-26-11:40:
+      Mount the terminal ONLY while it is open. It used to be mounted for the whole session (visibility driven purely by `isOpen`), so a closed terminal still ran `useTerminalSessions` + `useTerminal`: a live PTY WebSocket, its heartbeat interval, and — because xterm is torn down on close, leaving no `onData` subscriber — an UNBOUNDED client-side buffer of every byte the shell emitted while the user was elsewhere. Background timers/sockets are a primary tab-discard signal on iOS Safari and Chrome Android, and the growing buffer is the memory pressure that triggers the discard; together they are why returning to the dashboard after a few minutes costs a full white-splash reload.
+      This does NOT regress the "persist across tab switches" requirement: `terminalOpen` survives view switches, so switching views keeps the modal mounted and its buffer intact. Only an explicit close unmounts. Terminal tabs are server-side PTY sessions restored on reopen, with scrollback replayed by the server on reconnect.
+
+      FNXC:Terminal 2026-07-26-14:10 (CORRECTION — the paragraph above originally ended "close already disposed xterm and its scrollback, so nothing is lost that closing did not already discard"; that was FALSE and must not be reasserted):
+      Closing DID dispose xterm, but the WebSocket stayed open with zero `onData` subscribers, so `useTerminal`'s `initialBufferRef.current.data` accumulated EVERY byte emitted while closed and `onData()` replayed the whole array verbatim when xterm re-initialized on reopen. Reopen was therefore lossless for arbitrarily long closed-terminal output. It no longer is: unmounting closes the socket, and reopen now starts from the server's replay — `MAX_SCROLLBACK_SIZE = 50000` CHARACTERS in `packages/dashboard/src/terminal-service.ts` (~600-800 typical lines), not lines and not unbounded.
+      Keeping the component mounted is nonetheless the WRONG repair, because the property it preserved was itself the defect: that buffer has no cap and is never drained while closed, so a long-running command (a watch build, `tail -f`) left in a closed terminal grows the heap without bound for as long as the app is open — strictly worse than losing scrollback, and precisely the memory pressure that gets the tab discarded. There is no in-component way to keep both properties: the buffer lives inside `useTerminal`, which cannot outlive the mount.
+      The real ceiling is the server ring, and the correct place to recover the lost history is to raise `MAX_SCROLLBACK_SIZE` (the repo's own CLI-agent session ring is 512 KiB by comparison) or to bound-and-persist the client buffer outside the component. Both are outside this change's file scope; this comment records the deliberate, known trade so it is not rediscovered as a mystery.
+      */}
+      {currentProject && modalManager.terminalOpen && (
         <TerminalModal
           isOpen={modalManager.terminalOpen}
           onClose={closeTerminalWithNav}

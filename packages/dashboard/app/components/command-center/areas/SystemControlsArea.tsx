@@ -43,6 +43,7 @@ import { ReportActionMenu } from "../../ReportActionMenu";
 import { ReportModal } from "../../ReportModal";
 import { resolveReportContextRefs } from "../../../utils/reportContextRefs";
 import { copyTextToClipboard } from "../../../utils/copyToClipboard";
+import { capLogEntries } from "../../../hooks/useAgentLogs";
 import "./SystemControlsArea.css";
 
 /*
@@ -70,7 +71,14 @@ FNXC:SystemPanelFnBinary 2026-07-15-09:54:
     the shared job log viewer so operators see live output without hunting.
 */
 
-const LOG_VIEW_CAP = 500;
+/*
+FNXC:MobileTabRetention 2026-07-26-10:48:
+Bounded ring for every streamed tail in this panel (server logs AND rebuild job output). A full
+workspace rebuild emits many thousands of lines; retaining all of them grows the page's resident set
+until a backgrounded mobile tab is discarded by the OS and reloads with a white splash on return.
+The joined-string render below is O(kept lines) per frame, so the cap bounds render cost too.
+*/
+export const LOG_VIEW_CAP = 500;
 const RESTART_POLL_MS = 1500;
 const BACK_ONLINE_RELOAD_DELAY_MS = 3000;
 // Bound the post-restart wait so a server that never comes back (crashed
@@ -110,6 +118,15 @@ export function SystemControlsArea({ projectId, addToast }: SystemControlsAreaPr
 
   const [job, setJob] = useState<SystemRebuildJobSnapshot | null>(null);
   const [jobLines, setJobLines] = useState<SystemRebuildJobLine[]>([]);
+  /*
+  FNXC:MobileTabRetention 2026-07-26-10:52:
+  Stream dedupe is keyed on the line's monotonic `i` and must stay O(1) per incoming line. The old
+  Array.some() scan was O(n^2) over a rebuild's thousands of lines, burning CPU in the background —
+  itself a discard signal on iOS/Chrome Android — on top of the memory growth. The Set is a ref, not
+  state, so it survives the cap trimming older lines out of the rendered buffer and a trimmed line
+  can never be re-appended by a stream replay.
+  */
+  const seenJobLineIndexesRef = useRef<Set<number>>(new Set());
   const jobOutputRef = useRef<HTMLPreElement | null>(null);
   const jobFollowingRef = useRef(true);
   const jobSectionRef = useRef<HTMLDivElement | null>(null);
@@ -153,6 +170,7 @@ export function SystemControlsArea({ projectId, addToast }: SystemControlsAreaPr
           // Adopting a different (resumed) job — clear stale lines so the new
           // job's stream doesn't render mixed with the previous job's output.
           setJobLines([]);
+          seenJobLineIndexesRef.current = new Set();
           jobFollowingRef.current = true;
           return next.activeRebuild;
         });
@@ -177,7 +195,13 @@ export function SystemControlsArea({ projectId, addToast }: SystemControlsAreaPr
         const { job: current } = await fetchCurrentSystemRebuild();
         if (!cancelled && current) {
           setJob(current);
-          setJobLines(current.lines ?? []);
+          // FNXC:MobileTabRetention 2026-07-26-10:55: The buffered hydration payload is the whole
+          // job so far — keep only the newest LOG_VIEW_CAP lines and seed the dedupe index from them.
+          const hydrated = current.lines ?? [];
+          // Seed from ALL hydrated indexes (not just the kept tail) so a stream replay cannot
+          // re-append a line the cap already trimmed out of the rendered buffer.
+          seenJobLineIndexesRef.current = new Set(hydrated.map((line) => line.i));
+          setJobLines(capLogEntries(hydrated, LOG_VIEW_CAP));
         }
       } catch {
         // Best-effort hydration; the live stream still fills a running job.
@@ -196,10 +220,10 @@ export function SystemControlsArea({ projectId, addToast }: SystemControlsAreaPr
         line: (event) => {
           try {
             const line = JSON.parse((event as MessageEvent).data) as SystemRebuildJobLine;
-            setJobLines((current) => {
-              if (current.some((existing) => existing.i === line.i)) return current;
-              return [...current, line];
-            });
+            // O(1) dedupe on the line's monotonic index, then a bounded append.
+            if (seenJobLineIndexesRef.current.has(line.i)) return;
+            seenJobLineIndexesRef.current.add(line.i);
+            setJobLines((current) => capLogEntries([...current, line], LOG_VIEW_CAP));
           } catch {
             // Ignore malformed stream payloads.
           }
@@ -287,10 +311,8 @@ export function SystemControlsArea({ projectId, addToast }: SystemControlsAreaPr
         log: (event) => {
           try {
             const entry = JSON.parse((event as MessageEvent).data) as SystemLogEntryDto;
-            setLogEntries((current) => {
-              const next = [...current, entry];
-              return next.length > LOG_VIEW_CAP ? next.slice(-LOG_VIEW_CAP) : next;
-            });
+            // Shared bounded-tail helper (see hooks/useAgentLogs.ts) — one cap implementation.
+            setLogEntries((current) => capLogEntries([...current, entry], LOG_VIEW_CAP));
           } catch {
             // Ignore malformed stream payloads.
           }
@@ -835,6 +857,22 @@ export function SystemControlsArea({ projectId, addToast }: SystemControlsAreaPr
               {jobStatusLabel}
             </span>
           </div>
+          {/*
+          FNXC:MobileTabRetention 2026-07-26-11:02:
+          The rendered buffer is capped at LOG_VIEW_CAP, so a long rebuild's earliest output is
+          dropped. `i` is the job's monotonic line index: a first kept line with i > 0 proves lines
+          were trimmed, and the operator must be told rather than read a clipped tail as the whole
+          build log.
+          */}
+          {(jobLines[0]?.i ?? 0) > 0 ? (
+            <p className="cc-system-note" data-testid="cc-system-rebuild-output-truncated">
+              {t(
+                "systemControls.jobOutputTruncated",
+                "Showing the most recent {{count}} lines — earlier output trimmed",
+                { count: LOG_VIEW_CAP },
+              )}
+            </p>
+          ) : null}
           <pre ref={jobOutputRef} className="cc-syscontrols-output" aria-live="polite" onScroll={updateJobFollowState}>
             {jobLines.map((line) => `${line.stream === "stderr" ? "! " : ""}${line.text}`).join("\n")}
           </pre>

@@ -70,6 +70,19 @@ const XTERM_INIT_TIMEOUT_MS = 10000;
 
 const XTERM_IMPORT_RETRY_DELAYS_MS = [500, 1500, 3000] as const;
 
+/*
+FNXC:Terminal 2026-07-26-11:05:
+Mobile browsers (iOS Safari tab, iOS installed PWA, Chrome Android) DISCARD a backgrounded tab when its resident set is large, and the user then pays a full white-splash reload on return. xterm's scrollback ring is retained verbatim in JS memory (line buffers, not just rendered rows), so this ring x a wide viewport is one of the larger single allocations the dashboard holds. That made 2000 lines look like a free win.
+
+FNXC:Terminal 2026-07-26-14:05 (CORRECTION — do not restore the 2000-line value on the old reasoning):
+The 2000-line cut above was justified with "the PTY's own server-side scrollback is replayed on reconnect anyway, so the reachable history is unchanged". THAT WAS FALSE. The server ring is `MAX_SCROLLBACK_SIZE = 50000` in `packages/dashboard/src/terminal-service.ts`, and the unit is CHARACTERS, not lines: the buffer is a plain string that is `slice(-50000)`d on every append, and `server.ts` replays exactly that truncated string on reconnect. 50000 characters is only ~600-800 typical terminal lines — the server holds STRICTLY LESS history than even the 2000-line client ring, so it can never back-stop it.
+Consequence of the false claim: a build emitting ~4000 lines used to let the user scroll back to the first compile error; at 2000 lines that error was evicted from the client ring and unreachable from the server too. Restored to the pre-cut 5000.
+This ring is therefore the AUTHORITATIVE user-reachable history for this surface, not a local cache of something the server also has. Any future reduction has to be argued against 50000 characters of server replay, not against an imagined larger server buffer.
+Keep this value in step with SessionTerminal's TERMINAL_SCROLLBACK_LINES (duplicated rather than shared so neither terminal surface pulls the other's heavy module into its lazy chunk). Note the two surfaces have DIFFERENT server rings — the CLI-agent one is 512 KiB — so they are kept in step for maintenance, not because the backing store is the same.
+The WebGL-context disposal in disposeXtermInstance is the part of the memory work that was sound; it stays.
+*/
+const TERMINAL_SCROLLBACK_LINES = 5000;
+
 export type TerminalDisplayMode = "docked" | "floating" | "below";
 
 export const TERMINAL_DISPLAY_MODE_STORAGE_PREFIX = "fusion:terminal-display-mode-";
@@ -605,6 +618,11 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
   const overlayMouseDownRef = useRef(false);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<ITerminalAddon | null>(null);
+  /*
+  FNXC:Terminal 2026-07-26-11:10:
+  The WebGL renderer holds a real GL context plus its glyph atlas textures. A GL context that is dropped without an explicit dispose() is a well-known source of memory pressure on iOS (contexts are a scarce, process-wide resource and are not released promptly by GC), and memory pressure is what makes the OS discard the backgrounded tab. Hold the addon so every teardown path disposes it EXPLICITLY before terminal.dispose(), instead of relying on xterm's AddonManager or the onContextLoss handler to get there.
+  */
+  const webglAddonRef = useRef<ITerminalAddon | null>(null);
   const hasInitialCommandRun = useRef<string | false>(false);
   const pendingInitialCommandRef = useRef<{ command: string; commandKey: string; sessionId: string } | null>(null);
   const creatingInitialCommandTabRef = useRef(false);
@@ -644,6 +662,40 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
   fontSizeRef.current = fontSize;
   terminalPreferencesRef.current = terminalPreferences;
   resolvedFontFamilyRef.current = resolvedFontFamily;
+
+  /**
+   * Release the live xterm instance and everything whose lifetime is tied to it.
+   *
+   * FNXC:Terminal 2026-07-26-11:15:
+   * Four call sites (session/project switch, modal close, session-invalid swap, manual reinit) plus the new unmount teardown all have to release the SAME set of resources: the WebGL addon's GL context, the terminal (scrollback ring + DOM/canvas layers), the fit addon, and the window resize listener bound to that instance. They had drifted into four hand-copied blocks, none of which disposed the WebGL addon. Any one of them missing a resource leaves a GL context or a multi-megabyte scrollback buffer resident, which is exactly the memory pressure that makes mobile browsers discard the backgrounded tab. Single helper so a new teardown path cannot forget one.
+   * Refs only — callers still own their own React state resets, which differ per path.
+   */
+  const disposeXtermInstance = useCallback(() => {
+    // WebGL first: dispose the renderer while its terminal is still alive so the
+    // addon can detach cleanly, then drop the GL context reference.
+    if (webglAddonRef.current) {
+      try {
+        webglAddonRef.current.dispose();
+      } catch {
+        /* already disposed (e.g. by onContextLoss) */
+      }
+      webglAddonRef.current = null;
+    }
+    if (xtermRef.current) {
+      try {
+        xtermRef.current.dispose();
+      } catch {
+        /* already disposed */
+      }
+      xtermRef.current = null;
+    }
+    fitAddonRef.current = null;
+    xtermInitializedRef.current = false;
+    if (windowResizeListenerRef.current) {
+      window.removeEventListener("resize", windowResizeListenerRef.current);
+      windowResizeListenerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     setDisplayModeState(readTerminalDisplayMode(projectId));
@@ -1551,14 +1603,7 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
 
     // Clean up existing xterm if switching sessions/projects or if DOM was cleared
     if (xtermRef.current && (xtermInitializedRef.current !== currentSessionId || projectChanged)) {
-      xtermRef.current.dispose();
-      xtermRef.current = null;
-      fitAddonRef.current = null;
-      xtermInitializedRef.current = false;
-      if (windowResizeListenerRef.current) {
-        window.removeEventListener("resize", windowResizeListenerRef.current);
-        windowResizeListenerRef.current = null;
-      }
+      disposeXtermInstance();
       setXtermReady(false);
       setXtermInitError(null);
     }
@@ -1616,7 +1661,7 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
             white: "#d4d4d4",
           },
           allowProposedApi: true,
-          scrollback: 5000,
+          scrollback: TERMINAL_SCROLLBACK_LINES,
         });
 
         // Load addons
@@ -1637,8 +1682,10 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
             const webglAddon = new WebglAddon();
             webglAddon.onContextLoss(() => {
               webglAddon.dispose();
+              if (webglAddonRef.current === webglAddon) webglAddonRef.current = null;
             });
             terminal.loadAddon(webglAddon);
+            webglAddonRef.current = webglAddon;
           } catch {
             // WebGL not available, fallback to canvas
           }
@@ -1857,16 +1904,24 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
         clearTimeout(watchdogTimer);
       }
 
-      // Don't dispose xterm here - it should persist across tab switches
-      // Only dispose when the modal is fully closed
+      /*
+      FNXC:Terminal 2026-07-26-11:20:
+      Deliberately NOT disposing here. This effect re-runs on every terminal-tab / session change, and the instance must survive a tab switch (the body above disposes+recreates only when the session actually changed). Release is owned by the close effect, the session-invalid swap, manual reinit, and the unmount teardown below — never by this cleanup.
+      */
     };
-  }, [fitAndResizeForSession, isOpen, isReady, activeTab?.sessionId, projectId, remeasureAfterTerminalFontLoad]);
+  }, [disposeXtermInstance, fitAndResizeForSession, isOpen, isReady, activeTab?.sessionId, projectId, remeasureAfterTerminalFontLoad]);
 
   // (Input forwarding + window resize listener are wired inside initTerminal
   // so they share the xterm instance's lifetime — see comment there.)
 
   // FNXC:Terminal 2026-06-22-09:00: Run any active drag teardown when the component unmounts mid-drag so document pointer listeners + the pending docked-resize rAF never outlive the modal.
   useEffect(() => () => dragTeardownRef.current?.(), []);
+
+  /*
+  FNXC:Terminal 2026-07-26-11:25:
+  Unmount teardown. The close-cleanup effect below is keyed on `isOpen` and has no cleanup function, so an unmount (project switch, or App unmounting the modal now that it is mounted only while open) left the xterm, its scrollback ring, and the WebGL context reachable-but-orphaned until GC happened to run. Mobile browsers discard a backgrounded tab on memory pressure, and a GL context is not released promptly by GC — so "the collector will get to it" is not good enough here. Release synchronously on unmount.
+  */
+  useEffect(() => () => disposeXtermInstance(), [disposeXtermInstance]);
 
   // Cleanup xterm when modal closes
   useEffect(() => {
@@ -1876,16 +1931,7 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
     dragTeardownRef.current?.();
 
     // Modal is closed - cleanup xterm
-    if (xtermRef.current) {
-      xtermRef.current.dispose();
-      xtermRef.current = null;
-    }
-    fitAddonRef.current = null;
-    xtermInitializedRef.current = false;
-    if (windowResizeListenerRef.current) {
-      window.removeEventListener("resize", windowResizeListenerRef.current);
-      windowResizeListenerRef.current = null;
-    }
+    disposeXtermInstance();
     setXtermReady(false);
     setXtermInitError(null);
     hasInitialCommandRun.current = false;
@@ -1896,7 +1942,7 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
     setShowShortcuts(false);
     setShowPreferences(false);
     setStickyModifier(null);
-  }, [isOpen]);
+  }, [disposeXtermInstance, isOpen]);
 
   // Subscribe to terminal data.
   // Depends on `xtermReady` so subscriptions are established after the
@@ -2262,16 +2308,7 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
       hasInitialCommandRun.current = false;
 
       // Dispose current xterm so the init effect re-runs with the new session
-      if (xtermRef.current) {
-        xtermRef.current.dispose();
-        xtermRef.current = null;
-      }
-      fitAddonRef.current = null;
-      xtermInitializedRef.current = false;
-      if (windowResizeListenerRef.current) {
-        window.removeEventListener("resize", windowResizeListenerRef.current);
-        windowResizeListenerRef.current = null;
-      }
+      disposeXtermInstance();
       setXtermReady(false);
       setXtermInitError(null);
 
@@ -2280,7 +2317,7 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
       });
     });
     return unsub;
-  }, [onSessionInvalid, replaceActiveTabSession]);
+  }, [disposeXtermInstance, onSessionInvalid, replaceActiveTabSession]);
 
   // Overlay dismiss — track mousedown source so a click that starts on the
   // modal but releases on the overlay (e.g. when dragging the resize grip
@@ -2327,20 +2364,11 @@ export function TerminalModal({ isOpen, onClose, initialCommand, initialCommandG
   // Used when xterm initialization fails/stalls but the backend session is fine.
   const handleReinitialize = useCallback(() => {
     // Dispose any partially-initialized xterm
-    if (xtermRef.current) {
-      xtermRef.current.dispose();
-      xtermRef.current = null;
-    }
-    fitAddonRef.current = null;
-    xtermInitializedRef.current = false;
-    if (windowResizeListenerRef.current) {
-      window.removeEventListener("resize", windowResizeListenerRef.current);
-      windowResizeListenerRef.current = null;
-    }
+    disposeXtermInstance();
     // Clear error state and reset readiness so the init effect re-runs
     setXtermInitError(null);
     setXtermReady(false);
-  }, []);
+  }, [disposeXtermInstance]);
 
   const handleRefreshPage = useCallback(() => {
     window.location.reload();

@@ -2618,6 +2618,15 @@ describe("App view switching", () => {
     });
     first.unmount();
 
+    /*
+     * FNXC:ViewState 2026-07-26-12:56:
+     * Each render here stands for a separate BOOT, not a remount of the same tab. useViewState now
+     * keeps a per-tab sessionStorage copy of the live view so an involuntary mobile tab discard
+     * restores where the operator actually was; jsdom shares one session store across the whole test,
+     * so a boot must start from a cleared one or the previous render's view wins over the localStorage
+     * value this step is asserting on.
+     */
+    sessionStorage.clear();
     localStorage.setItem(taskViewStorageKey(), "board");
     const second = render(<App />);
     await waitFor(() => {
@@ -2625,6 +2634,8 @@ describe("App view switching", () => {
     });
     second.unmount();
 
+    // Third boot — same fresh-tab reset as above.
+    sessionStorage.clear();
     localStorage.setItem(taskViewStorageKey(), "plugin:fusion-plugin-dependency-graph:graph");
     (fetchPluginDashboardViews as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       {

@@ -358,13 +358,38 @@ into a partial cache after a later assistant turn. Every client-side transcript 
 ascending createdAt order, with id as a deterministic tie-breaker, so optimistic replacement,
 mid-stream reloads, and SSE echoes cannot move user bubbles past later turns.
 */
+function compareChatMessagesChronologically(a: ChatMessageInfo, b: ChatMessageInfo): number {
+  const createdAtDifference = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+  return Number.isFinite(createdAtDifference) && createdAtDifference !== 0
+    ? createdAtDifference
+    : a.id.localeCompare(b.id);
+}
+
 function sortChatMessagesChronologically(messages: ChatMessageInfo[]): ChatMessageInfo[] {
-  return [...messages].sort((a, b) => {
-    const createdAtDifference = Date.parse(a.createdAt) - Date.parse(b.createdAt);
-    return Number.isFinite(createdAtDifference) && createdAtDifference !== 0
-      ? createdAtDifference
-      : a.id.localeCompare(b.id);
-  });
+  return [...messages].sort(compareChatMessagesChronologically);
+}
+
+/*
+FNXC:MobileTabRetention 2026-07-26-11:15:
+Chat history is user-visible content the reader can still scroll to, so it is NOT capped — silently
+dropping a conversation the user is reading would be a real regression, unlike the disposable log
+tails bounded elsewhere for the same mobile-tab-discard problem.
+What is fixed instead is the per-append cost: appending a message re-sorted the ENTIRE transcript
+(O(n log n) plus a second array copy) on every optimistic send and every SSE frame, which is
+sustained background CPU — itself a discard signal on iOS Safari / Chrome Android — for a stream
+that is already chronological. The transcript is kept sorted by every mutation path, so an append
+whose message already sorts at or after the tail needs no sort at all; only genuinely out-of-order
+arrivals pay for the full sort and keep FN's ChatMessageOrder invariant above intact.
+*/
+export function appendChatMessageChronologically(
+  previous: ChatMessageInfo[],
+  message: ChatMessageInfo,
+): ChatMessageInfo[] {
+  const last = previous[previous.length - 1];
+  if (!last || compareChatMessagesChronologically(last, message) <= 0) {
+    return [...previous, message];
+  }
+  return sortChatMessagesChronologically([...previous, message]);
 }
 
 function reconcileOptimisticSentMessage(previous: ChatMessageInfo[], persisted: ChatMessageInfo): ChatMessageInfo[] {
@@ -375,7 +400,7 @@ function reconcileOptimisticSentMessage(previous: ChatMessageInfo[], persisted: 
     && candidate.sessionId === persisted.sessionId
     && candidate.content.trim() === persisted.content.trim(),
   );
-  if (optimisticIndex < 0) return sortChatMessagesChronologically([...previous, persisted]);
+  if (optimisticIndex < 0) return appendChatMessageChronologically(previous, persisted);
   const next = [...previous];
   next[optimisticIndex] = persisted;
   return sortChatMessagesChronologically(next);
@@ -1450,7 +1475,7 @@ export function useChat(
         content,
         createdAt: new Date().toISOString(),
       };
-      setMessages((prev) => sortChatMessagesChronologically([...prev, userMessage]));
+      setMessages((prev) => appendChatMessageChronologically(prev, userMessage));
 
       // Clear streaming state
       setStreamingText("");
@@ -1498,7 +1523,7 @@ export function useChat(
           streamingMessageIdsRef.current.add(assistantMessage.id);
 
           // Preserve user message and add assistant message
-          setMessages((prev) => sortChatMessagesChronologically([...prev, assistantMessage]));
+          setMessages((prev) => appendChatMessageChronologically(prev, assistantMessage));
 
           setStreamingText("");
           setStreamingThinking("");
@@ -1956,7 +1981,7 @@ export function useChat(
       ) {
         setMessages((prev) => {
           if (prev.some((m) => m.id === message.id)) return prev;
-          return sortChatMessagesChronologically([...prev, message]);
+          return appendChatMessageChronologically(prev, message);
         });
         setStreamingText("");
         setStreamingThinking("");
@@ -1981,7 +2006,7 @@ export function useChat(
             return reconcileOptimisticSentMessage(prev, message);
           }
 
-          return sortChatMessagesChronologically([...prev, message]);
+          return appendChatMessageChronologically(prev, message);
         });
       }
     };

@@ -732,23 +732,28 @@ describe("Column pagination", () => {
     });
   });
 
-  it("disables pagination when isSearchActive is true, showing all tasks", () => {
+  /*
+  FNXC:BoardColumnWindowing 2026-07-26-12:30:
+  These two cases previously pinned the OLD contract (search disables pagination, render every match).
+  That escape hatch was unbounded and is deliberately gone: `tasks` arrives already search-filtered, so
+  paginating search results still shows matches while keeping the mounted TaskCard count bounded — the
+  resident set is what makes mobile browsers discard the backgrounded tab.
+  */
+  it("paginates even when isSearchActive is true", () => {
     const tasks = Array.from({ length: 110 }, (_, index) => makeTask(`KB-${String(index + 1).padStart(3, "0")}`));
     render(<Column {...defaultProps} column="todo" tasks={tasks} isSearchActive={true} />);
 
-    // All 110 tasks should be visible — no pagination applied during active search
-    expect(screen.getAllByTestId(/task-/)).toHaveLength(110);
-    expect(screen.queryByRole("button", { name: /Load 25 more/i })).toBeNull();
+    expect(screen.getAllByTestId(/task-/)).toHaveLength(50);
+    expect(screen.getByRole("button", { name: /Load 25 more/i })).toBeTruthy();
   });
 
-  it("restores pagination when isSearchActive changes back to false", () => {
+  it("collapses the window back to one screenful when isSearchActive changes back to false", () => {
     const tasks = Array.from({ length: 110 }, (_, index) => makeTask(`KB-${String(index + 1).padStart(3, "0")}`));
     const { rerender } = render(<Column {...defaultProps} column="todo" tasks={tasks} isSearchActive={true} />);
 
-    // All tasks visible during search
-    expect(screen.getAllByTestId(/task-/)).toHaveLength(110);
+    expect(screen.getAllByTestId(/task-/)).toHaveLength(50);
 
-    // Search cleared — pagination resumes
+    // Search cleared — the result set changed, so the window resets to the initial page.
     rerender(<Column {...defaultProps} column="todo" tasks={tasks} isSearchActive={false} />);
 
     expect(screen.getAllByTestId(/task-/)).toHaveLength(50);

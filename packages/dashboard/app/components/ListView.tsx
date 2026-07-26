@@ -84,6 +84,29 @@ First-run list view users should see only the Title column by default for a clea
 const DEFAULT_LIST_COLUMNS = ["title"] as const;
 type ListColumn = typeof ALL_LIST_COLUMNS[number];
 
+/*
+FNXC:ListViewWindowing 2026-07-26-11:20:
+Mobile browsers (iOS Safari tabs, iOS installed PWAs, Chrome Android) reclaim a backgrounded tab whose
+resident set is large, which the operator sees as a white-splash "reload" on return. ListView used to
+render EVERY grouped task row/card at once, so a project with thousands of tasks produced a DOM large
+enough to be a primary contributor to that reclaim. No virtualization library exists in this repo and
+none may be added, so List reuses the board's manual paging affordance (Column.tsx
+VISIBLE_TASKS_INITIAL / VISIBLE_TASKS_INCREMENT) with the same "Load more" button styling and copy.
+
+Invariants this window must not break:
+- Filtering (search/column/stale/hide-done/workflow) runs over the FULL task set in `groupedTasks`;
+  the window is applied AFTER, per section, so a match beyond the window is still reachable via
+  "Load more" instead of being filtered out of existence.
+- Grouping is preserved: the window is per column section, never across the flattened list, so every
+  section keeps its own header, count (which reports the FULL group size), and collapse state.
+- Selection is id-based (`kb-dashboard-selected-tasks` / `kb-dashboard-list-selected-task` in
+  projectStorage), so a selected task outside the window stays selected. The window is additionally
+  widened to cover the persisted single selection so the highlighted row remains visible after a
+  remount rather than silently vanishing from the rendered list.
+*/
+const LIST_SECTION_VISIBLE_INITIAL = 50;
+const LIST_SECTION_VISIBLE_INCREMENT = 25;
+
 function getNodeStatusLabel(status: NodeInfo["status"], t: TFunction<"app">): string {
   if (status === "online") return t("listView.nodeStatusOnline", "Online");
   if (status === "connecting") return t("listView.nodeStatusConnecting", "Connecting");
@@ -931,6 +954,60 @@ export function ListView({
   const filteredCount = useMemo(() => {
     return Object.values(groupedTasks).reduce((sum, group) => sum + group.length, 0);
   }, [groupedTasks]);
+
+  /*
+  FNXC:ListViewWindowing 2026-07-26-11:24:
+  Per-section reveal counters, keyed by column id. Absent entries mean "still at the initial window".
+  Every change to what the FULL set contains or how it is ordered (search text, column filter,
+  hide-done, stale filters, sort, workflow selection, project) resets the counters so a fresh result
+  set starts from one screen of rows again — otherwise a previously-expanded section would keep an
+  arbitrarily large DOM alive across filter changes, which is exactly the resident-set growth that
+  gets the backgrounded tab reclaimed.
+  */
+  const [sectionVisibleCounts, setSectionVisibleCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    setSectionVisibleCounts({});
+  }, [
+    projectId,
+    searchQuery,
+    selectedColumn,
+    hideDoneTasks,
+    staleOnlyFilter,
+    stalePausedReviewOnlyFilter,
+    sortField,
+    sortDirection,
+    selectedWorkflowId,
+  ]);
+
+  /**
+   * FNXC:ListViewWindowing 2026-07-26-11:28:
+   * Slice each already-filtered, already-sorted section down to its visible window. `hiddenCount`
+   * drives the shared "Load more" affordance; a section at or under its window renders unchanged with
+   * no button shell. The window is stretched to include the persisted single-selection index so the
+   * selected row is never hidden by paging.
+   */
+  const listSectionWindows = useMemo(() => {
+    const windows: Record<string, { tasks: Task[]; hiddenCount: number }> = {};
+    for (const [columnId, group] of Object.entries(groupedTasks)) {
+      const stored = sectionVisibleCounts[columnId] ?? LIST_SECTION_VISIBLE_INITIAL;
+      const selectedIndex = selectedTaskId ? group.findIndex((task) => task.id === selectedTaskId) : -1;
+      const effective = Math.max(stored, selectedIndex >= 0 ? selectedIndex + 1 : 0);
+      if (group.length <= effective) {
+        windows[columnId] = { tasks: group, hiddenCount: 0 };
+        continue;
+      }
+      windows[columnId] = { tasks: group.slice(0, effective), hiddenCount: group.length - effective };
+    }
+    return windows;
+  }, [groupedTasks, sectionVisibleCounts, selectedTaskId]);
+
+  const handleLoadMoreSection = useCallback((columnId: ColumnId, currentVisibleCount: number) => {
+    setSectionVisibleCounts((previous) => ({
+      ...previous,
+      [columnId]: currentVisibleCount + LIST_SECTION_VISIBLE_INCREMENT,
+    }));
+  }, []);
 
   // Selection logic that depends on groupedTasks (must be after groupedTasks definition)
   // Toggle all visible tasks
@@ -2641,6 +2718,11 @@ export function ListView({
               const isEmpty = columnTasks.length === 0;
               if (searchQuery && isEmpty) return null;
 
+              // FNXC:ListViewWindowing 2026-07-26-11:32: header count stays the FULL group size; only the rendered slice is windowed.
+              const sectionWindow = listSectionWindows[column] ?? { tasks: columnTasks, hiddenCount: 0 };
+              const windowedTasks = sectionWindow.tasks;
+              const hiddenTaskCount = sectionWindow.hiddenCount;
+
               const isCollapsed = collapsedSections.has(column);
 
               return (
@@ -2672,7 +2754,7 @@ export function ListView({
                       {isEmpty ? (
                         <div className="list-empty-cell list-card-empty">{t("listView.noTasks", "No tasks")}</div>
                       ) : (
-                        columnTasks.map((task) => {
+                        windowedTasks.map((task) => {
                           const isDoneColumn = isCompleteColumn(task.column);
                           const visualStatus = isDoneColumn ? "done" : task.status;
                           const isFailed = !isDoneColumn && task.status === "failed" && !hasPendingAutomaticRecovery(task, lastFetchTimeMs);
@@ -2812,6 +2894,20 @@ export function ListView({
                           );
                         })
                       )}
+                      {hiddenTaskCount > 0 && (
+                        <div className="list-section-load-more">
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => handleLoadMoreSection(column, windowedTasks.length)}
+                          >
+                            {t("column.loadMore", "Load {{count}} more ({{remaining}} remaining)", {
+                              count: Math.min(LIST_SECTION_VISIBLE_INCREMENT, hiddenTaskCount),
+                              remaining: hiddenTaskCount,
+                            })}
+                          </button>
+                        </div>
+                      )}
                     </>
                   )}
                 </Fragment>
@@ -2878,6 +2974,11 @@ export function ListView({
                 // When text filtering, hide empty sections entirely
                 if (searchQuery && isEmpty) return null;
 
+                // FNXC:ListViewWindowing 2026-07-26-11:34: header count stays the FULL group size; only the rendered slice is windowed.
+                const sectionWindow = listSectionWindows[column] ?? { tasks: columnTasks, hiddenCount: 0 };
+                const windowedTasks = sectionWindow.tasks;
+                const hiddenTaskCount = sectionWindow.hiddenCount;
+
                 const isCollapsed = collapsedSections.has(column);
 
                 return (
@@ -2909,7 +3010,7 @@ export function ListView({
                             </td>
                           </tr>
                         ) : (
-                          columnTasks.map((task) => {
+                          windowedTasks.map((task) => {
                             const isDoneColumn = isCompleteColumn(task.column);
                             const visualStatus = isDoneColumn ? "done" : task.status;
                             const isFailed = !isDoneColumn && task.status === "failed" && !hasPendingAutomaticRecovery(task, lastFetchTimeMs);
@@ -3083,6 +3184,22 @@ export function ListView({
                               </tr>
                             );
                           })
+                        )}
+                        {hiddenTaskCount > 0 && (
+                          <tr className="list-section-load-more-row">
+                            <td colSpan={visibleColumns.size + (bulkEditEnabled ? 1 : 0)} className="list-section-load-more">
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => handleLoadMoreSection(column, windowedTasks.length)}
+                              >
+                                {t("column.loadMore", "Load {{count}} more ({{remaining}} remaining)", {
+                                  count: Math.min(LIST_SECTION_VISIBLE_INCREMENT, hiddenTaskCount),
+                                  remaining: hiddenTaskCount,
+                                })}
+                              </button>
+                            </td>
+                          </tr>
                         )}
                       </>
                     )}

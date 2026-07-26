@@ -32,6 +32,7 @@ import { plannerOverseerBadgeTooltip, plannerOverseerStateLabel } from "./planne
 import { getFreshBatchData } from "../hooks/useBatchBadgeFetch";
 import { useTaskDiffStats } from "../hooks/useTaskDiffStats";
 import { useAgentsMapCache } from "../hooks/useAgentsMapCache";
+import { useLiveTimeTicker } from "../hooks/useLiveTimeTicker";
 import { isTaskStuck } from "../utils/taskStuck";
 import { hasPendingAutomaticRecovery, isTaskManuallyRetryable } from "../utils/taskRecovery";
 import { getRevertOfId, isTaskReverted } from "../utils/taskRevert";
@@ -328,7 +329,8 @@ const TIME_INDICATOR_COLUMNS = new Set<ColumnId>([
   "in-review",
   "done",
 ]);
-const LIVE_TIME_INDICATOR_POLL_MS = 30_000;
+// FNXC:BoardPerformance 2026-07-26-09:48: LIVE_TIME_INDICATOR_POLL_MS now lives with the shared
+// ticker (`hooks/useLiveTimeTicker`) so the cadence and the single timer that honors it cannot drift.
 
 /*
 FNXC:TaskCardStatus 2026-07-31-00:00:
@@ -990,7 +992,6 @@ function TaskCardComponent({
   const [isPrCreateOpen, setIsPrCreateOpen] = useState(false);
   const [isAddressingPrFeedback, setIsAddressingPrFeedback] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
-  const [timeIndicatorNowMs, setTimeIndicatorNowMs] = useState(() => Date.now());
   const [lifecycleNowMs, setLifecycleNowMs] = useState(() => Date.now());
 
   /*
@@ -1557,37 +1558,46 @@ function TaskCardComponent({
   const showProgressSection =
     unifiedProgress.total > 0 && (task.status === "executing" || task.column === "in-progress");
 
-  useEffect(() => {
+  /*
+  FNXC:BoardPerformance 2026-07-26-09:46:
+  This card used to own a `window.setInterval` for its live elapsed-time indicator, so a 60-card board
+  ran 60 independent 30s timers that kept waking the tab even while backgrounded. Mobile browsers
+  (iOS Safari, iOS PWA, Chrome Android) discard a backgrounded page that never goes idle, which is
+  what produced the white-splash reload operators saw on returning to the dashboard. The card now
+  DERIVES whether it needs a live indicator and subscribes to the single shared ticker in
+  `useLiveTimeTicker` (one interval process-wide, suspended while hidden, immediate tick on return).
+  Cards that are ineligible must NOT subscribe: eligibility is exactly the set of early-returns the
+  old effect used, so cadence, formatting, and which cards animate are unchanged.
+  */
+  const wantsLiveTimeIndicator = useMemo(() => {
     if (task.column !== "in-progress" && task.column !== "in-review") {
-      return;
+      return false;
     }
 
     const merging = task.status != null && ACTIVE_MERGE_STATUSES.has(task.status);
+    const nowMs = Date.now();
 
     if (task.column === "in-progress") {
-      const endToEndMs = getTaskEndToEndDurationMs(task, Date.now());
-      const elapsedMs = getInProgressElapsedMs(task, Date.now());
-      const instrumentedMs = getInstrumentedDurationMs(task, Date.now());
+      const endToEndMs = getTaskEndToEndDurationMs(task, nowMs);
+      const elapsedMs = getInProgressElapsedMs(task, nowMs);
+      const instrumentedMs = getInstrumentedDurationMs(task, nowMs);
       if (endToEndMs == null && elapsedMs == null && instrumentedMs == null) {
-        return;
+        return false;
       }
     }
 
     if (!merging && task.column === "in-review") {
-      const endToEndMs = getTaskEndToEndDurationMs(task, Date.now());
-      const instrumentedMs = getInstrumentedDurationMs(task, Date.now());
+      const endToEndMs = getTaskEndToEndDurationMs(task, nowMs);
+      const instrumentedMs = getInstrumentedDurationMs(task, nowMs);
       if (endToEndMs == null && instrumentedMs == null) {
-        return;
+        return false;
       }
     }
 
-    setTimeIndicatorNowMs(Date.now());
-    const interval = window.setInterval(() => {
-      setTimeIndicatorNowMs(Date.now());
-    }, LIVE_TIME_INDICATOR_POLL_MS);
-
-    return () => window.clearInterval(interval);
+    return true;
   }, [task.column, task.status, task.columnMovedAt, task.updatedAt, task.workflowStepResults, task.timedExecutionMs, task.firstExecutionAt, task.cumulativeActiveMs, task.executionStartedAt, task.executionCompletedAt]);
+
+  const timeIndicatorNowMs = useLiveTimeTicker(wantsLiveTimeIndicator);
 
   const timeIndicator = useMemo(() => {
     if (!TIME_INDICATOR_COLUMNS.has(task.column)) {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ThemeMode } from "@fusion/core";
 import type { ProjectInfo } from "../api";
-import { getScopedItem, setScopedItem } from "../utils/projectStorage";
+import { getScopedItem, scopedKey, setScopedItem } from "../utils/projectStorage";
 import { getPluginViewId, isPluginViewId, isPluginViewRegistered } from "../plugins/pluginViewRegistry";
 import { recordActivity } from "../utils/report-capture";
 
@@ -91,6 +91,54 @@ function resolveLandingTaskView(value: TaskView): TaskView {
   return value === "command-center" || value === "settings" ? "board" : value;
 }
 
+/*
+FNXC:ViewState 2026-07-26-10:35:
+Mobile browsers DISCARD a backgrounded dashboard tab and reload it when the user returns. That reload is indistinguishable from a fresh boot to `localStorage`, so the landing-view guard above bounced an operator who was reading Command Center or Settings back to the Board every time they took a phone call — losing their place through no action of their own.
+The two cases ARE distinguishable by storage lifetime: `sessionStorage` is per-tab and survives reload AND discard-restore, but is never inherited by a newly opened tab. So a session-scoped copy of the live view means "this tab was already running and came back", while its absence means "genuinely fresh boot".
+Deliberately conservative: the session copy bypasses `resolveLandingTaskView` ONLY on the first hydration of a tab that already had a view. A new tab, a cleared session, and every explicit project switch (`hasHydratedScopedTaskViewRef` already true) all keep the FN-7649 bounce to Board. The stored value is a view name only — never a URL, task id, or content.
+*/
+const SESSION_TASK_VIEW_KEY = "kb-dashboard-task-view-session";
+
+/*
+FNXC:ViewState 2026-07-26-10:44:
+`task-detail` is the one view a same-tab restore must NOT reproduce: the detail's task snapshot is in-memory only, so a restored `task-detail` renders MainContent's empty-detail Board fallback — a Board wearing the wrong view name, which also suppresses the board scroll replay. Resolve it to `board` instead. A `?task=` deep link still re-opens the real detail on reload via useDeepLink.
+*/
+function resolveSessionTaskView(value: TaskView): TaskView {
+  return value === "task-detail" ? "board" : normalizeTaskView(value);
+}
+
+function getSessionStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const storage = window.sessionStorage;
+    if (!storage || typeof storage.getItem !== "function" || typeof storage.setItem !== "function") return null;
+    return storage;
+  } catch {
+    // Safari private mode / storage disabled: fall back to the fresh-boot landing behavior.
+    return null;
+  }
+}
+
+function getScopedSessionTaskView(projectId?: string): string | null {
+  const storage = getSessionStorage();
+  if (!storage) return null;
+  try {
+    return storage.getItem(scopedKey(SESSION_TASK_VIEW_KEY, projectId));
+  } catch {
+    return null;
+  }
+}
+
+function setScopedSessionTaskView(value: TaskView, projectId?: string): void {
+  const storage = getSessionStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(scopedKey(SESSION_TASK_VIEW_KEY, projectId), value);
+  } catch {
+    // Quota failures must never break navigation.
+  }
+}
+
 function migrateLegacyRoadmapsView(value: string): TaskView {
   if (value !== "roadmaps") {
     return "board";
@@ -153,6 +201,10 @@ export function useViewState(options: UseViewStateOptions): UseViewStateResult {
   });
 
   const [taskView, setTaskView] = useState<TaskView>(() => {
+    // Same-tab restore (reload / OS tab discard) keeps the view the operator was actually on.
+    const sessionView = getScopedSessionTaskView();
+    if (isTaskView(sessionView)) return resolveSessionTaskView(sessionView);
+
     const saved = getScopedItem("kb-dashboard-task-view");
     const legacyReliabilityView = migrateLegacyReliabilityView(saved);
     if (legacyReliabilityView) return legacyReliabilityView;
@@ -169,6 +221,22 @@ export function useViewState(options: UseViewStateOptions): UseViewStateResult {
   }, [viewMode]);
 
   useEffect(() => {
+    /*
+    First hydration of a tab that was already running (reload / discard-restore): the per-tab
+    session copy is the operator's real last view, so honor it verbatim. Every later run of this
+    effect is an explicit project switch and keeps the FN-7649 landing bounce.
+    */
+    if (!hasHydratedScopedTaskViewRef.current) {
+      const sessionView = getScopedSessionTaskView(currentProject?.id);
+      if (isTaskView(sessionView)) {
+        setTaskView(resolveSessionTaskView(sessionView));
+        if (currentProject?.id) {
+          hasHydratedScopedTaskViewRef.current = true;
+        }
+        return;
+      }
+    }
+
     const saved = getScopedItem("kb-dashboard-task-view", currentProject?.id);
     const legacyReliabilityView = migrateLegacyReliabilityView(saved);
     const retiredStashRecoveryView = migrateRetiredStashRecoveryView(saved);
@@ -196,6 +264,12 @@ export function useViewState(options: UseViewStateOptions): UseViewStateResult {
 
   useEffect(() => {
     setScopedItem("kb-dashboard-task-view", taskView, currentProject?.id);
+    /*
+    Per-tab copy: what THIS tab is showing right now, for a reload/discard-restore of this tab.
+    Written with the same project scoping as the localStorage copy and never mirrored unscoped —
+    an unscoped mirror would let the previous project's view leak into the next project's landing.
+    */
+    setScopedSessionTaskView(taskView, currentProject?.id);
   }, [currentProject?.id, taskView]);
 
   useEffect(() => {

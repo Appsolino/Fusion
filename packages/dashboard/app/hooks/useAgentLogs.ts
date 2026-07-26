@@ -6,6 +6,31 @@ import { recordResumeEvent } from "../utils/resumeInstrumentation";
 
 const INITIAL_LOAD_LIMIT = 100;
 
+/*
+FNXC:MobileTabRetention 2026-07-26-10:20:
+Mobile browsers (iOS Safari tabs, iOS PWAs, Chrome Android) discard a backgrounded page whose
+resident set is large, which the operator sees as a full white-splash reload on return. Every live
+log tail must therefore be a bounded ring, never an array that grows for the lifetime of the session:
+an agent streaming for an hour otherwise pins tens of MB of log entries per open surface.
+500 matches the caps already enforced by useMultiAgentLogs and useDevServerLogs — one number so the
+per-surface memory ceiling stays predictable.
+*/
+export const MAX_LOG_ENTRIES = 500;
+
+/**
+ * Keep only the newest `cap` items of a streaming buffer.
+ *
+ * Whole-list cap: it bounds how many entries are retained, never the content of an individual
+ * entry. Newest-wins — a log tail is read from the bottom, so dropping the oldest entries is the
+ * only truncation that preserves what the reader is actually looking at.
+ *
+ * Generic so the agent-detail and command-center streams can share this one implementation instead
+ * of each re-deriving the same `slice(-N)` (see AGENTS.md "Reuse Components ... (No Drift)").
+ */
+export function capLogEntries<T>(entries: T[], cap: number = MAX_LOG_ENTRIES): T[] {
+  return entries.length > cap ? entries.slice(-cap) : entries;
+}
+
 function getActiveContextKey(taskId: string | null, enabled: boolean, projectId?: string): string | null {
   if (!taskId || !enabled) return null;
   return `${projectId ?? ""}\u0000${taskId}`;
@@ -46,6 +71,8 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
   // Refs for state that needs to survive re-renders
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const cancelledRef = useRef(false);
+  // Sticky "the live tail dropped older entries" flag; see the SSE handler below.
+  const trimmedLiveTailRef = useRef(false);
 
   // Track the project context version to detect stale SSE events after project switches.
   // Incremented whenever projectId changes, invalidating any in-flight SSE handlers.
@@ -82,6 +109,7 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
     cancelledRef.current = true;
 
     // Clear entries immediately on context change to prevent stale data visibility
+    trimmedLiveTailRef.current = false;
     setEntries([]);
     setLoading(false);
     setHasMore(false);
@@ -187,7 +215,25 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
               }
               try {
                 const entry: AgentLogEntry = JSON.parse(e.data);
-                setEntries((prev) => [...prev, entry]);
+                /*
+                FNXC:MobileTabRetention 2026-07-26-10:24:
+                The live tail is bounded so a long-running agent cannot grow this buffer without
+                limit (see MAX_LOG_ENTRIES). The ceiling is `max(MAX_LOG_ENTRIES, prev.length)`:
+                streaming holds the buffer at whatever size it has (dropping one oldest entry per
+                new line) instead of collapsing a transcript the user deliberately expanded with
+                loadMore() straight back down to the cap.
+                A trim sets `trimmedLiveTailRef`, which forces `hasMore` on: older entries still
+                exist server-side and the viewer's "load older" affordance is the truncation signal,
+                so the reader is never shown a silently-clipped tail that looks complete. The flag is
+                a ref because the trim decision is only known inside the state updater, and it is
+                idempotent so React's double-invoked updaters cannot corrupt it.
+                */
+                setEntries((prev) => {
+                  const limit = Math.max(MAX_LOG_ENTRIES, prev.length);
+                  if (prev.length + 1 <= limit) return [...prev, entry];
+                  trimmedLiveTailRef.current = true;
+                  return [...prev.slice(prev.length + 1 - limit), entry];
+                });
                 setTotal((prev) => (prev !== null ? prev + 1 : null));
               } catch {
                 // skip malformed events
@@ -244,8 +290,21 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
     }
   }, [taskId, projectId, entries.length, loadingMore]);
 
-  const clear = useCallback(() => setEntries([]), []);
+  const clear = useCallback(() => {
+    trimmedLiveTailRef.current = false;
+    setEntries([]);
+  }, []);
   const initialContextLoading = Boolean(activeContextKey && loadedContextKey !== activeContextKey);
 
-  return { entries, loading: loading || initialContextLoading, clear, loadMore, hasMore, total, loadingMore };
+  return {
+    entries,
+    loading: loading || initialContextLoading,
+    clear,
+    loadMore,
+    // A trimmed live tail always leaves older entries behind on the server, so the
+    // "load older" affordance must stay reachable even when the last fetch said otherwise.
+    hasMore: hasMore || trimmedLiveTailRef.current,
+    total,
+    loadingMore,
+  };
 }

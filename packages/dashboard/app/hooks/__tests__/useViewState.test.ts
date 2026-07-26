@@ -34,6 +34,9 @@ describe("useViewState", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    // The hook also mirrors the live view into sessionStorage for same-tab reload/discard restore;
+    // clear it too or one test's view leaks into the next test's landing resolution.
+    sessionStorage.clear();
     vi.spyOn(pluginViewRegistry, "isPluginViewRegistered").mockImplementation(() => false);
   });
 
@@ -576,6 +579,8 @@ describe("useViewState", () => {
 
     for (const view of legacyViews) {
       localStorage.clear();
+      // Each loop iteration is a separate fresh boot, not a same-tab reload.
+      sessionStorage.clear();
       localStorage.setItem(`kb:proj_123:kb-dashboard-task-view`, view);
 
       const { result } = renderHook(() =>

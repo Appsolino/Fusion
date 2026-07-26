@@ -337,8 +337,19 @@ function ColumnComponent({ column, tasks, projectId, maxConcurrent, showWorktree
     ).length,
     [tasks, columnFlags, globalPaused, taskStuckTimeoutMs, lastFetchTimeMs],
   );
-  // When search is active, skip pagination so all matching tasks are visible
-  const shouldPaginate = !isArchived && !isSearchActive && !showWorktreeGroups && tasks.length > PAGINATED_COLUMN_THRESHOLD;
+  /*
+  FNXC:BoardColumnWindowing 2026-07-26-11:48:
+  Search used to disable pagination entirely (`!isSearchActive`) so every match rendered at once. That
+  escape hatch is unbounded — a broad query over a large project mounts an unlimited number of
+  ~4000-line TaskCards, and a resident set that large is a primary reason mobile browsers reclaim the
+  backgrounded tab (the operator sees a white-splash reload on return). It is also unnecessary: the
+  `tasks` handed to this column are ALREADY search-filtered upstream, so paginating them still shows
+  matches — just an increment at a time behind the same "Load more" button. The remaining bypasses are
+  bounded: the archived column is server-paginated (100 per page) and worktree grouping renders only
+  the WIP/processing lane. The window resets whenever the search term toggles so a new result set
+  starts from one screenful again.
+  */
+  const shouldPaginate = !isArchived && !showWorktreeGroups && tasks.length > PAGINATED_COLUMN_THRESHOLD;
 
   useEffect(() => {
     setVisibleTaskCount((current) => {
@@ -349,6 +360,11 @@ function ColumnComponent({ column, tasks, projectId, maxConcurrent, showWorktree
       return Math.min(Math.max(current, VISIBLE_TASKS_INITIAL), tasks.length);
     });
   }, [showWorktreeGroups, isArchived, tasks.length]);
+
+  // Entering/leaving search replaces the result set; collapse back to one window.
+  useEffect(() => {
+    setVisibleTaskCount(VISIBLE_TASKS_INITIAL);
+  }, [isSearchActive]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     // Don't allow dropping into archived column via drag-drop
