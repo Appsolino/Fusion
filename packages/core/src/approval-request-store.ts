@@ -84,6 +84,22 @@ export class ApprovalRequestStore {
     return this.db;
   }
 
+  /*
+  FNXC:ApprovalRedemption 2026-07-26-16:40:
+  In backend (PostgreSQL) mode `targetContext` is a jsonb column that Drizzle
+  returns ALREADY PARSED, while the sync SQLite path stores a JSON string.
+  Feeding the parsed object through the string-only `fromJson` made
+  `findLatestByDedupeKey` never match in PG mode, so every gate retry minted a
+  duplicate approval request and approved-grant reuse silently never worked in
+  production. Normalize both shapes here.
+  */
+  private static normalizeTargetContext(value: unknown): Record<string, unknown> | undefined {
+    if (value === null || value === undefined) return undefined;
+    if (typeof value === "string") return fromJson<Record<string, unknown>>(value);
+    if (typeof value === "object") return value as Record<string, unknown>;
+    return undefined;
+  }
+
   private rowToRequest(row: ApprovalRequestRow): ApprovalRequest {
     return {
       id: row.id,
@@ -101,7 +117,7 @@ export class ApprovalRequestStore {
         summary: row.targetActionSummary,
         resourceType: row.targetResourceType,
         resourceId: row.targetResourceId,
-        context: fromJson<Record<string, unknown>>(row.targetContext),
+        context: ApprovalRequestStore.normalizeTargetContext(row.targetContext),
       },
       taskId: row.taskId ?? undefined,
       runId: row.runId ?? undefined,
@@ -302,7 +318,8 @@ export class ApprovalRequestStore {
         .where(and(...conditions))
         .orderBy(desc(table.createdAt), desc(table.id));
       for (const row of rows as ApprovalRequestRow[]) {
-        const context = fromJson<Record<string, unknown>>(row.targetContext);
+        // FNXC:ApprovalRedemption 2026-07-26-16:40: jsonb rows arrive parsed; see normalizeTargetContext.
+        const context = ApprovalRequestStore.normalizeTargetContext(row.targetContext);
         if (context?.approvalDedupeKey === input.dedupeKey) {
           return this.rowToRequest(row);
         }
@@ -325,7 +342,7 @@ export class ApprovalRequestStore {
     `).all(...params) as ApprovalRequestRow[];
 
     for (const row of rows) {
-      const context = fromJson<Record<string, unknown>>(row.targetContext);
+      const context = ApprovalRequestStore.normalizeTargetContext(row.targetContext);
       if (context?.approvalDedupeKey === input.dedupeKey) {
         return this.rowToRequest(row);
       }
