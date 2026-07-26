@@ -609,6 +609,9 @@ export type DatabaseMutationType =
   { taskId, column, orphanedCount, resultCount }.
   */
   | "task:reconcile-orphaned-pending-step-results"
+  /* FNXC:StalledCardWatchdog 2026-07-26-19:40: detect-only backstop — a non-terminal card with no
+     live session and no queued continuation that has not moved past the stall floor. */
+  | "task:stall-watchdog-detected"
   /**
    * FNXC:MergeQueue 2026-07-15-10:05:
    * Wedged single-flight merge reclaim. Metadata ids/outcomes-only:

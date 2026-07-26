@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkflowColumnsEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, resolveWorkflowIrForTask, resolveReboundTarget, planLegacyAdoption, resolveOrphanedPendingStepResults, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult } from "@fusion/core";
+import { resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkflowColumnsEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, resolveWorkflowIrForTask, resolveReboundTarget, planLegacyAdoption, resolveOrphanedPendingStepResults, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult } from "@fusion/core";
 import { finalizePlanningSegment } from "@fusion/core";
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
 import { createLogger, schedulerLog } from "./logger.js";
@@ -437,6 +437,7 @@ const ORPHANED_EXECUTION_RECOVERY_GRACE_MS = 60_000;
  * reapable column (todo/triage) shorter than this is left alone, so the reaper
  * never races a task mid-transition out of in-progress.
  */
+const STALLED_CARD_WATCHDOG_MS = 30 * 60_000;
 const LEAKED_WORKTREE_SLOT_GRACE_MS = 60_000;
 /*
 FNXC:MergeQueue 2026-07-15-09:50:
@@ -2872,6 +2873,7 @@ export class SelfHealingManager {
               await this.options.reconcileAllMissionFeatures();
             },
           },
+          { name: "detect-stalled-cards", fn: () => this.detectStalledCards() },
           { name: "recover-completed-tasks", fn: () => this.recoverCompletedTasks() },
           { name: "recover-stranded-completed-todo", fn: () => this.recoverStrandedCompletedTodoTasks() },
           { name: "recover-advanced-triage", fn: () => this.recoverAdvancedTriageTasks() },
@@ -6989,6 +6991,109 @@ export class SelfHealingManager {
   write so the whole-array update cannot clobber a lease written after the page
   snapshot. User pauses are never disturbed.
   */
+  /*
+  FNXC:StalledCardWatchdog 2026-07-26-19:40 (FN-8596 class):
+  The BACKSTOP for "a card must never sit waiting". Every other sweep in this file recovers a KNOWN
+  strand shape; this one exists for the shapes nobody has enumerated yet. FN-8596 was exactly that:
+  a card sat in `triage` doing nothing for ten minutes with a finished spec, and no sweep, log, or
+  audit event named it — the strand was only found because a human noticed the board.
+
+  DETECT-ONLY, deliberately. It emits a run-audit event and a warning; it does NOT move, requeue,
+  pause, or fail anything. A generic mutator racing the specialized sweeps is precisely the class of
+  bug this file keeps fixing, so recovery stays with the sweep that owns each shape and this one
+  guarantees visibility. Emitting the shape (column/status/whether a continuation or session exists)
+  is what makes the next unknown strand diagnosable in one query instead of an archaeology session.
+
+  A card counts as stalled when ALL hold:
+    - it is in a non-terminal column (done/archived are finished, not waiting),
+    - nothing is executing it (executing set + executingTaskLock + live session registry),
+    - it has no ACTIVE workflow continuation queued to resume it,
+    - it is not paused (an operator park is a deliberate wait, not a stall),
+    - and it has not been touched for longer than the stall floor.
+  Deduped per (taskId, shape) so a genuinely parked card does not re-emit every sweep.
+  */
+  private readonly stalledCardSignatures = new Map<string, string>();
+
+  async detectStalledCards(): Promise<number> {
+    try {
+      const settings = await this.store.getSettings().catch(() => undefined);
+      if (settings?.globalPause === true || settings?.enginePaused === true) return 0;
+
+      const executingIds = this.options.getExecutingTaskIds?.() ?? new Set<string>();
+      const now = Date.now();
+      const tasks = await this.store.listTasks({ slim: true, includeArchived: false });
+      let detected = 0;
+      const seen = new Set<string>();
+
+      for (const task of tasks) {
+        if (task.column === "done" || task.column === "archived") continue;
+        if (task.paused === true || task.userPaused === true) continue;
+        if (executingIds.has(task.id) || executingTaskLock.has(task.id)) continue;
+        if (this.options.isTaskActive?.(task.id) === true) continue;
+        const livePaths = activeSessionRegistry.pathsForTask(task.id);
+        if (livePaths.some((path) => activeSessionRegistry.isPathActive(path))) continue;
+
+        const touchedAt = Date.parse(task.updatedAt ?? task.columnMovedAt ?? "");
+        if (!Number.isFinite(touchedAt) || now - touchedAt < STALLED_CARD_WATCHDOG_MS) continue;
+
+        // An active continuation means something IS queued to resume this card — not a stall.
+        let hasContinuation = false;
+        try {
+          const items = await this.store.listWorkflowWorkItemsForTask?.(task.id, { kinds: ["task"] }) ?? [];
+          hasContinuation = items.some((item) => ACTIVE_WORKFLOW_WORK_ITEM_STATES.includes(item.state));
+        } catch {
+          // Unknown continuation state — assume one exists so the watchdog never cries wolf.
+          hasContinuation = true;
+        }
+        if (hasContinuation) continue;
+
+        seen.add(task.id);
+        const signature = `${task.column}|${task.status ?? "null"}`;
+        if (this.stalledCardSignatures.get(task.id) === signature) continue;
+        this.stalledCardSignatures.set(task.id, signature);
+        detected += 1;
+
+        const idleMinutes = Math.floor((now - touchedAt) / 60_000);
+        log.warn(
+          `Stalled card ${task.id}: idle ${idleMinutes}m in '${task.column}' (status=${task.status ?? "null"}) `
+          + "with no live session and no queued continuation — nothing is scheduled to advance it",
+        );
+        try {
+          await createRunAuditor(this.store, {
+            runId: generateSyntheticRunId("stalled-card-watchdog", task.id),
+            agentId: "self-healing",
+            taskId: task.id,
+            taskLineageId: task.lineageId,
+            phase: "detect-stalled-cards",
+          }).database({
+            type: "task:stall-watchdog-detected",
+            target: task.id,
+            // ids/counts/outcomes only — never spec text, error prose, or reviewer output.
+            metadata: {
+              taskId: task.id,
+              column: task.column,
+              status: task.status ?? null,
+              idleMinutes,
+              hasWorktree: Boolean(task.worktree),
+              stepCount: task.steps?.length ?? 0,
+            },
+          });
+        } catch (error) {
+          log.warn(`detectStalledCards: audit emit failed for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
+      // Forget cards that recovered, so a future stall on the same card re-alerts.
+      for (const id of [...this.stalledCardSignatures.keys()]) {
+        if (!seen.has(id)) this.stalledCardSignatures.delete(id);
+      }
+      return detected;
+    } catch (error) {
+      log.error(`detectStalledCards failed: ${error instanceof Error ? error.message : String(error)}`);
+      return 0;
+    }
+  }
+
   async reconcileOrphanedPendingStepResults(): Promise<number> {
     try {
       const pageSize = 500;

@@ -2802,10 +2802,32 @@ export class TriageProcessor {
    * mutation in one task-lock acquisition; row-only atomic patches cannot protect PROMPT.md.
    */
   private async runIfStillPlanningUnderTaskLock(task: Task, operation: () => Promise<void>): Promise<boolean> {
+    /*
+    FNXC:TriageFinalizeVisibility 2026-07-26-19:05 (FN-8596 follow-up):
+    Every caller of this helper treats `false` as "skip silently and return". That is how the
+    FN-8596 strand hid: the planning-stage predicate went false (stale execution stamps), each
+    guarded write no-opped, and NOTHING anywhere said so. Skipping is a legitimate outcome when the
+    scheduler genuinely advanced the card, but it must be OBSERVABLE, so log the reason with the
+    live state that decided it. Logged here rather than at the four call sites so a future caller
+    inherits the visibility instead of re-introducing a silent branch.
+    */
     const store = this.store as TaskStore;
-    if (typeof store.withTaskLock !== "function" || typeof store.readTaskForMove !== "function") return false;
+    if (typeof store.withTaskLock !== "function" || typeof store.readTaskForMove !== "function") {
+      planLog.warn(
+        `${task.id}: planning-guarded write skipped — store lacks withTaskLock/readTaskForMove; no recovery write performed`,
+      );
+      return false;
+    }
     return store.withTaskLock(task.id, async () => {
-      if (!isTaskStillInPlanningStage(await store.readTaskForMove(task.id))) return false;
+      const live = await store.readTaskForMove(task.id);
+      if (!isTaskStillInPlanningStage(live)) {
+        planLog.warn(
+          `${task.id}: planning-guarded write skipped — no longer in the planning stage `
+          + `(column=${live?.column ?? "unknown"}, status=${live?.status ?? "null"}, `
+          + `executionStartedAt=${live?.executionStartedAt ?? "null"})`,
+        );
+        return false;
+      }
       await operation();
       return true;
     });
@@ -3535,9 +3557,21 @@ export class TriageProcessor {
 
     if (task.column !== "todo") {
       const moveTaskIf = (this.store as unknown as { moveTaskIf?: TaskStore["moveTaskIf"] }).moveTaskIf;
-      if (typeof moveTaskIf !== "function") return;
+      if (typeof moveTaskIf !== "function") {
+        // FNXC:TriageFinalizeVisibility 2026-07-26-19:05: the release move is the handoff. If it
+        // cannot even be attempted the card stays in the planner column with a finished spec, so
+        // never let that be silent.
+        planLog.warn(`${task.id}: planning handoff skipped — store does not expose moveTaskIf; card left in ${task.column}`);
+        return;
+      }
       const release = await moveTaskIf.call(this.store, task.id, "todo", isTaskStillInPlanningStage);
-      if (!release.moved) return;
+      if (!release.moved) {
+        planLog.warn(
+          `${task.id}: planning handoff to todo REFUSED by the planning-stage guard `
+          + `(column=${release.task?.column ?? "unknown"}, status=${release.task?.status ?? "null"}). Card left in ${task.column}.`,
+        );
+        return;
+      }
     }
 
     /*

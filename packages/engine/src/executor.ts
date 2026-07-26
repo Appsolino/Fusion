@@ -5008,7 +5008,15 @@ export class TaskExecutor {
         fallbackMaxRevisions: settings.maxPostReviewFixes ?? 3,
       });
       const budget = resolveOptionalStepRevisionBudget(maxRevisions, settings.maxPostReviewFixes ?? 3);
-      if (!budget.unbounded && (!Number.isFinite(budget.max) || budget.max <= 0)) return false;
+      if (!budget.unbounded && (!Number.isFinite(budget.max) || budget.max <= 0)) {
+        // FNXC:RemediationVisibility 2026-07-26-19:20 (FN-8596 follow-up): returning false here
+        // makes the graph's plan-replan node fail with `remediation-not-scheduled` and leaves the
+        // card parked in place with nothing scheduled to fix it. Never let that be silent.
+        executorLog.warn(
+          `${taskId}: plan-review remediation NOT scheduled — revision budget is zero/invalid (max=${String(budget.max)}). Card left parked.`,
+        );
+        return false;
+      }
       const revisionKey = optionalStepRevisionKey(info.nodeId ?? "plan-review", info.stepName);
       const currentCount = countOptionalStepRevisionAttempts(liveTask, revisionKey, info.stepName);
       if (!budget.unbounded && currentCount >= budget.max) {
@@ -5076,7 +5084,14 @@ export class TaskExecutor {
       return true;
     }
 
-    if (info.verdict !== "REVISE") return false;
+    if (info.verdict !== "REVISE") {
+      // FNXC:RemediationVisibility 2026-07-26-19:20: a hard-failed gate with no parsed REVISE
+      // verdict schedules nothing, so the remediation node fails and the card parks. Say so.
+      executorLog.warn(
+        `${taskId}: pre-merge remediation NOT scheduled for step "${info.stepName}" — status=${info.status}, verdict=${info.verdict ?? "none"}. Card left parked.`,
+      );
+      return false;
+    }
     const settings = await mergeEffectiveSettings(this.store, liveTask, await this.store.getSettings());
     const maxRevisions = resolveOptionalReviewRevisionBudget({
       optionalGroupId: info.nodeId ?? "",
@@ -5085,11 +5100,23 @@ export class TaskExecutor {
       fallbackMaxRevisions: settings.maxPostReviewFixes ?? 3,
     });
     const budget = resolveOptionalStepRevisionBudget(maxRevisions, settings.maxPostReviewFixes ?? 3);
-    if (!budget.unbounded && (!Number.isFinite(budget.max) || budget.max <= 0)) return false;
+    if (!budget.unbounded && (!Number.isFinite(budget.max) || budget.max <= 0)) {
+      executorLog.warn(
+        `${taskId}: pre-merge remediation NOT scheduled for step "${info.stepName}" — revision budget is zero/invalid (max=${String(budget.max)}). Card left parked.`,
+      );
+      return false;
+    }
 
     const revisionKey = optionalStepRevisionKey(info.nodeId, info.stepName);
     const currentCount = countOptionalStepRevisionAttempts(liveTask, revisionKey, info.stepName);
-    if (!budget.unbounded && currentCount >= budget.max) return false;
+    if (!budget.unbounded && currentCount >= budget.max) {
+      // Budget exhaustion is a legitimate terminal outcome, but it must be visible: the card stays
+      // in place with a failed pre-merge step and only an operator bypass clears it.
+      executorLog.warn(
+        `${taskId}: pre-merge remediation budget EXHAUSTED for step "${info.stepName}" (${currentCount}/${String(budget.max)}). Card left parked for operator action.`,
+      );
+      return false;
+    }
 
     const nextCount = currentCount + 1;
     const totalFixCount = (liveTask.postReviewFixCount ?? 0) + 1;
