@@ -129,7 +129,11 @@ export class RoutineScheduler {
   async tick(): Promise<void> {
     // Re-entrance guard
     if (this.ticking) {
-      logger.log("Tick already in progress, skipping");
+      /*
+      FNXC:EngineDiagnostics 2026-07-26-08:25:
+      Overlapping poll ticks and per-interval pause no-ops are steady-state (same class as heartbeat timer skips). Keep on debug (FUSION_DEBUG=routine-scheduler); due-found processing and execute lines stay at log.
+      */
+      logger.debug("Tick already in progress, skipping");
       return;
     }
 
@@ -139,7 +143,7 @@ export class RoutineScheduler {
       // Check pause state
       const settings = await this.taskStore.getSettings();
       if (settings.globalPause || settings.enginePaused) {
-        logger.log(
+        logger.debug(
           `Paused: globalPause=${settings.globalPause}, enginePaused=${settings.enginePaused}`
         );
         return;

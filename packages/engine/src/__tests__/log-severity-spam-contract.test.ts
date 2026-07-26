@@ -64,6 +64,24 @@ describe("log severity spam contract (source)", () => {
     expect(src).toMatch(/schedulerLog\.debug\(`Hold release for \$\{task\.id\} rejected on capacity/);
     expect(src).toMatch(/schedulerLog\.debug\(`Hold release for \$\{task\.id\} deferred — no reservable slot/);
   });
+
+  it("routine-scheduler re-entrance and pause no-ops use debug", () => {
+    const src = readSrc("routine-scheduler.ts");
+    expect(src).toMatch(/logger\.debug\("Tick already in progress, skipping"\)/);
+    expect(src).toMatch(/logger\.debug\(\s*`Paused: globalPause=/);
+    expect(src).not.toMatch(/logger\.log\("Tick already in progress, skipping"\)/);
+    expect(src).not.toMatch(/logger\.log\(\s*`Paused: globalPause=/);
+  });
+
+  it("peer-exchange zero-work sync cycle uses debug; non-zero/error stay on log", () => {
+    const src = readSrc("peer-exchange-service.ts");
+    expect(src).toMatch(/peerExchangeLog\.debug\(`Starting sync with \$\{onlineRemoteNodes\.length\} peers`\)/);
+    expect(src).toMatch(/peerExchangeLog\.debug\(\s*`Sync complete: \$\{onlineRemoteNodes\.length\} peers synced\./);
+    // Non-zero discovery path and error summary remain log
+    expect(src).toMatch(/else if \(totalAdded > 0 \|\| totalUpdated > 0\) \{\s*peerExchangeLog\.log\(/);
+    expect(src).toMatch(/if \(errors\.length > 0\) \{\s*peerExchangeLog\.log\(/);
+    expect(src).not.toMatch(/peerExchangeLog\.log\(`Starting sync with \$\{onlineRemoteNodes\.length\} peers`\)/);
+  });
 });
 
 describe("log severity spam contract (runtime gating)", () => {
@@ -108,5 +126,27 @@ describe("log severity spam contract (runtime gating)", () => {
     expect(warnSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
     warnSpy.mockRestore();
+  });
+
+  it("routine-scheduler and peer-exchange debug channels stay silent without FUSION_DEBUG", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const routineLog = createLogger("routine-scheduler");
+    const peerLog = createLogger("peer-exchange");
+
+    routineLog.debug("Tick already in progress, skipping");
+    routineLog.debug("Paused: globalPause=true, enginePaused=false");
+    peerLog.debug("Starting sync with 2 peers");
+    peerLog.debug("Sync complete: 2 peers synced. 0 new peers discovered, 0 updated.");
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    process.env.FUSION_DEBUG = "routine-scheduler,peer-exchange";
+    routineLog.debug("Tick already in progress, skipping");
+    peerLog.debug("Starting sync with 2 peers");
+    expect(errorSpy).toHaveBeenCalled();
+    const joined = errorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(joined).toContain("[routine-scheduler]");
+    expect(joined).toContain("[peer-exchange]");
+
+    errorSpy.mockRestore();
   });
 });
