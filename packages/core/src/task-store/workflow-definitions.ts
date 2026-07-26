@@ -339,7 +339,10 @@ export async function getWorkflowDefinitionImpl(store: TaskStore,
         const requiredPluginId = getRequiredPluginIdForBuiltinWorkflow(id);
         if (!requiredPluginId || !(await store.isPluginInstalled(requiredPluginId))) return undefined;
       }
-      return { ...builtin, ir: store.applyBuiltInPromptOverridesSync(id, builtin.ir) };
+      const ir = store.backendMode
+        ? await store.applyBuiltInPromptOverridesAsync(id, builtin.ir)
+        : store.applyBuiltInPromptOverridesSync(id, builtin.ir);
+      return { ...builtin, ir };
     }
     // FNXC:WorkflowDefinitions 2026-06-27-06:00: PG backend reads the custom row
     // from project.workflows via the AsyncDataLayer; sync store.db otherwise.
@@ -863,14 +866,13 @@ export function getDatabaseHealthImpl(store: TaskStore): {
     isRunning: boolean;
   } {
     /*
-     * FNXC:SqliteFinalRemoval 2026-06-25-16:30:
-     * In backend mode, SQLite-specific corruption detection (PRAGMA
-     * integrity_check) is not applicable. PostgreSQL health is checked via
-     * the async layer. Return a healthy sentinel so synchronous callers do
-     * not block; the real health signal comes from /api/health.
-     */
+    FNXC:IncompletePgPorts 2026-07-26-20:40:
+    Backend mode returns the last refreshDatabaseHealthAsync snapshot. Until the
+    first probe runs, report healthy with lastCheckedAt null (unknown, not a
+    lie about a successful integrity check).
+    */
     if (store.backendMode) {
-      return {
+      return store.postgresHealthSnapshot ?? {
         healthy: true,
         corruptionDetected: false,
         corruptionErrors: [],
@@ -910,14 +912,14 @@ export function getDistributedTaskIdAllocatorImpl(store: TaskStore): Distributed
 }
 
 export function healthCheckImpl(store: TaskStore): boolean {
-    // FNXC:RuntimePersistenceAsync 2026-06-24-11:08:
-    // In backend mode, the sync SQLite health check is not applicable.
-    // PostgreSQL health is checked via the async ping() method on the
-    // AsyncDataLayer (wired by postgres-health.ts). Return true here so
-    // synchronous callers do not block; the real health signal comes from
-    // the /api/health endpoint which uses the async path.
+    /*
+    FNXC:IncompletePgPorts 2026-07-26-20:40:
+    Backend mode: report last postgresHealthSnapshot.healthy and schedule a
+    background refresh so CLI/daemon probes converge on real connectivity.
+    */
     if (store.backendMode) {
-      return true;
+      void store.refreshDatabaseHealthAsync().catch(() => undefined);
+      return store.getDatabaseHealth().healthy;
     }
     try {
       // Simple query to verify database responsiveness
@@ -929,14 +931,13 @@ export function healthCheckImpl(store: TaskStore): boolean {
 }
 
 export function getSettingsSyncImpl(store: TaskStore): Settings {
-    // FNXC:RuntimePersistenceAsync 2026-06-24-10:30:
-    // In backend mode, no synchronous DB read is possible (PostgreSQL is async).
-    // This method is only used by generateSpecifiedPrompt for ntfy settings.
-    // Return DEFAULT_SETTINGS; the async getSettings() path is the authoritative
-    // settings read in backend mode. Callers needing live settings must use the
-    // async path (getSettings/getSettingsFast).
+    /*
+    FNXC:IncompletePgPorts 2026-07-26-20:40:
+    Backend mode returns settingsSyncCache populated by getSettings/getSettingsFast.
+    Before the first async load, DEFAULT_SETTINGS is the only safe sync value.
+    */
     if (store.backendMode) {
-      return DEFAULT_SETTINGS;
+      return store.settingsSyncCache ?? DEFAULT_SETTINGS;
     }
     try {
       const row = store.db.prepare("SELECT settings FROM config WHERE id = 1").get() as { settings: string | null } | undefined;

@@ -11,7 +11,7 @@
 
 import { TaskStore } from "../store.js";
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { ArchiveDatabase } from "../archive-db.js";
 import { validateBranchGroupBranchName } from "../branch-assignment.js";
 import { CentralCore } from "../central-core.js";
@@ -23,8 +23,9 @@ import * as schema from "../postgres/schema/index.js";
 import { getTaskCreatedHook } from "../task-creation-hooks.js";
 import { type TaskIdIntegrityReport, detectTaskIdIntegrityAnomalies } from "../task-id-integrity.js";
 import { createBranchGroup as createBranchGroupAsync } from "./async-branch-groups.js";
-import { findLiveLineageChildren as findLiveLineageChildrenAsync } from "./async-lifecycle.js";
+import { findLiveLineageChildren as findLiveLineageChildrenAsync, projectPartition } from "./async-lifecycle.js";
 import { recordRunAuditEvent as recordRunAuditEventAsync } from "./async-audit.js";
+import { getLiveTaskColumn } from "./async-comments-attachments.js";
 import { insertTaskRowInTransaction, isTaskIdConflictError, readTaskRow, readTaskRowInTransaction } from "./async-persistence.js";
 import { TASK_PERSIST_SQL_COLUMNS, TASK_UPSERT_SQL_ASSIGNMENTS, type TaskRow } from "./persistence.js";
 import { purgeTaskWorkflowSelectionRowsAsyncImpl } from "./workflow-definitions.js";
@@ -334,11 +335,11 @@ export async function getMergeQueuedTaskIdsAsyncImpl(store: TaskStore): Promise<
 
 export function isTaskIdPresentInArchivedTasksTableImpl(store: TaskStore, id: string): boolean {
     /*
-     * FNXC:SqliteFinalRemoval 2026-06-26-10:20:
-     * Backend-mode: archived tasks are not yet wired to async. Return false
-     * as a safety guard (the archive check is secondary to the live-tasks
-     * check in taskIdExistsAnywhere).
-     */
+    FNXC:IncompletePgPorts 2026-07-26-20:30:
+    Sync archive-table probe remains SQLite-only. PostgreSQL callers must use
+    isTaskIdPresentInArchivedTasksTableAsyncImpl / taskIdExistsAnywhere (async).
+    Returning false here avoids opening the removed SQLite Database stub.
+    */
     if (store.backendMode) {
       return false;
     }
@@ -350,16 +351,49 @@ export function isTaskIdPresentInArchivedTasksTableImpl(store: TaskStore, id: st
     }
 }
 
+/*
+FNXC:IncompletePgPorts 2026-07-26-20:30:
+PostgreSQL archive authority is project.archived_tasks (warm) and
+archive.archived_tasks (cold). Both must reserve task IDs the same way the
+legacy SQLite archivedTasks / archive.db tables did.
+*/
+export async function isTaskIdPresentInArchivedTasksTableAsyncImpl(store: TaskStore, id: string): Promise<boolean> {
+    if (!store.backendMode) {
+      return store.isTaskIdPresentInArchivedTasksTable(id);
+    }
+    const layer = store.asyncLayer!;
+    const partition = projectPartition(layer.projectId);
+    const [projectArchive, coldArchive] = await Promise.all([
+      layer.db
+        .select({ id: schema.project.archivedTasks.id })
+        .from(schema.project.archivedTasks)
+        .where(and(
+          eq(schema.project.archivedTasks.projectId, partition),
+          eq(schema.project.archivedTasks.id, id),
+        ))
+        .limit(1),
+      layer.db
+        .select({ id: schema.archive.archivedTasks.id })
+        .from(schema.archive.archivedTasks)
+        .where(and(
+          eq(schema.archive.archivedTasks.projectId, partition),
+          eq(schema.archive.archivedTasks.id, id),
+        ))
+        .limit(1),
+    ]);
+    return projectArchive.length > 0 || coldArchive.length > 0;
+}
+
 export async function taskIdExistsAnywhereImpl(store: TaskStore, id: string): Promise<boolean> {
     /*
-     * FNXC:SqliteFinalRemoval 2026-06-26-10:20:
-     * Backend-mode: use async readTaskRow (includeDeleted) for the live-tasks
-     * check. Archive checks are deferred (safety guard returns false above).
-     */
+    FNXC:IncompletePgPorts 2026-07-26-20:30:
+    Backend-mode: live/soft-deleted rows via readTaskRow, then warm+cold archive
+    tables so IDs stay permanently reserved (FN-5105 parity with SQLite).
+    */
     if (store.backendMode) {
       const row = await readTaskRow(store.asyncLayer!, id, { includeDeleted: true });
       if (row) return true;
-      return false;
+      return isTaskIdPresentInArchivedTasksTableAsyncImpl(store, id);
     }
     // FN-5105: include soft-deleted rows so IDs remain permanently reserved.
     if (store.readTaskFromDb(id, { includeDeleted: true })) {
@@ -452,13 +486,14 @@ export async function maybeResolveTombstonedTaskIdImpl(store: TaskStore,
 
 export function isTaskArchivedImpl(store: TaskStore, id: string): boolean {
     /*
-     * FNXC:SqliteFinalRemoval 2026-06-26:
-     * In backend mode, store.db is unavailable. Return false — the archive
-     * check in logEntry is a safety guard, and the task is loaded below
-     * anyway. For full correctness this should use the async layer.
-     */
+    FNXC:IncompletePgPorts 2026-07-26-20:30:
+    Sync isTaskArchived cannot query PostgreSQL. Prefer isTaskArchivedAsyncImpl
+    from async callers. In backend mode use the in-memory task cache when the
+    row is already hydrated; otherwise false (caller should have used async).
+    */
     if (store.backendMode) {
-      return false;
+      const cached = store.taskCache.get(id);
+      return cached?.column === "archived";
     }
     const row = store.db.prepare(`SELECT "column" FROM tasks WHERE id = ? AND ${TaskStore.ACTIVE_TASKS_WHERE}`).get(id) as { column: Column } | undefined;
     if (row) {
@@ -466,6 +501,23 @@ export function isTaskArchivedImpl(store: TaskStore, id: string): boolean {
     }
 
     return store.archiveDb.get(id) !== undefined;
+}
+
+/*
+FNXC:IncompletePgPorts 2026-07-26-20:30:
+Authoritative archived check for PostgreSQL: live column gate via
+getLiveTaskColumn, plus cold archive.archived_tasks presence.
+*/
+export async function isTaskArchivedAsyncImpl(store: TaskStore, id: string): Promise<boolean> {
+    if (!store.backendMode) {
+      return store.isTaskArchived(id);
+    }
+    const layer = store.asyncLayer!;
+    const live = await getLiveTaskColumn(layer.db, id, layer.projectId);
+    // getLiveTaskColumn returns "archived" for archived OR soft-deleted rows.
+    if (live === "archived") return true;
+    if (live !== null) return false;
+    return isTaskIdPresentInArchivedTasksTableAsyncImpl(store, id);
 }
 
 export function findLiveDependentsImpl(store: TaskStore, id: string): string[] {

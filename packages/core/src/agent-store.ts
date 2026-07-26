@@ -305,6 +305,13 @@ export class AgentStore extends EventEmitter {
    */
   public readonly asyncLayer: AsyncDataLayer | null = null;
 
+  /*
+  FNXC:IncompletePgPorts 2026-07-26-20:40:
+  In-memory agent rows filled by getAgent() so getCachedAgent can serve sync
+  heartbeat config resolution under PostgreSQL (no sync SQLite handle).
+  */
+  private readonly agentMemoryCache = new Map<string, Agent>();
+
   /** True when AsyncDataLayer was injected. Gates all SQLite construction. */
   public get backendMode(): boolean {
     return this.asyncLayer !== null;
@@ -827,7 +834,15 @@ export class AgentStore extends EventEmitter {
     // Backend mode: read via async Drizzle helper instead of sync readAgent.
     if (this.backendMode) {
       const agent = await readAgentAsync(this.asyncLayer!.db, agentId);
-      return agent ? this.parseAgent(agent) : null;
+      const parsed = agent ? this.parseAgent(agent) : null;
+      /*
+      FNXC:IncompletePgPorts 2026-07-26-20:40:
+      Populate getCachedAgent memory so sync heartbeat resolveAgentConfig can
+      honor per-agent runtimeConfig without a sync SQLite handle.
+      */
+      if (parsed) this.agentMemoryCache.set(agentId, parsed);
+      else this.agentMemoryCache.delete(agentId);
+      return parsed;
     }
     return this.readAgent(agentId);
   }
@@ -3187,13 +3202,14 @@ export class AgentStore extends EventEmitter {
    * @param agentId - The agent ID
    */
   getCachedAgent(agentId: string): Agent | null {
-    // SQLite sync fast-path. In PG backend mode there is no sync DB handle, so
-    // this returns null. Both production callers (HeartbeatMonitor's sync
-    // resolveAgentConfig and the reports-health interval resolver) wrap this in
-    // try/catch and degrade to monitor defaults; the async getAgentConfig() path
-    // does its own async getAgent() lookup, so per-agent runtimeConfig is honored.
+    /*
+    FNXC:IncompletePgPorts 2026-07-26-20:40:
+    PostgreSQL path: return agentMemoryCache populated by getAgent(). Still
+    null until the first async getAgent warms the cache (heartbeat timer path
+    uses async getAgentConfig as authority).
+    */
     if (this.backendMode) {
-      return null;
+      return this.agentMemoryCache.get(agentId) ?? null;
     }
     return this.readAgent(agentId);
   }

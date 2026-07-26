@@ -1299,16 +1299,24 @@ export class SelfHealingManager {
   }
 
   private async getRecentRunAuditActivityAgeMs(task: Task, nowMs: number): Promise<number | null> {
-    const getRunAuditEvents = (this.store as unknown as {
+    /*
+    FNXC:IncompletePgPorts 2026-07-26-20:45:
+    Prefer getRunAuditEventsAsync — sync getRunAuditEvents returns [] on
+    PostgreSQL and incorrectly treated busy tasks as inactive.
+    */
+    const store = this.store as unknown as {
+      getRunAuditEventsAsync?: (filter: { taskId?: string; startTime?: string; limit?: number }) => Promise<Array<{ timestamp?: string }>>;
       getRunAuditEvents?: (filter: { taskId?: string; startTime?: string; limit?: number }) => Array<{ timestamp?: string }>;
-    }).getRunAuditEvents;
-    if (typeof getRunAuditEvents !== "function") {
-      return null;
-    }
-
+    };
     try {
       const since = new Date(nowMs - RUNNING_ON_INACTIVE_TASK_STALE_RUN_MS).toISOString();
-      const events = getRunAuditEvents.call(this.store, { taskId: task.id, startTime: since, limit: 1 });
+      const filter = { taskId: task.id, startTime: since, limit: 1 };
+      const events = typeof store.getRunAuditEventsAsync === "function"
+        ? await store.getRunAuditEventsAsync(filter)
+        : typeof store.getRunAuditEvents === "function"
+          ? store.getRunAuditEvents(filter)
+          : null;
+      if (!events) return null;
       const newest = events.find((event) => typeof event.timestamp === "string");
       if (!newest?.timestamp) return null;
       const timestampMs = Date.parse(newest.timestamp);
@@ -5730,6 +5738,16 @@ export class SelfHealingManager {
   }
 
   private async surfaceDbCorruption(): Promise<void> {
+    /*
+    FNXC:IncompletePgPorts 2026-07-26-20:45:
+    Refresh PostgreSQL connectivity before reading the snapshot so corruption
+    notifications are not permanently suppressed by the always-healthy sentinel.
+    */
+    if (typeof this.store.refreshDatabaseHealthAsync === "function") {
+      await this.store.refreshDatabaseHealthAsync();
+    } else {
+      this.store.refreshDatabaseHealth();
+    }
     const health = this.store.getDatabaseHealth();
     if (!health.corruptionDetected) {
       this.lastDbCorruptionNotifiedAt = null;

@@ -53,11 +53,16 @@ async function resolveTaskWorkflowIrForMove(store: TaskStore, id: string): Promi
   const selection = await store.getTaskWorkflowSelectionAsync(id);
   const workflowId = selection?.workflowId;
   /* FNXC:WorkflowBuiltins 2026-07-19-10:24: every no-selection/unresolvable fallback goes through resolveDefaultWorkflowIr() so this resolver and prepareWorkflowMovePolicyPreflightImpl agree on the default IR (see the helper's note on the "preflight is stale" drift). */
-  if (!workflowId) return store.applyBuiltInPromptOverridesSync(DEFAULT_WORKFLOW_ID, resolveDefaultWorkflowIr());
+  if (!workflowId) {
+    return store.applyBuiltInPromptOverridesAsync(DEFAULT_WORKFLOW_ID, resolveDefaultWorkflowIr());
+  }
   if (isBuiltinWorkflowId(workflowId)) {
     const builtin = getBuiltinWorkflow(workflowId);
     const ir = builtin?.ir;
-    return store.applyBuiltInPromptOverridesSync(workflowId, ir === undefined ? resolveDefaultWorkflowIr() : typeof ir === "string" ? parseWorkflowIr(ir) : ir);
+    return store.applyBuiltInPromptOverridesAsync(
+      workflowId,
+      ir === undefined ? resolveDefaultWorkflowIr() : typeof ir === "string" ? parseWorkflowIr(ir) : ir,
+    );
   }
   try {
     const def = await store.getWorkflowDefinition(workflowId);

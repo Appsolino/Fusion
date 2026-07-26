@@ -35,6 +35,9 @@ import {getErrorMessage} from "../error-message.js";
 import {type TaskRow} from "../task-store/persistence.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
 import {reconcileTaskIdStateAsync} from "../task-store/async-allocator.js";
+import {ACTIVE_TASK_FILTER, insertTaskRow, isTaskIdConflictError as isPgTaskIdConflictError} from "./async-persistence.js";
+import {recordRunAuditEvent as recordRunAuditEventAsync} from "./async-audit.js";
+import * as schema from "../postgres/schema/index.js";
 
 export async function initImpl(store: TaskStore): Promise<void> {
     store.closing = false;
@@ -586,18 +589,11 @@ export function setupActivityLogListenersImpl(store: TaskStore): void {
 
 export async function reconcileOrphanedTaskDirsImpl(store: TaskStore, opts: { ignoreRecencyWindow?: boolean } = {},): Promise<{ recovered: string[]; skipped: Array<{ id: string; reason: string }> }> {
     /*
-    FNXC:PostgresCutover 2026-07-04-00:00:
-    Assessed safe-default: in PG backend mode, the sync filesystem scan + store.db re-insert
-    path cannot run (Drizzle is async, store.db is removed). The self-healing caller (line 2302)
-    receives an empty result — orphaned task dirs are NOT reconciled in PG mode. This is low-risk
-    because PG soft-delete is the norm (task.json dirs persist for active tasks; deleted tasks
-    keep their dirs but are tombstoned in PG, not lost). A full async reconcile (scan dirs,
-    check PG for matching rows, re-import missing) is feasible but not P0 given the rarity of
-    PG-mode orphans. Not claiming a non-existent async fallback.
+    FNXC:IncompletePgPorts 2026-07-26-20:45:
+    PostgreSQL path: scan task.json dirs and re-insert missing IDs via insertTaskRow
+    after taskIdExistsAnywhere (live + archive). Same recency/empty-board gates as
+    the SQLite path; previously backendMode returned empty and never recovered.
     */
-    if (store.backendMode) {
-      return { recovered: [], skipped: [] };
-    }
     const result: { recovered: string[]; skipped: Array<{ id: string; reason: string }> } = {
       recovered: [],
       skipped: [],
@@ -616,10 +612,20 @@ export async function reconcileOrphanedTaskDirsImpl(store: TaskStore, opts: { ig
     // the same guard added to stop resurrection. Callers may also force the bypass explicitly.
     let dbHasLiveTasks = true;
     try {
-      const row = store.db
-        .prepare('SELECT EXISTS(SELECT 1 FROM tasks WHERE deletedAt IS NULL LIMIT 1) AS present')
-        .get() as { present?: number } | undefined;
-      dbHasLiveTasks = (row?.present ?? 0) === 1;
+      if (store.backendMode) {
+        const layer = store.asyncLayer!;
+        const rows = await layer.db
+          .select({ id: schema.project.tasks.id })
+          .from(schema.project.tasks)
+          .where(ACTIVE_TASK_FILTER)
+          .limit(1);
+        dbHasLiveTasks = rows.length > 0;
+      } else {
+        const row = store.db
+          .prepare('SELECT EXISTS(SELECT 1 FROM tasks WHERE deletedAt IS NULL LIMIT 1) AS present')
+          .get() as { present?: number } | undefined;
+        dbHasLiveTasks = (row?.present ?? 0) === 1;
+      }
     } catch {
       // If the count probe fails, keep the gate on (conservative — don't mass-resurrect).
       dbHasLiveTasks = true;
@@ -711,36 +717,68 @@ export async function reconcileOrphanedTaskDirsImpl(store: TaskStore, opts: { ig
       let recovered = false;
       let skipReason: string | undefined;
       try {
-        store.db.transactionImmediate(() => {
-          // FNXC:SqliteFinalRemoval 2026-06-26: taskIdExistsAnywhere is now async;
-          // inline the sync SQLite check here since this runs inside transactionImmediate.
-          if (store.readTaskFromDb(id, { includeDeleted: true }) || store.isTaskIdPresentInArchivedTasksTable(id) || store.archiveDb.get(id) !== undefined) {
+        if (store.backendMode) {
+          if (await store.taskIdExistsAnywhere(id)) {
             skipReason = "id-exists-anywhere";
-            return;
+          } else {
+            try {
+              const context = store.createTaskPersistSerializationContext(task);
+              await insertTaskRow(store.asyncLayer!, task as unknown as Record<string, unknown>, context);
+              await recordRunAuditEventAsync(store.asyncLayer!, {
+                taskId: id,
+                agentId: "system",
+                runId: "unknown",
+                domain: "database",
+                mutationType: "task:reconcile-orphaned-task-dir",
+                target: id,
+                metadata: {
+                  id,
+                  column: task.column,
+                  status: task.status ?? null,
+                  taskJsonPath,
+                },
+              });
+              recovered = true;
+            } catch (error) {
+              if (isPgTaskIdConflictError(error) || /Task ID already exists/i.test(error instanceof Error ? error.message : String(error))) {
+                skipReason = "id-conflict-during-insert";
+              } else {
+                throw error;
+              }
+            }
           }
-          try {
-            store.insertTaskWithFtsRecovery(task, "reconcileOrphanedTaskDirs");
-            store.insertRunAuditEventRow({
-              taskId: id,
-              domain: "database",
-              mutationType: "task:reconcile-orphaned-task-dir",
-              target: id,
-              metadata: {
-                id,
-                column: task.column,
-                status: task.status ?? null,
-                taskJsonPath,
-              },
-            });
-            recovered = true;
-          } catch (error) {
-            if (store.isTaskIdConflictError(error) || /Task ID already exists/i.test(error instanceof Error ? error.message : String(error))) {
-              skipReason = "id-conflict-during-insert";
+        } else {
+          store.db.transactionImmediate(() => {
+            // FNXC:SqliteFinalRemoval 2026-06-26: taskIdExistsAnywhere is now async;
+            // inline the sync SQLite check here since this runs inside transactionImmediate.
+            if (store.readTaskFromDb(id, { includeDeleted: true }) || store.isTaskIdPresentInArchivedTasksTable(id) || store.archiveDb.get(id) !== undefined) {
+              skipReason = "id-exists-anywhere";
               return;
             }
-            throw error;
-          }
-        });
+            try {
+              store.insertTaskWithFtsRecovery(task, "reconcileOrphanedTaskDirs");
+              store.insertRunAuditEventRow({
+                taskId: id,
+                domain: "database",
+                mutationType: "task:reconcile-orphaned-task-dir",
+                target: id,
+                metadata: {
+                  id,
+                  column: task.column,
+                  status: task.status ?? null,
+                  taskJsonPath,
+                },
+              });
+              recovered = true;
+            } catch (error) {
+              if (store.isTaskIdConflictError(error) || /Task ID already exists/i.test(error instanceof Error ? error.message : String(error))) {
+                skipReason = "id-conflict-during-insert";
+                return;
+              }
+              throw error;
+            }
+          });
+        }
       } catch (error) {
         const reason = `insert-failed: ${error instanceof Error ? error.message : String(error)}`;
         result.skipped.push({ id, reason });
@@ -756,12 +794,13 @@ export async function reconcileOrphanedTaskDirsImpl(store: TaskStore, opts: { ig
       if (recovered) {
         result.recovered.push(id);
         if (store.isWatching) store.taskCache.set(id, { ...task });
-        storeLog.warn("Recovered orphaned task.json into SQLite task index", {
+        storeLog.warn("Recovered orphaned task.json into task index", {
           phase: "reconcileOrphanedTaskDirs:recovered",
           taskId: id,
           column: task.column,
           status: task.status,
           taskJsonPath,
+          backend: store.backendMode ? "postgres" : "sqlite",
         });
         store.emitTaskLifecycleEventSafely("task:created", [task]);
       } else {

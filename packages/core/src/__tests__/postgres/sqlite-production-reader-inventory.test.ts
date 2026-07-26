@@ -161,11 +161,14 @@ describe("incomplete PG sync-reader stubs (shipped helpers)", () => {
   PostgreSQL is async-only. Drive the real exported impls so a future “fix”
   that reintroduces store.db.prepare on these paths fails loudly.
   */
-  function backendModeStore(): TaskStore {
+  function backendModeStore(overrides: Partial<TaskStore> = {}): TaskStore {
     // Minimal TaskStore shape: backendMode true must never touch store.db.
     return {
       backendMode: true,
       asyncLayer: { projectId: "proj_test" },
+      taskCache: new Map(),
+      postgresHealthSnapshot: null,
+      settingsSyncCache: null,
       db: {
         prepare() {
           throw new Error("SQLite Database must not be consulted in backend mode");
@@ -176,6 +179,14 @@ describe("incomplete PG sync-reader stubs (shipped helpers)", () => {
           throw new Error("SQLite ArchiveDatabase must not be consulted in backend mode");
         },
       },
+      refreshDatabaseHealthAsync: async () => ({
+        healthy: true,
+        corruptionDetected: false,
+        corruptionErrors: [],
+        lastCheckedAt: null,
+        isRunning: false,
+      }),
+      ...overrides,
     } as unknown as TaskStore;
   }
 
@@ -183,8 +194,11 @@ describe("incomplete PG sync-reader stubs (shipped helpers)", () => {
     expect(isTaskIdPresentInArchivedTasksTableImpl(backendModeStore(), "FN-9999")).toBe(false);
   });
 
-  it("isTaskArchivedImpl returns false under backend mode without opening SQLite", () => {
+  it("isTaskArchivedImpl uses taskCache under backend mode without opening SQLite", () => {
     expect(isTaskArchivedImpl(backendModeStore(), "FN-9999")).toBe(false);
+    const store = backendModeStore();
+    store.taskCache.set("FN-ARCH", { id: "FN-ARCH", column: "archived" } as never);
+    expect(isTaskArchivedImpl(store, "FN-ARCH")).toBe(true);
   });
 
   it("getMergeRequestRecordImpl returns null under backend mode (sync callers must use Async sibling)", () => {
@@ -217,32 +231,54 @@ describe("incomplete PG sync-reader stubs (shipped helpers)", () => {
     expect(typeof settings).toBe("object");
   });
 
-  it("healthCheckImpl returns true under backend mode (real health is AsyncDataLayer.ping)", () => {
-    expect(healthCheckImpl(backendModeStore())).toBe(true);
+  it("healthCheckImpl reports postgresHealthSnapshot under backend mode", () => {
+    const store = backendModeStore({
+      postgresHealthSnapshot: {
+        healthy: false,
+        corruptionDetected: true,
+        corruptionErrors: ["PostgreSQL backend unreachable: boom"],
+        lastCheckedAt: new Date("2026-07-26T00:00:00.000Z"),
+        isRunning: false,
+      },
+      getDatabaseHealth: undefined as never,
+    });
+    store.getDatabaseHealth = () => getDatabaseHealthImpl(store);
+    expect(healthCheckImpl(store)).toBe(false);
   });
 
-  it("getDatabaseHealthImpl returns always-healthy sentinel under backend mode without opening SQLite", () => {
-    const health = getDatabaseHealthImpl(backendModeStore());
+  it("getDatabaseHealthImpl returns cached postgresHealthSnapshot under backend mode", () => {
+    const checkedAt = new Date("2026-07-26T12:00:00.000Z");
+    const health = getDatabaseHealthImpl(backendModeStore({
+      postgresHealthSnapshot: {
+        healthy: false,
+        corruptionDetected: true,
+        corruptionErrors: ["unreachable"],
+        lastCheckedAt: checkedAt,
+        isRunning: false,
+      },
+    }));
     expect(health).toEqual({
-      healthy: true,
-      corruptionDetected: false,
-      corruptionErrors: [],
-      lastCheckedAt: null,
+      healthy: false,
+      corruptionDetected: true,
+      corruptionErrors: ["unreachable"],
+      lastCheckedAt: checkedAt,
       isRunning: false,
     });
   });
 
-  it("refreshDatabaseHealthImpl delegates to healthy sentinel under backend mode (no integrity_check)", () => {
+  it("refreshDatabaseHealthImpl schedules async refresh and returns current snapshot", () => {
     const store = backendModeStore();
-    // TaskStore.refreshDatabaseHealth / getDatabaseHealth are methods that call the impls.
     store.getDatabaseHealth = () => getDatabaseHealthImpl(store);
     const health = refreshDatabaseHealthImpl(store);
     expect(health.healthy).toBe(true);
     expect(health.corruptionDetected).toBe(false);
   });
 
-  it("reconcileOrphanedTaskDirsImpl returns empty recovered/skipped under backend mode (PG self-healing no-op)", async () => {
-    const result = await reconcileOrphanedTaskDirsImpl(backendModeStore(), {});
+  it("reconcileOrphanedTaskDirsImpl no-ops when tasksDir is missing under backend mode", async () => {
+    const store = backendModeStore({
+      tasksDir: "/nonexistent/fusion-tasks-dir-for-inventory",
+    });
+    const result = await reconcileOrphanedTaskDirsImpl(store, {});
     expect(result).toEqual({ recovered: [], skipped: [] });
   });
 });
