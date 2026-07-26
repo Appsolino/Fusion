@@ -199,6 +199,27 @@ export async function resolveReplanTargetColumn(store: TaskStore, taskId: string
  * Move `task` to its workflow-aware replan column unless it is already there.
  * Pass `target` when the caller already resolved it (e.g. to log the target
  * first) so the resolve/compare/move contract still lives in one place.
+ *
+ * FNXC:WorkflowReplan 2026-07-26-11:05:
+ * A replan bounce KEEPS the task worktree (`preserveWorktree: true`). `moveTask`'s
+ * reopen-to-todo/triage block clears `task.worktree` but deliberately leaves `task.branch`
+ * intact, so an unguarded replan move produced a split-brain row: no worktree pointer, but
+ * still owning `fusion/<id>`, which is still checked out in the worktree that was just
+ * orphaned. The next planning entry (`ensureTaskWorktreeForPlanning` ->
+ * `ensureGraphCustomNodeWorktree` -> `acquireTaskWorktree`) therefore skipped its resume
+ * branch (gated on `task.worktree`), tried to create the SAME branch fresh, collided, and
+ * fell into `cleanupConflictingWorktree` — force-removing the previous worktree and
+ * `git branch -D`-ing `fusion/<id>` before re-cutting it off the integration branch.
+ * Observed on FN-8603: two Plan Review REVISE bounces burned two full teardown +
+ * `git worktree add` + init-command cycles (~10s each) and two branch delete/recreate rounds
+ * for zero benefit — planning writes its spec to the task store, not the worktree, so the
+ * tree it is handed is the tree it should keep.
+ *
+ * Preserving is safe for every caller because acquisition still re-validates: a preserved
+ * pointer to a removed or unusable checkout is caught by `classifyTaskWorktree` in
+ * `acquireTaskWorktree`, which clears the metadata and creates a fresh worktree. The rest of
+ * the replan contract (steps reset to pending, status/error cleared, `executionStartedAt`
+ * dropped) is unchanged — only the checkout survives.
  */
 export async function moveTaskToReplanColumn(
   store: TaskStore,
@@ -207,7 +228,7 @@ export async function moveTaskToReplanColumn(
 ): Promise<string> {
   const replanColumn = target ?? await resolveReplanTargetColumn(store, task.id);
   if (task.column !== replanColumn) {
-    await store.moveTask(task.id, replanColumn);
+    await store.moveTask(task.id, replanColumn, { preserveWorktree: true });
   }
   return replanColumn;
 }

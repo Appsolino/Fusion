@@ -292,7 +292,7 @@ describe("moveTaskToReplanColumn", () => {
     const store = storeWithSelection("builtin:coding-ideas");
     const target = await moveTaskToReplanColumn(store, { id: "FN-1", column: "in-progress" });
     expect(target).toBe("todo");
-    expect(store.moveTask).toHaveBeenCalledWith("FN-1", "todo");
+    expect(store.moveTask).toHaveBeenCalledWith("FN-1", "todo", { preserveWorktree: true });
   });
 
   it("skips the move when the card is already in the replan column (plan-in-place)", async () => {
@@ -300,5 +300,60 @@ describe("moveTaskToReplanColumn", () => {
     const target = await moveTaskToReplanColumn(store, { id: "FN-1", column: "todo" });
     expect(target).toBe("todo");
     expect(store.moveTask).not.toHaveBeenCalled();
+  });
+});
+
+/*
+FNXC:WorkflowReplan 2026-07-26-11:05:
+Symptom (FN-8603): two Plan Review REVISE bounces each logged "Removed conflicting worktree /
+Deleted branch / Cleaned up conflicting worktree, retrying" and rebuilt the checkout from scratch
+(~10s init each). `moveTask`'s reopen block clears `worktree` but keeps `branch`, so the replan
+row lost its checkout while still owning `fusion/<id>` — the next planning acquisition could not
+resume, re-created the same branch, and collided with the worktree it had just orphaned.
+
+Surface enumeration — every replan-bounce mover routes through `moveTaskToReplanColumn`, so the
+invariant is asserted at that seam for ALL of them, not just the Plan Review repro:
+ - Plan Review REVISE -> automatic replan (executor.ts, the reported case)
+ - required-workflow-artifact planning recovery (executor.ts)
+ - spec-staleness rebound inside execute() (executor.ts)
+ - scheduler filesystem-validation and spec-staleness rebounds, legacy loop + workflow sweep
+Both replan-column shapes are covered (default Coding "triage" and plan-in-place Coding (Ideas)
+"todo"), as is every reopen origin column that `moveTask` treats as a reopen (in-progress,
+in-review, done). The already-in-column no-op case cannot strand a worktree because it never
+moves.
+*/
+describe("replan bounces preserve the task worktree (FN-8603)", () => {
+  const REPLAN_BOUNCE_ORIGINS = ["in-progress", "in-review", "done"] as const;
+  const REPLAN_COLUMN_SHAPES = [
+    { workflowId: undefined, expected: "triage", label: "default Coding (triage replan column)" },
+    { workflowId: "builtin:coding-ideas", expected: "todo", label: "Coding (Ideas) (plan-in-place todo)" },
+  ] as const;
+
+  for (const shape of REPLAN_COLUMN_SHAPES) {
+    for (const from of REPLAN_BOUNCE_ORIGINS) {
+      it(`preserves the worktree bouncing ${from} -> ${shape.expected} — ${shape.label}`, async () => {
+        const store = storeWithSelection(shape.workflowId);
+        const target = await moveTaskToReplanColumn(store, { id: "FN-8603", column: from });
+        expect(target).toBe(shape.expected);
+        expect(store.moveTask).toHaveBeenCalledWith(
+          "FN-8603",
+          shape.expected,
+          expect.objectContaining({ preserveWorktree: true }),
+        );
+      });
+    }
+  }
+
+  it("preserves the worktree when the caller pre-resolved the replan column", async () => {
+    // The Plan Review REVISE handler resolves the column first so it can log it, then passes
+    // it in — that overload must carry the same option as the self-resolving one.
+    const store = storeWithSelection(undefined);
+    const target = await moveTaskToReplanColumn(store, { id: "FN-8603", column: "in-progress" }, "triage");
+    expect(target).toBe("triage");
+    expect(store.moveTask).toHaveBeenCalledWith(
+      "FN-8603",
+      "triage",
+      expect.objectContaining({ preserveWorktree: true }),
+    );
   });
 });
