@@ -132,9 +132,8 @@ not cover close controls, hosted footer actions, or scrollable content.
 /*
 FNXC:ModalTouchGeometry 2026-07-26-12:34:
 A headerless window delegates dragging to a caller-owned header, so that resolved element must
-receive the same tablet-only target floor as FloatingWindow's built-in header. `min-block-size`
-enlarges only the interactive header box when necessary; it does not thicken resize borders or
-extend an invisible target into hosted content, close controls, or footer actions.
+receive the same tablet-only target floor as FloatingWindow's built-in header. Generic windows
+retain that established 44px layout contract.
 */
 .floating-window--touch-geometry .floating-window__delegated-drag-handle {
   box-sizing: border-box;
@@ -142,6 +141,41 @@ extend an invisible target into hosted content, close controls, or footer action
   cursor: grab;
   user-select: none;
   touch-action: none;
+}
+
+/*
+FNXC:ModalTouchGeometry 2026-07-26-15:30:
+Task-detail pop-outs are the only delegated-header surface with the reported tablet density
+regression. Their 44px drag contract is hit-area-only: an absolute pseudo-element extends the
+pointer target without making the painted task header taller. Keep the target below controls so a
+close or action button receives its tap. Do not widen this selector because FloatingWindow also
+hosts unrelated chat, import, workflow, and utility panels.
+*/
+.floating-window--task-detail.floating-window--touch-geometry .floating-window__delegated-drag-handle {
+  min-block-size: 0;
+  position: relative;
+  z-index: 0;
+}
+
+.floating-window--task-detail.floating-window--touch-geometry .floating-window__delegated-drag-handle::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset-inline: 0;
+  block-size: var(--modal-resize-touch-target);
+  inset-block-start: 50%;
+  transform: translateY(-50%);
+}
+
+/*
+FNXC:ModalTouchGeometry 2026-07-26-16:00:
+The invisible tablet drag extension must stay beneath actionable task-header descendants.
+Explicit stacking preserves the 44px parent hit area while buttons and links retain their normal
+activation instead of beginning a window drag.
+*/
+.floating-window--task-detail.floating-window--touch-geometry .floating-window__delegated-drag-handle :is(button, a, input, select, textarea, [role="button"]) {
+  position: relative;
+  z-index: 1;
 }
 
 .floating-window--touch-geometry .floating-window__delegated-drag-handle:active {

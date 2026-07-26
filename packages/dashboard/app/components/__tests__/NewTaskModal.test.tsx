@@ -155,6 +155,14 @@ describe("NewTaskModal", () => {
     });
   });
 
+  it("restores desktop body density only for the 768px tablet resize class", () => {
+    const tabletRule = newTaskModalCss.match(/\.new-task-modal\.task-modal--tablet \.modal-body\s*\{[^}]*\}/s)?.[0] ?? "";
+    const phoneRule = newTaskModalCss.match(/\.new-task-modal \.modal-body\s*\{[^}]*padding:\s*var\(--space-md\) var\(--space-sm\);[^}]*\}/s)?.[0] ?? "";
+
+    expect(tabletRule).toContain("padding: var(--space-xl);");
+    expect(phoneRule).toContain("padding: var(--space-md) var(--space-sm);");
+  });
+
   it("applies keyboard CSS variables when mobile keyboard is open", () => {
     mockUseMobileKeyboard.mockReturnValue({
       keyboardOpen: true,

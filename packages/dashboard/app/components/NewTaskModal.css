@@ -794,6 +794,20 @@ The New Task create workflow selector is a real dropdown so workflow identity ic
     padding: var(--space-md) var(--space-sm);
   }
 
+  /*
+  FNXC:TaskModalResize 2026-07-26-15:30:
+  The physical-screen tablet path shares this CSS query with phone sheets. Restore the desktop
+  body density only when the runtime tablet class is present; phones keep their compact sheet
+  padding while the tablet resize surface gains no visible inset from its touch controls.
+  */
+  .new-task-modal.task-modal--tablet .modal-header {
+    padding: var(--modal-padding);
+  }
+
+  .new-task-modal.task-modal--tablet .modal-body {
+    padding: var(--space-xl);
+  }
+
   .new-task-modal .form-group {
     padding: 0 var(--space-md);
   }

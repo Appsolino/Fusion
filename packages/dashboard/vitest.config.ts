@@ -506,6 +506,12 @@ export default defineConfig({
       Must precede the `@fusion/core` alias: Vite string aliases match by PREFIX, so the broader key would rewrite this subpath to `index.ts/detect-content-language` and fail to resolve.
       */
       "@fusion/core/detect-content-language": resolve(__dirname, "../core/src/detect-content-language.ts"),
+      /*
+      FNXC:VitestAliases 2026-07-26-15:45:
+      Dashboard client tests import the browser-safe delete-attribution leaf through api/client.
+      Keep this exact alias before the broader core alias so Vite does not rewrite the subpath.
+      */
+      "@fusion/core/task-delete-attribution": resolve(__dirname, "../core/src/task-delete-attribution.ts"),
       "@fusion/core": resolve(__dirname, "../core/src/index.ts"),
       "@fusion/engine": resolve(__dirname, "../engine/src/index.ts"),
       "@fusion/plugin-sdk": resolve(__dirname, "../plugin-sdk/src/index.ts"),
