@@ -547,13 +547,16 @@ FN-6774 removes the saturated stuck-task edge stripe from board cards. Keep the 
 }
 
 /*
-FNXC:TaskCardLayout 2026-07-17-14:00 (FN-8253):
-As a direct header child after .card-id, the size chip must match sibling header-badge height rather than use a bespoke chip-height minimum. Center it on the header row to preserve its baseline alignment with the id and trailing actions. Its existing color coding remains unchanged.
+FNXC:TaskCardLayout 2026-07-26-08:29 (FN-8599):
+As a direct header child after .card-id, the size chip must stay in the first chip-height row. Whole-header centering misaligned it when the middle badge group wrapped, so lock its tokenized height and anchor it at the header start while the shared badge rule centers its text.
 */
 .card-size-badge {
-  align-self: center;
+  align-self: flex-start;
   flex-shrink: 0;
   box-sizing: border-box;
+  height: var(--card-chip-height);
+  min-height: var(--card-chip-height);
+  max-height: var(--card-chip-height);
   letter-spacing: 0.5px;
 }
 
@@ -1672,6 +1675,18 @@ FNXC:TaskCardLayout 2026-07-13-00:59:
 The mobile/short-landscape 28px ⋯ touch target must not expand .card-header-actions' flex line. Without a negative vertical margin (same cancel pattern as .card-edit-btn/.card-delete-btn), align-items:center sinks the Actions/Send-back trigger below the mono task-id baseline on mobile. Keep the 28px hit box; cancel only the layout contribution so trailing actions stay vertically aligned with the task id (follow-up to FN-7933's within-cluster centerline).
 */
 @media (max-width: 768px), (max-height: 480px) {
+  /*
+  FNXC:TaskCardLayout 2026-07-26-08:29 (FN-8599):
+  Narrow and short-landscape cards use the mobile chip rhythm. Keep the size chip first-row anchored instead of centering it over wrapped header badges.
+  */
+  .card-size-badge {
+    align-self: flex-start;
+    box-sizing: border-box;
+    height: var(--card-chip-height-mobile);
+    min-height: var(--card-chip-height-mobile);
+    max-height: var(--card-chip-height-mobile);
+  }
+
   .card-menu-btn {
     opacity: 1;
     width: 28px;
@@ -1894,8 +1909,8 @@ The three-dot menu is the sole card move/action entry point. Keep this shared bu
   }
 
   /*
-  FNXC:TaskCardLayout 2026-07-17-14:00 (FN-8253):
-  At narrow and short-landscape breakpoints, the id, wrapping badge group, and trailing actions retain the mobile chip-height row. The direct id-adjacent size chip instead derives its height from shared badge geometry so it matches sibling header badges while its centered alignment preserves the non-wrapping header baseline.
+  FNXC:TaskCardLayout 2026-07-26-08:29 (FN-8599):
+  At narrow breakpoints, the id, wrapping badge group, and trailing actions retain the mobile chip-height row. The direct id-adjacent size chip has its own first-row anchor in the shared narrow/short-landscape block so wrapping cannot center it over the whole header.
   */
   .card-id,
   .card-header-badges,
