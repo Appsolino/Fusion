@@ -2913,7 +2913,15 @@ describe("TaskCard", () => {
     expect(badge.getAttribute("title")).toContain("Auto-merge retries exhausted");
   });
 
-  it("renders merge-blocker in-review stall badge without retry counter", () => {
+  /*
+  FNXC:InReviewStallBadge 2026-07-26-18:12:
+  Inverted from "renders merge-blocker badge": the merge-blocker code is now badge-suppressed
+  (operator request — a pre-merge blocker is the ordinary in-review resting state, so badging it
+  marked routine cards abnormal). The card must show NO stall badge for this code, in any merge
+  status — the previous carve-out only suppressed it while isActiveMergeStatus(status) held, so
+  "failed" here is the case that used to badge and must now stay silent.
+  */
+  it("suppresses the in-review stall badge for the merge-blocker code", () => {
     render(
       <TaskCard
         task={makeTask({
@@ -2931,7 +2939,10 @@ describe("TaskCard", () => {
       />,
     );
 
-    expect(screen.getByText("Merge blocked")).toBeDefined();
+    expect(screen.queryByText("Merge blocked")).toBeNull();
+    expect(document.querySelector('[data-stall-code="merge-blocker"]')).toBeNull();
+    // The suppression must not leave an empty badge shell behind.
+    expect(document.querySelector(".card-status-badge.in-review-stall")).toBeNull();
     expect(screen.queryByText(/\/3/)).toBeNull();
   });
 
