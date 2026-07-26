@@ -35,8 +35,7 @@ import { finalizePlanningSegment } from "@fusion/core";
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
 import { createLogger, schedulerLog } from "./logger.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
-import { RemovalReason, classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, hasRequiredWorktreeFiles, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "./worktree-pool.js";
-import { isUsableWorktreeDirectory } from "./step-runner.js";
+import { RemovalReason, classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, hasUsableWorktreeShape, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "./worktree-pool.js";
 import {
   classifyMissingWorktreeSessionStartFailure,
   extractMissingWorktreePathFromSessionStartFailure,
@@ -540,6 +539,13 @@ export async function autoRecoverWorktreeSessionStartFailure(
     forceClearWorktreeMetadata?: boolean;
     resetRetryBudgetOnStaleMetadataClear?: boolean;
     staleMetadataClearRecoveryRetryCount?: number;
+    /**
+     * FNXC:MissingWorktreeRecovery 2026-07-26-08:35:
+     * Project root. Pass it whenever the caller has one so the liveness probe can also reject a
+     * recorded worktree that IS the main checkout (FN-6861 repo-root requeue loop). Optional so
+     * narrow test callers and any future caller without a root still type-check.
+     */
+    rootDir?: string;
   },
 ): Promise<{ outcome: "requeue-todo" | "escalate-exhausted"; retries: number; classification: "missing" | "incomplete" | "unregistered" | "unknown" }> {
   const classification = classifyMissingWorktreeSessionStartFailure(opts.failure);
@@ -602,29 +608,69 @@ export async function autoRecoverWorktreeSessionStartFailure(
   existed ("Working directory does not exist: …" / "Cannot execute bash commands") until the retry
   budget burned out and the card parked failed in review. Preserve the recorded worktree only when
   it is STILL a usable checkout; otherwise clear it so the next dispatch builds a fresh one from
-  the branch. Filesystem-only probe (exists + `.git`, the same first two gates as
-  classifyTaskWorktree) — recovery must not spawn git, and this runs on a failure path.
+  the branch.
+
+  `hasUsableWorktreeShape` is the deliberately NARROW probe (see its own note in worktree-pool.ts):
+  recovery must not spawn git to decide how to recover from a git failure, so it proves only that
+  the path exists, carries `.git`, and is not the repo root. A stale-but-present `.git` pointer
+  therefore still reads as usable and is preserved here; the executor's own session-start assertion
+  is the backstop that catches that shape and routes it back through this recovery with the path now
+  named in the failure, at which point the branch below clears it.
+
+  FNXC:MissingWorktreeRecovery 2026-07-26-08:35:
+  WHAT THIS DECISION ACTUALLY CONTROLS: `branch`. The rebound below is a reopen move
+  (in-review/in-progress -> todo|triage), and a reopen CLEARS `task.worktree` unless the caller
+  passes `preserveWorktree` (packages/core/src/task-store/moves.ts + default-workflow-hooks.ts
+  applyResetOnEntryEffects) — which this recovery deliberately does not, because a fresh checkout is
+  the correct thing to hand the next dispatch. The `worktree` value written here is therefore
+  overwritten by the move on every reopen path; it is kept in the patch only so the row is coherent
+  for the non-reopen case (already sitting in the rebound column, where no reopen effects fire).
+  Do not read the preserve branch as "the worktree survives" — it does not.
   */
-  const recordedWorktreeStillUsable =
-    typeof staleWorktree === "string" && staleWorktree.length > 0
-    && isUsableWorktreeDirectory(staleWorktree)
-    && hasRequiredWorktreeFiles(staleWorktree);
+  const recordedWorktreeStillUsable = hasUsableWorktreeShape(staleWorktree, opts.rootDir);
   const hasMismatchedLiveWorktree =
     recordedWorktreeStillUsable
-    && typeof staleWorktree === "string" && staleWorktree.length > 0
     && typeof missingWorktreePath === "string" && missingWorktreePath.length > 0
-    && resolve(staleWorktree) !== resolve(missingWorktreePath);
+    && resolve(staleWorktree as string) !== resolve(missingWorktreePath);
   const noProgress = !hasStepProgress(task);
   const forceClearWorktreeMetadata = opts.forceClearWorktreeMetadata === true;
+  const clearWorktreeMetadata = noProgress || forceClearWorktreeMetadata || !hasMismatchedLiveWorktree;
+  /*
+  FNXC:MissingWorktreeRecovery 2026-07-26-08:35:
+  Clearing `branch` is only safe for the CANONICAL `fusion/<id>` name, which acquisition re-derives
+  from the task id (resolveTaskWorkingBranch) — dropping it costs nothing. A non-canonical branch
+  (a `-2` suffix, a legacy case-mismatched name) is NOT re-derivable, so nulling it would abandon the
+  only pointer to the card's commits. Keep such a branch even while clearing the dead worktree; the
+  worktree is rebuilt from whatever branch survives.
+  */
+  const branchIsRederivable =
+    typeof task.branch !== "string"
+    || task.branch.length === 0
+    || task.branch.toLowerCase() === `fusion/${task.id}`.toLowerCase();
+  const nextBranch = clearWorktreeMetadata && branchIsRederivable ? null : task.branch ?? null;
 
   await store.updateTask(task.id, {
     status: null,
     error: null,
     worktreeSessionRetryCount: nextCount,
     ...(nextStaleMetadataClearRecoveryCount === undefined ? {} : { recoveryRetryCount: nextStaleMetadataClearRecoveryCount }),
-    worktree: (noProgress || forceClearWorktreeMetadata) ? null : (hasMismatchedLiveWorktree ? staleWorktree : null),
-    branch: (noProgress || forceClearWorktreeMetadata) ? null : (hasMismatchedLiveWorktree ? task.branch ?? null : null),
+    worktree: clearWorktreeMetadata ? null : staleWorktree,
+    branch: nextBranch,
     sessionFile: null,
+  });
+  await opts.auditor?.database({
+    type: "task:auto-recover-worktree-session-metadata",
+    target: task.id,
+    metadata: {
+      source: opts.source,
+      classification,
+      // The decision this recovery makes, as ids/outcomes-only facts an agent can read without
+      // parsing the human log prose below (agent-native parity with the dashboard activity log).
+      recordedWorktreeStillUsable,
+      clearedWorktreeMetadata: clearWorktreeMetadata,
+      clearedBranch: nextBranch === null && (task.branch ?? null) !== null,
+      retainedNonCanonicalBranch: clearWorktreeMetadata && !branchIsRederivable,
+    },
   });
 
   const rawFailureExcerpt = typeof task.error === "string"
@@ -658,8 +704,19 @@ export async function autoRecoverWorktreeSessionStartFailure(
     noProgress
       ? `Auto-recovered (no-progress): session-start refused unusable worktree${staleWorktree ? ` (${staleWorktree})` : ""} — cleared stale session metadata and requeued to ${reboundColumn} (${attemptLabel}, failure: ${failureExcerpt})`
       : hasMismatchedLiveWorktree && !forceClearWorktreeMetadata
-        ? `Auto-recovered: stale resume referenced unusable worktree (${missingWorktreePath}) while live task worktree is ${staleWorktree} — cleared stale session metadata and requeued to ${reboundColumn} (${attemptLabel}, failure: ${failureExcerpt})`
-        : `Auto-recovered: retry/verification session targeted unusable worktree${staleWorktree ? ` (${staleWorktree})` : ""} — cleared stale session metadata and requeued to ${reboundColumn} (${attemptLabel}, failure: ${failureExcerpt})`,
+        ? `Auto-recovered: stale resume referenced unusable worktree (${missingWorktreePath}) while the recorded task worktree ${staleWorktree} is still a live checkout — cleared stale session metadata and requeued to ${reboundColumn} (${attemptLabel}, failure: ${failureExcerpt})`
+        /*
+        FNXC:MissingWorktreeRecovery 2026-07-26-08:35:
+        Name WHICH path was unusable. The old single sentence credited the failure to the recorded
+        worktree even when the session had actually targeted some other path (an AI-merge clean
+        room), which is what made the MG-047 strand unreadable from the activity log: the operator
+        saw "targeted unusable worktree (<task worktree>)" while the refusal named the clean room.
+        */
+        : `Auto-recovered: session start refused unusable worktree${missingWorktreePath ? ` (${missingWorktreePath})` : ""}${
+          staleWorktree && (!missingWorktreePath || resolve(staleWorktree) !== resolve(missingWorktreePath))
+            ? `; the recorded task worktree ${staleWorktree} is ${recordedWorktreeStillUsable ? "still present" : "gone too"}`
+            : ""
+        } — cleared stale session metadata${clearWorktreeMetadata && !branchIsRederivable ? ` (kept non-canonical branch ${task.branch})` : ""} and requeued to ${reboundColumn} (${attemptLabel}, failure: ${failureExcerpt})`,
   );
   if (noProgress) {
     // #1411: backward recovery move — recoveryRehome skips order-derived adjacency.
@@ -12081,6 +12138,7 @@ export class SelfHealingManager {
             failure: task.error,
             source: mergeActiveCandidate ? "merge-active-sweep" : "in-review-sweep",
             auditor,
+            rootDir: this.options.rootDir,
             forceClearWorktreeMetadata: mergeActiveCandidate,
             resetRetryBudgetOnStaleMetadataClear: mergeActiveCandidate,
             staleMetadataClearRecoveryRetryCount: mergeActiveCandidate ? task.recoveryRetryCount ?? 0 : undefined,

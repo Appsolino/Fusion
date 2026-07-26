@@ -326,6 +326,28 @@ describe("TriageProcessor planning discovery: missing PROMPT.md", () => {
     }
   });
 
+  /*
+  FNXC:WorkflowReplan 2026-07-26-08:35:
+  The FN-8361 counter-case at the SURFACE, not only in the pure guard table: a `planning` row that
+  execution claimed mid-race (stamp landed before the column/status write) must NOT be admitted for
+  planning — otherwise a second planner starts on a card the executor already owns.
+  */
+  it("does not admit a planning row that execution claimed mid-race", async () => {
+    const { store } = createEventedStore();
+    const task = createTask({
+      id: "FN-CLAIMED",
+      column: "triage",
+      status: "planning",
+      worktree: "/tmp/claimed",
+      firstExecutionAt: "2026-07-26T04:35:29.068Z",
+    });
+    const dir = join(rootDir, ".fusion", "tasks", task.id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "PROMPT.md"), "# FN-CLAIMED: Idea card\n\n## Mission\n\nSpec.\n", "utf-8");
+
+    expect(await discover(store, [task])).toEqual([]);
+  });
+
   it("re-admits a plan-in-place todo replan card that already executed once", async () => {
     const { store } = createEventedStore();
     const task = createTask({

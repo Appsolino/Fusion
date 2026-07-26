@@ -43,15 +43,27 @@ legal from every legacy column and eligibleTriageTasks re-specifies unconditiona
 /** Statuses that explicitly park a card for (re)planning, whichever column holds it. */
 const PLANNING_STAGE_STATUSES = new Set(["planning", "needs-replan", "plan-review-unavailable"]);
 
+/**
+ * The TRANSIENT planning-stage status: a planner is writing PROMPT.md right now. Everything else in
+ * {@link PLANNING_STAGE_STATUSES} is a durable park.
+ */
+const TRANSIENT_PLANNING_STATUS = "planning";
+
 /*
 FNXC:WorkflowReplan 2026-07-26-07:40:
-The DURABLE subset of the above: a card parked here was deliberately sent back by Plan Review (or
-by a reviewer outage) and stays parked until a planner re-specifies it. Only these outrank the
-execution timestamps below. `planning` is deliberately excluded — it is the TRANSIENT in-flight
-planner claim, and a fresh execution stamp on a `planning` row means execution won the race that
-FN-8361 guards (recovery must not clear the status out from under the claiming executor).
+The DURABLE subset of PLANNING_STAGE_STATUSES: a card parked here was deliberately sent back by Plan
+Review (or by a reviewer outage) and stays parked until a planner re-specifies it. Only these
+outrank the execution timestamps below. `planning` is deliberately excluded — it is the TRANSIENT
+in-flight planner claim, and a fresh execution stamp on a `planning` row means execution won the
+race that FN-8361 guards (recovery must not clear the status out from under the claiming executor).
+
+DERIVED, not re-listed: a new durable park status added to PLANNING_STAGE_STATUSES must automatically
+join this set, or it reproduces the FN-8594 strand this file already fixed once (a park status that
+lost to a sticky stamp, so the card was never re-planned). Only the transient status is subtracted.
 */
-const REPLAN_PARK_STATUSES = new Set(["needs-replan", "plan-review-unavailable"]);
+const REPLAN_PARK_STATUSES = new Set(
+  [...PLANNING_STAGE_STATUSES].filter((status) => status !== TRANSIENT_PLANNING_STATUS),
+);
 
 export function hasAdvancedPastPlanning(
   task: Pick<Task, "column" | "worktree" | "steps" | "status">
@@ -109,8 +121,16 @@ export function hasAdvancedPastPlanning(
   return (task.steps?.length ?? 0) > 0;
 }
 
+/*
+FNXC:WorkflowReplan 2026-07-26-08:35:
+The parameter type must mirror hasAdvancedPastPlanning's, including the execution stamps the
+implementation reads. When it omitted them, a caller passing a narrowed object (rather than a whole
+Task) type-checked while silently dropping the stamps — the guard then read them as absent, which is
+the "not advanced" answer, and TypeScript could not flag it.
+*/
 export function isTaskStillInPlanningStage(
-  task: Pick<Task, "column" | "worktree" | "steps" | "status">,
+  task: Pick<Task, "column" | "worktree" | "steps" | "status">
+    & Partial<Pick<Task, "firstExecutionAt" | "executionStartedAt">>,
 ): boolean {
   return !hasAdvancedPastPlanning(task);
 }

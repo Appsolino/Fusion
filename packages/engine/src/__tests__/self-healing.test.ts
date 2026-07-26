@@ -65,7 +65,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 vi.mock("../worktree-pool.js", async () => {
   const { existsSync: fsExistsSync } = await import("node:fs");
-  const { join: joinPath } = await import("node:path");
+  const { join: joinPath, resolve: resolvePath } = await import("node:path");
   return {
   WorktreePool: vi.fn(),
   // FN-4811: Must mirror the production `RemovalReason` const in worktree-backend.ts
@@ -97,6 +97,14 @@ vi.mock("../worktree-pool.js", async () => {
   worktree that is gone must be cleared, not carried into the next dispatch).
   */
   hasRequiredWorktreeFiles: vi.fn((worktreePath: string) => fsExistsSync(joinPath(worktreePath, ".git"))),
+  // Mirrors the real implementation (worktree-pool.ts): the `.git` probe subsumes directory
+  // existence, plus the repo-root rejection when a rootDir is supplied.
+  hasUsableWorktreeShape: vi.fn((worktreePath: string | undefined | null, rootDir?: string) => {
+    if (!worktreePath) return false;
+    if (!fsExistsSync(joinPath(worktreePath, ".git"))) return false;
+    if (rootDir && resolvePath(rootDir) === resolvePath(worktreePath)) return false;
+    return true;
+  }),
   classifyTaskWorktree: vi.fn().mockResolvedValue({ ok: false, classification: "missing", reason: "test-default" }),
   getRegisteredWorktreePaths: vi.fn().mockResolvedValue(new Set<string>()),
   getRegisteredWorktreeBranchMap: vi.fn().mockResolvedValue(new Map<string, string>()),
@@ -3384,6 +3392,7 @@ describe("SelfHealingManager", () => {
     */
     it("requeues failed in-review tasks with unusable-worktree session-start errors, preserving a live task worktree", async () => {
       const liveWorktree = mkdtempSync(join(tmpdir(), "fusion-live-worktree-"));
+      try {
       writeFileSync(join(liveWorktree, ".git"), "gitdir: /tmp/test-project/.git/worktrees/fn-3900\n");
       const managerWithRecovery = new SelfHealingManager(store, {
         rootDir: "/tmp/test-project",
@@ -3415,6 +3424,17 @@ describe("SelfHealingManager", () => {
         branch: "fusion/fn-3900",
         sessionFile: null,
       });
+      /*
+      FNXC:MissingWorktreeRecovery 2026-07-26-08:35:
+      The rebound is a reopen move, and a reopen clears `task.worktree` unless `preserveWorktree` is
+      passed — which this recovery deliberately does not. Pin that: the preserve branch preserves
+      `branch`, NOT the worktree, so nobody reads the updateTask argument above as the durable row.
+      */
+      expect(store.moveTask).toHaveBeenCalledWith(
+        "FN-3900",
+        "todo",
+        expect.not.objectContaining({ preserveWorktree: true }),
+      );
       expect(store.logEntry).toHaveBeenCalledWith(
         "FN-3900",
         expect.stringContaining("unusable worktree"),
@@ -3429,8 +3449,10 @@ describe("SelfHealingManager", () => {
       );
       expect(store.moveTask).toHaveBeenCalledWith("FN-3900", "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
 
-      rmSync(liveWorktree, { recursive: true, force: true });
       managerWithRecovery.stop();
+      } finally {
+        rmSync(liveWorktree, { recursive: true, force: true });
+      }
     });
 
     /*
@@ -3441,12 +3463,17 @@ describe("SelfHealingManager", () => {
     directory that no longer existed ("Working directory does not exist … Cannot execute bash
     commands") on every retry, until the budget burned out and the card parked failed in review.
     Surfaces: the failing path may be a clean room or the task worktree, and the recorded worktree
-    may be gone entirely or present-but-incomplete (no `.git`) — both must clear the metadata.
+    may be gone entirely, present-but-incomplete (no `.git`), or the repo root itself (the FN-6861
+    class — the main checkout is a registered worktree carrying `.git`, so only the repo-root gate
+    rejects it) — all must clear the metadata.
     */
     it.each([
       {
         label: "recorded task worktree no longer exists",
         seed: (base: string) => join(base, "removed-by-cleanup"),
+        rootDir: "/tmp/test-project",
+        branch: "fusion/FN-4559",
+        expectedBranch: null,
       },
       {
         label: "recorded task worktree exists but has no .git",
@@ -3455,10 +3482,76 @@ describe("SelfHealingManager", () => {
           mkdirSync(dir, { recursive: true });
           return dir;
         },
+        rootDir: "/tmp/test-project",
+        branch: "fusion/FN-4559",
+        expectedBranch: null,
       },
-    ])("requeues incomplete-worktree failures and clears stale worktree metadata when the $label", async ({ seed }) => {
+      {
+        label: "recorded task worktree is the repo root",
+        seed: (base: string) => {
+          // A real checkout shape: exists AND carries `.git`. Only the repo-root gate rejects it.
+          writeFileSync(join(base, ".git"), "gitdir: /tmp/test-project/.git\n");
+          return base;
+        },
+        rootDir: null, // replaced with the temp base below, so root === recorded worktree
+        branch: "fusion/FN-4559",
+        expectedBranch: null,
+      },
+      {
+        /*
+        A non-canonical branch is NOT re-derivable from the task id, so clearing it would abandon
+        the card's only pointer to its commits. The dead worktree is still cleared.
+        */
+        label: "branch is non-canonical and must survive the clear",
+        seed: (base: string) => join(base, "removed-by-cleanup"),
+        rootDir: "/tmp/test-project",
+        branch: "fusion/FN-4559-2",
+        expectedBranch: "fusion/FN-4559-2",
+      },
+    ])("requeues incomplete-worktree failures and clears stale worktree metadata when the $label", async ({ seed, rootDir, branch, expectedBranch }) => {
       const base = mkdtempSync(join(tmpdir(), "fusion-dead-worktree-"));
-      const recordedWorktree = seed(base);
+      try {
+        const recordedWorktree = seed(base);
+        const managerWithRecovery = new SelfHealingManager(store, {
+          rootDir: rootDir ?? base,
+        });
+
+        (store.listTasks as ReturnType<typeof vi.fn>).mockResolvedValue([
+          {
+            id: "FN-4559",
+            column: "in-review",
+            paused: false,
+            status: "failed",
+            worktree: recordedWorktree,
+            branch,
+            sessionFile: "/tmp/project/.fusion/sessions/FN-4559.json",
+            // The refusal names the AI-merge clean room, NOT the recorded task worktree.
+            error: "Refusing to start coding agent in incomplete worktree: /tmp/project/.worktrees/.ai-merge/fusion-ai-merge-fn-4559-TGahla",
+            steps: [{ status: "done" }, { status: "pending" }],
+            log: [],
+          },
+        ]);
+
+        const result = await managerWithRecovery.recoverMissingWorktreeReviewFailures();
+
+        expect(result).toBe(1);
+        expect(store.updateTask).toHaveBeenCalledWith("FN-4559", {
+          status: null,
+          error: null,
+          worktreeSessionRetryCount: 1,
+          worktree: null,
+          branch: expectedBranch,
+          sessionFile: null,
+        });
+        managerWithRecovery.stop();
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+
+    it("logs and audits the unusable-worktree clear decision so it is readable without the prose", async () => {
+      const base = mkdtempSync(join(tmpdir(), "fusion-dead-worktree-audit-"));
+      try {
       const managerWithRecovery = new SelfHealingManager(store, {
         rootDir: "/tmp/test-project",
       });
@@ -3469,10 +3562,9 @@ describe("SelfHealingManager", () => {
           column: "in-review",
           paused: false,
           status: "failed",
-          worktree: recordedWorktree,
+          worktree: join(base, "removed-by-cleanup"),
           branch: "fusion/FN-4559",
           sessionFile: "/tmp/project/.fusion/sessions/FN-4559.json",
-          // The refusal names the AI-merge clean room, NOT the recorded task worktree.
           error: "Refusing to start coding agent in incomplete worktree: /tmp/project/.worktrees/.ai-merge/fusion-ai-merge-fn-4559-TGahla",
           steps: [{ status: "done" }, { status: "pending" }],
           log: [],
@@ -3482,15 +3574,16 @@ describe("SelfHealingManager", () => {
       const result = await managerWithRecovery.recoverMissingWorktreeReviewFailures();
 
       expect(result).toBe(1);
-      expect(store.updateTask).toHaveBeenCalledWith("FN-4559", {
-        status: null,
-        error: null,
-        worktreeSessionRetryCount: 1,
-        worktree: null,
-        branch: null,
-        sessionFile: null,
-      });
-      rmSync(base, { recursive: true, force: true });
+      // The log must name the path that was actually refused (the clean room), and say the recorded
+      // task worktree was gone too — the old prose credited the failure to the recorded worktree.
+      expect(store.logEntry).toHaveBeenCalledWith(
+        "FN-4559",
+        expect.stringContaining("fusion-ai-merge-fn-4559-TGahla"),
+      );
+      expect(store.logEntry).toHaveBeenCalledWith(
+        "FN-4559",
+        expect.stringContaining("gone too"),
+      );
       expect(store.logEntry).toHaveBeenCalledWith(
         "FN-4559",
         expect.stringContaining("Auto-recovered"),
@@ -3502,6 +3595,9 @@ describe("SelfHealingManager", () => {
       expect(store.moveTask).toHaveBeenCalledWith("FN-4559", "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
 
       managerWithRecovery.stop();
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
     });
 
     it("requeues unregistered-worktree failures", async () => {

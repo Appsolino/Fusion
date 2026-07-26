@@ -18461,6 +18461,7 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
       failure: error,
       source: "executor-session-start",
       auditor: audit,
+      rootDir: this.rootDir,
     });
     if (recovery.outcome !== "escalate-exhausted") {
       this.markGraphExecuteSelfRequeued(task.id);
