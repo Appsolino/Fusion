@@ -874,6 +874,7 @@ describe("TaskDetailModal", () => {
         const grip = modal?.querySelector(".modal-resize-grip") as HTMLElement;
         expect(grip).toHaveAttribute("aria-label", "Resize modal from bottom-right corner");
         expect(grip).toHaveAttribute("tabindex", "0");
+        expect(grip).toHaveAttribute("data-resize-hit-target", "true");
 
         // FNXC:TaskModalResize 2026-07-24-19:20: The 768px tablet recovery must
         // remain keyboard discoverable, not merely restore a touch-only grip.

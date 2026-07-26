@@ -89,7 +89,7 @@ Movable dashboard pop-outs remember their last desktop location and size, while 
 <!-- FNXC:TaskModalResizeDocs 2026-08-07-00:00: Known touch tablets at the 768px CSS boundary use the shared physical-screen-aware viewport classification, so documentation must distinguish their resize contract from true phones that share the CSS media query. -->
 ### Task modal resizing on tablets
 
-Task Detail and New Task remain resizable on known touch tablets, including a 768px-wide tablet viewport. Task Detail exposes its accessible bottom-right resize grip; New Task keeps its draggable header and edge/corner resize controls. Their geometry stays within the viewport and is restored from browser storage on later tablet or desktop opens. True phones and narrow folded panes remain full-screen sheets without active resize controls so keyboard and safe-area behavior is unchanged.
+Task Detail and New Task remain resizable on known touch tablets, including a 768px-wide tablet viewport. Task Detail exposes its accessible bottom-right resize grip; New Task keeps its draggable header and edge/corner resize controls. On that tablet-touch surface, the painted control remains compact but its explicit resize hit target is at least 44px, sits outside the panel content, and owns touch gestures with pointer capture. Their geometry stays within the viewport and is restored from browser storage on later tablet or desktop opens. True phones, narrow folded panes, and desktop coarse-pointer devices do not receive the enlarged target: phones remain full-screen sheets and desktop preserves cursor-sized resize chrome.
 
 ## Mobile/PWA app icons
 
@@ -2293,3 +2293,7 @@ Dictation inserts a live partial transcript at the current caret (or replaces th
 ### Conversation tags
 
 Direct conversations can be organized with reusable tags. Open a conversation's **More** menu to create a tag or toggle its assignments; a conversation can have multiple tags. Use the tag selector beside conversation search to filter pinned and recent conversations without affecting text search. Tags are project-scoped, and deleting a tag only removes its assignments—it never deletes conversations or messages. Chat Rooms do not use conversation tags.
+
+### Tablet touch modal resize
+
+Task Detail and New Task retain their desktop resize chrome, but tablet-class touch viewports expose a 44px `data-resize-hit-target` around resize controls. The target is enabled only by the shared tablet-touch viewport classifier; true-phone sheets and desktop coarse-pointer devices do not expose it.

@@ -88,6 +88,7 @@ vi.mock("../../hooks/useViewportMode", () => ({
   isShortViewport: () => false,
   getViewportMode: () => mockViewportMode,
   isMobileViewport: () => mockViewportMode === "mobile",
+  isTabletTouchViewport: () => mockViewportMode === "tablet",
   useViewportMode: () => mockViewportMode,
 }));
 
@@ -2193,6 +2194,7 @@ describe("NewTaskModal", () => {
         expect(screen.getByTestId(`new-task-resize-${dir}`)).toHaveAttribute("role", "separator");
         expect(screen.getByTestId(`new-task-resize-${dir}`)).toHaveAttribute("aria-label", "Resize new task window");
         expect(screen.getByTestId(`new-task-resize-${dir}`)).toHaveAttribute("tabindex", "0");
+        expect(screen.getByTestId(`new-task-resize-${dir}`)).toHaveAttribute("data-resize-hit-target", "true");
       }
     });
 
@@ -2253,6 +2255,8 @@ describe("NewTaskModal", () => {
 
       fireEvent.pointerDown(handle, { pointerId: 4, clientX: 100, clientY: 100, pointerType: "touch" });
       fireEvent.pointerMove(handle, { pointerId: 4, clientX: 140, clientY: 130, pointerType: "touch" });
+      fireEvent.pointerUp(handle, { pointerId: 9, clientX: 140, clientY: 130, pointerType: "touch" });
+      expect(document.body.style.userSelect).toBe("none");
       fireEvent.pointerUp(handle, { pointerId: 4, clientX: 140, clientY: 130, pointerType: "touch" });
 
       expect(Number.parseFloat(panel.style.width)).toBeGreaterThan(initialWidth);

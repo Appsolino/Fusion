@@ -28,7 +28,7 @@ import { useConfirm } from "../hooks/useConfirm";
 import { useMobileKeyboard } from "../hooks/useMobileKeyboard";
 import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { useNodes } from "../hooks/useNodes";
-import { useViewportMode } from "../hooks/useViewportMode";
+import { isTabletTouchViewport, useViewportMode } from "../hooks/useViewportMode";
 import { useAgentsMapCache } from "../hooks/useAgentsMapCache";
 import { nextFloatingZ, currentFloatingZ } from "./floatingWindowStack";
 
@@ -412,6 +412,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
   const { t } = useTranslation("app");
   const { confirm } = useConfirm();
   const viewportMode = useViewportMode();
+  const isTabletTouchResize = isTabletTouchViewport(viewportMode);
   useMobileScrollLock(isOpen);
   const { keyboardOverlap, viewportHeight, viewportOffsetTop, keyboardOpen } = useMobileKeyboard({
     enabled: viewportMode === "mobile",
@@ -521,6 +522,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
+      moveEvent.preventDefault();
       const dx = moveEvent.clientX - startX;
       const dy = moveEvent.clientY - startY;
       const nextSize = clampFloatSize({
@@ -546,7 +548,15 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
       captureTarget.removeEventListener("pointerup", handlePointerUp);
       captureTarget.removeEventListener("pointercancel", handlePointerUp);
     };
-    function handlePointerUp() {
+    /*
+    FNXC:TaskModalResize 2026-07-26-10:51:
+    A tablet finger resize owns exactly the pointer that started it. Ignore another
+    finger's terminal event so it cannot release capture or persist partial geometry;
+    this preserves the established floating-window gesture isolation.
+    */
+    function handlePointerUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) return;
+      upEvent.preventDefault();
       if (frame) cancelAnimationFrame(frame);
       persistSize(latestSize);
       persistPosition(latestPosition, latestSize);
@@ -1206,7 +1216,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
         style={isFloating ? { zIndex } : undefined}
       >
         <div
-          className={`modal modal-lg new-task-modal${viewportMode === "tablet" ? " task-modal--tablet" : ""}${isFloating ? " new-task-modal--floating" : ""}`}
+          className={`modal modal-lg new-task-modal${viewportMode === "tablet" ? " task-modal--tablet" : ""}${isTabletTouchResize ? " task-modal--touch-resize" : ""}${isFloating ? " new-task-modal--floating" : ""}`}
           style={panelStyle}
           onPointerDownCapture={isFloating ? bringToFront : undefined}
           onFocusCapture={isFloating ? bringToFront : undefined}
@@ -1214,8 +1224,9 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
           {isFloating && NEW_TASK_RESIZE_DIRECTIONS.map((direction) => (
             <div
               key={direction}
-              className={`new-task-resize-handle new-task-resize-handle--${direction}`}
+              className={`new-task-resize-handle new-task-resize-handle--${direction}${isTabletTouchResize ? " new-task-resize-handle--touch-target" : ""}`}
               data-testid={`new-task-resize-${direction}`}
+              {...(isTabletTouchResize ? { "data-resize-hit-target": "true" } : {})}
               role="separator"
               aria-orientation={direction === "n" || direction === "s" ? "horizontal" : "vertical"}
               aria-valuemin={direction === "n" || direction === "s" ? NEW_TASK_MIN_HEIGHT : NEW_TASK_MIN_WIDTH}

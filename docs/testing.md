@@ -523,3 +523,7 @@ Use the exact heading `## Symptom Verification` and include all three required c
 - [ ] **Assertion it is gone** — final verification reproduces the original failure condition and asserts it no longer occurs via a real automated test.
 
 Symptom-based acceptance is mandatory for bug fixes: reproduce the original failure, prove it is gone, and keep the invariant covered across the `## Surface Enumeration` checklist. Green build/tests alone are insufficient when they do not exercise the reported symptom.
+
+### Chromium touch hit-testing
+
+Touch-resize regressions use the dashboard Vite fixture and Chromium CDP `Input.dispatchTouchEvent` start/move/end events. This is required where `elementFromPoint` and real touch hit testing matter; jsdom pointer dispatch does not provide layout hit testing.

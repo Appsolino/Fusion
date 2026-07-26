@@ -19,6 +19,17 @@
 }
 
 /*
+FNXC:TaskModalResize 2026-07-26-11:06:
+The tablet-only grip expands outside Task Detail's painted corner. Its default
+overflow clipping would make the 44px finger target visible in layout but
+unreachable by browser hit testing, so only the explicit touch-resize surface
+permits the target outside the panel; true-phone sheets retain clipped content.
+*/
+.modal.task-detail-modal.task-modal--touch-resize {
+  overflow: visible;
+}
+
+/*
 FNXC:TaskDetail 2026-06-22-20:00:
 The gray top header band (task id + column badge) was over-padded. Trim its vertical padding for a more compact band, scoped to the task-detail header so the shared global .modal-header (used by other modals) is unaffected. Keep horizontal padding from --modal-padding; only the block padding shrinks.
 */
@@ -1815,6 +1826,7 @@ FN-6500 fixes a tablet regression from FN-5599: the task-detail overlay offset a
   .task-modal--tablet .modal-resize-grip {
     display: block;
   }
+
 
   .detail-body--chat {
     display: flex;

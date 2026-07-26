@@ -134,6 +134,19 @@ export function getViewportMode(): ViewportMode {
   return "desktop";
 }
 
+/**
+ * Whether a viewport is the tablet-only touch-resize surface.
+ *
+ * FNXC:TaskModalResize 2026-07-26-10:40:
+ * Tablet resize controls need a finger-sized target, but `(pointer: coarse)` alone
+ * would also enlarge controls on desktop hybrids and true phones. Compose the existing
+ * physical-screen-aware tablet classifier with touch capability instead; phones retain
+ * full-screen sheets and desktop coarse-pointer devices retain mouse-sized chrome.
+ */
+export function isTabletTouchViewport(mode = getViewportMode()): boolean {
+  return mode === "tablet" && hasTouchScreen() && !isPhoneClassScreen();
+}
+
 export function useViewportMode(): ViewportMode {
   const [mode, setMode] = useState<ViewportMode>(getViewportMode);
 

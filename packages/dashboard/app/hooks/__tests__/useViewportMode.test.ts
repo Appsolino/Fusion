@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getViewportMode, isFullScreenSheetViewport, isMobileViewport, MOBILE_MEDIA_QUERY, useViewportMode } from "../useViewportMode";
+import { getViewportMode, isFullScreenSheetViewport, isMobileViewport, isTabletTouchViewport, MOBILE_MEDIA_QUERY, useViewportMode } from "../useViewportMode";
 
 const TABLET_MEDIA_QUERY = "(min-width: 769px) and (max-width: 1024px)";
 const MOBILE_WIDTH_MEDIA_QUERY = "(max-width: 768px)";
@@ -240,6 +240,30 @@ describe("useViewportMode", () => {
         expect(isMobileViewport()).toBe(false);
       });
     });
+  });
+
+  it("enables the resize touch target only for tablet-class touch viewports", () => {
+    const originalMaxTouchPoints = Object.getOwnPropertyDescriptor(navigator, "maxTouchPoints");
+    Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, value: 1 });
+    try {
+      stubScreen(768, 1024);
+      installViewportMedia({ width: true, height: false, tablet: false });
+      expect(isTabletTouchViewport()).toBe(true);
+
+      stubScreen(1024, 768);
+      installViewportMedia({ width: false, height: false, tablet: true });
+      expect(isTabletTouchViewport()).toBe(true);
+
+      stubScreen(1920, 1080);
+      installViewportMedia({ width: false, height: false, tablet: false });
+      expect(isTabletTouchViewport()).toBe(false);
+
+      stubScreen(390, 844);
+      installViewportMedia({ width: true, height: false, tablet: false });
+      expect(isTabletTouchViewport()).toBe(false);
+    } finally {
+      if (originalMaxTouchPoints) Object.defineProperty(navigator, "maxTouchPoints", originalMaxTouchPoints);
+    }
   });
 
   it("keeps a touch tablet at the 768px boundary out of the phone presentation", () => {

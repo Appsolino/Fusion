@@ -131,6 +131,76 @@ visible tokenized focus ring so keyboard users can discover the same controls to
 .new-task-resize-handle--se { bottom: 0; right: 0; cursor: nwse-resize; }
 .new-task-resize-handle--sw { bottom: 0; left: 0; cursor: nesw-resize; }
 
+/*
+FNXC:TaskModalResize 2026-07-26-10:40:
+Finger drags need a 44px hit area, unlike the mouse-sized painted edge/corner controls.
+These targets expand outward from the floating panel so they cannot cover its footer or
+scrollable body. The runtime tablet-touch class is required: true-phone sheets and desktop
+coarse-pointer devices must never expose an invisible resize target.
+*/
+.task-modal--touch-resize .new-task-resize-handle--touch-target {
+  z-index: 3;
+  touch-action: none;
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--n,
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--s {
+  left: var(--modal-resize-touch-target);
+  right: var(--modal-resize-touch-target);
+  height: var(--modal-resize-touch-target);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--n {
+  top: calc((var(--modal-resize-touch-target) - var(--space-sm)) * -1);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--s {
+  bottom: calc((var(--modal-resize-touch-target) - var(--space-sm)) * -1);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--e,
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--w {
+  top: var(--modal-resize-touch-target);
+  bottom: var(--modal-resize-touch-target);
+  width: var(--modal-resize-touch-target);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--e {
+  right: calc((var(--modal-resize-touch-target) - var(--space-sm)) * -1);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--w {
+  left: calc((var(--modal-resize-touch-target) - var(--space-sm)) * -1);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--ne,
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--nw,
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--se,
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--sw {
+  width: var(--modal-resize-touch-target);
+  height: var(--modal-resize-touch-target);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--ne {
+  top: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+  right: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--nw {
+  top: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+  left: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--se {
+  bottom: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+  right: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+}
+
+.task-modal--touch-resize .new-task-resize-handle--touch-target.new-task-resize-handle--sw {
+  bottom: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+  left: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+}
+
 .new-task-modal .modal-body {
   padding: var(--space-xl);
   overflow-y: auto;

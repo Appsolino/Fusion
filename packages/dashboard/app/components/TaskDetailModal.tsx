@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Pencil, Bot, X, ChevronDown, ChevronRight, GitBranch, ArrowLeft, Zap, Loader2, AlertTriangle, Sparkles, Maximize2, Minimize2, Send, Square, Info, Paperclip, Eye, EyeOff } from "lucide-react";
 import { useModalResizePersist } from "../hooks/useModalResizePersist";
-import { useViewportMode } from "../hooks/useViewportMode";
+import { isTabletTouchViewport, useViewportMode } from "../hooks/useViewportMode";
 import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { useOverlayDismiss } from "../hooks/useOverlayDismiss";
 import { useColumnLabel } from "../i18n/labels";
@@ -6587,7 +6587,8 @@ export function TaskDetailContent({
 export function TaskDetailModal({ onClose, ...props }: TaskDetailModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const viewportMode = useViewportMode();
-  useModalResizePersist(modalRef, true, "task-detail-modal-size");
+  const isTabletTouchResize = isTabletTouchViewport(viewportMode);
+  useModalResizePersist(modalRef, true, "task-detail-modal-size", { touchTargets: isTabletTouchResize });
   useMobileScrollLock(true);
   const overlayDismissProps = useOverlayDismiss(onClose);
   /*
@@ -6614,7 +6615,7 @@ export function TaskDetailModal({ onClose, ...props }: TaskDetailModalProps) {
       aria-modal="true"
     >
       <div
-        className={`modal modal-lg task-detail-modal${isTabletTaskModal ? " task-modal--tablet" : ""}${isMobileTransition ? " task-detail-modal--mobile-transition" : ""}`}
+        className={`modal modal-lg task-detail-modal${isTabletTaskModal ? " task-modal--tablet" : ""}${isTabletTouchResize ? " task-modal--touch-resize" : ""}${isMobileTransition ? " task-detail-modal--mobile-transition" : ""}`}
         ref={modalRef}
       >
         <TaskDetailContent
