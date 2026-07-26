@@ -1,3 +1,6 @@
+import { createLogger } from "../logger.js";
+
+const severityAuditLog = createLogger("core-comments-ops");
 /**
  * comments-ops operations.
  *
@@ -260,7 +263,7 @@ export async function upsertTaskDocumentImpl(store: TaskStore, taskId: string, i
           void store.recordGoalCitations(citationInputs);
         }
       } catch (err) {
-        console.warn("[fusion] Failed to scan/record goal citations from task document:", err);
+        severityAuditLog.warn("[fusion] Failed to scan/record goal citations from task document:", err);
       }
       return document;
     }
@@ -359,7 +362,7 @@ export async function upsertTaskDocumentImpl(store: TaskStore, taskId: string, i
         store.recordGoalCitations(citationInputs);
       }
     } catch (err) {
-      console.warn("[fusion] Failed to scan/record goal citations from task document:", err);
+      severityAuditLog.warn("[fusion] Failed to scan/record goal citations from task document:", err);
     }
 
     return document;

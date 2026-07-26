@@ -1,3 +1,6 @@
+import { createLogger } from "@fusion/core";
+
+const severityAuditLog = createLogger("dashboard-register-task-workflow-routes");
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -422,7 +425,7 @@ function extractAutoSyncOutcome(event: RunAuditEvent): AutoSyncOutcome | null {
 function extractMergeAdvanceEvent(event: RunAuditEvent): Omit<MergeAdvanceEvent, "userCheckout" | "autoSync"> | null {
   const metadata = event.metadata;
   if (!metadata || typeof metadata !== "object") {
-    console.warn(`[merge-advance-events] dropping run-audit event ${event.id}: missing metadata`);
+    severityAuditLog.warn(`[merge-advance-events] dropping run-audit event ${event.id}: missing metadata`);
     return null;
   }
   const candidate = metadata as {
@@ -434,11 +437,11 @@ function extractMergeAdvanceEvent(event: RunAuditEvent): Omit<MergeAdvanceEvent,
     succeeded?: unknown;
   };
   if (typeof candidate.integrationBranch !== "string" || candidate.integrationBranch.length === 0 || typeof candidate.toSha !== "string" || candidate.toSha.length === 0) {
-    console.warn(`[merge-advance-events] dropping run-audit event ${event.id}: missing integrationBranch or toSha`);
+    severityAuditLog.warn(`[merge-advance-events] dropping run-audit event ${event.id}: missing integrationBranch or toSha`);
     return null;
   }
   if (typeof event.taskId !== "string" || event.taskId.length === 0) {
-    console.warn(`[merge-advance-events] dropping run-audit event ${event.id}: missing taskId`);
+    severityAuditLog.warn(`[merge-advance-events] dropping run-audit event ${event.id}: missing taskId`);
     return null;
   }
   return {
@@ -1956,7 +1959,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         if (exists) {
           aiUndoWorkflowId = configuredAiUndoWorkflowId;
         } else {
-          console.warn(
+          severityAuditLog.warn(
             `[task-revert] aiUndoTaskWorkflowId "${configuredAiUndoWorkflowId}" does not resolve to a known workflow; AI-undo task will inherit the project default workflow instead`,
           );
         }

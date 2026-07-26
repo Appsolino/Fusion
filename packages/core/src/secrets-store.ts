@@ -1,3 +1,6 @@
+import { createLogger } from "./logger.js";
+
+const severityAuditLog = createLogger("core-secrets-store");
 import { randomUUID } from "node:crypto";
 import type { Database as ProjectDatabase } from "./db.js";
 import type { CentralDatabase } from "./central-db.js";
@@ -131,7 +134,7 @@ export class SecretsStore {
     try {
       this.options.auditEmitter(event);
     } catch (error) {
-      console.warn("[secrets-store] audit emitter failed", error);
+      severityAuditLog.warn("[secrets-store] audit emitter failed", error);
     }
   }
 
@@ -203,7 +206,7 @@ export class SecretsStore {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(`[secrets-store] failed to reveal env exportable secret ${row.scope}:${row.key}: ${message}`);
+        severityAuditLog.warn(`[secrets-store] failed to reveal env exportable secret ${row.scope}:${row.key}: ${message}`);
       }
     };
 

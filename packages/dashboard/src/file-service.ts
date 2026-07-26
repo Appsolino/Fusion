@@ -1,3 +1,6 @@
+import { createLogger } from "@fusion/core";
+
+const severityAuditLog = createLogger("dashboard-file-service");
 import { join, resolve, relative, dirname, basename } from "node:path";
 import { readdir, readFile as fsReadFile, writeFile as fsWriteFile, stat, copyFile as fsCopyFile, rename as fsRename, rm as fsRm, mkdir, access } from "node:fs/promises";
 import type { Dirent } from "node:fs";
@@ -1154,7 +1157,7 @@ export async function scanMarkdownFiles(
     } catch (err: unknown) {
       const error = err as NodeJS.ErrnoException;
       if (error.code !== "ENOENT") {
-        console.warn(
+        severityAuditLog.warn(
           `[scanMarkdownFiles] failed to read directory ${directoryPath}: ${error.message ?? String(err)}`,
         );
       }

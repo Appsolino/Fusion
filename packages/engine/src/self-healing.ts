@@ -2704,7 +2704,7 @@ export class SelfHealingManager {
           fn: async () => {
             const cleaned = await this.cleanupStaleTempMergeWorktrees();
             if (cleaned > 0) {
-              log.log(`Cleaned ${cleaned} stale AI merge temp worktree(s)`);
+              log.debug(`Cleaned ${cleaned} stale AI merge temp worktree(s)`);
             }
             return cleaned;
           },
@@ -2756,7 +2756,7 @@ export class SelfHealingManager {
             }
             const { sessionsDeleted, roomsDeleted } = await this.options.chatStore.cleanupOldChats(days * 86_400_000);
             if (sessionsDeleted > 0 || roomsDeleted > 0) {
-              log.log(`Maintenance batch 1 step "cleanup-old-chats" succeeded — sessions=${sessionsDeleted} rooms=${roomsDeleted}`);
+              log.debug(`Maintenance batch 1 step "cleanup-old-chats" removed stale data — sessions=${sessionsDeleted} rooms=${roomsDeleted}`);
             } else {
               log.debug(`Maintenance batch 1 step "cleanup-old-chats" succeeded — sessions=${sessionsDeleted} rooms=${roomsDeleted}`);
             }
@@ -2776,7 +2776,7 @@ export class SelfHealingManager {
             }
             const { messagesDeleted } = await this.options.messageStore.cleanupOldMessages(value * 86_400_000);
             if (messagesDeleted > 0) {
-              log.log(`Maintenance batch 1 step "cleanup-old-mail" succeeded — messagesDeleted=${messagesDeleted}`);
+              log.debug(`Maintenance batch 1 step "cleanup-old-mail" removed stale data — messagesDeleted=${messagesDeleted}`);
             } else {
               log.debug(`Maintenance batch 1 step "cleanup-old-mail" succeeded — messagesDeleted=${messagesDeleted}`);
             }
@@ -3062,7 +3062,7 @@ export class SelfHealingManager {
 
       if (stale.length === 0) return 0;
 
-      log.log(`Auto-archiving ${stale.length} done task(s) older than ${archiveAfterMs}ms`);
+      log.debug(`Auto-archiving ${stale.length} done task(s) older than ${archiveAfterMs}ms`);
 
       let archived = 0;
       const thresholdDays = Math.floor(archiveAfterMs / 86_400_000);
@@ -3073,14 +3073,14 @@ export class SelfHealingManager {
           const ts = task.columnMovedAt || task.updatedAt;
           const movedAt = ts ? Date.parse(ts) : NaN;
           const ageDays = Number.isFinite(movedAt) ? Math.floor((now - movedAt) / 86_400_000) : 0;
-          log.log(`auto-archive: archived ${task.id} (age ${ageDays}d, threshold ${thresholdDays}d)`);
+          log.debug(`auto-archive: archived ${task.id} (age ${ageDays}d, threshold ${thresholdDays}d)`);
         } catch (err: unknown) { const errorMessage = err instanceof Error ? err.message : String(err);
           log.error(`Failed to auto-archive ${task.id}: ${errorMessage}`);
         }
       }
 
       if (archived > 0) {
-        log.log(`Auto-archived ${archived} stale done task(s)`);
+        log.debug(`Auto-archived ${archived} stale done task(s)`);
       }
       return archived;
     } catch (err: unknown) { const errorMessage = err instanceof Error ? err.message : String(err);

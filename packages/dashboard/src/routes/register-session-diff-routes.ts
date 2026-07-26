@@ -1,3 +1,6 @@
+import { createLogger } from "@fusion/core";
+
+const severityAuditLog = createLogger("dashboard-register-session-diff-routes");
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import type { Request, Router } from "express";
@@ -829,7 +832,7 @@ async function restrictRebaseRangeFiles(
     const ownSet = new Set(attribution.files);
     return rebaseRangeFiles.filter((file) => ownSet.has(file.path));
   } catch (err) {
-    console.warn(
+    severityAuditLog.warn(
       `[diff] FN-5154 attribution failed for ${task.id}: ${(err as Error).message}; falling back to unrestricted range`,
     );
     return rebaseRangeFiles;
@@ -1088,7 +1091,7 @@ export function registerSessionDiffRoutes(router: Router, deps: SessionDiffRoute
           if (rebaseDiffSpec) {
             diffSpec = rebaseDiffSpec;
           } else {
-            console.warn(`[diff] done task ${task.id}: mergeDetails.rebaseBaseSha ${rebaseBaseSha} is not ancestor of ${sha}; falling back to single-commit diff`);
+            severityAuditLog.warn(`[diff] done task ${task.id}: mergeDetails.rebaseBaseSha ${rebaseBaseSha} is not ancestor of ${sha}; falling back to single-commit diff`);
             try {
               diffSpec = await resolveCommitDiffSpec(sha, rootDir);
             } catch {
@@ -1283,7 +1286,7 @@ export function registerSessionDiffRoutes(router: Router, deps: SessionDiffRoute
           if (rebaseDiffSpec) {
             diffSpec = rebaseDiffSpec;
           } else {
-            console.warn(`[file-diffs] done task ${task.id}: mergeDetails.rebaseBaseSha ${rebaseBaseSha} is not ancestor of ${sha}; falling back to single-commit diff`);
+            severityAuditLog.warn(`[file-diffs] done task ${task.id}: mergeDetails.rebaseBaseSha ${rebaseBaseSha} is not ancestor of ${sha}; falling back to single-commit diff`);
             try {
               diffSpec = await resolveCommitDiffSpec(sha, rootDir);
             } catch {

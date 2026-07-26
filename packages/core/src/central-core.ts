@@ -1,3 +1,6 @@
+import { createLogger } from "./logger.js";
+
+const severityAuditLog = createLogger("core-central-core");
 /**
  * CentralCore — Main API for fn's multi-project central infrastructure.
  *
@@ -274,19 +277,19 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
 
   private readonly onDiscoveryNodeDiscovered = (node: DiscoveredNode): void => {
     void this.handleDiscoveryNodeDiscovered(node).catch((error) => {
-      console.warn("[central-core] Failed to process discovered node", error);
+      severityAuditLog.warn("[central-core] Failed to process discovered node", error);
     });
   };
 
   private readonly onDiscoveryNodeUpdated = (node: DiscoveredNode): void => {
     void this.handleDiscoveryNodeUpdated(node).catch((error) => {
-      console.warn("[central-core] Failed to process discovery node update", error);
+      severityAuditLog.warn("[central-core] Failed to process discovery node update", error);
     });
   };
 
   private readonly onDiscoveryNodeLost = (name: string): void => {
     void this.handleDiscoveryNodeLost(name).catch((error) => {
-      console.warn("[central-core] Failed to process discovery node loss", error);
+      severityAuditLog.warn("[central-core] Failed to process discovery node loss", error);
     });
   };
 
@@ -362,7 +365,7 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
     }
 
     await this.markLocalNodeOffline().catch((error) => {
-      console.warn("[central-core] Failed to persist local node offline during close", error);
+      severityAuditLog.warn("[central-core] Failed to persist local node offline during close", error);
     });
 
     // FNXC:CentralCore 2026-06-26-12:30: In backend mode there is no SQLite
@@ -560,7 +563,7 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
     if (this.backendMode) {
       // FNXC:CentralCore 2026-06-26-12:30: Backend mode delegates to PostgreSQL.
       await asyncCentralCore.insertProjectRow(this.asyncLayer!, project, now);
-      console.log(
+      severityAuditLog.log(
         `[central] reattached project ${project.id} at ${project.path} using stored identity (createdAt=${now})`,
       );
       this.emit("project:reattached", project, "identity-recovered");
@@ -569,9 +572,7 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
 
     this.insertProjectRow(project, now);
     this.db!.bumpLastModified();
-    console.log(
-      `[central] reattached project ${project.id} at ${project.path} using stored identity (createdAt=${now})`,
-    );
+    severityAuditLog.debug(`[central] local reattached project ${project.id} at ${project.path} using stored identity (createdAt=${now})`);
     this.emit("project:reattached", project, "identity-recovered");
     return project;
   }

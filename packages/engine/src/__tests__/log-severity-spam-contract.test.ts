@@ -5,9 +5,10 @@
  * shipped call-site severity for known TUI flood classes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { createLogger } from "../logger.js";
+import { logSeverityManifest } from "./log-severity-manifest.js";
 
 const engineSrc = join(__dirname, "..");
 
@@ -15,7 +16,44 @@ function readSrc(relative: string): string {
   return readFileSync(join(engineSrc, relative), "utf8");
 }
 
+function sourceFiles(root: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) return entry.name === "__tests__" ? [] : sourceFiles(path);
+    return entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") ? [path] : [];
+  });
+}
+
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+}
+
+/*
+FNXC:EngineDiagnostics 2026-08-01-10:46:
+FN-8603 pins every demoted engine call-site by a stable message anchor. The
+source check rejects a reversion to log, warn, error, or bare console output.
+*/
 describe("log severity spam contract (source)", () => {
+  it("keeps every manifest entry at its audited severity", () => {
+    for (const entry of logSeverityManifest.filter((entry) => entry.pkg === "engine")) {
+      const src = readSrc(entry.file);
+      const matchingLines = src.split("\n").filter((line) => line.includes(entry.anchor));
+      expect(matchingLines, `${entry.file}: ${entry.anchor}`).toHaveLength(1);
+      const [line] = matchingLines;
+      expect(line).toContain(`.${entry.severity}(`);
+      expect(line).not.toMatch(/\.(log|warn|error)\(|console\.(log|warn|error)\(/);
+    }
+  });
+  // Logger implementation is the sole adapter allowed to write severity-marked console output.
+  const bareConsoleAllowlist = new Set([join(engineSrc, "logger.ts")]);
+
+  it("routes production diagnostics through createLogger", () => {
+    for (const file of sourceFiles(engineSrc)) {
+      if (bareConsoleAllowlist.has(file)) continue;
+      expect(withoutComments(readFileSync(file, "utf8")), file).not.toMatch(/console\.(log|warn|error)\(/);
+    }
+  });
+
   it("maintenance batch per-step success uses debug, not log", () => {
     const src = readSrc("self-healing.ts");
     expect(src).toMatch(/log\.debug\(`Maintenance batch 1 step "\$\{fn\.name\}" succeeded`\)/);

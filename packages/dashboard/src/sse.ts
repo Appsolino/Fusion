@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { createLogger } from "@fusion/core";
 import type {
   TaskStore,
   MissionStore,
@@ -46,9 +47,10 @@ function isSseDebugEnabled(): boolean {
     .includes("sse");
 }
 
+const sseLog = createLogger("sse");
 function sseDebug(message: string): void {
   if (!isSseDebugEnabled()) return;
-  console.log(message);
+  sseLog.debug(message);
 }
 
 const SSE_CLIENT_ID_MAX_LENGTH = 128;
@@ -563,8 +565,8 @@ export function createSSE(
       const result = safeWrite(res, data);
       if (result === "ok") return;
       if (result === "backpressure") {
-        console.warn(
-          `[sse] connection ${connectionId} backpressure exceeded ` +
+        sseLog.warn(
+          `connection ${connectionId} backpressure exceeded ` +
             `(buffered=${res.writableLength}B, threshold=${SSE_MAX_BUFFERED_BYTES}B); closing`,
         );
         closeConnection("backpressure");

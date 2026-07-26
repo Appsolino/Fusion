@@ -1,3 +1,6 @@
+import { createLogger } from "../logger.js";
+
+const severityAuditLog = createLogger("core-agent-logs");
 /**
  * agent-logs operations.
  *
@@ -50,7 +53,7 @@ export function flushAgentLogBufferImpl(store: TaskStore): void {
         validEntries = batch.filter((entry) => liveTaskIds.has(entry.taskId));
         const dropped = batch.length - validEntries.length;
         if (dropped > 0) {
-          console.warn(
+          severityAuditLog.warn(
             `[fusion] Dropped ${dropped} buffered agent log entries for deleted tasks (${store.fusionDir})`,
           );
         }
@@ -84,7 +87,7 @@ export function flushAgentLogBufferImpl(store: TaskStore): void {
                 ),
               );
             } catch (err) {
-              console.warn("[fusion] Failed to scan goal citations from agent_log:", err);
+              severityAuditLog.warn("[fusion] Failed to scan goal citations from agent_log:", err);
             }
           }
         }
@@ -97,10 +100,10 @@ export function flushAgentLogBufferImpl(store: TaskStore): void {
           // fire-and-forget agent-log path.
           try {
             void Promise.resolve(store.recordGoalCitations(citationInputs)).catch((err) => {
-              console.warn("[fusion] Failed to record goal citations from agent_log batch:", err);
+              severityAuditLog.warn("[fusion] Failed to record goal citations from agent_log batch:", err);
             });
           } catch (err) {
-            console.warn("[fusion] Failed to record goal citations from agent_log batch:", err);
+            severityAuditLog.warn("[fusion] Failed to record goal citations from agent_log batch:", err);
           }
         }
         if (!store.backendMode) {
@@ -117,7 +120,7 @@ export function flushAgentLogBufferImpl(store: TaskStore): void {
             try {
               store.flushAgentLogBuffer();
             } catch (err) {
-              console.error(`[fusion] Retry agent log flush failed (${store.fusionDir}):`, err);
+              severityAuditLog.error(`[fusion] Retry agent log flush failed (${store.fusionDir}):`, err);
             }
           }, TaskStore.AGENT_LOG_FLUSH_MS);
           store.agentLogFlushTimer.unref();
@@ -152,7 +155,7 @@ export async function appendAgentLogBatchImpl(store: TaskStore, entries: Array<{
       validEntries = normalizedEntries.filter((entry) => liveTaskIds.has(entry.taskId));
       const dropped = normalizedEntries.length - validEntries.length;
       if (dropped > 0) {
-        console.warn(`[fusion] Dropped ${dropped} batch agent log entries for deleted tasks (${store.fusionDir})`);
+        severityAuditLog.warn(`[fusion] Dropped ${dropped} batch agent log entries for deleted tasks (${store.fusionDir})`);
       }
     }
 
@@ -192,7 +195,7 @@ export async function appendAgentLogBatchImpl(store: TaskStore, entries: Array<{
             ),
           );
         } catch (err) {
-          console.warn("[fusion] Failed to scan goal citations from agent log batch:", err);
+          severityAuditLog.warn("[fusion] Failed to scan goal citations from agent log batch:", err);
         }
       }
     }
@@ -201,10 +204,10 @@ export async function appendAgentLogBatchImpl(store: TaskStore, entries: Array<{
       // promise so a citation-write failure is not an unhandled rejection.
       try {
         void Promise.resolve(store.recordGoalCitations(citationInputs)).catch((err) => {
-          console.warn("[fusion] Failed to record goal citations from appendAgentLogBatch:", err);
+          severityAuditLog.warn("[fusion] Failed to record goal citations from appendAgentLogBatch:", err);
         });
       } catch (err) {
-        console.warn("[fusion] Failed to record goal citations from appendAgentLogBatch:", err);
+        severityAuditLog.warn("[fusion] Failed to record goal citations from appendAgentLogBatch:", err);
       }
     }
     if (validEntries.length > 0 && !store.backendMode) {

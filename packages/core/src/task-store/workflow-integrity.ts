@@ -1,3 +1,6 @@
+import { createLogger } from "../logger.js";
+
+const severityAuditLog = createLogger("core-workflow-integrity");
 /**
  * workflow-integrity operations.
  *
@@ -101,7 +104,7 @@ export async function appendAgentLogImpl(store: TaskStore, taskId: string, text:
       // where an uncaught throw exits the process. The catch blocks exist
       // precisely to keep a failed flush from crashing the caller/process, so
       // they must not themselves dereference `store.db`.
-      console.warn(
+      severityAuditLog.warn(
         `[fusion] Dropped ${dropCount} buffered agent log entries — backlog cap reached (${store.fusionDir})`,
       );
     }
@@ -122,7 +125,7 @@ export async function appendAgentLogImpl(store: TaskStore, taskId: string, text:
         store.flushAgentLogBuffer();
       } catch (err) {
         // Size-triggered flush failed — log but don't crash the caller.
-        console.error(`[fusion] Size-triggered agent log flush failed (${store.fusionDir}):`, err);
+        severityAuditLog.error(`[fusion] Size-triggered agent log flush failed (${store.fusionDir}):`, err);
       }
     } else if (!store.agentLogFlushTimer) {
       store.agentLogFlushTimer = setTimeout(
@@ -131,7 +134,7 @@ export async function appendAgentLogImpl(store: TaskStore, taskId: string, text:
             store.flushAgentLogBuffer();
           } catch (err) {
             // Timer-triggered flush failed — log but don't crash the process.
-            console.error(`[fusion] Timer-triggered agent log flush failed (${store.fusionDir}):`, err);
+            severityAuditLog.error(`[fusion] Timer-triggered agent log flush failed (${store.fusionDir}):`, err);
           }
         },
         TaskStore.AGENT_LOG_FLUSH_MS,

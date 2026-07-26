@@ -1,3 +1,6 @@
+import { createLogger } from "@fusion/core";
+
+const severityAuditLog = createLogger("dashboard-register-git-github");
 import { type NextFunction, type Request, type Response } from "express";
 import { isAbsolute, resolve } from "node:path";
 import { realpathSync } from "node:fs";
@@ -1466,7 +1469,7 @@ export async function pullGitBranch(cwd?: string, options?: PullGitBranchOptions
           // advanced, so downstream stash-pop and audit emission proceed.
           // The user's worktree just stays at its prior sha, matching today's
           // behavior. Logged loudly so the failure is visible.
-          console.warn(
+          severityAuditLog.warn(
             `[integration-pull] taskId=${taskId} worktree sync to ${localIntegrationTip.slice(0, 8)} failed (continuing): ${err instanceof Error ? err.message : String(err)}`,
           );
         });
@@ -2404,7 +2407,7 @@ export async function refreshPrInBackground(
             directMergeCommitStrategy: options?.directMergeCommitStrategy,
           });
         } catch (err) {
-          console.error("[pr-conflict-diagnostics]", err);
+          severityAuditLog.error("[pr-conflict-diagnostics]", err);
         }
       } else {
         conflictDiagnostics = undefined;
@@ -2647,7 +2650,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
         reconcileSweepOffsetByStore.set(projectStore, nextOffset);
       } catch (err) {
         // runSweep isolates per-pass failures internally; this guards only unexpected orchestration errors.
-        console.warn(
+        severityAuditLog.warn(
           `[github-tracking-reconcile] sweep orchestration error: ${err instanceof Error ? err.message : String(err)}`,
         );
       } finally {
@@ -2985,7 +2988,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
         res.json({ ...status, ...extended });
       } catch (extErr: unknown) {
         const message = extErr instanceof Error ? extErr.message : String(extErr);
-        console.warn(`[git-status] extended computation failed; returning basic status: ${message}`);
+        severityAuditLog.warn(`[git-status] extended computation failed; returning basic status: ${message}`);
         res.json(status);
       }
     } catch (err: unknown) {
@@ -4147,7 +4150,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
         const detail = await client.getIssueDetail(owner, repo, issueNumber);
         issueImageBodies.push(...detail.comments.map((comment) => comment.body));
       } catch (err) {
-        console.warn(
+        severityAuditLog.warn(
           `[fusion:github-import] Could not fetch comments for ${owner}/${repo}#${issueNumber}; importing body images only: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
@@ -4168,7 +4171,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
         } catch (error) {
           // FNXC:IssueImportAttachments 2026-07-15-14:10: Post-create audit
           // telemetry is best-effort; never turn a stored task into a failed import.
-          console.warn(`[fusion:github-import] Could not log image attachments for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+          severityAuditLog.warn(`[fusion:github-import] Could not log image attachments for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
 
@@ -4453,7 +4456,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
               const detail = await githubClient.getIssueDetail(owner, repo, issueNumber);
               batchImageBodies.push(...detail.comments.map((comment) => comment.body));
             } catch (err) {
-              console.warn(
+              severityAuditLog.warn(
                 `[fusion:github-import] Could not fetch comments for ${owner}/${repo}#${issueNumber}; importing body images only: ${err instanceof Error ? err.message : String(err)}`,
               );
             }
@@ -4477,7 +4480,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
                 sourceUrl,
               );
             } catch (error) {
-              console.warn(`[fusion:github-import] Could not log image attachments for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+              severityAuditLog.warn(`[fusion:github-import] Could not log image attachments for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
             }
           }
 
@@ -5869,7 +5872,7 @@ export function registerGitGitHubRoutes(ctx: ApiRoutesContext): void {
                 directMergeCommitStrategy: settings.directMergeCommitStrategy,
               });
             } catch (err) {
-              console.error("[pr-conflict-diagnostics]", err);
+              severityAuditLog.error("[pr-conflict-diagnostics]", err);
             }
           } else {
             conflictDiagnostics = undefined;

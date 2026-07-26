@@ -1,3 +1,6 @@
+import { createLogger } from "@fusion/core";
+
+const severityAuditLog = createLogger("dashboard-context");
 import { Router, type Request } from "express";
 import { resolve, sep } from "node:path";
 import {
@@ -134,7 +137,7 @@ export function warnLaunchDirFallbackOnce(options?: ServerOptions): void {
   if (logger?.warn) {
     logger.warn(message);
   } else {
-    console.warn(message);
+    severityAuditLog.warn(message);
   }
 }
 

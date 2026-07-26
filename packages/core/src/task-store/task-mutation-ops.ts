@@ -1,3 +1,6 @@
+import { createLogger } from "../logger.js";
+
+const severityAuditLog = createLogger("core-task-mutation-ops");
 /**
  * FNXC:CodeOrganization 2026-07-21-12:00:
  * Domain rename from remaining-ops-2: task JSON/config writes, atomic updates, tracking reconcile,
@@ -1087,7 +1090,7 @@ export async function addAttachmentImpl(store: TaskStore, id: string, filename: 
           },
         });
       } catch (err) {
-        console.warn(
+        severityAuditLog.warn(
           `[fusion:store] Skipping artifact bridge for attachment ${attachmentResult.filename} on task ${id}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
@@ -1565,7 +1568,7 @@ export async function closeImpl(store: TaskStore): Promise<void> {
       } catch (err) {
         // Best-effort flush — entries for deleted tasks will fail FK check.
         // Log the error instead of silently swallowing it.
-        console.warn(`[fusion] Could not flush remaining agent log entries on close:`, err);
+        severityAuditLog.warn(`[fusion] Could not flush remaining agent log entries on close:`, err);
       }
     }
     // Cancel any retry timer armed by a failed flush — the DB is about to close.
@@ -1594,7 +1597,7 @@ export async function closeImpl(store: TaskStore): Promise<void> {
       try {
         await secretsCentralCore.close();
       } catch (err) {
-        console.warn(`[fusion] Could not close secrets central core on TaskStore close:`, err);
+        severityAuditLog.warn(`[fusion] Could not close secrets central core on TaskStore close:`, err);
       }
     }
     store.secretsStore = null;
@@ -1610,7 +1613,7 @@ export async function closeImpl(store: TaskStore): Promise<void> {
       try {
         pluginStore.close();
       } catch (err) {
-        console.warn(`[fusion] Could not close plugin store on TaskStore close:`, err);
+        severityAuditLog.warn(`[fusion] Could not close plugin store on TaskStore close:`, err);
       }
     }
     // FNXC:RuntimeBackendInjection 2026-06-24-14:30:
