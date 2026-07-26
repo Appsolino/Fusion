@@ -9,6 +9,7 @@ import type {
   AgentHeartbeatRun,
   PluginStore,
   PluginLoader,
+  PluginLoaderOptions,
   MessageStore,
   RoutineStore,
   GithubIssueAction,
@@ -62,6 +63,39 @@ import { setImmediate as setImmediateCb } from "node:timers";
 import { seedPreReleasePlanReviewContinuation } from "../plan-review-continuation.js";
 
 const yieldEventLoop = (): Promise<void> => new Promise((resolve) => setImmediateCb(resolve));
+
+/**
+ * FNXC:PluginMcpServers 2026-07-23-12:00:
+ * FN-8596 keeps cross-root MCP discovery private to its throwaway loader. This
+ * exported production seam lets regression tests prove runtime construction
+ * cannot reintroduce shared lifecycle registration or state persistence.
+ */
+export function createDiscoveryPluginLoaderOptions(
+  scopedStore: { getPluginStore(): unknown },
+): PluginLoaderOptions {
+  return {
+    pluginStore: scopedStore.getPluginStore() as PluginStore,
+    taskStore: scopedStore as TaskStore,
+    lifecycleScope: "isolated",
+    persistRuntimeState: false,
+  };
+}
+
+export function createRuntimePluginMcpProviderOptions(input: {
+  hostRootDir: string;
+  hostLoader: Pick<PluginLoader, "getPluginMcpServers">;
+  PluginLoaderClass: new (options: PluginLoaderOptions) => PluginLoader;
+}): {
+  hostRootDir: string;
+  hostLoader: Pick<PluginLoader, "getPluginMcpServers">;
+  createScopedLoader: (store: { getPluginStore(): unknown }) => PluginLoader;
+} {
+  return {
+    hostRootDir: input.hostRootDir,
+    hostLoader: input.hostLoader,
+    createScopedLoader: (scopedStore) => new input.PluginLoaderClass(createDiscoveryPluginLoaderOptions(scopedStore)),
+  };
+}
 
 export const CLI_AGENT_AWAITING_INPUT_EVENT = "cli-agent-awaiting-input" as const;
 const TASK_PLANNER_CHAT_AGENT_ID_PREFIX = "task-planner:";
@@ -482,14 +516,13 @@ export class InProcessRuntime
        * resolveMcpServersForStore consumes this filtered seam across every AI
        * lane; it never sees PluginRunner's raw contribution list.
        */
-      const projectScopedPluginMcpProvider = createProjectScopedPluginMcpProvider({
-        hostRootDir: this.config.workingDirectory,
-        hostLoader: this.pluginLoader,
-        createScopedLoader: (scopedStore) => new PluginLoaderClass({
-          pluginStore: scopedStore.getPluginStore() as PluginStore,
-          taskStore: scopedStore as TaskStore,
+      const projectScopedPluginMcpProvider = createProjectScopedPluginMcpProvider(
+        createRuntimePluginMcpProviderOptions({
+          hostRootDir: this.config.workingDirectory,
+          hostLoader: this.pluginLoader,
+          PluginLoaderClass,
         }),
-      });
+      );
       (this.taskStore as TaskStore & { getProjectScopedPluginMcpServers?: () => Promise<ReturnType<PluginRunner["getPluginMcpServers"]>> }).getProjectScopedPluginMcpServers = () => projectScopedPluginMcpProvider.get(this.taskStore);
       /*
        * FNXC:PluginMcpServers 2026-07-22-15:35:
