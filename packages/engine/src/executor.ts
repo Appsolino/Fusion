@@ -1648,6 +1648,14 @@ export function getExecutorSystemPrompt(
 
 
 export interface TaskExecutorOptions {
+  /*
+   * FNXC:PlanReviewLease 2026-07-26-21:07:
+   * Resolves this engine's cluster node id for review-gate lease attribution. A GETTER, not a
+   * value: the runtime resolves the id asynchronously during start(), which can complete after
+   * the executor is constructed, so a snapshot taken at construction would be permanently
+   * undefined. Read at runner-construction time instead.
+   */
+  getLocalNodeId?: () => string | undefined;
   semaphore?: AgentSemaphore;
   /** Worktree pool for recycling idle worktrees across tasks. */
   pool?: WorktreePool;
@@ -5964,6 +5972,7 @@ export class TaskExecutor {
         resolveColumnBinding: resolveBindingForNode,
       });
       const runner = new WorkflowGraphTaskRunner({
+        localNodeId: this.options.getLocalNodeId?.(),
         store: {
           ...this.store,
           /*

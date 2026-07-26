@@ -867,6 +867,13 @@ export class InProcessRuntime
 
       const prNodeGithubOps = this.config.prNodeGithubOps;
       const executorOptions: TaskExecutorOptions = {
+        /*
+        FNXC:PlanReviewLease 2026-07-26-21:12:
+        Getter, not a value: `this.localNodeId` is resolved later in start() (it needs an async
+        CentralCore read), so capturing it here would freeze `undefined` and silently disable lease
+        attribution. Reading it lazily at runner-construction time picks up the resolved id.
+        */
+        getLocalNodeId: () => this.localNodeId,
         semaphore: this.projectSemaphore,
         pool: this.worktreePool,
         usageLimitPauser: this.usageLimitPauser,
