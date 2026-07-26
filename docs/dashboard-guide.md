@@ -91,6 +91,11 @@ Movable dashboard pop-outs remember their last desktop location and size, while 
 
 Task Detail and New Task remain resizable on known touch tablets, including a 768px-wide tablet viewport. Task Detail exposes its accessible bottom-right resize grip; New Task keeps its draggable header and edge/corner resize controls. On that tablet-touch surface, the painted control remains compact but its explicit resize hit target is at least 44px, sits outside the panel content, and owns touch gestures with pointer capture. Their geometry stays within the viewport and is restored from browser storage on later tablet or desktop opens. True phones, narrow folded panes, and desktop coarse-pointer devices do not receive the enlarged target: phones remain full-screen sheets and desktop preserves cursor-sized resize chrome.
 
+<!-- FNXC:ModalTouchGeometryDocs 2026-07-26-12:19: FloatingWindow is the shared move/resize primitive; its tablet target contract must remain discriminator-composed so 768px tablets never collide with phone sheets. -->
+### Shared floating-window touch contract
+
+Use `FloatingWindow` for a moveable and resizable dashboard surface rather than adding per-modal pointer code. On known tablet touch viewports it uses `isTabletTouchViewport`, applies `data-resize-hit-target="true"` to the drag handle and all eight edge/corner handles, and expands only their hit areas to the shared 44px target without thickening painted borders or covering content/footer controls. Never gate these controls on bare `(pointer: coarse)`: desktop hybrids keep desktop geometry. Phone full-screen sheets are strictly **below 768px** (`max-width: 767.98px`); a 768px viewport is tablet-class, so JS geometry and CSS must preserve active targets there.
+
 ## Mobile/PWA app icons
 
 The installed mobile/PWA home-screen icons are generated from `packages/dashboard/app/public/logo.svg` by the desktop icon generator. When the Fusion brand mark changes, run `pnpm --filter @fusion/desktop generate:icons` so `packages/dashboard/app/public/icons/icon-192.png` and `packages/dashboard/app/public/icons/icon-512.png` stay aligned with the canonical logo. Also bump `CACHE_NAME` in `packages/dashboard/app/public/sw.js` whenever those icon assets change so installed PWAs refresh the cached launcher images.

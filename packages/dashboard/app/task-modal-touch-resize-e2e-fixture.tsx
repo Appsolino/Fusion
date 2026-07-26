@@ -4,6 +4,8 @@ import i18n from "i18next";
 import { I18nextProvider, initReactI18next } from "react-i18next";
 import "./styles.css";
 import "./components/TaskDetailModal.css";
+import "./components/FloatingWindow.css";
+import { FloatingWindow } from "./components/FloatingWindow";
 import { useModalResizePersist } from "./hooks/useModalResizePersist";
 import { isTabletTouchViewport, useViewportMode } from "./hooks/useViewportMode";
 import { NewTaskModal } from "./components/NewTaskModal";
@@ -43,10 +45,45 @@ function TaskDetailResizeHarness() {
   </div>;
 }
 
+function FloatingWindowHarness() {
+  return <FloatingWindow
+    windowKey="fn-8605-floating"
+    title="Floating task detail"
+    onClose={() => undefined}
+    className="floating-window--task-detail"
+    defaultSize={{ width: 560, height: 480 }}
+    defaultPosition={{ x: 80, y: 80 }}
+    minSize={{ width: 320, height: 240 }}
+    persistGeometryKey="fusion:fn-8605-floating"
+    suspendGeometryPersistenceOnMobile
+  >
+    <div>Floating task detail body</div>
+  </FloatingWindow>;
+}
+
+function HeaderlessFloatingWindowHarness() {
+  return <FloatingWindow
+    windowKey="fn-8605-headerless-floating"
+    title="Headerless floating task detail"
+    onClose={() => undefined}
+    hideHeader
+    dragHandleSelector=".fn-8605-delegated-drag-handle"
+    className="floating-window--task-detail"
+    defaultSize={{ width: 560, height: 480 }}
+    defaultPosition={{ x: 80, y: 80 }}
+    minSize={{ width: 320, height: 240 }}
+    persistGeometryKey="fusion:fn-8605-headerless-floating"
+    suspendGeometryPersistenceOnMobile
+  >
+    <div className="fn-8605-delegated-drag-handle">Headerless task detail</div>
+    <div>Floating task detail body</div>
+  </FloatingWindow>;
+}
+
 function Fixture() {
   return <I18nextProvider i18n={i18n}>
     <ConfirmDialogProvider skipConfirmations>
-      {surface === "task-detail" ? <TaskDetailResizeHarness /> : <NewTaskModal
+      {surface === "floating-window" ? <FloatingWindowHarness /> : surface === "floating-window-headerless" ? <HeaderlessFloatingWindowHarness /> : surface === "task-detail" ? <TaskDetailResizeHarness /> : <NewTaskModal
         isOpen
         tasks={[]}
         onClose={() => undefined}

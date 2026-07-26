@@ -88,7 +88,7 @@ function mediaBlockFor(css: string, query: string): string {
 
 function setSheetViewport(isSheetWidth: boolean): void {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
-    matches: query === "(max-width: 768px)" ? isSheetWidth : query === "(max-height: 480px)",
+    matches: query === "(max-width: 767.98px)" ? isSheetWidth : query === "(max-height: 480px)",
     media: query,
     onchange: null,
     addEventListener: vi.fn(),
@@ -151,9 +151,9 @@ describe("FloatingWindow", () => {
     expect(stylesCss).toContain("width: 8px;");
     expect(bodyRule).toContain("overflow: auto;");
     expect(bodyRule).toContain("margin-inline-end: var(--space-lg);");
-    expect(cssRuleFor(floatingWindowCss, ".floating-window__resize-handle--e")).toContain("right: 0;");
-    expect(cssRuleFor(floatingWindowCss, ".floating-window__resize-handle--ne")).toContain("right: 0;");
-    expect(cssRuleFor(floatingWindowCss, ".floating-window__resize-handle--se")).toContain("right: 0;");
+    expect(cssRuleContaining(floatingWindowCss, ".floating-window__resize-handle--e", "right: 0;")).toContain("right: 0;");
+    expect(cssRuleContaining(floatingWindowCss, ".floating-window__resize-handle--ne", "right: 0;")).toContain("right: 0;");
+    expect(cssRuleContaining(floatingWindowCss, ".floating-window__resize-handle--se", "right: 0;")).toContain("right: 0;");
 
     // No shared caller may move a right handle back into the reserved scrollbar
     // gutter, nor override the body gutter, AT DESKTOP WIDTHS. Mobile full-screen
@@ -208,68 +208,16 @@ describe("FloatingWindow", () => {
   width, and that it stays scoped to task-detail so other floating-window callers
   (whose right resize handles remain live) keep their scrollbar clearance.
   */
-  it("removes task-detail resize clearance on touch-primary pointers at any width", () => {
-    const coarseBlock = mediaBlockFor(floatingWindowCss, "(pointer: coarse)");
+  it("uses the tablet-touch discriminator instead of bare coarse-pointer suppression", () => {
+    expect(floatingWindowCss).not.toContain("@media (pointer: coarse)");
+    expect(floatingWindowCss).not.toContain("max-width: 768px");
+    expect(floatingWindowCss).toContain("@media (max-width: 767.98px)");
+    expect(floatingWindowCss).toContain(".floating-window--touch-geometry .floating-window__resize-handle");
+    expect(floatingWindowCss).toContain("width: var(--modal-resize-touch-target);");
+    expect(floatingWindowCss).toContain("margin-inline-end: var(--space-lg);");
 
-    expect(coarseBlock).not.toBe("");
-    expect(cssRuleFor(coarseBlock, ".floating-window--task-detail .floating-window__body")).toContain("margin-inline-end: 0;");
-    expect(cssRuleFor(coarseBlock, ".floating-window--task-detail .floating-window__resize-handle")).toContain("display: none;");
-
-    // The carve-out is task-detail only: every other shared caller keeps the gutter.
-    for (const callerClass of [
-      "floating-window--automation",
-      "floating-window--mission-interview",
-      "floating-window--pr-create",
-      "floating-window--file-browser",
-      "floating-window--workflow-editor",
-      "artifacts-gallery-window",
-    ]) {
-      expect(cssRulesForClass(coarseBlock, callerClass), callerClass).toHaveLength(0);
-    }
-
-    // No width bound may creep back into the coarse-pointer query.
-    expect(floatingWindowCss).toContain("@media (pointer: coarse) {");
-  });
-
-  it("removes only tablet task-detail resize clearance and handles for empty and populated popups", () => {
-    const tabletBlock = mediaBlockFor(floatingWindowCss, "(min-width: 769px) and (max-width: 1024px)");
-    const mobileBlock = mediaBlockFor(floatingWindowCss, "(max-width: 768px)");
-    const desktopCss = stripAtMediaBlocks(floatingWindowCss);
-
-    expect(cssRuleFor(tabletBlock, ".floating-window--task-detail .floating-window__body")).toContain("margin-inline-end: 0;");
-    expect(cssRuleFor(tabletBlock, ".floating-window--task-detail .floating-window__resize-handle")).toContain("display: none;");
-    expect(desktopCss.match(/(?:^|\n)\.floating-window__body\s*\{[^}]*\}/)?.[0]).toContain("margin-inline-end: var(--space-lg);");
-    expect(cssRulesForClass(desktopCss, "floating-window--task-detail").some((rule) => /margin-inline-end|display:\s*none/.test(rule))).toBe(false);
-
-    // Mobile remains a full-screen sheet with its independent no-gutter/no-handle contract.
-    expect(cssRuleFor(mobileBlock, ".floating-window--task-detail")).toContain("width: 100vw !important;");
-    expect(cssRuleFor(mobileBlock, ".floating-window--task-detail")).toContain("border-radius: 0;");
-    expect(cssRuleFor(mobileBlock, ".floating-window--task-detail .floating-window__body")).toContain("margin-inline-end: 0;");
-    expect(cssRuleFor(mobileBlock, ".floating-window--task-detail .floating-window__resize-handle")).toContain("display: none;");
-    expect(mobileBlock).toContain(".floating-window--task-detail .task-detail-content--embedded > .modal-header");
-    expect(mobileBlock).toContain("cursor: default;");
-    expect(mobileBlock).toContain("touch-action: auto;");
-
-    Object.defineProperty(window, "innerWidth", { configurable: true, value: 834 });
-    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1112 });
-    setSheetViewport(false);
-    render(
-      <>
-        <FloatingWindow windowKey="tablet-empty" title="Empty task" onClose={() => {}} className="floating-window--task-detail">
-          <div aria-label="empty task detail" />
-        </FloatingWindow>
-        <FloatingWindow windowKey="tablet-populated" title="Populated task" onClose={() => {}} className="floating-window--task-detail">
-          <div aria-label="populated task detail">{Array.from({ length: 40 }, (_, index) => <p key={index}>Scrollable detail {index}</p>)}</div>
-        </FloatingWindow>
-      </>,
-    );
-
-    for (const key of ["tablet-empty", "tablet-populated"]) {
-      const panel = screen.getByTestId(`floating-window-${key}`);
-      expect(panel).toHaveClass("floating-window--task-detail");
-      expect(Number.parseFloat(panel.style.width)).toBeLessThanOrEqual(834);
-      expect(screen.getByTestId(`floating-window-body-${key}`)).toHaveClass("floating-window__body");
-    }
+    const phoneBlock = mediaBlockFor(floatingWindowCss, "(max-width: 767.98px)");
+    expect(cssRuleFor(phoneBlock, ".floating-window--task-detail .floating-window__resize-handle")).toContain("display: none;");
   });
 
   it("keeps task-detail long content clear of right handles while preserving short-content right-edge resize", () => {
@@ -1053,7 +1001,7 @@ describe("FloatingWindow", () => {
   });
 
   it("makes only the mobile chat floating window full-screen", () => {
-    const mobileBlock = floatingWindowCss.match(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.floating-window--chat \.chat-view\s*\{[\s\S]*?\n\}/)?.[0];
+    const mobileBlock = floatingWindowCss.match(/@media\s*\(max-width:\s*767\.98px\)\s*\{[\s\S]*?\.floating-window--chat \.chat-view\s*\{[\s\S]*?\n\}/)?.[0];
 
     expect(mobileBlock).toContain(".floating-window--chat");
     expect(mobileBlock).toContain("width: 100vw !important;");

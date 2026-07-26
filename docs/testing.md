@@ -526,4 +526,4 @@ Symptom-based acceptance is mandatory for bug fixes: reproduce the original fail
 
 ### Chromium touch hit-testing
 
-Touch-resize regressions use the dashboard Vite fixture and Chromium CDP `Input.dispatchTouchEvent` start/move/end events. This is required where `elementFromPoint` and real touch hit testing matter; jsdom pointer dispatch does not provide layout hit testing.
+Touch-resize regressions use the dashboard Vite fixture and Chromium CDP `Input.dispatchTouchEvent` start/move/end events. The shared task-modal/FloatingWindow lane in `packages/dashboard/src/__tests__/task-modal-touch-resize-browser.test.ts` covers 768px and wider tablets, a 767px phone sheet, and true phones on an ephemeral Vite port. This is required where `elementFromPoint` and real touch hit testing matter; jsdom pointer dispatch does not provide layout hit testing.

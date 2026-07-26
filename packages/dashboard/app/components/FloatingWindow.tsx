@@ -10,7 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
-import { isFullScreenSheetViewport, isShortViewport } from "../hooks/useViewportMode";
+import { isFullScreenSheetViewport, isShortViewport, isTabletTouchViewport, useViewportMode } from "../hooks/useViewportMode";
 import { currentFloatingZ, currentTaskDetailFloatingZ, nextFloatingZ, nextTaskDetailFloatingZ } from "./floatingWindowStack";
 import "./FloatingWindow.css";
 
@@ -198,6 +198,14 @@ export function FloatingWindow({
   ariaLabel,
 }: FloatingWindowProps) {
   const resolvedMinSize: FloatingWindowSize = minSize ?? { width: DEFAULT_MIN_WIDTH, height: DEFAULT_MIN_HEIGHT };
+  const viewportMode = useViewportMode();
+  /*
+  FNXC:ModalTouchGeometry 2026-07-26-12:19:
+  Tablet touch geometry must use FN-8602's physical-screen-aware discriminator, not a bare
+  coarse-pointer query. Phones remain full-screen sheets and desktop hybrids retain their exact
+  mouse geometry; a known touch tablet at 768px is the one surface that receives enlarged targets.
+  */
+  const hasTabletTouchGeometry = isTabletTouchViewport(viewportMode);
   const initialGeometry = useRef<{ size: FloatingWindowSize; position: FloatingWindowPosition } | null>(null);
   /*
   FNXC:ModalGeometryPersistence 2026-07-16-00:40:
@@ -269,6 +277,14 @@ export function FloatingWindow({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if ((event.target as HTMLElement).closest("button")) return;
       event.preventDefault();
+      event.stopPropagation();
+      /*
+      FNXC:ModalTouchGeometry 2026-07-26-12:19:
+      A drag owns one captured pointer until matching up/cancel or unmount. Tear down any
+      interrupted gesture before claiming this header so touch scroll, outside dismissal, and a
+      second finger cannot retain listeners, selection suppression, or stale animation frames.
+      */
+      dragTeardownRef.current?.();
       bringToFront();
       const captureTarget = event.currentTarget;
       const pointerId = event.pointerId;
@@ -285,6 +301,7 @@ export function FloatingWindow({
 
       const handlePointerMove = (moveEvent: PointerEvent) => {
         if (moveEvent.pointerId !== pointerId) return;
+        moveEvent.preventDefault();
         latest = { x: startPosition.x + moveEvent.clientX - startX, y: startPosition.y + moveEvent.clientY - startY };
         if (frame) return;
         frame = requestAnimationFrame(() => {
@@ -298,7 +315,9 @@ export function FloatingWindow({
         captureTarget.removeEventListener("pointerup", handlePointerUp);
         captureTarget.removeEventListener("pointercancel", handlePointerUp);
       };
-      function handlePointerUp() {
+      function handlePointerUp(upEvent: PointerEvent) {
+        if (upEvent.pointerId !== pointerId) return;
+        upEvent.preventDefault();
         if (frame) cancelAnimationFrame(frame);
         setPosition(clampPosition(latest, currentSize));
         document.body.style.userSelect = previousUserSelect;
@@ -330,10 +349,34 @@ export function FloatingWindow({
     [dragHandleSelector, handleDragPointerDown, hideHeader]
   );
 
+  /*
+  FNXC:ModalTouchGeometry 2026-07-26-12:34:
+  Headerless FloatingWindows delegate dragging to caller-owned headers (notably task-detail
+  pop-outs). The resolved element, rather than only FloatingWindow's optional built-in header,
+  must receive the shared tablet touch marker and hit-area class so every drag path has the same
+  >=44px contract without a second gesture implementation.
+  */
+  useLayoutEffect(() => {
+    if (!hasTabletTouchGeometry || !hideHeader || !dragHandleSelector) return;
+    const delegatedHandle = panelRef.current?.querySelector<HTMLElement>(dragHandleSelector);
+    if (!delegatedHandle) return;
+
+    const previousTarget = delegatedHandle.getAttribute("data-resize-hit-target");
+    delegatedHandle.classList.add("floating-window__delegated-drag-handle");
+    delegatedHandle.setAttribute("data-resize-hit-target", "true");
+
+    return () => {
+      delegatedHandle.classList.remove("floating-window__delegated-drag-handle");
+      if (previousTarget === null) delegatedHandle.removeAttribute("data-resize-hit-target");
+      else delegatedHandle.setAttribute("data-resize-hit-target", previousTarget);
+    };
+  }, [children, dragHandleSelector, hasTabletTouchGeometry, hideHeader]);
+
   const handleResizePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>, direction: ResizeDirection) => {
       event.preventDefault();
       event.stopPropagation();
+      dragTeardownRef.current?.();
       bringToFront();
       const captureTarget = event.currentTarget;
       const pointerId = event.pointerId;
@@ -351,6 +394,7 @@ export function FloatingWindow({
 
       const handlePointerMove = (moveEvent: PointerEvent) => {
         if (moveEvent.pointerId !== pointerId) return;
+        moveEvent.preventDefault();
         const dx = moveEvent.clientX - startX;
         const dy = moveEvent.clientY - startY;
         const nextSize = clampSize(
@@ -379,7 +423,9 @@ export function FloatingWindow({
         captureTarget.removeEventListener("pointerup", handlePointerUp);
         captureTarget.removeEventListener("pointercancel", handlePointerUp);
       };
-      function handlePointerUp() {
+      function handlePointerUp(upEvent: PointerEvent) {
+        if (upEvent.pointerId !== pointerId) return;
+        upEvent.preventDefault();
         if (frame) cancelAnimationFrame(frame);
         setSize(latestSize);
         setPosition(clampPosition(latestPosition, latestSize));
@@ -495,7 +541,7 @@ export function FloatingWindow({
     >
       <div
         ref={panelRef}
-        className={`floating-window${hideHeader ? " floating-window--headerless" : ""}${className ? ` ${className}` : ""}`}
+        className={`floating-window${hideHeader ? " floating-window--headerless" : ""}${hasTabletTouchGeometry ? " floating-window--touch-geometry" : ""}${className ? ` ${className}` : ""}`}
         style={panelStyle}
         data-testid={`floating-window-${windowKey}`}
         onPointerDownCapture={bringToFront}
@@ -507,6 +553,7 @@ export function FloatingWindow({
             key={direction}
             className={`floating-window__resize-handle floating-window__resize-handle--${direction}`}
             data-testid={`floating-window-resize-${direction}`}
+            {...(hasTabletTouchGeometry ? { "data-resize-hit-target": "true" } : {})}
             role="separator"
             aria-label="Resize floating window"
             onPointerDown={(event) => handleResizePointerDown(event, direction)}
@@ -516,6 +563,7 @@ export function FloatingWindow({
           <div
             className="floating-window__header"
             data-testid={`floating-window-drag-handle-${windowKey}`}
+            {...(hasTabletTouchGeometry ? { "data-resize-hit-target": "true" } : {})}
             onPointerDown={handleDragPointerDown}
           >
             <div className="floating-window__title">{title}</div>

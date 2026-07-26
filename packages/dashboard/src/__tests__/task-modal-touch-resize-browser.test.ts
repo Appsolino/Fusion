@@ -19,6 +19,7 @@ const browserCandidates = process.platform === "darwin"
   : ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
 const executablePath = [process.env.FUSION_BROWSER_SMOKE_BROWSER, process.env.CHROME_BIN, ...browserCandidates].find((candidate): candidate is string => Boolean(candidate) && existsSync(candidate));
 const screenshots = path.resolve(process.cwd(), "e2e/__screenshots__/fn-8602");
+const floatingWindowScreenshots = path.resolve(process.cwd(), "e2e/__screenshots__/fn-8605");
 
 async function touchDrag(cdp: Cdp, point: Point, delta = { x: 48, y: 36 }) {
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y, id: 1 }] });
@@ -135,6 +136,88 @@ describe.runIf(executablePath)("Task modal tablet touch resize browser regressio
       await page.close();
     }, 30_000);
   }
+
+  for (const [width, height] of [[768, 1024], [820, 1180]] as const) {
+    it(`hits, resizes, and drags FloatingWindow at ${width}px with CDP touch`, async () => {
+      const page = await browser.newPage({ viewport: { width, height } });
+      const cdp = await page.context().newCDPSession(page);
+      await setTabletMetrics(cdp, width, height);
+      await page.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=floating-window&reset=1`);
+      await page.waitForTimeout(250);
+      expect(await page.evaluate(() => window.scrollX === 0 && window.scrollY === 0)).toBe(true);
+      expect(await page.evaluate(() => document.querySelectorAll("[data-resize-hit-target='true']").length)).toBe(9);
+      await mkdir(floatingWindowScreenshots, { recursive: true });
+      if (width === 820) await page.screenshot({ path: path.join(floatingWindowScreenshots, "tablet-before.png") });
+
+      const resizeSelector = "[data-testid='floating-window-resize-se']";
+      const resizePoint = await targetCenter(page, resizeSelector);
+      expect(await page.evaluate((point) => document.elementFromPoint(point.x, point.y)?.getAttribute("data-resize-hit-target"), resizePoint)).toBe("true");
+      const beforeResize = await rect(page, "[data-testid='floating-window-fn-8605-floating']");
+      await touchDrag(cdp, resizePoint);
+      await page.waitForTimeout(100);
+      const afterResize = await rect(page, "[data-testid='floating-window-fn-8605-floating']");
+      expect(afterResize.width).toBeGreaterThan(beforeResize.width);
+      expect(afterResize.height).toBeGreaterThan(beforeResize.height);
+      expect(afterResize.x).toBeGreaterThanOrEqual(0);
+      expect(afterResize.y).toBeGreaterThanOrEqual(0);
+      expect(afterResize.width).toBeLessThanOrEqual(width - 32);
+      expect(afterResize.height).toBeLessThanOrEqual(height - 32);
+      expect(await page.evaluate(() => localStorage.getItem("fusion:fn-8605-floating"))).not.toBeNull();
+
+      const headerPoint = await targetCenter(page, "[data-testid='floating-window-drag-handle-fn-8605-floating']");
+      const beforeDrag = await rect(page, "[data-testid='floating-window-fn-8605-floating']");
+      await touchDrag(cdp, headerPoint, { x: 28, y: 24 });
+      await page.waitForTimeout(100);
+      const afterDrag = await rect(page, "[data-testid='floating-window-fn-8605-floating']");
+      expect(afterDrag.x).not.toBe(beforeDrag.x);
+      expect(afterDrag.y).not.toBe(beforeDrag.y);
+      expect(afterDrag.width).toBe(beforeDrag.width);
+      expect(afterDrag.height).toBe(beforeDrag.height);
+      if (width === 820) await page.screenshot({ path: path.join(floatingWindowScreenshots, "tablet-after.png") });
+      await page.close();
+    }, 30_000);
+  }
+
+  for (const [width, height] of [[768, 1024], [820, 1180]] as const) {
+    it(`hits and drags a headerless delegated FloatingWindow handle at ${width}px`, async () => {
+      const page = await browser.newPage({ viewport: { width, height } });
+      const cdp = await page.context().newCDPSession(page);
+      await setTabletMetrics(cdp, width, height);
+      await page.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=floating-window-headerless&reset=1`);
+      await page.waitForTimeout(250);
+
+      expect(await page.evaluate(() => document.querySelectorAll("[data-resize-hit-target='true']").length)).toBe(9);
+      const headerSelector = ".fn-8605-delegated-drag-handle";
+      const headerPoint = await targetCenter(page, headerSelector);
+      expect(await page.evaluate((point) => document.elementFromPoint(point.x, point.y)?.getAttribute("data-resize-hit-target"), headerPoint)).toBe("true");
+      const panelSelector = "[data-testid='floating-window-fn-8605-headerless-floating']";
+      const beforeDrag = await rect(page, panelSelector);
+      await touchDrag(cdp, headerPoint, { x: 28, y: 24 });
+      await page.waitForTimeout(100);
+      const afterDrag = await rect(page, panelSelector);
+      expect(afterDrag.x).not.toBe(beforeDrag.x);
+      expect(afterDrag.y).not.toBe(beforeDrag.y);
+      expect(afterDrag.width).toBe(beforeDrag.width);
+      expect(afterDrag.height).toBe(beforeDrag.height);
+      await page.close();
+    }, 30_000);
+  }
+
+  it("keeps the 767px FloatingWindow phone sheet free of active targets", async () => {
+    const page = await browser.newPage({ viewport: { width: 767, height: 1024 } });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 767, height: 1024, screenWidth: 390, screenHeight: 844, deviceScaleFactor: 1, mobile: false });
+    await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+    await page.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=floating-window&reset=1`);
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(() => document.querySelector("[data-resize-hit-target]") === null)).toBe(true);
+    expect(await page.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>("[data-testid='floating-window-fn-8605-floating']");
+      return panel ? panel.getBoundingClientRect().height >= window.innerHeight * 0.9 : false;
+    })).toBe(true);
+    await page.screenshot({ path: path.join(floatingWindowScreenshots, "phone-fullscreen.png") });
+    await page.close();
+  }, 30_000);
 
   it("keeps the true-phone sheet free of active resize targets", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });

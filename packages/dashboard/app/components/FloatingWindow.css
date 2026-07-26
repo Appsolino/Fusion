@@ -107,40 +107,114 @@ Headerless task pop-outs still need a visible drag affordance. The embedded task
 }
 
 /*
-FNXC:FloatingWindow 2026-07-21-00:00:
-Tablet task-detail popups prioritize symmetric content insets over desktop resize affordances. Their body removes the desktop scrollbar-clearance gutter only while all resize handles are suppressed; desktop retains the clearance and resize-safe handles, and the delegated task header remains draggable.
+FNXC:ModalTouchGeometry 2026-07-26-12:19:
+A bare `(pointer: coarse)` rule hid task-detail handles on every touch-primary device,
+including tablets that must be movable and resizable. The JS tablet-touch discriminator
+composes physical screen class, touch capability, and the 768px boundary, so phone sheets
+and desktop hybrids retain their existing geometry while tablet touch gets active targets.
+The shared scrollbar gutter stays in place: it keeps hosted scrollbars clear of east handles.
 */
-@media (min-width: 769px) and (max-width: 1024px) {
-  .floating-window--task-detail .floating-window__body {
-    margin-inline-end: 0;
-  }
-
-  .floating-window--task-detail .floating-window__resize-handle {
-    display: none;
-  }
+.floating-window--touch-geometry {
+  overflow: visible;
 }
 
 /*
-FNXC:FloatingWindow 2026-07-25-00:00:
-The tablet carve-out above is width-gated at 1024px, so a landscape tablet (iPad Air/Pro report 1180-1366 CSS px) fell back to the desktop contract and kept FN-8015's `margin-inline-end: var(--space-lg)` body gutter — content stopped ~17px short of the right edge while the left edge stayed flush, reading as unexplained dead space on the right of the task pop-up.
-Width cannot answer this: the gutter exists to keep a hosted scrollbar out of the east/north-east/south-east resize hot zones, which only matters when a pointer can actually grab them. Gate the carve-out on the input device instead, so every touch-primary tablet gets symmetric insets at any width. `(pointer: coarse)` is primary-input only, so a touchscreen laptop driven by a trackpad still reports `fine` and keeps desktop resize clearance.
-Kept as a separate block rather than folded into the width query so the existing 769-1024px contract stays independently addressable.
+FNXC:ModalTouchGeometry 2026-07-26-12:19:
+The painted borders remain mouse-sized, but tablet fingers receive FN-8602's shared
+44px effective target outside the panel. Edges begin beyond corner targets so they do
+not cover close controls, hosted footer actions, or scrollable content.
 */
-@media (pointer: coarse) {
-  .floating-window--task-detail .floating-window__body {
-    margin-inline-end: 0;
-  }
-
-  .floating-window--task-detail .floating-window__resize-handle {
-    display: none;
-  }
+.floating-window--touch-geometry .floating-window__resize-handle {
+  z-index: 3;
+  touch-action: none;
 }
 
 /*
+FNXC:ModalTouchGeometry 2026-07-26-12:34:
+A headerless window delegates dragging to a caller-owned header, so that resolved element must
+receive the same tablet-only target floor as FloatingWindow's built-in header. `min-block-size`
+enlarges only the interactive header box when necessary; it does not thicken resize borders or
+extend an invisible target into hosted content, close controls, or footer actions.
+*/
+.floating-window--touch-geometry .floating-window__delegated-drag-handle {
+  box-sizing: border-box;
+  min-block-size: var(--modal-resize-touch-target);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.floating-window--touch-geometry .floating-window__delegated-drag-handle:active {
+  cursor: grabbing;
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--n,
+.floating-window--touch-geometry .floating-window__resize-handle--s {
+  left: var(--modal-resize-touch-target);
+  right: var(--modal-resize-touch-target);
+  height: var(--modal-resize-touch-target);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--n {
+  top: calc((var(--modal-resize-touch-target) - var(--space-sm)) * -1);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--s {
+  bottom: calc((var(--modal-resize-touch-target) - var(--space-sm)) * -1);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--e,
+.floating-window--touch-geometry .floating-window__resize-handle--w {
+  top: var(--modal-resize-touch-target);
+  bottom: var(--modal-resize-touch-target);
+  width: var(--modal-resize-touch-target);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--e {
+  right: calc((var(--modal-resize-touch-target) - var(--space-sm)) * -1);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--w {
+  left: calc((var(--modal-resize-touch-target) - var(--space-sm)) * -1);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--ne,
+.floating-window--touch-geometry .floating-window__resize-handle--nw,
+.floating-window--touch-geometry .floating-window__resize-handle--se,
+.floating-window--touch-geometry .floating-window__resize-handle--sw {
+  width: var(--modal-resize-touch-target);
+  height: var(--modal-resize-touch-target);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--ne {
+  top: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+  right: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--nw {
+  top: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+  left: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--se {
+  bottom: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+  right: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+}
+
+.floating-window--touch-geometry .floating-window__resize-handle--sw {
+  bottom: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+  left: calc((var(--modal-resize-touch-target) - var(--space-lg)) * -1);
+}
+
+/*
+FNXC:ModalTouchGeometry 2026-07-26-12:19:
+Phone sheets are strictly below 768px. At exactly 768px this query must not match so
+`isTabletTouchViewport` can expose the active tablet touch targets without a cascade conflict.
+
 FNXC:ChatModal 2026-06-22-14:49:
 On mobile/narrow app viewports, opening Quick Chat should present the full Chat modal as a full-screen sheet instead of a small draggable desktop window. Scope this to the chat FloatingWindow and override the inline desktop geometry only at the mobile breakpoint; desktop pop-out behavior remains movable/resizable.
 */
-@media (max-width: 768px) {
+@media (max-width: 767.98px) {
   /*
   FNXC:FloatingWindow 2026-07-12-17:35:
   Mobile keeps the global `styles.css` pan-y lockdown so the dashboard cannot drift, but movable FloatingWindow headers must still resolve to an effective `touch-action: none`. Reassert the drag-handle contract at the mobile breakpoint, excluding full-screen sheet variants, so a single-finger header drag stays on the captured pointermove stream instead of being intersected back into page pan by the ancestor chain. Desktop drag/resize and mobile sheet variants are unchanged.
