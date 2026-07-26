@@ -277,6 +277,8 @@ export type {
   EffectiveAgentInput,
   EffectiveAgentResult,
 } from "./column-agent-resolver.js";
+export { evaluateForeachMergeProof } from "./workflow-merge-proof.js";
+export type { ForeachMergeProof, ForeachMergeProofInput } from "./workflow-merge-proof.js";
 export { BUILTIN_CODING_WORKFLOW_IR } from "./builtin-coding-workflow-ir.js";
 export { BUILTIN_CODING_IDEAS_WORKFLOW_IR } from "./builtin-coding-ideas-workflow-ir.js";
 export { PLAN_REVIEW_GROUP_ID } from "./builtin-plan-review-group.js";

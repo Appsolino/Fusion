@@ -14,7 +14,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import type { TaskStore, Task, TaskDetail, TaskTokenUsage, StepStatus, Settings, WorkflowStep, MissionStore, AsyncMissionStore, Slice, AgentState, AgentCapability, RunMutationContext, AgentHeartbeatConfig, Agent, AgentMemoryInclusionMode, ProjectSettings, MergeResult, WorkflowIrNode, WorkflowIrNodeKind, WorkflowStepResult as CoreWorkflowStepResult, ThinkingLevel } from "@fusion/core";
 import { getUnmetSchedulingDependencies } from "./scheduler.js";
-import { RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, COMPLETION_SUMMARY_NODE_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel } from "@fusion/core";
+import { RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, COMPLETION_SUMMARY_NODE_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel } from "@fusion/core";
 import { finalizeProvenAutoMergeTask } from "./auto-merge-finalization.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
 import { generateFeatureVideo, type GenerateFeatureVideoOptions } from "./review-artifacts/feature-video.js";
@@ -7623,7 +7623,18 @@ export class TaskExecutor {
     FNXC:WorkflowMerge 2026-06-29-15:28:
     Compound Engineering and similar graph-native workflows execute skill nodes instead of legacy parsed task steps. The graph records those nodes as `workflowStepResults.source = "node"`; at the merge boundary, project a successful graph-native run onto the legacy checklist so `task has incomplete steps` cannot block a workflow that already completed its authoritative nodes.
     */
-    if (this.shouldCompleteChecklistAtWorkflowMerge(live)) {
+    const mergeProof = await this.evaluateWorkflowMergeBoundary(live, metadata.runId);
+    if (mergeProof.hasForeachStepExecute && !mergeProof.complete) {
+      const reason = !mergeProof.hasRelevantNodeResult
+        ? "no pre-merge node result recorded"
+        : !mergeProof.allResultsTerminal
+          ? `non-terminal pre-merge node result ${mergeProof.nonTerminalResult?.workflowStepId ?? "unknown"} (${mergeProof.nonTerminalResult?.status ?? "unknown"})`
+          : `foreach step instances incomplete at merge boundary: missing ${mergeProof.missingInstanceIds.join(", ")}`;
+      await this.store.logEntry(live.id, `Workflow merge boundary blocked: ${reason}`, undefined, this.getRunContextFor(live.id));
+      return live;
+    }
+
+    if (this.shouldCompleteChecklistAtWorkflowMerge(live, mergeProof)) {
       const completedSteps = live.steps.map((step) =>
         step.status === "done" || step.status === "skipped"
           ? step
@@ -7664,6 +7675,49 @@ export class TaskExecutor {
     return { ...live, column: targetColumn };
   }
 
+  private async evaluateWorkflowMergeBoundary(task: TaskDetail, runId?: string): Promise<{
+    resolved: boolean;
+    hasRelevantNodeResult: boolean;
+    allResultsTerminal: boolean;
+    coverageComplete: boolean;
+    hasForeachStepExecute: boolean;
+    missingInstanceIds: string[];
+    nonTerminalResult?: CoreWorkflowStepResult;
+    complete: boolean;
+  }> {
+    const relevant = (task.workflowStepResults ?? []).filter((result) =>
+      result.source === "node" && (result.phase ?? "pre-merge") === "pre-merge",
+    );
+    // FNXC:WorkflowMerge 2026-07-27-12:30: FN-8601 keeps required presence
+    // independent from terminality: a failed node result proves execution occurred,
+    // while allResultsTerminal separately rejects it at the merge boundary.
+    const hasRelevantNodeResult = relevant.length > 0;
+    const nonTerminalResult = relevant.find((result) => result.status !== "passed" && result.status !== "skipped");
+    const allResultsTerminal = nonTerminalResult === undefined;
+    let ir: WorkflowIr | undefined;
+    try { ir = await resolveWorkflowIrForTask(this.store, task.id); } catch { /* preserve legacy behavior for unresolved IRs */ }
+    if (!ir) return { resolved: false, hasRelevantNodeResult, allResultsTerminal, coverageComplete: true, hasForeachStepExecute: false, missingInstanceIds: [], nonTerminalResult, complete: false };
+
+    let persistedInstances: Awaited<ReturnType<typeof this.loadMergeBoundaryInstances>> = [];
+    try { persistedInstances = await this.loadMergeBoundaryInstances(task.id, runId); } catch { /* persistence is additive */ }
+    const coverage = evaluateForeachMergeProof({ ir, steps: task.steps, workflowStepResults: task.workflowStepResults, persistedInstances });
+    const complete = hasRelevantNodeResult && allResultsTerminal && coverage.missingInstanceIds.length === 0;
+    return { resolved: true, hasRelevantNodeResult, allResultsTerminal, coverageComplete: coverage.missingInstanceIds.length === 0, hasForeachStepExecute: coverage.hasForeachStepExecute, missingInstanceIds: coverage.missingInstanceIds, nonTerminalResult, complete };
+  }
+
+  private async loadMergeBoundaryInstances(taskId: string, runId?: string): Promise<Array<{ foreachNodeId: string; stepIndex: number; pinnedStepCount: number }>> {
+    if (!runId) return [];
+    const store = this.store as typeof this.store & {
+      loadWorkflowRunStepInstancesAsync?: (id: string, idRun: string) => Promise<Array<{ foreachNodeId: string; stepIndex: number; pinnedStepCount: number }>>;
+      loadWorkflowRunStepInstances?: (id: string, idRun: string) => Array<{ foreachNodeId: string; stepIndex: number; pinnedStepCount: number }>;
+    };
+    try {
+      return await store.loadWorkflowRunStepInstancesAsync?.(taskId, runId)
+        ?? store.loadWorkflowRunStepInstances?.(taskId, runId)
+        ?? [];
+    } catch { return []; }
+  }
+
   private async getWorkflowMergeImplementationProofFailure(task: TaskDetail): Promise<string | undefined> {
     /*
     FNXC:Lifecycle 2026-07-16-21:40:
@@ -7674,62 +7728,41 @@ export class TaskExecutor {
     Runs before the noCommitsExpected exemption so a tainted task cannot slip past it.
     */
     const taint = evaluateSkipBypassTaint(task);
-    if (taint.blocked) {
-      return "implementation did not run: steps were skipped after a bulk-step-completion refusal without an accepted fn_task_done";
-    }
+    if (taint.blocked) return "implementation did not run: steps were skipped after a bulk-step-completion refusal without an accepted fn_task_done";
     if (task.noCommitsExpected === true) return undefined;
-
     let ir: WorkflowIr | undefined;
-    try {
-      ir = await resolveWorkflowIrForTask(this.store, task.id);
-    } catch {
-      ir = undefined;
-    }
+    try { ir = await resolveWorkflowIrForTask(this.store, task.id); } catch { ir = undefined; }
     if (!ir) return undefined;
-
     const usesParsedSteps = ir.nodes.some((node) => node.kind === "parse-steps");
     const usesExecuteSeam = ir.nodes.some((node) => node.kind === "prompt" && node.config?.seam === "execute");
     if (!usesParsedSteps && !usesExecuteSeam) return undefined;
-
     const steps = Array.isArray(task.steps) ? task.steps : [];
-    const hasTerminalParsedSteps =
-      steps.length > 0 && steps.every((step) => step.status === "done" || step.status === "skipped");
+    const hasTerminalParsedSteps = steps.length > 0 && steps.every((step) => step.status === "done" || step.status === "skipped");
     const hasModifiedFiles = (task.modifiedFiles?.length ?? 0) > 0;
-    const hasGraphNativeImplementationProof = (task.workflowStepResults ?? []).some((result) =>
-      result.source === "node"
-      && (result.phase ?? "pre-merge") === "pre-merge"
-      && (result.status === "passed" || result.status === "skipped")
-    );
-
-    /*
-    FNXC:WorkflowMerge 2026-06-30-00:38:
-    Stepwise Coding proves implementation through parsed task steps/foreach projection. Legacy monolithic Coding may prove through modified files or explicit no-op completion. Do not accept an empty step list as success for parse-step workflows; a valid PROMPT.md with unparsed steps must resume execution, not no-op merge.
-    */
+    const proof = await this.evaluateWorkflowMergeBoundary(task);
+    const hasGraphNativeImplementationProof = proof.hasRelevantNodeResult && proof.allResultsTerminal && proof.coverageComplete;
     if (usesParsedSteps) {
-      return hasTerminalParsedSteps || hasGraphNativeImplementationProof
-        ? undefined
+      if (hasTerminalParsedSteps || hasGraphNativeImplementationProof) return undefined;
+      return proof.hasForeachStepExecute && !proof.coverageComplete
+        ? `implementation did not run: foreach step instances are incomplete (missing ${proof.missingInstanceIds.join(", ")})`
         : "implementation did not run: parsed coding steps are missing or incomplete";
     }
-
-    if (usesExecuteSeam) {
-      return hasTerminalParsedSteps || hasModifiedFiles || hasGraphNativeImplementationProof
-        ? undefined
-        : "implementation did not run: execute seam has no completion proof";
-    }
-
+    if (usesExecuteSeam) return hasTerminalParsedSteps || hasModifiedFiles || hasGraphNativeImplementationProof ? undefined : "implementation did not run: execute seam has no completion proof";
     return undefined;
   }
 
-  private shouldCompleteChecklistAtWorkflowMerge(task: TaskDetail): boolean {
+  /*
+  FNXC:WorkflowMerge 2026-07-27-12:00:
+  FN-8601 gates checklist projection and foreach merge admission on required node-result
+  presence, terminal status for every present result, and expanded-instance coverage.
+  Non-foreach/no-seam coverage is vacuous and does not change legacy move behavior.
+  */
+  private shouldCompleteChecklistAtWorkflowMerge(task: TaskDetail, proof?: { complete: boolean }): boolean {
     if (!Array.isArray(task.steps) || task.steps.length === 0) return false;
     if (task.steps.every((step) => step.status === "done" || step.status === "skipped")) return false;
-
-    const graphNodeResults = (task.workflowStepResults ?? []).filter((result) =>
-      result.source === "node" && (result.phase ?? "pre-merge") === "pre-merge"
-    );
-    if (graphNodeResults.length === 0) return false;
-
-    return graphNodeResults.every((result) => result.status === "passed" || result.status === "skipped");
+    if (proof) return proof.complete;
+    const graphNodeResults = (task.workflowStepResults ?? []).filter((result) => result.source === "node" && (result.phase ?? "pre-merge") === "pre-merge");
+    return graphNodeResults.length > 0 && graphNodeResults.every((result) => result.status === "passed" || result.status === "skipped");
   }
 
   public createAuthoritativeWorkflowSeams(_settings: Settings): WorkflowLegacySeams {
