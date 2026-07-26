@@ -1979,8 +1979,17 @@ describe("SettingsModal", () => {
       expect(screen.queryByRole("button", { name: /^Save$/i })).not.toBeInTheDocument();
     });
 
+    /*
+    FNXC:SettingsModalTests 2026-07-27-17:20:
+    Target the footer/mobile Close affordances by their scoped selectors (`.modal-actions-right button`,
+    `.settings-embedded-mobile-close`) rather than `*ByRole("button", { name: "Close" })`. The role+name
+    query recomputes the accessible name for every button in the large Settings tree, which added ~700ms
+    per dismissal test in the dashboard's slowest feedback-loop suite. The scoped selectors mirror the
+    already-fast header/Escape/backdrop siblings while keeping the flush-on-close assertions identical
+    (Standing Rule: do not add slow tests / prefer narrow seams over whole-tree walks).
+    */
     it.each([
-      ["footer Close", async (container: HTMLElement) => settingsModalUser.click(screen.getAllByRole("button", { name: "Close" }).at(-1)!)],
+      ["footer Close", async (container: HTMLElement) => settingsModalUser.click(container.querySelector(".modal-actions-right button") as HTMLButtonElement)],
       ["header close", async (container: HTMLElement) => settingsModalUser.click(container.querySelector(".modal-close") as HTMLButtonElement)],
       ["Escape", async () => { fireEvent.keyDown(document, { key: "Escape" }); }],
       ["backdrop", async (container: HTMLElement) => {
@@ -2007,10 +2016,11 @@ describe("SettingsModal", () => {
 
     it("flushes the latest edit through the embedded mobile close affordance", async () => {
       const onClose = vi.fn();
-      renderModal({ initialSection: "general", presentation: "embedded", onClose });
+      const { container } = renderModal({ initialSection: "general", presentation: "embedded", onClose });
       await waitForSettingsModalReady();
       changeProjectToggle();
-      await settingsModalUser.click(screen.getByRole("button", { name: "Close" }));
+      // FNXC:SettingsModalTests 2026-07-27-17:20: scoped selector avoids the whole-tree accessible-name walk of getByRole({ name: "Close" }).
+      await settingsModalUser.click(container.querySelector(".settings-embedded-mobile-close") as HTMLButtonElement);
 
       await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledWith(
         expect.objectContaining({ capacityRiskBannerEnabled: true }),
