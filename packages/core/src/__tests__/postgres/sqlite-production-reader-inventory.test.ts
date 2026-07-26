@@ -16,8 +16,9 @@ import {
   isTaskArchivedImpl,
   isTaskIdPresentInArchivedTasksTableImpl,
 } from "../../task-store/task-id-integrity.js";
-import { getMergeRequestRecordImpl } from "../../task-store/task-store-helpers.js";
+import { getMergeRequestRecordImpl, refreshDatabaseHealthImpl } from "../../task-store/task-store-helpers.js";
 import {
+  getDatabaseHealthImpl,
   getSettingsSyncImpl,
   getTaskWorkflowSelectionImpl,
   healthCheckImpl,
@@ -25,6 +26,7 @@ import {
 import { getWorkflowPromptOverridesImpl } from "../../task-store/task-mutation-ops.js";
 import { getWorkflowSettingValuesImpl } from "../../task-store/branch-and-pr-entities.js";
 import { getRunAuditEventsImpl } from "../../task-store/project-store-ops.js";
+import { reconcileOrphanedTaskDirsImpl } from "../../task-store/lifecycle-ops.js";
 import type { TaskStore } from "../../store.js";
 
 const workspaceRoot = join(__dirname, "..", "..", "..", "..", "..");
@@ -217,5 +219,30 @@ describe("incomplete PG sync-reader stubs (shipped helpers)", () => {
 
   it("healthCheckImpl returns true under backend mode (real health is AsyncDataLayer.ping)", () => {
     expect(healthCheckImpl(backendModeStore())).toBe(true);
+  });
+
+  it("getDatabaseHealthImpl returns always-healthy sentinel under backend mode without opening SQLite", () => {
+    const health = getDatabaseHealthImpl(backendModeStore());
+    expect(health).toEqual({
+      healthy: true,
+      corruptionDetected: false,
+      corruptionErrors: [],
+      lastCheckedAt: null,
+      isRunning: false,
+    });
+  });
+
+  it("refreshDatabaseHealthImpl delegates to healthy sentinel under backend mode (no integrity_check)", () => {
+    const store = backendModeStore();
+    // TaskStore.refreshDatabaseHealth / getDatabaseHealth are methods that call the impls.
+    store.getDatabaseHealth = () => getDatabaseHealthImpl(store);
+    const health = refreshDatabaseHealthImpl(store);
+    expect(health.healthy).toBe(true);
+    expect(health.corruptionDetected).toBe(false);
+  });
+
+  it("reconcileOrphanedTaskDirsImpl returns empty recovered/skipped under backend mode (PG self-healing no-op)", async () => {
+    const result = await reconcileOrphanedTaskDirsImpl(backendModeStore(), {});
+    expect(result).toEqual({ recovered: [], skipped: [] });
   });
 });
