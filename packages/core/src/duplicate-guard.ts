@@ -17,9 +17,18 @@ cheap and rare: this is an EXACT normalized title+description hash, and a legiti
 byte-identical content inside ten minutes is a double-submit, not distinct work. Near-duplicate
 (paraphrase) matching is unaffected and keeps its own thresholds/windows. The clamp ceiling rises
 with it so an explicit caller-supplied window is not silently cut back to five minutes.
+
+FNXC:TaskCreationDeduplication 2026-07-26-07:40:
+Exported because the STORE query clamps the window independently. Code review caught that
+findRecentTasksByContentFingerprintImpl carried its own `?? 60_000` / `Math.min(300_000, …)`
+pair, so widening only this module capped the effective window at five minutes and made the
+new ceiling unreachable. Two clamps for one policy is how a window silently under-delivers;
+both sites now read these constants.
 */
-const DEFAULT_WINDOW_MS = 600_000;
-const MAX_WINDOW_MS = 3_600_000;
+export const FINGERPRINT_WINDOW_DEFAULT_MS = 600_000;
+export const FINGERPRINT_WINDOW_MAX_MS = 3_600_000;
+const DEFAULT_WINDOW_MS = FINGERPRINT_WINDOW_DEFAULT_MS;
+const MAX_WINDOW_MS = FINGERPRINT_WINDOW_MAX_MS;
 export const deterministicGuardLocks = new Map<string, Promise<void>>();
 
 // Test-only compatibility hook used by dashboard deterministic-dedup route tests.

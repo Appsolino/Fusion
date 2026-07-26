@@ -98,7 +98,7 @@ import { Type, type Static } from "@earendil-works/pi-ai";
 import { describeModel, formatModelMarkerDetails, promptWithFallback, compactSessionContext } from "./pi.js";
 import { buildAgentGatedActionSummary } from "./permanent-agent-gating.js";
 import { accumulateSessionTokenUsage, captureSessionTokenBaseline, mergeTokenUsagePerModel, resetSessionTokenBaseline } from "./session-token-usage.js";
-import { finalizePlanningSegment, startPlanningSegment } from "@fusion/core";
+import { finalizePlanningSegment, startPlanningSegment, resolveEphemeralTaskCreationPolicy } from "@fusion/core";
 import { enforceTaskTokenBudgetForPersist } from "./token-budget-enforcer.js";
 import {
   createResolvedAgentSession,
@@ -257,6 +257,7 @@ import {
   createArtifactViewTool as sharedCreateArtifactViewTool,
   createTaskCreateTool as sharedCreateTaskCreateTool,
   isAgentTaskCreateToolAvailable,
+  isAgentDelegateTaskToolAvailable,
   createTaskDocumentReadTool as sharedCreateTaskDocumentReadTool,
   createTaskDocumentWriteTool as sharedCreateTaskDocumentWriteTool,
   createTaskPromptWriteTool as sharedCreateTaskPromptWriteTool,
@@ -1577,13 +1578,50 @@ The tool prevents your session from being killed by the inactivity watchdog duri
 - Introducing new patterns when existing local patterns should be reused
 - Marking a step done before required review/tooling gates are satisfied`;
 
+/*
+FNXC:EphemeralAgentTaskCreation 2026-07-26-07:40:
+The base prompt teaches fn_task_create/fn_delegate_task in several places ("Out-of-scope work
+found during execution", the Guardrails follow-up rule, the completion checklist). When the
+project policy withholds those tools, an unmodified prompt instructs the agent to call a tool
+that is not in its tool list — the same instruction/capability mismatch that produced the
+original retry storm, just from the other direction.
+
+This override states the absence and names what to do instead, so a withheld tool reads as
+policy rather than malfunction. It is appended last so it wins over the base text, and it
+applies to a custom operator prompt too (an operator who overrode the prompt still gets a
+truthful statement of what this session may do).
+*/
+function getWithheldTaskCreationGuidance(taskCreateWithheld: boolean, delegateWithheld: boolean): string {
+  if (!taskCreateWithheld && !delegateWithheld) return "";
+  const withheld = [
+    ...(taskCreateWithheld ? ["`fn_task_create`"] : []),
+    ...(delegateWithheld ? ["`fn_delegate_task`"] : []),
+  ].join(" and ");
+  return `## Follow-up task creation is disabled for this session
+
+This project's "Ephemeral agent follow-up tasks" policy withholds ${withheld}. ${
+    taskCreateWithheld && delegateWithheld ? "Those tools are" : "That tool is"
+  } deliberately absent from your tool list — this is an operator setting, not a malfunction or a transient error. Do not attempt to call ${
+    taskCreateWithheld && delegateWithheld ? "them" : "it"
+  }, and do not retry.
+
+Ignore any instruction above that tells you to file follow-up work with ${withheld}. When you find out-of-scope work, record it instead with \`fn_task_log(message="follow-up: ...")\` and include it in your \`fn_task_done\` summary so the operator sees it. If the work genuinely blocks this task, use \`fn_task_done(outcome="blocked", reason="...")\` rather than trying to create a task for it.`;
+}
+
 /** Resolve the executor system prompt from settings, falling back to the hardcoded constant. */
-export function getExecutorSystemPrompt(settings: Settings): string {
+export function getExecutorSystemPrompt(
+  settings: Settings,
+  toolAvailability?: { taskCreateWithheld?: boolean; delegateWithheld?: boolean },
+): string {
   const customPrompt = resolveAgentPrompt("executor", settings.agentPrompts);
   const basePrompt = customPrompt || EXECUTOR_SYSTEM_PROMPT;
   const sections = [
     basePrompt,
     isResearchToolSurfaceEnabled(settings) ? getResearchGuidanceForSurface("executor") : "",
+    getWithheldTaskCreationGuidance(
+      toolAvailability?.taskCreateWithheld === true,
+      toolAvailability?.delegateWithheld === true,
+    ),
   ].filter((section) => section.trim());
   return sections.join("\n\n");
 }
@@ -12647,15 +12685,40 @@ export class TaskExecutor {
       FNXC:EphemeralAgentTaskCreation 2026-07-26-06:20:
       A `deny` project policy removes fn_task_create from the session's tool list instead of
       registering a tool that only refuses at execute time; see isAgentTaskCreateToolAvailable.
+
+      FNXC:EphemeralAgentTaskCreation 2026-07-26-07:40:
+      fn_delegate_task is withheld by the same policy (it creates a task through the same
+      primitive), and the suppression emits a run-audit event. Without the event an operator
+      cannot distinguish "the policy suppressed the tool" from "the agent had nothing to file" —
+      every other policy decision in this engine leaves that trail.
       */
       const executionCallerIsEphemeral = !identityAgent || isEphemeralAgent(identityAgent);
+      const taskCreateWithheld = !isAgentTaskCreateToolAvailable(settings, executionCallerIsEphemeral);
+      const delegateWithheld = !isAgentDelegateTaskToolAvailable(settings, executionCallerIsEphemeral);
+      if (taskCreateWithheld || delegateWithheld) {
+        await this.store.recordRunAuditEvent?.({
+          taskId: task.id,
+          agentId: identityAgent?.id ?? "executor",
+          runId: this.getRunContextFor(task.id)?.runId ?? generateSyntheticRunId("task-create-withheld", task.id),
+          domain: "database",
+          mutationType: "agent:task-create-withheld",
+          target: task.id,
+          metadata: {
+            taskId: task.id,
+            policy: resolveEphemeralTaskCreationPolicy(settings),
+            withheldTaskCreate: taskCreateWithheld,
+            withheldDelegateTask: delegateWithheld,
+            lane: "execution-session",
+          },
+        }).catch(() => undefined);
+      }
       const customTools = [
         this.createTaskUpdateTool(task.id, codeReviewVerdicts, sessionRef, stuckDetector),
         this.createTaskLogTool(task.id),
         this.createTaskLogsReadTool(task.id),
-        ...(isAgentTaskCreateToolAvailable(settings, executionCallerIsEphemeral)
-          ? [this.createTaskCreateTool(executionCallerIsEphemeral, task.id, identityAgent?.id)]
-          : []),
+        ...(taskCreateWithheld
+          ? []
+          : [this.createTaskCreateTool(executionCallerIsEphemeral, task.id, identityAgent?.id)]),
         this.createTaskAddDepTool(task.id),
         this.createTaskDoneTool(task.id, worktreePath, detail.prompt ?? "", codeReviewVerdicts, () => { taskDone = true; }, audit),
         createRunVerificationTool({
@@ -12736,7 +12799,9 @@ export class TaskExecutor {
         // Agent delegation tools — discover and delegate work to other agents.
         ...(this.options.agentStore ? [
           createListAgentsTool(this.options.agentStore),
-          createDelegateTaskTool(this.options.agentStore, this.store, { rootDir: this.rootDir, sourceTaskId: task.id, sourceAgentId: assignedAgentId }),
+          ...(delegateWithheld
+            ? []
+            : [createDelegateTaskTool(this.options.agentStore, this.store, { rootDir: this.rootDir, sourceTaskId: task.id, sourceAgentId: assignedAgentId, callerIsEphemeral: executionCallerIsEphemeral })]),
           createTaskAssignTool(this.options.agentStore, this.store),
           ...(assignedAgentId ? [
             createGetAgentConfigTool(this.options.agentStore, assignedAgentId),
@@ -12908,7 +12973,7 @@ export class TaskExecutor {
         const executorGoalContext = executorGoalResolution.goalContext;
 
         const executorLayers = buildPromptLayers({
-          basePrompt: getExecutorSystemPrompt(settings),
+          basePrompt: getExecutorSystemPrompt(settings, { taskCreateWithheld, delegateWithheld }),
           goalContext: executorGoalContext,
           agentInstructions: executorInstructions,
           pluginContributions: executorPluginContributions,

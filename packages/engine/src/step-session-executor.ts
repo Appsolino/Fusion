@@ -52,6 +52,7 @@ import {
   createSendMessageTool,
   createTaskCreateTool,
   isAgentTaskCreateToolAvailable,
+  isAgentDelegateTaskToolAvailable,
   createTaskDocumentReadTool,
   createTaskDocumentWriteTool,
   createTaskLogTool,
@@ -1340,11 +1341,19 @@ export class StepSessionExecutor {
             ? [createTaskCreateTool(this.options.store, undefined, { rootDir: this.options.rootDir, callerIsEphemeral: this.options.callerIsEphemeral, sourceTaskId: this.options.sourceTaskId ?? taskDetail.id, sourceAgentId: this.options.sourceAgentId ?? taskDetail.assignedAgentId, messageStore: this.options.messageStore })]
             : [];
 
-          // Agent delegation tools — discover and delegate work to other agents.
+          /*
+          FNXC:EphemeralAgentTaskCreation 2026-07-26-07:40:
+          fn_delegate_task creates a task through the same primitive as fn_task_create, so the
+          follow-up-task policy withholds it on this lane too. Withheld under `deny` AND
+          `upon_validation`: delegation has no proposal channel, so leaving it available under
+          upon_validation would launder a create past the operator review that policy requires.
+          */
           const delegationTools = this.options.agentStore
             ? [
                 createListAgentsTool(this.options.agentStore),
-                createDelegateTaskTool(this.options.agentStore, this.options.store!, { rootDir: this.options.rootDir, sourceTaskId: this.options.sourceTaskId ?? taskDetail.id, sourceAgentId: this.options.sourceAgentId ?? taskDetail.assignedAgentId }),
+                ...(isAgentDelegateTaskToolAvailable(settings, this.options.callerIsEphemeral)
+                  ? [createDelegateTaskTool(this.options.agentStore, this.options.store!, { rootDir: this.options.rootDir, sourceTaskId: this.options.sourceTaskId ?? taskDetail.id, sourceAgentId: this.options.sourceAgentId ?? taskDetail.assignedAgentId, callerIsEphemeral: this.options.callerIsEphemeral })]
+                  : []),
                 createTaskAssignTool(this.options.agentStore, this.options.store!),
               ]
             : [];

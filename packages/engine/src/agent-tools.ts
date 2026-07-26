@@ -1001,6 +1001,29 @@ export function isAgentTaskCreateToolAvailable(
   return fusionCore.resolveEphemeralTaskCreationPolicy(settings ?? {}) !== "deny";
 }
 
+/**
+ * FNXC:EphemeralAgentTaskCreation 2026-07-26-07:40:
+ * `fn_delegate_task` creates a task through the same `createAgentTask` primitive as
+ * `fn_task_create`, so the follow-up-task policy must govern both or it governs neither.
+ * Code review of the first Deny fix found the gap: the tool validated only that the TARGET
+ * agent is non-ephemeral and never checked the CALLER, so under Deny an ephemeral worker
+ * could enumerate agents and delegate unlimited tasks to any permanent one — reproducing the
+ * ten-duplicate incident through a sibling tool name.
+ *
+ * Delegation is withheld under BOTH non-allow policies, which is stricter than the
+ * `fn_task_create` rule. `upon_validation` means "an operator approves before work is filed";
+ * delegation has no proposal channel of its own, so honoring it as an allow would launder a
+ * create past the very validation the operator asked for. Under `upon_validation` the agent
+ * still has the sanctioned path: `fn_task_create` remains registered and mails a proposal.
+ */
+export function isAgentDelegateTaskToolAvailable(
+  settings: Pick<Settings, "ephemeralAgentTaskCreationPolicy" | "ephemeralAgentsCanCreateTasks"> | undefined | null,
+  callerIsEphemeral: boolean | undefined,
+): boolean {
+  if (!callerIsEphemeral) return true;
+  return fusionCore.resolveEphemeralTaskCreationPolicy(settings ?? {}) === "allow";
+}
+
 type AgentTaskCreationOptions = {
   rootDir?: string;
   bypassDuplicateCheck?: boolean;
@@ -4839,6 +4862,29 @@ export function createDelegateTaskTool(
       "fn_workflow_list to discover valid IDs.",
     parameters: delegateTaskParams,
     execute: async (_id: string, params: Static<typeof delegateTaskParams>) => {
+      /*
+      FNXC:EphemeralAgentTaskCreation 2026-07-26-07:40:
+      Caller-side policy gate, mirroring fn_task_create. The target-agent check below is a
+      routing rule, not an authorization one — it never asked whether the CALLER may create
+      work at all. Fail open only on a settings read error so a store hiccup cannot strand
+      delegation for permanent agents.
+      */
+      if (options?.callerIsEphemeral) {
+        const settings = typeof (taskStore as { getSettings?: unknown }).getSettings === "function"
+          ? await taskStore.getSettings().catch(() => ({} as Settings))
+          : ({} as Settings);
+        if (!isAgentDelegateTaskToolAvailable(settings as Settings, true)) {
+          const policy = fusionCore.resolveEphemeralTaskCreationPolicy(settings as Settings);
+          const message = policy === "deny"
+            ? "Ephemeral task-worker agents are not allowed to create tasks (ephemeral agent task creation is denied for this project), and delegation creates a task."
+            : "Ephemeral task-worker agents must route new work through fn_task_create for operator validation; delegation cannot bypass that review.";
+          return {
+            content: [{ type: "text" as const, text: `ERROR: ${message}` }],
+            details: { error: message, rule: "ephemeral-agents-cannot-create-tasks", policy },
+            isError: true,
+          };
+        }
+      }
       // Validate target agent exists
       const agent = await agentStore.getAgent(params.agent_id);
       if (!agent) {

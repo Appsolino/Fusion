@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Column, Task } from "../types.js";
 import type { TaskStore } from "../store.js";
 import { computeContentFingerprint } from "../duplicate-detection.js";
+import { findRecentTasksByContentFingerprintImpl } from "../task-store/branch-and-pr-entities.js";
 import {
+  FINGERPRINT_WINDOW_DEFAULT_MS,
+  FINGERPRINT_WINDOW_MAX_MS,
   __getDeterministicGuardMutexSize,
   reconcileDeterministicDuplicate,
   runDeterministicDuplicateGuard,
@@ -32,8 +35,12 @@ function makeStore(seed: Task[] = []): { tasks: Task[]; store: TaskStore } {
   const tasks = [...seed];
   const store = {
     findRecentTasksByContentFingerprint: vi.fn().mockImplementation(async (fp: string, options?: { windowMs?: number; includeArchived?: boolean }) => {
-      // Mirrors clampWindowMs in duplicate-guard.ts (default 10m, ceiling 1h).
-      const windowMs = Math.max(1, Math.min(3_600_000, Math.trunc(options?.windowMs ?? 600_000)));
+      /*
+      FNXC:TaskCreationDeduplication 2026-07-26-07:40:
+      Import the real bounds instead of hand-mirroring them. A hardcoded copy here is what let the
+      widened window look correct in tests while the production store clamped it back to 5 minutes.
+      */
+      const windowMs = Math.max(1, Math.min(FINGERPRINT_WINDOW_MAX_MS, Math.trunc(options?.windowMs ?? FINGERPRINT_WINDOW_DEFAULT_MS)));
       const cutoff = Date.now() - windowMs;
       return tasks
         .filter((task) => task.source?.sourceMetadata?.contentFingerprint === fp)
@@ -311,5 +318,57 @@ describe("reconcileDeterministicDuplicate", () => {
     const result = await reconcileDeterministicDuplicate(store, { createdTask: created, fingerprint: "fp", logger: { warn } });
     expect(result).toEqual({ outcome: "kept", canonical: created });
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+/*
+FNXC:TaskCreationDeduplication 2026-07-26-07:40:
+The store query owns a SECOND clamp on the same window. Code review found that widening only
+duplicate-guard.ts capped the effective window at the store's own 5-minute ceiling, and no test
+caught it because the guard tests stub the query. These assertions pin the real cutoff the SQL
+receives, so the two clamps cannot drift apart again.
+*/
+describe("findRecentTasksByContentFingerprintImpl window", () => {
+  function stubStore(): { store: TaskStore; cutoffs: string[] } {
+    const cutoffs: string[] = [];
+    const store = {
+      backendMode: false,
+      getTaskSelectClause: () => "t.*",
+      rowToTask: (row: unknown) => row as Task,
+      db: {
+        prepare: () => ({
+          all: (_fingerprint: string, cutoffIso: string) => {
+            cutoffs.push(cutoffIso);
+            return [];
+          },
+        }),
+      },
+    } as unknown as TaskStore;
+    return { store, cutoffs };
+  }
+
+  it("defaults to the shared 10-minute window, not the store's old 60s/5m pair", async () => {
+    const { store, cutoffs } = stubStore();
+    const before = Date.now();
+    await findRecentTasksByContentFingerprintImpl(store, "fp");
+    const windowMs = before - Date.parse(cutoffs[0]!);
+    expect(windowMs).toBeGreaterThanOrEqual(FINGERPRINT_WINDOW_DEFAULT_MS - 5_000);
+    expect(windowMs).toBeLessThanOrEqual(FINGERPRINT_WINDOW_DEFAULT_MS + 5_000);
+  });
+
+  it("honors an explicit window above the old 5-minute ceiling", async () => {
+    const { store, cutoffs } = stubStore();
+    const before = Date.now();
+    await findRecentTasksByContentFingerprintImpl(store, "fp", { windowMs: 20 * 60_000 });
+    const windowMs = before - Date.parse(cutoffs[0]!);
+    expect(windowMs).toBeGreaterThan(300_000);
+  });
+
+  it("still clamps to the shared ceiling", async () => {
+    const { store, cutoffs } = stubStore();
+    const before = Date.now();
+    await findRecentTasksByContentFingerprintImpl(store, "fp", { windowMs: 24 * 60 * 60_000 });
+    const windowMs = before - Date.parse(cutoffs[0]!);
+    expect(windowMs).toBeLessThanOrEqual(FINGERPRINT_WINDOW_MAX_MS + 5_000);
   });
 });
