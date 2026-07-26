@@ -24,7 +24,7 @@ import { getAgentHealthStatus } from "../utils/agentHealth";
 import type { AgentHealthStatus } from "../utils/agentHealth";
 import { SkillMultiselect } from "./SkillMultiselect";
 import { subscribeSse } from "../sse-bus";
-import { MAX_LOG_ENTRIES, capLogEntries } from "../hooks/useAgentLogs";
+import { MAX_LOG_ENTRIES } from "../hooks/useAgentLogs";
 import { DEFAULT_HEARTBEAT_INTERVAL_MS, formatHeartbeatInterval, resolveHeartbeatIntervalMs } from "../utils/heartbeatIntervals";
 import { formatAgentSkillBadgeLabel } from "../utils/agentSkills";
 import { CustomModelDropdown } from "./CustomModelDropdown";

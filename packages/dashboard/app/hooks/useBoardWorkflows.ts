@@ -140,7 +140,14 @@ export function useBoardWorkflows(params: UseBoardWorkflowsParams): UseBoardWork
     if (typeof window !== "undefined") window.addEventListener("focus", onVisible);
     const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
     const forceRefreshBoardWorkflows = () => refreshBoardWorkflows({ forceFresh: true });
+    /*
+    FNXC:BoardWorkflows 2026-07-26-15:14:
+    The visibilitychange/focus listeners above cover a backgrounded tab, but not an error-driven SSE
+    reconnect while the tab stays visible, during which workflow mutations are dropped. Declare the
+    resync on the subscription itself so recovery does not depend on which of the two paths fired.
+    */
     const unsubscribe = subscribeSse(`/api/events${query}`, {
+      onReconnect: forceRefreshBoardWorkflows,
       events: {
         "workflow:created": forceRefreshBoardWorkflows,
         "workflow:updated": forceRefreshBoardWorkflows,

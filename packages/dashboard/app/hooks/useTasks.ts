@@ -3,7 +3,7 @@ import type { Task, Column, ColumnId, TaskCreateInput, MergeResult, GithubIssueA
 import { normalizeColumnId } from "@fusion/core";
 import * as api from "../api";
 import { subscribeSse } from "../sse-bus";
-import { clearCache, readCache, readCacheEntry, SWR_CACHE_KEYS, SWR_TASKS_MAX_AGE_MS, writeCache } from "../utils/swrCache";
+import { clearCache, readCache, readCacheSavedAt, SWR_CACHE_KEYS, SWR_TASKS_MAX_AGE_MS, writeCache } from "../utils/swrCache";
 import { pushTrace } from "../utils/dashboardTraceBuffer";
 import { recordResumeEvent } from "../utils/resumeInstrumentation";
 
@@ -221,17 +221,20 @@ export function useTasks(options?: UseTasksOptions) {
   Captured by the `tasks` initializer below and consumed by the `lastFetchTimeMs` ref initializer on
   the SAME first render, so the hydrated board is described by the snapshot's real write time from its
   very first paint. A `useRef` initial value is only honored on first render, which is exactly when the
-  `useState` initializer runs — the two stay in lockstep without an extra localStorage read.
+  `useState` initializer runs — the two stay in lockstep with no effect-ordering gap. Reading the
+  timestamp in an effect instead would be wrong: the value returned to consumers is `.current` read
+  during render, so the first (restore) frame would still ship `undefined`.
+  It is only read when a snapshot actually hydrated, so a cache miss leaves the clock `undefined`.
   */
   let hydratedSnapshotSavedAtMs: number | undefined;
   const [tasks, setTasks] = useState<Task[]>(() => {
     if (!projectId) {
       return [];
     }
-    const cached = readCacheEntry<Task[]>(`${SWR_CACHE_KEYS.TASKS_PREFIX}${projectId}`, { maxAgeMs: SWR_TASKS_MAX_AGE_MS });
-    const cachedTasks = cached?.data ?? null;
+    const cacheKey = `${SWR_CACHE_KEYS.TASKS_PREFIX}${projectId}`;
+    const cachedTasks = readCache<Task[]>(cacheKey, { maxAgeMs: SWR_TASKS_MAX_AGE_MS });
     if (Array.isArray(cachedTasks)) {
-      hydratedSnapshotSavedAtMs = cached?.savedAt;
+      hydratedSnapshotSavedAtMs = readCacheSavedAt(cacheKey, { maxAgeMs: SWR_TASKS_MAX_AGE_MS });
       if (cachedTasks.length > 0 && !loggedTaskCacheHitProjects.has(projectId)) {
         loggedTaskCacheHitProjects.add(projectId);
         console.info("[swr-cache] hit tasks=", cachedTasks.length, "projectId=", projectId);
@@ -539,8 +542,8 @@ export function useTasks(options?: UseTasksOptions) {
       return;
     }
 
-    const cached = readCacheEntry<Task[]>(`${SWR_CACHE_KEYS.TASKS_PREFIX}${projectId}`, { maxAgeMs: SWR_TASKS_MAX_AGE_MS });
-    const cachedTasks = cached?.data ?? null;
+    const cacheKey = `${SWR_CACHE_KEYS.TASKS_PREFIX}${projectId}`;
+    const cachedTasks = readCache<Task[]>(cacheKey, { maxAgeMs: SWR_TASKS_MAX_AGE_MS });
     if (Array.isArray(cachedTasks)) {
       if (cachedTasks.length > 0 && !loggedTaskCacheHitProjects.has(projectId)) {
         loggedTaskCacheHitProjects.add(projectId);
@@ -555,7 +558,7 @@ export function useTasks(options?: UseTasksOptions) {
       screen (stale-while-revalidate), and their real fetch time remains the honest answer. This runs
       before the mount/refresh effect below, so the fetch that resolves next still wins.
       */
-      lastFetchTimeMs.current = cached?.savedAt;
+      lastFetchTimeMs.current = readCacheSavedAt(cacheKey, { maxAgeMs: SWR_TASKS_MAX_AGE_MS });
     }
     setIsStale(true);
   }, [projectId]);

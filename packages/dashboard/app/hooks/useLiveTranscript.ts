@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { fetchAgentLogsWithMeta } from "../api";
 import { subscribeSse } from "../sse-bus";
 
 // Render shows only the first 20 entries; keep a small buffer above that for
@@ -86,7 +87,33 @@ export function useLiveTranscript(taskId: string | undefined, projectId?: string
       url += `?projectId=${encodeURIComponent(projectId)}`;
     }
 
+    /*
+    FNXC:TaskTranscript 2026-07-26-14:50:
+    Missed-event recovery. `/api/tasks/:id/logs/stream` replays nothing on connect — it only forwards
+    entries emitted while the socket is live — so every SSE gap (error reconnect, or the mobile
+    hidden-tab suspend) punched a permanent hole in the transcript, silently mixing entries from
+    before and after the gap with no marker. On reopen, replace the buffer with the persisted tail
+    from GET /tasks/:id/logs, which is the same data the stream would have delivered. The API returns
+    oldest-first; this hook renders newest-first.
+    */
+    const resyncTranscript = () => {
+      void fetchAgentLogsWithMeta(taskId, projectId, { limit: MAX_TRANSCRIPT_ENTRIES })
+        .then((result) => {
+          if (projectContextVersionRef.current !== contextVersionAtStart) return;
+          const normalized: TranscriptEntry[] = result.entries.map((raw) => ({
+            type: raw.type ?? "text",
+            text: raw.text ?? "",
+            timestamp: raw.timestamp,
+          }));
+          setEntries(normalized.reverse().slice(0, MAX_TRANSCRIPT_ENTRIES));
+        })
+        .catch(() => {
+          // Keep the current buffer on failure; the next reopen retries.
+        });
+    };
+
     const unsubscribe = subscribeSse(url, {
+      onReconnect: resyncTranscript,
       events: {
         "agent:log": (event) => {
           if (projectContextVersionRef.current !== contextVersionAtStart) return;

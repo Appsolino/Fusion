@@ -84,20 +84,7 @@ function getLocalStorage(): Storage | null {
   return null;
 }
 
-/**
- * FNXC:MobileTabDiscard 2026-07-26-14:05:
- * Envelope-aware read. `readCache` deliberately discards `savedAt`, which was fine while every
- * hydration TTL was ~60s (any hydrated snapshot was younger than every downstream freshness
- * threshold, so "as of now" was a harmless approximation). Raising `SWR_TASKS_MAX_AGE_MS` to hours
- * for the mobile tab-discard restore broke that assumption: a consumer that hydrates an hours-old
- * board and then reasons about elapsed time against `Date.now()` reports every in-progress card as
- * stuck. Consumers deriving time-sensitive state from a hydrated snapshot MUST read through this
- * function and carry `savedAt` as their "data as of" clock.
- *
- * Returns `null` for exactly the cases `readCache` treats as a miss (absent, malformed, expired);
- * `readCache` is a thin wrapper so existing call sites are unchanged.
- */
-export function readCacheEntry<T>(key: string, options?: { maxAgeMs?: number }): CacheReadResult<T> | null {
+export function readCache<T>(key: string, options?: { maxAgeMs?: number }): T | null {
   const storage = getLocalStorage();
   if (!storage) {
     return null;
@@ -111,17 +98,17 @@ export function readCacheEntry<T>(key: string, options?: { maxAgeMs?: number }):
 
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") {
-      return { data: parsed as T, savedAt: undefined };
+      return parsed as T;
     }
 
     const hasEnvelopeMarkers = "savedAt" in parsed || "data" in parsed;
     if (!hasEnvelopeMarkers) {
-      return { data: parsed as T, savedAt: undefined };
+      return parsed as T;
     }
 
     const envelope = parsed as Partial<CacheEnvelope<T>>;
     if (typeof envelope.savedAt !== "number" || Number.isNaN(envelope.savedAt)) {
-      return { data: (envelope.data ?? null) as T, savedAt: undefined };
+      return envelope.data ?? null;
     }
 
     const maxAgeMs = options?.maxAgeMs;
@@ -144,15 +131,76 @@ export function readCacheEntry<T>(key: string, options?: { maxAgeMs?: number }):
       }
     }
 
-    return { data: (envelope.data ?? null) as T, savedAt: envelope.savedAt };
+    return envelope.data ?? null;
   } catch {
     return null;
   }
 }
 
-export function readCache<T>(key: string, options?: { maxAgeMs?: number }): T | null {
-  const entry = readCacheEntry<T>(key, options);
-  return entry === null ? null : entry.data;
+/**
+ * FNXC:MobileTabDiscard 2026-07-26-14:40:
+ * Companion to `readCache` that exposes the envelope's `savedAt` — the wall-clock time the snapshot
+ * was WRITTEN. `readCache` discards it, which was harmless while every hydration TTL was ~60s: any
+ * hydrated snapshot was structurally younger than every downstream freshness threshold, so treating
+ * it as "current" could not change a derived verdict. Raising `SWR_TASKS_MAX_AGE_MS` to hours for
+ * the mobile tab-discard restore broke that: a consumer that hydrates an hours-old snapshot and then
+ * measures elapsed time against `Date.now()` (e.g. `isTaskStuck`) reports every in-progress card as
+ * stuck on restore. Any consumer deriving time-sensitive state from hydrated data must carry this
+ * value as its "data as of" clock and must NOT substitute `Date.now()` when it is `undefined`.
+ *
+ * Deliberately additive and independent rather than a refactor of `readCache`: every existing call
+ * site — and the spies that assert on them — stays untouched. Pass the SAME `maxAgeMs` the paired
+ * `readCache` used, so an entry that read as a miss never yields a timestamp.
+ *
+ * Returns `undefined` for a miss, an expired entry, or a legacy/bare payload with no usable
+ * `savedAt`. Deletion of expired entries stays with `readCache`'s lazy GC; this is a pure read.
+ */
+const ENVELOPE_SAVED_AT_PREFIX = /^\s*\{\s*"savedAt"\s*:\s*(\d+(?:\.\d+)?)\s*,/;
+
+export function readCacheSavedAt(key: string, options?: { maxAgeMs?: number }): number | undefined {
+  const storage = getLocalStorage();
+  if (!storage) {
+    return undefined;
+  }
+
+  try {
+    const raw = storage.getItem(key);
+    if (raw === null) {
+      return undefined;
+    }
+
+    /*
+    `writeCache` always serializes `{ savedAt, data }` in that key order, so the timestamp is
+    readable from a short prefix. Board snapshots run to hundreds of KB and this read happens on the
+    restore path the mobile work exists to make fast — a second full `JSON.parse` alongside
+    `readCache`'s would be pure waste. The full parse below remains the correctness fallback for any
+    payload not written in that shape.
+    */
+    const prefixMatch = ENVELOPE_SAVED_AT_PREFIX.exec(raw.slice(0, 64));
+    let savedAt: number | undefined;
+    if (prefixMatch) {
+      savedAt = Number(prefixMatch[1]);
+    } else {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object" || !("savedAt" in parsed)) {
+        return undefined;
+      }
+      savedAt = (parsed as Partial<CacheEnvelope<unknown>>).savedAt;
+    }
+
+    if (typeof savedAt !== "number" || !Number.isFinite(savedAt)) {
+      return undefined;
+    }
+
+    const maxAgeMs = options?.maxAgeMs;
+    if (typeof maxAgeMs === "number" && Date.now() - savedAt > maxAgeMs) {
+      return undefined;
+    }
+
+    return savedAt;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

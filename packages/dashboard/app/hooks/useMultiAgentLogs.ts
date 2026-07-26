@@ -260,9 +260,41 @@ export function useMultiAgentLogs(taskIds: string[], projectId?: string): LogSta
 
       // Build SSE URL with optional projectId for multi-project support
       const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+      /*
+      FNXC:AgentLogs 2026-07-26-14:56:
+      Missed-event recovery. The per-task log stream replays nothing on connect, so any SSE gap (error
+      reconnect, or the mobile hidden-tab suspend) dropped every entry emitted while the socket was
+      down and left a silent hole in the merged transcript. On reopen, re-read the persisted tail —
+      the same fetch the initial load performs — and replace this task's entries with it.
+      */
+      const resyncTaskLogs = () => {
+        if (cancelled[taskId] || projectContextVersionRef.current !== contextVersionAtStart) return;
+        void fetchAgentLogsWithMeta(taskId, projectId, { limit: INITIAL_LOAD_LIMIT })
+          .then((result) => {
+            if (cancelled[taskId] || projectContextVersionRef.current !== contextVersionAtStart) return;
+            pendingLiveEntriesRef.current[taskId] = [];
+            setStateMap((prev) => {
+              const current = prev[taskId];
+              if (!current) return prev;
+              return {
+                ...prev,
+                [taskId]: {
+                  ...current,
+                  entries: capLogEntries(result.entries),
+                  hasMore: result.hasMore,
+                  total: result.total,
+                },
+              };
+            });
+          })
+          .catch(() => {
+            // Keep the current entries on failure; the next reopen retries.
+          });
+      };
       subs[taskId] = subscribeSse(
         `/api/tasks/${taskId}/logs/stream${query}`,
         {
+          onReconnect: resyncTaskLogs,
           events: {
             "agent:log": (e) => {
               if (cancelled[taskId] ||

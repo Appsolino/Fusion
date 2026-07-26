@@ -2017,7 +2017,27 @@ export function useChat(
       setMessages((prev) => prev.filter((m) => m.id !== messageId));
     };
 
+    /*
+    FNXC:ChatRealtime 2026-07-26-14:32:
+    Missed-event recovery. Sessions and the open transcript were mutated only by SSE handlers, so any
+    stream gap (error reconnect, or the mobile hidden-tab suspend) left the thread permanently wrong
+    until a manual session switch or reload: messages added while disconnected never appeared, and
+    messages deleted while disconnected kept rendering. On reopen, refetch the session list and — when
+    a session is open and no local stream owns the transcript — reload its messages, which replaces
+    the visible thread with the server's. Skipped while a stream is attached because the streaming
+    path owns the transcript and an authoritative reload mid-turn would fight it (see loadMessages'
+    active-streaming guard).
+    */
+    const resyncChatState = () => {
+      if (isStale()) return;
+      void refreshSessions();
+      const currentSession = activeSessionRef.current;
+      if (!currentSession || streamRef.current) return;
+      void loadMessages(currentSession.id);
+    };
+
     const unsubscribe = subscribeSse(`/api/events${query}`, {
+      onReconnect: resyncChatState,
       events: {
         "chat:session:created": handleChatSessionCreated,
         "chat:session:updated": handleChatSessionUpdated,
@@ -2028,7 +2048,7 @@ export function useChat(
     });
 
     return unsubscribe;
-  }, [attachIfGenerating, getChatMessagesCacheKey, projectId, flushPendingMessage, refreshSessions]);
+  }, [attachIfGenerating, getChatMessagesCacheKey, loadMessages, projectId, flushPendingMessage, refreshSessions]);
 
   // Cleanup on unmount
   useEffect(() => {

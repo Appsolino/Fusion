@@ -40,7 +40,7 @@ Chosen bound: an insertion-ordered entry cap over hashed /assets/ entries only.
 
 Safety against evicting an asset the RUNNING build still needs: every hashed URL this service-worker session has served (hit or miss) is recorded in `sessionReferencedAssets` and is exempt from eviction while it remains in that set (itself bounded — see MAX_SESSION_REFERENCED_ASSETS). A chunk the current page has already loaded is thereby pinned. A not-yet-lazy-loaded chunk of the current build is protected by the cap being sized for multiple builds, and by the fact that it is at the END of insertion order. `versionCheck.ts`'s handleChunkLoadError/isStaleChunkError remains a backstop, deliberately not the primary design.
 */
-const MAX_IMMUTABLE_CACHE_ENTRIES = Infinity;
+const MAX_IMMUTABLE_CACHE_ENTRIES = 200;
 
 /*
 FNXC:PWAOffline 2026-07-26-14:05:

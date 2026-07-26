@@ -641,6 +641,18 @@ FNXC:AgentDetailView 2026-06-26-01:00:
   color: var(--text-muted);
 }
 
+/*
+FNXC:AgentLogHistory 2026-07-26-13:46:
+Wrapper for the log window's "Load older" affordance. Sits ABOVE the viewer because a log tail reads
+bottom-up: older entries are reached by walking upward, so the control belongs at the top edge of the
+rendered window. Reuses the shared `.btn .btn-secondary .btn-sm` primitive — no forked variant.
+*/
+.log-window-loader {
+  display: flex;
+  justify-content: center;
+  padding-bottom: var(--space-sm);
+}
+
 .streaming-indicator {
   display: flex;
   align-items: center;

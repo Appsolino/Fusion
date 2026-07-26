@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useAgentLogs, MAX_LOG_ENTRIES } from "../useAgentLogs";
+import { useAgentLogs, MAX_LOG_ENTRIES, isLogGapMarker } from "../useAgentLogs";
+import { __resetSseBus } from "../../sse-bus";
 import { fetchAgentLogsWithMeta } from "../../api";
 
 // Mock the api module
@@ -37,6 +38,19 @@ class MockEventSource {
       fn({ data: JSON.stringify(data) });
     }
   }
+
+  /*
+  FNXC:AgentLogResync 2026-07-26-14:52:
+  Fires a payload-less transport event ("open"/"error"). The sse-bus turns the SECOND `open` on a
+  channel into `onReconnect`, which is exactly the shape of the hidden-tab suspend/resume: the socket
+  is torn down while hidden and reopened on return, and the stream replays nothing it emitted in
+  between.
+  */
+  _fire(event: string) {
+    for (const fn of this.listeners[event] || []) {
+      fn({});
+    }
+  }
 }
 
 const originalEventSource = globalThis.EventSource;
@@ -54,6 +68,7 @@ function createDeferred<T>() {
 }
 
 beforeEach(() => {
+  __resetSseBus();
   MockEventSource.instances = [];
   (globalThis as any).EventSource = MockEventSource;
   mockFetchAgentLogsWithMeta.mockReset().mockResolvedValue({ entries: [], total: 0, hasMore: false });
@@ -467,6 +482,66 @@ describe("useAgentLogs", () => {
       expect(result.current.entries[0].text).toBe("older-1");
     });
 
+    /*
+    FNXC:AgentLogPaging 2026-07-26-15:14:
+    The live-tail trim flag used to be cleared only by clear() or a task/project switch, so it was
+    OR-ed into `hasMore` forever: after paging back to entry 0 the server said hasMore:false and the
+    hook still reported true. The "load older" control stayed rendered and every further click
+    fetched past the end and changed nothing, so the reader could not distinguish "beginning of log"
+    from "broken control". `hasMore` must be true iff older entries actually remain server-side.
+    */
+    it("reports hasMore false once paging reaches the beginning after a live-tail trim", async () => {
+      const streamedCount = 520;
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: [], total: streamedCount, hasMore: false });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(MockEventSource.instances).toHaveLength(1);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        for (let index = 0; index < streamedCount; index++) {
+          es._emit("agent:log", {
+            timestamp: `2026-01-01T00:${String(index).padStart(2, "0")}:00Z`,
+            taskId: "FN-001",
+            text: `live-${index}`,
+            type: "text",
+          });
+        }
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(MAX_LOG_ENTRIES);
+        expect(result.current.hasMore).toBe(true);
+      });
+
+      // The trimmed 20 entries are everything that remained; this page reaches entry 0.
+      const trimmedAway = Array.from({ length: streamedCount - MAX_LOG_ENTRIES }, (_, index) => ({
+        timestamp: `2026-01-01T00:${String(index).padStart(2, "0")}:00Z`,
+        taskId: "FN-001",
+        text: `live-${index}`,
+        type: "text" as const,
+      }));
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: trimmedAway,
+        total: streamedCount,
+        hasMore: false,
+      });
+
+      await act(async () => {
+        await result.current.loadMore();
+      });
+
+      expect(mockFetchAgentLogsWithMeta).toHaveBeenLastCalledWith("FN-001", undefined, {
+        limit: INITIAL_LOAD_LIMIT,
+        offset: MAX_LOG_ENTRIES,
+      });
+      expect(result.current.entries).toHaveLength(streamedCount);
+      expect(result.current.hasMore).toBe(false);
+    });
+
     it("loadMore does not trigger when already loading more", async () => {
       mockFetchAgentLogsWithMeta.mockResolvedValue({ entries: [], total: 200, hasMore: true });
 
@@ -490,6 +565,218 @@ describe("useAgentLogs", () => {
 
       // Initial call + loadMore call (2 total), ignoring re-render calls
       expect(mockFetchAgentLogsWithMeta.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  /*
+  FNXC:AgentLogResync 2026-07-26-15:02:
+  Regression cover for the silent log gap. `/api/tasks/:id/logs/stream` replays nothing on open, so
+  every line emitted while the channel is down (SSE error, heartbeat timeout, or the hidden-tab
+  suspend introduced for mobile tab retention) used to vanish from a list that still looked
+  contiguous. The invariant asserted here is surface-independent: after ANY reconnect the rendered
+  list either contains the missed lines, in order and without duplicates, or shows an explicit gap
+  marker. It must never imply continuity it cannot prove.
+  */
+  describe("reconnect resync", () => {
+    const logEntry = (minute: number, text: string) => ({
+      timestamp: `2026-01-01T00:${String(minute).padStart(2, "0")}:00Z`,
+      taskId: "FN-001",
+      text,
+      type: "text" as const,
+    });
+
+    it("refetches authoritative state on reconnect and restores lines emitted while suspended", async () => {
+      const history = [logEntry(0, "hist-1"), logEntry(1, "hist-2")];
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: history, total: 2, hasMore: false });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(2);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+      act(() => {
+        es._emit("agent:log", logEntry(2, "live-3"));
+      });
+      expect(result.current.entries.map((entry) => entry.text)).toEqual(["hist-1", "hist-2", "live-3"]);
+
+      // Suspended: the server kept writing, and the stream delivered none of it.
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: [...history, logEntry(2, "live-3"), logEntry(3, "missed-4"), logEntry(4, "missed-5")],
+        total: 5,
+        hasMore: false,
+      });
+
+      await act(async () => {
+        es._fire("open");
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries.map((entry) => entry.text)).toEqual([
+          "hist-1",
+          "hist-2",
+          "live-3",
+          "missed-4",
+          "missed-5",
+        ]);
+      });
+      expect(new Set(result.current.entries.map((entry) => entry.text)).size).toBe(5);
+      expect(result.current.entries.some(isLogGapMarker)).toBe(false);
+    });
+
+    it("renders an explicit gap marker when the missed window exceeds one authoritative page", async () => {
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: [logEntry(0, "before-suspend")],
+        total: 1,
+        hasMore: false,
+      });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(1);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      // 400 entries were written while hidden; the newest page shares nothing with the buffer.
+      const authoritativePage = Array.from({ length: INITIAL_LOAD_LIMIT }, (_, index) =>
+        logEntry(index + 5, `missed-${index}`),
+      );
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: authoritativePage,
+        total: 401,
+        hasMore: true,
+      });
+
+      await act(async () => {
+        es._fire("open");
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(INITIAL_LOAD_LIMIT + 1);
+      });
+
+      expect(isLogGapMarker(result.current.entries[0])).toBe(true);
+      expect(result.current.entries[0].text.length).toBeGreaterThan(0);
+      expect(result.current.entries.slice(1).map((entry) => entry.text)).toEqual(
+        authoritativePage.map((entry) => entry.text),
+      );
+      // The unreconcilable prefix is not silently glued onto a page it does not touch.
+      expect(result.current.entries.some((entry) => entry.text === "before-suspend")).toBe(false);
+      expect(result.current.hasMore).toBe(true);
+    });
+
+    it("does not duplicate a live entry that also comes back in the reconnect refetch", async () => {
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: [], total: 0, hasMore: false });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(MockEventSource.instances).toHaveLength(1);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      const refetch = createDeferred<{ entries: any[]; total: number; hasMore: boolean }>();
+      mockFetchAgentLogsWithMeta.mockReturnValueOnce(refetch.promise);
+
+      act(() => {
+        es._fire("open");
+      });
+
+      // Races the in-flight refetch and is also already persisted server-side.
+      act(() => {
+        es._emit("agent:log", logEntry(1, "raced"));
+      });
+
+      await act(async () => {
+        refetch.resolve({ entries: [logEntry(0, "page-1"), logEntry(1, "raced")], total: 2, hasMore: false });
+        await refetch.promise;
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries.map((entry) => entry.text)).toEqual(["page-1", "raced"]);
+      });
+    });
+
+    it("keeps a live entry that raced the reconnect refetch but is not in the page", async () => {
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: [], total: 0, hasMore: false });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(MockEventSource.instances).toHaveLength(1);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      const refetch = createDeferred<{ entries: any[]; total: number; hasMore: boolean }>();
+      mockFetchAgentLogsWithMeta.mockReturnValueOnce(refetch.promise);
+
+      act(() => {
+        es._fire("open");
+      });
+      act(() => {
+        es._emit("agent:log", logEntry(2, "raced-later"));
+      });
+
+      await act(async () => {
+        refetch.resolve({ entries: [logEntry(0, "page-1")], total: 1, hasMore: false });
+        await refetch.promise;
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries.map((entry) => entry.text)).toEqual(["page-1", "raced-later"]);
+      });
+    });
+
+    it("keeps streaming into the buffer when the reconnect refetch fails", async () => {
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: [logEntry(0, "hist-1")],
+        total: 1,
+        hasMore: false,
+      });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(1);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      mockFetchAgentLogsWithMeta.mockRejectedValueOnce(new Error("network down"));
+
+      await act(async () => {
+        es._fire("open");
+        await Promise.resolve();
+      });
+      act(() => {
+        es._emit("agent:log", logEntry(1, "after-failed-resync"));
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries.map((entry) => entry.text)).toEqual(["hist-1", "after-failed-resync"]);
+      });
     });
   });
 
