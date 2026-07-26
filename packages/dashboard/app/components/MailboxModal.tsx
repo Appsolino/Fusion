@@ -398,7 +398,17 @@ export function MailboxModal({
       }
     };
 
+    /*
+    FNXC:MailboxModal 2026-07-26-16:20:
+    Resync contract (see SseSubscription in sse-bus.ts). The modal's message lists and unread count are
+    mutated ONLY by these events, and the stream is lossy: an error/heartbeat reconnect or the >=60s
+    hidden-tab suspend drops the socket and /api/events keeps no replay buffer. Without onReconnect a
+    message sent while the phone was backgrounded never appears and the unread badge under-counts until
+    the operator manually switches tabs. `onMailboxUpdate` is the same authoritative reload the events
+    already trigger, so reusing it needs no new endpoint.
+    */
     return subscribeSse(`/api/events${query}`, {
+      onReconnect: onMailboxUpdate,
       events: {
         "message:sent": onMailboxUpdate,
         "message:received": onMailboxUpdate,

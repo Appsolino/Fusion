@@ -326,7 +326,8 @@ export function pruneStaleCacheEntries(): number {
 /**
  * FNXC:SwrCache 2026-07-02-00:00:
  * User-facing "Clear local data" helper: removes all Fusion-owned browser data — SWR
- * hydration caches plus per-project scoped preferences and global UI preferences — while
+ * hydration caches plus per-project scoped preferences and global UI preferences, and (since
+ * 2026-07-26-18:05) service-worker Cache Storage, which this function did NOT touch before — while
  * preserving the dashboard auth token so a reload keeps the session usable. Wired to
  * Settings → General "Clear local data" as the escape hatch for quota exhaustion. Callers
  * should reload the page after this so React state re-hydrates from a clean slate.
@@ -344,7 +345,83 @@ function isFusionOwnedKey(key: string): boolean {
   );
 }
 
+/*
+FNXC:SwrCache 2026-07-26-18:05:
+`clearAllLocalCache` walked localStorage ONLY, and nothing else in the dashboard ever touched the
+`caches` API. Settings -> "Clear all cached data" therefore left every service-worker-cached response in
+durable origin storage — including, before the sw.js allow-list landed, GET /api/settings bodies with
+plaintext `daemonToken`/`githubAuthToken`/`gitlabAuthToken`/`ntfyAccessToken`. The operator's only purge
+affordance silently did not reach the storage most worth purging.
+
+Two delete paths, because each covers the other's blind spot:
+- postMessage to the controlling service worker: the caller reloads the page immediately after this
+  returns, which can abort an in-page delete mid-flight; the worker is not torn down by that reload.
+- a direct `caches` walk from the page: covers a page with no controlling worker (first load, dev
+  server, SW unregistered), where the message goes nowhere.
+Both are idempotent, so running both is harmless.
+
+Deliberately fire-and-forget: `clearAllLocalCache` is called synchronously from a click handler that
+reloads on return, and its `number` result is the localStorage count that existing callers and tests
+already consume. `purgeCacheStorage` is exported separately so the deletion is directly assertable.
+*/
+export const PURGE_CACHES_MESSAGE = "PURGE_CACHES";
+
+function getCacheStorage(): CacheStorage | null {
+  try {
+    if (typeof caches !== "undefined" && caches && typeof caches.keys === "function") {
+      return caches;
+    }
+  } catch {
+    // Accessing `caches` throws in some non-secure contexts.
+  }
+  return null;
+}
+
+/** Deletes every Cache Storage bucket on this origin. Returns how many were deleted. */
+export async function purgeCacheStorage(): Promise<number> {
+  const cacheStorage = getCacheStorage();
+  if (!cacheStorage) {
+    return 0;
+  }
+
+  try {
+    const keys = await cacheStorage.keys();
+    const results = await Promise.all(
+      keys.map(async (key) => {
+        try {
+          return await cacheStorage.delete(key);
+        } catch {
+          return false;
+        }
+      }),
+    );
+    return results.filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** Asks the controlling service worker to purge Cache Storage; no-op when nothing controls this page. */
+export function requestServiceWorkerCachePurge(): boolean {
+  try {
+    const controller =
+      typeof navigator !== "undefined" && navigator.serviceWorker
+        ? navigator.serviceWorker.controller
+        : null;
+    if (!controller) {
+      return false;
+    }
+    controller.postMessage({ type: PURGE_CACHES_MESSAGE });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function clearAllLocalCache(): number {
+  requestServiceWorkerCachePurge();
+  void purgeCacheStorage();
+
   const storage = getLocalStorage();
   if (!storage) {
     return 0;

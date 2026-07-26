@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createVisibilityGatedTimer } from "./visibilitySuspension";
 
 /*
 FNXC:BoardPerformance 2026-07-26-09:40:
@@ -61,15 +62,28 @@ function stopInterval(): void {
   intervalId = null;
 }
 
+/*
+FNXC:BoardPerformance 2026-07-26-16:05:
+The stop/resume bookkeeping is delegated to `createVisibilityGatedTimer` in `visibilitySuspension.ts`, which
+that module documents as the single visibility gate. This ticker previously hand-rolled a second copy of the
+same shape. It still cannot call `useVisibilityAwarePoll` — the ticker is a module singleton fanning out to a
+subscriber set, not a per-consumer hook — so the non-hook gate is what the two share. Requirement 3 (catch up
+on return before re-arming) is the gate's `onResume`; `resumeDelayMs` is left at 0 because this timer issues
+no network request, so it is not part of the visible-edge connection stampede the stagger exists to bound.
+
+Behavior note: the gate is a no-op when the interval is already armed, so a redundant `visibilitychange`
+fired while the tab is already visible no longer produces an extra tick. The previous code notified on every
+such event; that was wasted renders, not a correctness requirement.
+*/
+const visibilityGate = createVisibilityGatedTimer({
+  arm: startInterval,
+  disarm: stopInterval,
+  isArmed: () => intervalId !== null,
+  onResume: notifyListeners,
+});
+
 function handleVisibilityChange(): void {
-  if (!isDocumentVisible()) {
-    stopInterval();
-    return;
-  }
-  // Requirement 3: catch up on return before re-arming, so the first frame after
-  // the tab is foregrounded already shows a fresh elapsed time.
-  notifyListeners();
-  startInterval();
+  visibilityGate.handleVisibilityChange();
 }
 
 /**
@@ -90,7 +104,8 @@ export function subscribeLiveTimeTicker(listener: TickListener): () => void {
     if (listeners.size > 0) {
       return;
     }
-    stopInterval();
+    // Via the gate so any pending resume is cancelled too, not just the interval.
+    visibilityGate.stop();
     if (visibilityListenerBound && typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       visibilityListenerBound = false;

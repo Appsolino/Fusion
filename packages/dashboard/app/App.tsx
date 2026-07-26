@@ -360,7 +360,23 @@ function AppInner() {
       const params = new URLSearchParams();
       if (currentProject?.id) params.set("projectId", currentProject.id);
       const query = params.size > 0 ? `?${params.toString()}` : "";
+      /*
+      FNXC:PluginEvents 2026-07-26-16:46:
+      Resync contract (see SseSubscription in sse-bus.ts). This subscription is a pure relay: it parses
+      `plugin:custom`, filters by pluginId, and hands the payload to the plugin view's callback. It
+      holds no state of its own, so there is nothing here to refetch — and the host cannot synthesize a
+      refetch for the plugin either, because `plugin:custom` payloads are opaque and no generic
+      "current plugin state" endpoint exists. Adding a refetch here would only add a request to the
+      visible-edge burst without correcting anything, so this takes the documented replaySafe opt-out.
+      RESIDUAL RISK, stated deliberately: a plugin view that accumulates state purely from these events
+      still diverges across a hidden-suspend gap. The fix belongs in the plugin surface, which must
+      resync when its own view remounts or through its own authoritative fetch; the relay cannot do it.
+      */
       return subscribeSse(`/api/events${query}`, {
+        replaySafe: {
+          reason:
+            "relay-only: no host state; plugin:custom payloads are opaque so the host has no authoritative refetch, plugin views own their resync",
+        },
         events: {
           "plugin:custom": (event: MessageEvent) => {
             try {

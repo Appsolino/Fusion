@@ -20,6 +20,7 @@ import {
   parseDateMs,
   persistApprovalBannerDismissals,
 } from "../utils/appLifecycle";
+import { createResyncRetryRunner } from "./resyncRetry";
 
 export interface UseApprovalBannerOptions {
   tasks: Task[];
@@ -32,6 +33,16 @@ export interface UseApprovalBannerOptions {
 export interface UseApprovalBannerResult {
   candidate: ApprovalBannerCandidate | null;
   dismissApproval: (candidate: ApprovalBannerCandidate) => void;
+  /*
+  FNXC:ApprovalBanner 2026-07-26-18:20:
+  True when every attempt of a reconnect resync ladder failed, so "no banner" no longer means "no
+  pending approval" — it means we could not find out. The banner host renders this as the
+  operator-visible signal that approvals may be missing; without it, a failed resync is
+  indistinguishable from a quiet system, which is exactly how a pending decision goes unanswered.
+  NOTE: this hook only PRODUCES the flag. As of this change no consumer renders it yet
+  (AppInner is outside this change's file scope) — the bounded retry below is the fix that is live.
+  */
+  approvalsMayBeIncomplete: boolean;
 }
 
 export function useApprovalBanner({
@@ -41,6 +52,7 @@ export function useApprovalBanner({
   onStarPrompt,
 }: UseApprovalBannerOptions): UseApprovalBannerResult {
   const [candidate, setCandidate] = useState<ApprovalBannerCandidate | null>(null);
+  const [approvalsMayBeIncomplete, setApprovalsMayBeIncomplete] = useState(false);
   const taskStatusByIdRef = useRef<Map<string, string | undefined>>(new Map());
   const seenApprovalKeysRef = useRef<Set<string>>(new Set());
   const approvalDismissalsRef = useRef<Map<string, number>>(loadApprovalBannerDismissals());
@@ -82,38 +94,53 @@ export function useApprovalBanner({
     surface the newest undismissed pending request, and clear a banner whose request is no longer
     pending (decided elsewhere while we were disconnected).
     */
-    const resyncPendingApprovals = () => {
-      void fetchApprovals({ status: "pending", limit: 50 }, currentProjectId)
-        .then((list) => {
-          if (disposed) return;
-          const pending = [...list.requests].sort((a, b) =>
-            (b.updatedAt ?? b.createdAt ?? "").localeCompare(a.updatedAt ?? a.createdAt ?? ""),
-          );
-          const newest = pending.find((request) => {
-            const dedupeKey = `approval:${request.id}`;
-            const dismissedAt = approvalDismissalsRef.current.get(dedupeKey);
-            return dismissedAt === undefined || parseDateMs(request.updatedAt ?? request.createdAt) > dismissedAt;
-          });
-          if (!newest) {
-            // Server has nothing pending for us: any banner still on screen was decided while the
-            // stream was down.
-            setCandidate((current) => (current === null ? current : null));
-            return;
-          }
-          const dedupeKey = `approval:${newest.id}`;
-          seenApprovalKeysRef.current.add(dedupeKey);
-          triggerApprovalBanner({
-            dedupeKey,
-            updatedAtMs: parseDateMs(newest.updatedAt ?? newest.createdAt),
-          });
-        })
-        .catch(() => {
-          // A failed resync must not clear a banner we already have; the next reopen retries.
-        });
+    /*
+    FNXC:ApprovalBanner 2026-07-26-18:24:
+    CORRECTION to the previous handler, whose catch said "the next reopen retries" and did nothing.
+    That reasoning was WRONG and must not be reintroduced: once the connection is healthy again there
+    may be no further reopen for hours, so a single failed refetch permanently hid a pending
+    approval — the operator saw no banner and the requesting agent blocked on a decision it never
+    got. Failures now run the shared bounded ladder (resyncRetry) and, if the whole ladder fails,
+    raise `approvalsMayBeIncomplete` instead of leaving silence that reads as "nothing pending".
+    Still true and preserved: a failed attempt never clears a banner already on screen.
+    */
+    const resyncPendingApprovals = async () => {
+      const list = await fetchApprovals({ status: "pending", limit: 50 }, currentProjectId);
+      if (disposed) return;
+      const pending = [...list.requests].sort((a, b) =>
+        (b.updatedAt ?? b.createdAt ?? "").localeCompare(a.updatedAt ?? a.createdAt ?? ""),
+      );
+      const newest = pending.find((request) => {
+        const dedupeKey = `approval:${request.id}`;
+        const dismissedAt = approvalDismissalsRef.current.get(dedupeKey);
+        return dismissedAt === undefined || parseDateMs(request.updatedAt ?? request.createdAt) > dismissedAt;
+      });
+      if (!newest) {
+        // Server has nothing pending for us: any banner still on screen was decided while the
+        // stream was down.
+        setCandidate((current) => (current === null ? current : null));
+        return;
+      }
+      const dedupeKey = `approval:${newest.id}`;
+      seenApprovalKeysRef.current.add(dedupeKey);
+      triggerApprovalBanner({
+        dedupeKey,
+        updatedAtMs: parseDateMs(newest.updatedAt ?? newest.createdAt),
+      });
     };
 
+    const approvalResync = createResyncRetryRunner({
+      run: resyncPendingApprovals,
+      onExhausted: () => {
+        if (!disposed) setApprovalsMayBeIncomplete(true);
+      },
+      onRecovered: () => {
+        if (!disposed) setApprovalsMayBeIncomplete(false);
+      },
+    });
+
     const unsubscribe = subscribeSse(`/api/events${query}`, {
-      onReconnect: resyncPendingApprovals,
+      onReconnect: () => approvalResync.trigger(),
       events: {
         "approval:requested": (event: MessageEvent) => {
           try {
@@ -156,6 +183,7 @@ export function useApprovalBanner({
 
     return () => {
       disposed = true;
+      approvalResync.dispose();
       unsubscribe();
     };
   }, [currentProjectId, gitHubStarPromptShown, onStarPrompt]);
@@ -169,5 +197,5 @@ export function useApprovalBanner({
     setCandidate(null);
   }, []);
 
-  return { candidate, dismissApproval };
+  return { candidate, dismissApproval, approvalsMayBeIncomplete };
 }

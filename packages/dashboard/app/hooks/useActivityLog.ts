@@ -140,13 +140,24 @@ export function useActivityLog(options: UseActivityLogOptions = {}): UseActivity
       FNXC:MobileTabRetention 2026-07-26-10:22:
       loadMore appended pages unbounded, so a long session grew the entry array without limit and inflated
       the page's resident set — large-memory pages are the second discard trigger on mobile. Cap retained
-      entries at MAX_RETAINED_ENTRIES (same bound as useMultiAgentLogs). The head of the array is the
-      current refresh page the operator is looking at, and loadMore only appends continuation pages, so the
-      cap truncates the tail rather than evicting what is on screen.
+      entries at MAX_RETAINED_ENTRIES (same bound as useMultiAgentLogs).
+
+      FNXC:ActivityLogPaging 2026-07-26-18:30:
+      CORRECTION to the note above, which claimed "the cap truncates the tail rather than evicting what is
+      on screen" and used `merged.slice(0, MAX_RETAINED_ENTRIES)`. That was wrong in the only case where
+      the cap actually bites: the tail being truncated IS the page loadMore just fetched. At the cap
+      (limit 50 -> the 11th click) every further click fetched 50 older entries, dropped all 50, advanced
+      `lastTimestampRef` past them, and left `hasMore` true — so the feed stopped paginating while still
+      offering a "Load more" button that provably did nothing, and the skipped entries became unreachable
+      because the cursor had already moved beyond them.
+      Drop from the HEAD instead (`slice(-MAX)`): the appended older page survives, so the control keeps
+      doing what it exists for — paging backwards. Evicting the newest entries is the recoverable
+      direction: `refresh` (manual, and the 5s visibility-aware poll) refetches the newest page from
+      offset 0 and resets the buffer, so anything dropped off the head comes straight back.
       */
       setEntries((prev) => {
         const merged = [...prev, ...data];
-        return merged.length > MAX_RETAINED_ENTRIES ? merged.slice(0, MAX_RETAINED_ENTRIES) : merged;
+        return merged.length > MAX_RETAINED_ENTRIES ? merged.slice(-MAX_RETAINED_ENTRIES) : merged;
       });
       setHasMore(data.length === limit);
 

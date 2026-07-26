@@ -41,8 +41,13 @@ vi.mock("../TaskDetailModal", () => ({
   ),
 }));
 
+const confirmMocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  confirmWithChoice: vi.fn(),
+}));
+
 vi.mock("../../hooks/useConfirm", () => ({
-  useConfirm: () => ({ confirm: vi.fn(), confirmWithChoice: vi.fn() }),
+  useConfirm: () => confirmMocks,
 }));
 
 const PROJECT_ID = "proj-windowing";
@@ -98,6 +103,10 @@ function renderedTaskIds(): string[] {
 
 beforeEach(() => {
   localStorage.clear();
+  confirmMocks.confirm.mockReset();
+  confirmMocks.confirm.mockResolvedValue(false);
+  confirmMocks.confirmWithChoice.mockReset();
+  confirmMocks.confirmWithChoice.mockResolvedValue("cancel");
 });
 
 describe("ListView render windowing", () => {
@@ -150,5 +159,84 @@ describe("ListView render windowing", () => {
 
     // ...and the window is widened so the persisted single selection is still rendered.
     expect(renderedTaskIds()).toContain(FAR_TASK_ID);
+  });
+});
+
+/*
+FNXC:ListViewSelectAll 2026-07-26-14:40:
+The header checkbox says "Select all visible tasks" and arms DESTRUCTIVE bulk actions (delete, column
+move). Render windowing made that label false: it flattened the full filtered set, so 50 rendered rows
+armed 200 tasks. These cases pin the corrected contract at the point that matters — the count a bulk
+action actually confirms — not merely at the internal selection state.
+*/
+describe("ListView select-all under render windowing", () => {
+  function enterBulkEdit() {
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Bulk Edit/i }));
+    });
+  }
+
+  function selectAll() {
+    act(() => {
+      fireEvent.click(screen.getByLabelText("Select all visible tasks"));
+    });
+  }
+
+  it("selects only the rendered window, not the whole filtered set", () => {
+    renderList();
+    enterBulkEdit();
+
+    const rendered = renderedTaskIds();
+    expect(rendered).toHaveLength(INITIAL_WINDOW);
+
+    selectAll();
+
+    const persisted: string[] = JSON.parse(
+      localStorage.getItem(scopedKey("kb-dashboard-selected-tasks", PROJECT_ID)) ?? "[]",
+    );
+    expect(persisted.sort()).toEqual([...rendered].sort());
+    expect(persisted).toHaveLength(INITIAL_WINDOW);
+    expect(screen.getAllByText(`${INITIAL_WINDOW} selected`).length).toBeGreaterThan(0);
+  });
+
+  it("confirms a bulk delete against the rendered rows only", async () => {
+    renderList();
+    enterBulkEdit();
+    selectAll();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Delete selected/i }));
+    });
+
+    expect(confirmMocks.confirm).toHaveBeenCalledTimes(1);
+    const { message } = confirmMocks.confirm.mock.calls[0][0] as { message: string };
+    expect(message).toContain(String(INITIAL_WINDOW));
+    expect(message).not.toContain(String(TOTAL_TASKS));
+  });
+
+  it("grows the select-all target as the window is expanded", () => {
+    renderList();
+    enterBulkEdit();
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Load 25 more/i }));
+    });
+    selectAll();
+
+    const persisted: string[] = JSON.parse(
+      localStorage.getItem(scopedKey("kb-dashboard-selected-tasks", PROJECT_ID)) ?? "[]",
+    );
+    expect(persisted).toHaveLength(INITIAL_WINDOW + INCREMENT);
+    expect(persisted.sort()).toEqual([...renderedTaskIds()].sort());
+  });
+
+  it("reports checked, not indeterminate, once the rendered window is fully selected", () => {
+    renderList();
+    enterBulkEdit();
+    selectAll();
+
+    const checkbox = screen.getByLabelText("Select all visible tasks") as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.indeterminate).toBe(false);
   });
 });

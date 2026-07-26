@@ -44,12 +44,31 @@ count; user-visible staleness on return is therefore capped at ~3s for ancillary
 Board task data is NOT affected: `useTasks` owns its own `visibilitychange` refresh listener and never routes
 through this helper, so the operator's primary data is still refreshed immediately on return.
 */
-const VISIBLE_EDGE_STAGGER_STEP_MS = 150;
-const VISIBLE_EDGE_STAGGER_WINDOW_MS = 3_000;
-const VISIBLE_EDGE_STAGGER_SLOTS = Math.max(
+/*
+FNXC:MobileTabRetention 2026-07-26-16:05:
+The stagger geometry is EXPORTED because the visible edge has more than one fan-out on it: the poll path here
+and the SSE bus's channel reopen (`app/api/sse-bus.ts`) both burst on the same `visibilitychange`, against the
+same 6-connection-per-origin cap. A second hand-rolled stagger would spread each fan-out independently while
+leaving their union unbounded, so both paths must derive delays from this one slot function.
+`visibleEdgeStaggerDelayMs` is pure (index -> delay) and owns no registry, so a caller with its own ordering
+(SSE channels) and a caller with the module registry below (pollers) can share it without sharing state.
+*/
+export const VISIBLE_EDGE_STAGGER_STEP_MS = 150;
+export const VISIBLE_EDGE_STAGGER_WINDOW_MS = 3_000;
+export const VISIBLE_EDGE_STAGGER_SLOTS = Math.max(
   1,
   Math.round(VISIBLE_EDGE_STAGGER_WINDOW_MS / VISIBLE_EDGE_STAGGER_STEP_MS),
 );
+
+/**
+ * Deterministic (no randomness, therefore testable) delay for the Nth participant in a visible-edge fan-out.
+ * Modulo wrap keeps the spread bounded by {@link VISIBLE_EDGE_STAGGER_WINDOW_MS} regardless of participant
+ * count; index 0 is always synchronous so a lone participant is unchanged.
+ */
+export function visibleEdgeStaggerDelayMs(index: number): number {
+  const normalized = Number.isFinite(index) ? Math.max(0, Math.trunc(index)) : 0;
+  return (normalized % VISIBLE_EDGE_STAGGER_SLOTS) * VISIBLE_EDGE_STAGGER_STEP_MS;
+}
 
 /** Insertion-ordered registry of background subscribers; membership position is the stagger slot. */
 const staggeredVisibleEdgeSubscribers = new Set<object>();
@@ -63,7 +82,7 @@ function visibleEdgeDelayMs(token: object): number {
     }
     index += 1;
   }
-  return (index % VISIBLE_EDGE_STAGGER_SLOTS) * VISIBLE_EDGE_STAGGER_STEP_MS;
+  return visibleEdgeStaggerDelayMs(index);
 }
 
 /**
@@ -73,6 +92,78 @@ function visibleEdgeDelayMs(token: object): number {
 export function __resetVisibleEdgeStaggerRegistryForTests(): void {
   if (import.meta.env.MODE !== "test") return;
   staggeredVisibleEdgeSubscribers.clear();
+}
+
+/*
+FNXC:MobileTabRetention 2026-07-26-16:05:
+`createVisibilityGatedTimer` is the ONE implementation of "tear the timer down when hidden; fire once and
+re-arm when visible". It exists because `useLiveTimeTicker` could not call `useVisibilityAwarePoll` — the
+ticker is a module singleton with its own subscriber set, not a per-consumer hook — and so had independently
+reimplemented the same start/stop/resume-on-visible shape, contradicting this module's own "do not add a
+second visibility pattern" rule. Factoring the bookkeeping into a plain (non-hook) function lets both call
+sites share it while keeping their different ownership models.
+
+Contract:
+- `disarm()` runs on the hidden edge AND cancels any pending staggered resume, so a page that is re-hidden
+  mid-stagger issues no work at all — "a hidden page does no work" is preserved, not merely approximated.
+- The visible edge is a no-op when something is already armed or a resume is already pending, so a duplicate
+  `visibilitychange` cannot produce a second refresh.
+- `arm()` is invoked FROM the staggered instant (not from the edge), so participants stay drifted apart
+  instead of re-synchronizing one interval later.
+*/
+export interface VisibilityGatedTimer {
+  /** Attach as the `visibilitychange` handler. */
+  handleVisibilityChange: () => void;
+  /** Cancel a pending staggered resume and disarm. Safe to call from teardown. */
+  stop: () => void;
+}
+
+export function createVisibilityGatedTimer(spec: {
+  /** Arm the underlying timer. Must be idempotent. */
+  arm: () => void;
+  /** Tear the underlying timer down. Must be idempotent. */
+  disarm: () => void;
+  /** Whether the underlying timer is currently armed. */
+  isArmed: () => boolean;
+  /** Fired once on the hidden -> visible edge, before `arm()`. */
+  onResume?: () => void;
+  /** Delay applied to the resume, from the shared stagger geometry. Defaults to 0 (synchronous). */
+  resumeDelayMs?: () => number;
+}): VisibilityGatedTimer {
+  let pendingResume: ReturnType<typeof setTimeout> | null = null;
+
+  const stop = () => {
+    if (pendingResume !== null) {
+      clearTimeout(pendingResume);
+      pendingResume = null;
+    }
+    spec.disarm();
+  };
+
+  const resume = () => {
+    pendingResume = null;
+    spec.onResume?.();
+    spec.arm();
+  };
+
+  const handleVisibilityChange = () => {
+    // Non-DOM environments are treated as visible, matching every other visibility check in this module.
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      stop();
+      return;
+    }
+    if (spec.isArmed() || pendingResume !== null) {
+      return;
+    }
+    const delayMs = spec.resumeDelayMs?.() ?? 0;
+    if (delayMs === 0) {
+      resume();
+      return;
+    }
+    pendingResume = setTimeout(resume, delayMs);
+  };
+
+  return { handleVisibilityChange, stop };
 }
 
 export type VisibilityPollPriority = "critical" | "background";
@@ -110,58 +201,38 @@ export function useVisibilityAwarePoll(
     }
 
     let timer: ReturnType<typeof setInterval> | null = null;
-    let staggerTimer: ReturnType<typeof setTimeout> | null = null;
     const start = () => {
       if (timer === null) {
         timer = setInterval(tick, intervalMs);
       }
     };
-    const stop = () => {
-      if (staggerTimer !== null) {
-        clearTimeout(staggerTimer);
-        staggerTimer = null;
-      }
-      if (timer !== null) {
-        clearInterval(timer);
-        timer = null;
-      }
-    };
 
-    // Refresh once and re-arm the interval FROM the staggered instant, so subscribers stay drifted apart
-    // instead of re-synchronizing one interval after the edge.
-    const resume = () => {
-      staggerTimer = null;
-      if (refreshOnVisible) {
-        tick();
-      }
-      start();
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        stop();
-        return;
-      }
-      // Both timers null is the hidden -> visible edge (or a mount that happened while hidden). The
-      // `staggerTimer` half of the guard also makes a duplicate visibilitychange during the stagger window
-      // a no-op rather than a second queued refresh.
-      if (timer === null && staggerTimer === null) {
-        const delayMs = priority === "critical" ? 0 : visibleEdgeDelayMs(staggerToken);
-        if (delayMs === 0) {
-          resume();
-        } else {
-          staggerTimer = setTimeout(resume, delayMs);
+    // Bookkeeping (stop-on-hidden, refresh-once-then-re-arm-on-visible, duplicate-edge guard, cancel a
+    // pending stagger when re-hidden) lives in the shared gate so `useLiveTimeTicker` runs the same logic.
+    const gate = createVisibilityGatedTimer({
+      arm: start,
+      disarm: () => {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
         }
-      }
-    };
+      },
+      isArmed: () => timer !== null,
+      onResume: () => {
+        if (refreshOnVisible) {
+          tick();
+        }
+      },
+      resumeDelayMs: () => (priority === "critical" ? 0 : visibleEdgeDelayMs(staggerToken)),
+    });
 
     if (document.visibilityState !== "hidden") {
       start();
     }
-    document.addEventListener("visibilitychange", handleVisibilityChange);
+    document.addEventListener("visibilitychange", gate.handleVisibilityChange);
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      stop();
+      document.removeEventListener("visibilitychange", gate.handleVisibilityChange);
+      gate.stop();
       staggeredVisibleEdgeSubscribers.delete(staggerToken);
     };
   }, [enabled, intervalMs, refreshOnVisible, priority]);

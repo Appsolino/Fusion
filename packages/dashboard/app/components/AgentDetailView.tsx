@@ -25,6 +25,7 @@ import type { AgentHealthStatus } from "../utils/agentHealth";
 import { SkillMultiselect } from "./SkillMultiselect";
 import { subscribeSse } from "../sse-bus";
 import { MAX_LOG_ENTRIES } from "../hooks/useAgentLogs";
+import { countLeadingGapMarkers, reconcileReconnectedEntries } from "../hooks/logStreamReconcile";
 import { DEFAULT_HEARTBEAT_INTERVAL_MS, formatHeartbeatInterval, resolveHeartbeatIntervalMs } from "../utils/heartbeatIntervals";
 import { formatAgentSkillBadgeLabel } from "../utils/agentSkills";
 import { CustomModelDropdown } from "./CustomModelDropdown";
@@ -164,6 +165,15 @@ default) and grows backwards, the mirror image of the board's top-anchored windo
 const LOG_WINDOW_INITIAL = MAX_LOG_ENTRIES;
 const LOG_WINDOW_INCREMENT = MAX_LOG_ENTRIES;
 
+/*
+FNXC:AgentLogResync 2026-07-26-18:02:
+Page size for the task-log fetch (matches `useAgentLogs`'s INITIAL_LOAD_LIMIT) and the hard ceiling on a
+reconnect refetch. The ceiling exists only to bound one request; it is not a retention cap, and it must
+never be applied to an array already held in state — see the correction on LOG_WINDOW_INITIAL.
+*/
+const AGENT_LOG_PAGE_LIMIT = 100;
+const AGENT_LOG_RESYNC_MAX_LIMIT = 1000;
+
 /**
  * FNXC:AgentLogHistory 2026-07-26-13:08:
  * Live SSE append with a SOFT ceiling, identical in intent to `useAgentLogs`'s tail: the buffer is
@@ -275,6 +285,16 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
   const agentRef = useRef<AgentDetail | null>(null);
   const hasConfigChangesRef = useRef(false);
   const loadedLatestRunLogsRef = useRef<string | null>(null);
+  /*
+  FNXC:AgentLogResync 2026-07-26-18:10:
+  `logs` mirrored into a ref plus an identifier for the stream that filled it. `loadLogs` needs the
+  current buffer length (to size the resync page) and its provenance (to decide merge-vs-replace), but
+  reading either from state would put them in `loadLogs`'s dependency list, and `loadLogs` is a
+  dependency of the Logs-tab effect — every streamed line would then refetch the log page.
+  */
+  const logsRef = useRef<AgentLogEntry[]>([]);
+  logsRef.current = logs;
+  const logsSourceRef = useRef<string | null>(null);
 
   // Track the context version to detect stale events after project/agent switches.
   // Incremented whenever agentId or projectId changes, invalidating any in-flight SSE handlers.
@@ -337,11 +357,44 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
 
     try {
       if (agent?.taskId) {
+        const currentTaskId = agent.taskId;
         setLatestRun(null);
         loadedLatestRunLogsRef.current = null;
-        const result = await fetchAgentLogsWithMeta(agent.taskId, currentProjectId, { limit: 100 });
+        /*
+        FNXC:AgentLogResync 2026-07-26-18:05:
+        Task-log refetch. This path is BOTH the initial load and the SSE-reconnect heal, and it used to
+        `setLogs(result.entries)` — a wholesale replace with a 100-entry page. After a hidden-tab suspend
+        an agent that had streamed 480 lines into the buffer was silently cut to the newest 100: this view
+        has no server-paging path (WindowedAgentLogViewer pages only over the array already in memory), so
+        `hiddenCount` became 0, the "Load older" affordance disappeared, and a truncated log was presented
+        as complete. Both halves of the fix are required:
+          1. request AT LEAST as many entries as the buffer already holds, so the fetched page provably
+             overlaps the buffer and the splice loses nothing;
+          2. merge through the SHARED `reconcileReconnectedEntries` rather than replacing, so an
+             unprovable splice renders a visible gap marker instead of implied continuity.
+        The request is clamped at AGENT_LOG_RESYNC_MAX_LIMIT so a very large buffer cannot turn one
+        reconnect into an unbounded query; past that ceiling the reconcile's gap marker is the honest
+        outcome.
+
+        The limit is `max(PAGE, heldRealCount)` and deliberately NOT `heldRealCount + PAGE`: the reconcile
+        splices when the fetched page STARTS INSIDE the buffer, so a page reaching further back than the
+        buffer's first entry has no overlap and would stamp a gap marker on a buffer that in fact lost
+        nothing — a false "entries are missing" claim.
+
+        `logsSourceRef` gates the merge on the buffer belonging to this same task stream. The Logs tab also
+        fills `logs` from the latest-RUN fallback, and reconciling a task page against a run buffer would
+        likewise fabricate a gap marker between two unrelated streams; a source change is a plain replace.
+        */
+        const sameSource = logsSourceRef.current === `task:${currentTaskId}`;
+        const heldEntries = sameSource ? logsRef.current : [];
+        const heldRealCount = heldEntries.length - countLeadingGapMarkers(heldEntries);
+        const limit = Math.min(AGENT_LOG_RESYNC_MAX_LIMIT, Math.max(AGENT_LOG_PAGE_LIMIT, heldRealCount));
+        const result = await fetchAgentLogsWithMeta(currentTaskId, currentProjectId, { limit });
         if (isStale()) return;
-        setLogs(result.entries);
+        setLogs((prev) =>
+          reconcileReconnectedEntries(sameSource ? prev : [], result.entries, [], currentTaskId).entries,
+        );
+        logsSourceRef.current = `task:${currentTaskId}`;
         return;
       }
 
@@ -353,6 +406,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
       setLatestRun(latest);
       if (!latest) {
         loadedLatestRunLogsRef.current = null;
+        logsSourceRef.current = null;
         setLogs([]);
         return;
       }
@@ -365,6 +419,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
       // by WindowedAgentLogViewer instead. Capping here destroyed the run's opening entries outright
       // (see the correction note on LOG_WINDOW_INITIAL).
       setLogs(entries);
+      logsSourceRef.current = `run:${latest.id}`;
       loadedLatestRunLogsRef.current = latest.id;
     } catch (err) {
       if (isStale()) return;
@@ -571,6 +626,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
       setAgentMailbox(null);
       setMailboxError(null);
       loadedLatestRunLogsRef.current = null;
+      logsSourceRef.current = null;
       hasConfigChangesRef.current = false;
     }
   }, [agentId, projectId]);
@@ -611,6 +667,26 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
         "approval:requested": refreshAgentForApprovalEvent,
         "approval:updated": refreshAgentForApprovalEvent,
         "approval:decided": refreshAgentForApprovalEvent,
+      },
+      /*
+      FNXC:AgentDetailResync 2026-07-26-18:18:
+      This subscription drives the WHOLE detail header (state badge, health, error indicator) and the
+      approval indicator purely from events — nothing else refetches on demand. `/api/events` replays
+      nothing on open and the bus tears the socket down after SSE_HIDDEN_SUSPEND_DELAY_MS hidden, so
+      every `agent:updated`/`approval:*` emitted during the suspend window is gone. Without this
+      handler an agent that went to `error` and raised an approval kept rendering as its pre-suspend
+      self on return. Not forever — the 30s `loadAgent` poll above eventually corrects it (do not
+      re-file this as a permanent stale view) — but that timer does not run through a frozen/suspended
+      tab, so the operator can stare at a confidently wrong header for up to a further 30s after
+      resume. Refetch authoritative agent state at the reopen instead.
+
+      The three log subscriptions in this file each got `onReconnect` when the suspend landed and this
+      one was missed; every subscribeSse here now declares one.
+      */
+      onReconnect: () => {
+        if (contextVersionRef.current !== contextVersionAtStart) return;
+        if (hasConfigChangesRef.current) return;
+        void loadAgent();
       },
     });
   }, [agentId, projectId, loadAgent]);

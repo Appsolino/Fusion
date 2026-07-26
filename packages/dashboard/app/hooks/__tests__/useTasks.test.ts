@@ -699,18 +699,34 @@ describe("useTasks", () => {
       expect(mockFetchTasks).not.toHaveBeenCalled();
       expect(MockEventSource.instances).toHaveLength(1);
 
-      act(() => {
-        MockEventSource.instances[0]._emit("open");
-        MockEventSource.instances[0]._emit("error");
-      });
+      // The resync fires when the REBUILT stream opens, not on the error (see the FNXC note above).
+      // RECONNECT_DELAY_MS is 3s, so drive it with fake timers rather than waiting in real time; the
+      // fake clock must be installed BEFORE the error schedules the reconnect timer.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        act(() => {
+          MockEventSource.instances[0]._emit("open");
+          MockEventSource.instances[0]._emit("error");
+        });
 
-      await waitFor(() => {
+        await act(async () => {
+          vi.advanceTimersByTime(3_000);
+          await flushPromises();
+        });
+        expect(MockEventSource.instances).toHaveLength(2);
+        await act(async () => {
+          MockEventSource.instances[1]._emit("open");
+          await flushPromises();
+        });
+
         expect(mockFetchTasks).toHaveBeenCalledTimes(1);
-      });
-      expect(mockFetchTasks).toHaveBeenLastCalledWith(undefined, undefined, undefined, undefined, false);
-      await waitFor(() => {
-        expect(result.current.tasks[0]?.id).toBe("FN-RECONNECTED");
-      });
+        expect(mockFetchTasks).toHaveBeenLastCalledWith(undefined, undefined, undefined, undefined, false);
+        await waitFor(() => {
+          expect(result.current.tasks[0]?.id).toBe("FN-RECONNECTED");
+        });
+      } finally {
+        vi.useRealTimers();
+      }
 
       unmount();
     });
@@ -905,6 +921,7 @@ describe("useTasks", () => {
     const first = MockEventSource.instances[0];
 
     act(() => {
+      first._emit("open");
       first._emit("error");
     });
 
@@ -916,6 +933,17 @@ describe("useTasks", () => {
     });
 
     expect(MockEventSource.instances).toHaveLength(2);
+    /*
+    FNXC:DashboardSSE 2026-07-26-11:25:
+    The resync signal is now emitted by the REBUILT stream's `open`, not by the error that tore the old
+    one down (a failed reconnect must not claim to have resynced). vitest.setup's MockEventSource marks
+    itself OPEN in its constructor but never dispatches `open` like a real EventSource, so the test has
+    to emit it on the replacement instance.
+    */
+    await act(async () => {
+      MockEventSource.instances[1]._emit("open");
+      await flushPromises();
+    });
     expect(mockFetchTasks).toHaveBeenCalledTimes(2);
 
     unmount();
@@ -948,6 +976,7 @@ describe("useTasks", () => {
     const first = MockEventSource.instances[0];
 
     act(() => {
+      first._emit("open");
       first._emit("error");
     });
 
@@ -957,6 +986,11 @@ describe("useTasks", () => {
     });
 
     expect(MockEventSource.instances).toHaveLength(2);
+    // See the FNXC note above: the rebuilt stream's `open` is the resync authority.
+    await act(async () => {
+      MockEventSource.instances[1]._emit("open");
+      await flushPromises();
+    });
     expect(mockFetchTasks).toHaveBeenCalledTimes(2);
     expect(result.current.tasks[0]?.title).toBe("Fresh title");
   });
@@ -3767,7 +3801,10 @@ describe("useTasks", () => {
       act(() => {
         es._emit("error");
       });
-      expect(mockFetchTasks).toHaveBeenCalledTimes(1); // onReconnect fires once during error
+      // The error alone no longer resyncs — only the rebuilt stream's `open` does (see the FNXC note
+      // on the reconnect tests above). This test's real guarantee is the one below: after sseEnabled
+      // flips off, the pending reconnect can never produce a refetch.
+      expect(mockFetchTasks).toHaveBeenCalledTimes(0);
 
       // Before the reconnect timer fires, flip sseEnabled to false
       await act(async () => {
@@ -3777,8 +3814,8 @@ describe("useTasks", () => {
       // Advance timers past RECONNECT_DELAY_MS (3 seconds)
       vi.advanceTimersByTime(4_000);
 
-      // No additional fetchTasks should have been called — active flag blocked it
-      expect(mockFetchTasks).toHaveBeenCalledTimes(1);
+      // No fetchTasks should have been called — active flag blocked it
+      expect(mockFetchTasks).toHaveBeenCalledTimes(0);
       vi.useRealTimers();
     });
   });

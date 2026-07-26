@@ -21,6 +21,9 @@ const fetchActivityLog = vi.fn();
 const fetchActivityFeed = vi.fn();
 const fetchProjectHealth = vi.fn();
 const apiFn = vi.fn();
+const fetchProjectsAcrossNodes = vi.fn();
+const fetchNodes = vi.fn();
+const fetchMeshState = vi.fn();
 
 vi.mock("../../api", () => ({
   fetchDashboardHealth: (...a: unknown[]) => fetchDashboardHealth(...a),
@@ -29,12 +32,53 @@ vi.mock("../../api", () => ({
   fetchActivityFeed: (...a: unknown[]) => fetchActivityFeed(...a),
   fetchProjectHealth: (...a: unknown[]) => fetchProjectHealth(...a),
   api: (...a: unknown[]) => apiFn(...a),
+  // Surfaces added when useProjects / useNodes / useMeshState were migrated onto the shared gate.
+  fetchProjectsAcrossNodes: (...a: unknown[]) => fetchProjectsAcrossNodes(...a),
+  hasNodeMappingsSupport: () => false,
+  registerProject: vi.fn(),
+  updateProject: vi.fn(),
+  unregisterProject: vi.fn(),
+  fetchNodes: (...a: unknown[]) => fetchNodes(...a),
+  registerNode: vi.fn(),
+  updateNode: vi.fn(),
+  unregisterNode: vi.fn(),
+  checkNodeHealth: vi.fn(),
+  discoverRemoteNodeProjects: vi.fn(),
+  fetchDockerNodeConfig: vi.fn(),
+  fetchDockerConfigDiff: vi.fn(),
+  updateDockerNodeConfig: vi.fn(),
+  fetchMeshState: (...a: unknown[]) => fetchMeshState(...a),
 }));
 
-import { __resetVisibleEdgeStaggerRegistryForTests, useVisibilityAwarePoll } from "../visibilitySuspension";
+vi.mock("../../api-node", () => ({
+  persistNodeProjectPathMappings: vi.fn(),
+}));
+
+vi.mock("../../utils/resumeInstrumentation", () => ({
+  recordResumeEvent: vi.fn(),
+}));
+
+// `t` must be referentially stable: `useNodes`/`useMeshState` list it in effect deps, so a fresh function
+// per render would re-run their load effect and fabricate fetches this test would misattribute to polling.
+const translate = (_key: string, fallback?: string) => fallback ?? _key;
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({ t: translate }),
+}));
+
+import {
+  VISIBLE_EDGE_STAGGER_SLOTS,
+  VISIBLE_EDGE_STAGGER_STEP_MS,
+  VISIBLE_EDGE_STAGGER_WINDOW_MS,
+  __resetVisibleEdgeStaggerRegistryForTests,
+  useVisibilityAwarePoll,
+  visibleEdgeStaggerDelayMs,
+} from "../visibilitySuspension";
 import { useActivityLog } from "../useActivityLog";
 import { useDashboardHealth } from "../useDashboardHealth";
+import { useMeshState } from "../useMeshState";
+import { useNodes } from "../useNodes";
 import { useProjectHealth } from "../useProjectHealth";
+import { useProjects } from "../useProjects";
 import { useStashOrphanCount } from "../useStashOrphanCount";
 
 /** Drive the jsdom visibility state and dispatch the event the gate listens for. */
@@ -51,7 +95,16 @@ describe("polling loops are suspended while the document is hidden", () => {
     vi.useFakeTimers();
     __resetVisibleEdgeStaggerRegistryForTests();
     setVisibility("visible");
-    for (const fn of [fetchDashboardHealth, fetchActivityLog, fetchActivityFeed, fetchProjectHealth, apiFn]) {
+    for (const fn of [
+      fetchDashboardHealth,
+      fetchActivityLog,
+      fetchActivityFeed,
+      fetchProjectHealth,
+      apiFn,
+      fetchProjectsAcrossNodes,
+      fetchNodes,
+      fetchMeshState,
+    ]) {
       fn.mockReset();
     }
     fetchDashboardHealth.mockResolvedValue({ status: "ok" });
@@ -59,6 +112,9 @@ describe("polling loops are suspended while the document is hidden", () => {
     fetchActivityFeed.mockResolvedValue([]);
     fetchProjectHealth.mockResolvedValue({ ok: true });
     apiFn.mockResolvedValue({ count: 0 });
+    fetchProjectsAcrossNodes.mockResolvedValue([]);
+    fetchNodes.mockResolvedValue([]);
+    fetchMeshState.mockResolvedValue({ nodes: [] });
   });
 
   afterEach(() => {
@@ -149,6 +205,33 @@ describe("polling loops are suspended while the document is hidden", () => {
       render: () => renderHook(() => useStashOrphanCount("p1")),
       spy: () => apiFn,
     },
+    /*
+    FNXC:MobileTabRetention 2026-07-26-16:05:
+    These three were the gap between the change set's claim ("every polling loop is visibility-gated") and
+    its behavior. Each owned a `visibilitychange` listener that only ADDED a refresh-on-visible and never
+    cleared its interval, so all three kept fetching the whole time the tab was backgrounded. `useProjects`
+    is the worst of them: App.tsx mounts it unconditionally, so its 5s loop alone kept the page non-idle for
+    the entire session — the precise condition that makes a mobile browser discard the tab. Against the
+    pre-fix code the hidden-window assertion below fails (6 poll periods of fetches, not zero).
+    */
+    {
+      name: "useProjects (5s project-list poll, mounted for the whole session)",
+      intervalMs: 5_000,
+      render: () => renderHook(() => useProjects()),
+      spy: () => fetchProjectsAcrossNodes,
+    },
+    {
+      name: "useNodes (10s node-registry poll)",
+      intervalMs: 10_000,
+      render: () => renderHook(() => useNodes()),
+      spy: () => fetchNodes,
+    },
+    {
+      name: "useMeshState (10s mesh-state poll)",
+      intervalMs: 10_000,
+      render: () => renderHook(() => useMeshState()),
+      spy: () => fetchMeshState,
+    },
   ];
 
   for (const surface of surfaces) {
@@ -236,6 +319,25 @@ describe("the hidden -> visible edge is staggered, not a synchronized stampede",
   function calledCount(ticks: Array<ReturnType<typeof vi.fn>>): number {
     return ticks.filter((tick) => tick.mock.calls.length > 0).length;
   }
+
+  /*
+  FNXC:MobileTabRetention 2026-07-26-16:05:
+  The stagger geometry is shared with the SSE bus's visible-edge channel reopen, so the pure slot function is
+  asserted directly: both fan-outs must derive delays from it rather than hand-roll a second stagger whose
+  union with this one would be unbounded.
+  */
+  it("exposes a deterministic, bounded slot delay for other visible-edge fan-outs to reuse", () => {
+    expect(VISIBLE_EDGE_STAGGER_SLOTS).toBe(Math.round(VISIBLE_EDGE_STAGGER_WINDOW_MS / VISIBLE_EDGE_STAGGER_STEP_MS));
+    expect(visibleEdgeStaggerDelayMs(0)).toBe(0);
+    expect(visibleEdgeStaggerDelayMs(1)).toBe(VISIBLE_EDGE_STAGGER_STEP_MS);
+    expect(visibleEdgeStaggerDelayMs(3)).toBe(3 * VISIBLE_EDGE_STAGGER_STEP_MS);
+    // Wraps instead of growing without bound, so a large fan-out stays inside the window.
+    expect(visibleEdgeStaggerDelayMs(VISIBLE_EDGE_STAGGER_SLOTS)).toBe(0);
+    expect(visibleEdgeStaggerDelayMs(VISIBLE_EDGE_STAGGER_SLOTS * 4 + 2)).toBe(2 * VISIBLE_EDGE_STAGGER_STEP_MS);
+    for (let index = 0; index < VISIBLE_EDGE_STAGGER_SLOTS * 3; index += 1) {
+      expect(visibleEdgeStaggerDelayMs(index)).toBeLessThan(VISIBLE_EDGE_STAGGER_WINDOW_MS);
+    }
+  });
 
   it("N background consumers do not all fire in the same tick, and all refresh within the window", async () => {
     const N = 8;

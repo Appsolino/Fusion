@@ -1390,6 +1390,7 @@ export function TaskDetailContent({
     if (activeTab !== "workflow") return;
 
     const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    let cancelled = false;
 
     const handleTaskUpdated = (e: MessageEvent) => {
       try {
@@ -1403,22 +1404,58 @@ export function TaskDetailContent({
       }
     };
 
-    return subscribeSse(`/api/events${query}`, {
+    /*
+    FNXC:TaskWorkflowDetails 2026-07-26-16:30:
+    Resync contract (see SseSubscription in sse-bus.ts). After the initial fetch the Workflow tab's step
+    results are replaced ONLY by `task:updated` payloads, and the stream is lossy: an error/heartbeat
+    reconnect or the >=60s hidden-tab suspend drops the socket and /api/events keeps no replay buffer.
+    Missing the gap freezes the rendered step list at its pre-suspend state — a review that failed or a
+    step that finished while the phone was backgrounded still reads as running, which is exactly the
+    surface an operator checks before deciding to intervene. Refetch through the same
+    `fetchWorkflowResults` the load effect uses; deliberately no `setWorkflowResultsLoading(true)` and no
+    list clear, so a reconnect refreshes in place instead of flashing an empty/spinner tab.
+    */
+    const resyncWorkflowResults = () => {
+      void fetchWorkflowResults(task.id, projectId)
+        .then((results) => {
+          if (!cancelled) setWorkflowResults(results);
+        })
+        .catch(() => {
+          // Non-fatal: the tab keeps its last known rows and the next task:updated event corrects them.
+        });
+    };
+
+    const unsubscribe = subscribeSse(`/api/events${query}`, {
+      onReconnect: resyncWorkflowResults,
       events: { "task:updated": handleTaskUpdated },
     });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [activeTab, task.id, projectId]);
+
+  /*
+  FNXC:TaskCliSession 2026-07-26-16:36:
+  Hoisted out of the load effect so the `cli:session:state` subscription's onReconnect can refetch the
+  SAME authoritative list rather than duplicating the request shape. Returns the most-recent session
+  (the list is store-ordered) or null; the enriched list fields (adapterId / autonomyPosture) exist only
+  here, which is why the SSE handler merges onto this record instead of replacing it.
+  */
+  const fetchLatestCliSession = useCallback(async (): Promise<CliSessionSummaryRecord | null> => {
+    const search = new URLSearchParams({ taskId: task.id });
+    if (projectId) search.set("projectId", projectId);
+    const res = await api<{ sessions: CliSessionSummaryRecord[] }>(`/cli-sessions?${search.toString()}`);
+    const sessions = res.sessions ?? [];
+    return sessions.length > 0 ? sessions[sessions.length - 1] : null;
+  }, [task.id, projectId]);
 
   // Load the CLI agent session for this task (drives the terminal tab + matrix).
   useEffect(() => {
     let cancelled = false;
-    const search = new URLSearchParams({ taskId: task.id });
-    if (projectId) search.set("projectId", projectId);
-    void api<{ sessions: CliSessionSummaryRecord[] }>(`/cli-sessions?${search.toString()}`)
-      .then((res) => {
-        if (cancelled) return;
-        // Most-recent session for the task (the list is store-ordered).
-        const sessions = res.sessions ?? [];
-        setCliSession(sessions.length > 0 ? sessions[sessions.length - 1] : null);
+    void fetchLatestCliSession()
+      .then((session) => {
+        if (!cancelled) setCliSession(session);
       })
       .catch(() => {
         if (!cancelled) setCliSession(null);
@@ -1426,13 +1463,14 @@ export function TaskDetailContent({
     return () => {
       cancelled = true;
     };
-  }, [task.id, projectId]);
+  }, [fetchLatestCliSession]);
 
   // Live CLI session state via SSE — MERGE payload fields onto the record
   // (never wholesale-replace: the list fetch carries enriched fields the SSE
   // payload omits, e.g. adapterId / autonomyPosture).
   useEffect(() => {
     const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    let cancelled = false;
     const handleCliState = (e: MessageEvent) => {
       try {
         const payload = JSON.parse(e.data) as {
@@ -1473,10 +1511,35 @@ export function TaskDetailContent({
         /* skip malformed events */
       }
     };
-    return subscribeSse(`/api/events${query}`, {
+    /*
+    FNXC:TaskCliSession 2026-07-26-16:40:
+    Resync contract (see SseSubscription in sse-bus.ts). `agentState` is advanced ONLY by
+    `cli:session:state` after the initial list fetch, and the stream is lossy: an error/heartbeat
+    reconnect or the >=60s hidden-tab suspend drops the socket with no replay buffer. A terminal
+    transition landing in that gap is the expensive one — the session shows "busy" forever while the
+    real process is `waitingOnInput` (operator never answers the prompt) or `dead`/`done` (operator
+    waits on a session that already ended). Refetch the list on reconnect and take it as authoritative:
+    unlike the event handler, the list response carries every enriched field, so replacing is safe here.
+    */
+    const resyncCliSession = () => {
+      void fetchLatestCliSession()
+        .then((session) => {
+          if (!cancelled) setCliSession(session);
+        })
+        .catch(() => {
+          // Non-fatal: keep the last known record; the next state event or reopen corrects it.
+        });
+    };
+
+    const unsubscribe = subscribeSse(`/api/events${query}`, {
+      onReconnect: resyncCliSession,
       events: { "cli:session:state": handleCliState },
     });
-  }, [task.id, projectId]);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [task.id, projectId, fetchLatestCliSession]);
 
   // Reset dependency search when dropdown closes
   useEffect(() => {

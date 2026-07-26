@@ -119,7 +119,14 @@ function getSessionStorage(): Storage | null {
   }
 }
 
+/*
+FNXC:ViewState 2026-07-26-19:22:
+Symmetric with the writer: with no project there is no project-scoped key to read, and reading the
+bare one would restore the previous project's view (including any bare key a pre-fix build left in
+this tab's sessionStorage). Absent a project, the same-tab restore simply does not apply.
+*/
 function getScopedSessionTaskView(projectId?: string): string | null {
+  if (typeof projectId !== "string" || projectId.length === 0) return null;
   const storage = getSessionStorage();
   if (!storage) return null;
   try {
@@ -129,7 +136,17 @@ function getScopedSessionTaskView(projectId?: string): string | null {
   }
 }
 
+/*
+FNXC:ViewState 2026-07-26-19:15:
+Project-scoped ONLY, enforced here rather than merely documented at the call site.
+`scopedKey(base, undefined)` returns the BARE key, and the persist effect runs during boot and the
+project-switch window when `currentProject` is undefined — so the previous version DID write the
+unscoped mirror the adjacent comment claimed was never written, and the initializer then read it for
+first paint, leaking the previous project's view into the next project's landing. Dropping the write
+costs nothing: the value is re-persisted the moment a project resolves.
+*/
 function setScopedSessionTaskView(value: TaskView, projectId?: string): void {
+  if (typeof projectId !== "string" || projectId.length === 0) return;
   const storage = getSessionStorage();
   if (!storage) return;
   try {
@@ -201,10 +218,14 @@ export function useViewState(options: UseViewStateOptions): UseViewStateResult {
   });
 
   const [taskView, setTaskView] = useState<TaskView>(() => {
-    // Same-tab restore (reload / OS tab discard) keeps the view the operator was actually on.
-    const sessionView = getScopedSessionTaskView();
-    if (isTaskView(sessionView)) return resolveSessionTaskView(sessionView);
-
+    /*
+    FNXC:ViewState 2026-07-26-19:18:
+    No unscoped session read here. The initializer runs before the project is known, so the only key
+    it could read is the bare one — which is precisely the cross-project leak the session copy is not
+    allowed to have (and which nothing writes any more). The same-tab restore therefore happens in
+    the project-hydration effect below, where the project id exists; first paint until then falls
+    back to the persisted/landing view exactly as it did before the session copy existed.
+    */
     const saved = getScopedItem("kb-dashboard-task-view");
     const legacyReliabilityView = migrateLegacyReliabilityView(saved);
     if (legacyReliabilityView) return legacyReliabilityView;
@@ -266,8 +287,10 @@ export function useViewState(options: UseViewStateOptions): UseViewStateResult {
     setScopedItem("kb-dashboard-task-view", taskView, currentProject?.id);
     /*
     Per-tab copy: what THIS tab is showing right now, for a reload/discard-restore of this tab.
-    Written with the same project scoping as the localStorage copy and never mirrored unscoped —
-    an unscoped mirror would let the previous project's view leak into the next project's landing.
+    Project-scoped, and skipped entirely while the project is unknown (boot and project-switch
+    windows) — an unscoped mirror would let the previous project's view leak into the next project's
+    landing. That skip is enforced inside setScopedSessionTaskView, not assumed here: this effect
+    deliberately still runs with `currentProject?.id === undefined`.
     */
     setScopedSessionTaskView(taskView, currentProject?.id);
   }, [currentProject?.id, taskView]);

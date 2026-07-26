@@ -14,13 +14,41 @@ render, not just after a fetch. Asserted against real localStorage and the real 
 a mocked cache is what let the missing `savedAt` plumbing hide.
 */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { Task } from "@fusion/core";
 import { useTasks } from "../useTasks";
 import * as api from "../../api";
 import { SWR_CACHE_KEYS } from "../../utils/swrCache";
 import { isTaskStuck, countStuckTasks } from "../../utils/taskStuck";
 import { isTaskAgentActive } from "../../utils/taskActivity";
+
+/*
+FNXC:MobileTabDiscard 2026-07-26-16:40:
+The SSE bus is faked (rather than driven through EventSource) so a test can deliver ONE task event at a
+chosen moment and inspect the freshness clock. `vi.hoisted` is required: the factory runs when
+`../useTasks` is imported, before module-scope `const`s initialize.
+*/
+type SseEventHandlers = Record<string, ((event: MessageEvent) => void) | undefined>;
+const sseHarness = vi.hoisted(() => ({ subscriptions: [] as Record<string, unknown>[] }));
+
+vi.mock("../../sse-bus", () => ({
+  subscribeSse: (_url: string, sub: { events?: Record<string, unknown> } = {}) => {
+    const events = sub.events ?? {};
+    sseHarness.subscriptions.push(events);
+    return () => {
+      const index = sseHarness.subscriptions.indexOf(events);
+      if (index >= 0) sseHarness.subscriptions.splice(index, 1);
+    };
+  },
+}));
+
+function emitSse(event: string, payload: unknown): void {
+  act(() => {
+    for (const events of [...sseHarness.subscriptions]) {
+      (events as SseEventHandlers)[event]?.({ data: JSON.stringify(payload) } as MessageEvent);
+    }
+  });
+}
 
 vi.mock("../../api", async (importOriginal) => {
   const { createDashboardApiMock } = await import("../../test/mockApi");
@@ -75,6 +103,7 @@ function seedSnapshot(tasks: Task[], ageMs: number): number {
 }
 
 beforeEach(() => {
+  sseHarness.subscriptions.length = 0;
   MockEventSource.instances = [];
   (globalThis as unknown as { EventSource: unknown }).EventSource = MockEventSource;
   localStorage.clear();
@@ -195,5 +224,86 @@ describe("useTasks hydration freshness (dataAsOfMs)", () => {
       expect(result.current.tasks.map((task) => task.id)).toEqual(["FN-B"]);
     });
     expect(result.current.lastFetchTimeMs).toBe(otherSavedAt);
+  });
+});
+
+/*
+FNXC:MobileTabDiscard 2026-07-26-16:40:
+`lastFetchTimeMs` is read as the as-of time of ALL rows in `tasks`, but four writers advanced it to
+`Date.now()` on learning about ONE row (task:created / task:moved / task:updated, and
+`ingestCreatedTasks`). While a hydrated hours-old board waits for the mount revalidation on a waking
+radio, a single unrelated event re-stamped the entire board as measured-from-now and every in-progress
+card rendered 'stuck' again — the seeding regression above, reached through a sibling path.
+
+The rule under test: a single-row live update may advance the clock only AFTER a full fetch has confirmed
+every row. It must still advance after that, or stuck detection would silently stop firing for the rest
+of a long SSE session (this hook has no periodic poll).
+*/
+describe("useTasks freshness clock vs single-row live updates", () => {
+  const eventCases: [string, (task: Task) => unknown][] = [
+    ["task:created", (task) => task],
+    ["task:updated", (task) => task],
+    ["task:moved", (task) => ({ task, from: "todo", to: "in-progress" })],
+  ];
+
+  it.each(eventCases)(
+    "%s does not advance the clock while an unconfirmed hydrated snapshot is on screen",
+    (eventName, buildPayload) => {
+      const savedAt = Date.now() - TWO_HOURS_MS;
+      const hydrated = Array.from({ length: 3 }, (_, index) =>
+        createInProgressTask(`FN-${index}`, savedAt - 60_000),
+      );
+      seedSnapshot(hydrated, TWO_HOURS_MS);
+      // Never resolves: the mount revalidation is still in flight, exactly as on a waking radio.
+      mockFetchTasks.mockReturnValue(new Promise<Task[]>(() => {}));
+
+      const { result } = renderHook(() => useTasks({ projectId: PROJECT_ID }));
+      expect(result.current.lastFetchTimeMs).toBe(savedAt);
+
+      emitSse(eventName, buildPayload(createInProgressTask("FN-LIVE", Date.now())));
+
+      // The event was applied...
+      expect(result.current.tasks.map((task) => task.id)).toContain("FN-LIVE");
+      // ...but it says nothing about the other three rows, so the board's age is unchanged.
+      expect(result.current.lastFetchTimeMs).toBe(savedAt);
+      const stuckHydrated = hydrated.filter((task) =>
+        isTaskStuck(task, TASK_STUCK_TIMEOUT_MS, result.current.lastFetchTimeMs),
+      );
+      expect(stuckHydrated).toEqual([]);
+      expect(countStuckTasks(result.current.tasks, TASK_STUCK_TIMEOUT_MS, result.current.lastFetchTimeMs)).toBe(0);
+    },
+  );
+
+  it("ingestCreatedTasks does not advance the clock while the snapshot is unconfirmed", () => {
+    const savedAt = Date.now() - TWO_HOURS_MS;
+    seedSnapshot([createInProgressTask("FN-0", savedAt - 60_000)], TWO_HOURS_MS);
+    mockFetchTasks.mockReturnValue(new Promise<Task[]>(() => {}));
+
+    const { result } = renderHook(() => useTasks({ projectId: PROJECT_ID }));
+
+    act(() => {
+      result.current.ingestCreatedTasks([createInProgressTask("FN-INGESTED", Date.now())]);
+    });
+
+    expect(result.current.tasks.map((task) => task.id)).toContain("FN-INGESTED");
+    expect(result.current.lastFetchTimeMs).toBe(savedAt);
+  });
+
+  it("still advances the clock on a live update once a fetch has confirmed the whole board", async () => {
+    seedSnapshot([createInProgressTask("FN-0", Date.now() - TWO_HOURS_MS)], TWO_HOURS_MS);
+    mockFetchTasks.mockResolvedValue([createInProgressTask("FN-CONFIRMED", Date.now())]);
+
+    const { result } = renderHook(() => useTasks({ projectId: PROJECT_ID }));
+    await waitFor(() => {
+      expect(result.current.tasks.map((task) => task.id)).toEqual(["FN-CONFIRMED"]);
+    });
+    const confirmedAt = result.current.lastFetchTimeMs;
+    expect(confirmedAt).toBeDefined();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(Date.now() + 5 * 60_000);
+    emitSse("task:updated", createInProgressTask("FN-CONFIRMED", Date.now()));
+
+    expect(result.current.lastFetchTimeMs!).toBeGreaterThan(confirmedAt!);
   });
 });

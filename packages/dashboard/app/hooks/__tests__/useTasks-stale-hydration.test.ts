@@ -123,9 +123,10 @@ describe("useTasks stale snapshot hydration (mobile tab discard)", () => {
     expect(mockFetchTasks).toHaveBeenCalledTimes(1);
   });
 
-  it("clears the entry when the revalidation fails so the next mount does not re-hydrate it", async () => {
+  it("clears the entry when a revalidation that REACHED THE SERVER fails, so the next mount does not re-hydrate it", async () => {
     seedSnapshot([createTask({ id: "FN-STALE" })], FIVE_MINUTES_MS);
-    mockFetchTasks.mockRejectedValue(new Error("offline"));
+    // A non-2xx response: the server answered and the snapshot is unverifiable.
+    mockFetchTasks.mockRejectedValue(new Error("Request failed: 500"));
 
     const first = renderHook(() => useTasks({ projectId: PROJECT_ID }));
     expect(first.result.current.tasks.map((task) => task.id)).toEqual(["FN-STALE"]);
@@ -134,10 +135,56 @@ describe("useTasks stale snapshot hydration (mobile tab discard)", () => {
       expect(first.result.current.lastRefreshErrorAt).not.toBeNull();
     });
     expect(localStorage.getItem(CACHE_KEY)).toBeNull();
+    expect(first.result.current.tasks).toEqual([]);
     first.unmount();
 
     const second = renderHook(() => useTasks({ projectId: PROJECT_ID }));
     expect(second.result.current.tasks).toEqual([]);
+  });
+
+  /*
+  FNXC:MobileTabDiscard 2026-07-26-16:40:
+  The failure mode this whole cache exists to survive. The mount revalidation fires on a just-woken
+  mobile radio, where the first fetch routinely rejects at the transport layer ("Load failed" on iOS
+  Safari, "Failed to fetch" on Chrome Android). That rejection says nothing about the snapshot, but the
+  `clearOnError` catch used to delete the entry AND blank the hydrated board — so the restore went white
+  and the NEXT restore had nothing left to hydrate either.
+  */
+  describe.each([
+    ["an iOS suspension rejection", () => new TypeError("Load failed"), false],
+    ["a Chrome Android suspension rejection", () => new TypeError("Failed to fetch"), false],
+    ["an offline device", () => new Error("boom"), true],
+  ])("when mount revalidation fails with %s", (_label, makeError, forceOffline) => {
+    beforeEach(() => {
+      if (!forceOffline) return;
+      // Own property shadows jsdom's Navigator.prototype getter; deleting it restores the getter.
+      Object.defineProperty(navigator, "onLine", { configurable: true, value: false });
+    });
+
+    afterEach(() => {
+      if (!forceOffline) return;
+      delete (navigator as unknown as Record<string, unknown>).onLine;
+    });
+
+    it("keeps both the painted board and the snapshot so the next restore still hydrates", async () => {
+      seedSnapshot([createTask({ id: "FN-STALE" })], FIVE_MINUTES_MS);
+      mockFetchTasks.mockRejectedValue(makeError());
+
+      const first = renderHook(() => useTasks({ projectId: PROJECT_ID }));
+      expect(first.result.current.tasks.map((task) => task.id)).toEqual(["FN-STALE"]);
+
+      await waitFor(() => {
+        expect(first.result.current.lastRefreshErrorAt).not.toBeNull();
+      });
+      // The board must not blank behind the failed revalidation.
+      expect(first.result.current.tasks.map((task) => task.id)).toEqual(["FN-STALE"]);
+      expect(localStorage.getItem(CACHE_KEY)).not.toBeNull();
+      first.unmount();
+
+      // The restore after this one is the real regression: it must not start from [].
+      const second = renderHook(() => useTasks({ projectId: PROJECT_ID }));
+      expect(second.result.current.tasks.map((task) => task.id)).toEqual(["FN-STALE"]);
+    });
   });
 
   it("still persists a snapshot when the full board exceeds the write budget", async () => {

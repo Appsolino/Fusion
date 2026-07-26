@@ -103,6 +103,9 @@ Invariants this window must not break:
   projectStorage), so a selected task outside the window stays selected. The window is additionally
   widened to cover the persisted single selection so the highlighted row remains visible after a
   remount rather than silently vanishing from the rendered list.
+- Bulk select-all is scoped to the RENDERED window, not the filtered set. See the
+  FNXC:ListViewSelectAll block on `selectAllTaskIds`; this invariant was missing from the original
+  windowing change and the "Select all visible tasks" label was false until it was added.
 */
 const LIST_SECTION_VISIBLE_INITIAL = 50;
 const LIST_SECTION_VISIBLE_INCREMENT = 25;
@@ -1009,46 +1012,75 @@ export function ListView({
     }));
   }, []);
 
-  // Selection logic that depends on groupedTasks (must be after groupedTasks definition)
-  // Toggle all visible tasks
-  const toggleSelectAll = useCallback(() => {
-    const visibleTaskIds = Object.values(groupedTasks)
-      .flat()
-      .filter((t) => !isArchivedColumn(t.column)) // Can't bulk edit archived
-      .map((t) => t.id);
+  /*
+  FNXC:ListViewSelectAll 2026-07-26-14:05:
+  The header checkbox is labelled "Select all visible tasks" and the bulk bar behind it performs
+  DESTRUCTIVE actions (bulk delete, bulk column move). Before render windowing it flattened
+  `groupedTasks` and that was honest, because every filtered row was in the DOM. Windowing broke the
+  label: on a 3000-task project the operator sees 50 rows and the old handler armed 3000 for deletion.
+  Correction of a false claim: the earlier windowing FNXC block enumerated filtering, grouping and
+  single-selection invariants and asserted nothing about bulk selection — it did NOT hold. A bulk
+  action must never reach a row the operator cannot see, so select-all is scoped to what is actually
+  rendered.
 
-    setSelectedTaskIds((prev) => {
-      const allSelected = visibleTaskIds.every((id) => prev.has(id));
-      if (allSelected) {
-        // Deselect all visible
-        const next = new Set(prev);
-        visibleTaskIds.forEach((id) => next.delete(id));
-        return next;
-      } else {
-        // Select all visible
-        return new Set([...prev, ...visibleTaskIds]);
+  "Rendered" here mirrors the two render loops (single-pane cards and the table) exactly: the
+  selected-column filter, the hide-done/archived section skip, the collapsed-section skip (a collapsed
+  section renders no rows), and the per-section window slice. Archived rows are then dropped because
+  bulk edit cannot act on them. Keep this in sync with both loops — if a loop grows another skip, it
+  belongs here too, or the label lies again.
+  */
+  const selectAllTaskIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const columnDef of listColumns) {
+      const column = columnDef.id;
+      if (selectedColumn && column !== selectedColumn) continue;
+      if (hideDoneTasks && (columnDef.flags.complete || columnDef.flags.archived) && !selectedColumn) continue;
+      if (collapsedSections.has(column)) continue;
+      const group = groupedTasks[column];
+      if (!group || group.length === 0) continue;
+      const windowed = listSectionWindows[column]?.tasks ?? group;
+      for (const task of windowed) {
+        if (isArchivedColumn(task.column)) continue; // Can't bulk edit archived
+        ids.push(task.id);
       }
+    }
+    return ids;
+  }, [
+    listColumns,
+    selectedColumn,
+    hideDoneTasks,
+    collapsedSections,
+    groupedTasks,
+    listSectionWindows,
+    isArchivedColumn,
+  ]);
+
+  // Toggle every rendered (windowed) task
+  const toggleSelectAll = useCallback(() => {
+    setSelectedTaskIds((prev) => {
+      const allSelected = selectAllTaskIds.every((id) => prev.has(id));
+      if (allSelected) {
+        // Deselect the rendered rows, leaving any selection made outside the current window intact.
+        const next = new Set(prev);
+        selectAllTaskIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      return new Set([...prev, ...selectAllTaskIds]);
     });
-  }, [groupedTasks, isArchivedColumn]);
+  }, [selectAllTaskIds]);
 
-  // Check if all visible tasks are selected
+  // Check if all rendered tasks are selected
   const isSelectAll = useMemo(() => {
-    const visibleTaskIds = Object.values(groupedTasks)
-      .flat()
-      .filter((t) => !isArchivedColumn(t.column));
-    if (visibleTaskIds.length === 0) return false;
-    return visibleTaskIds.every((t) => selectedTaskIds.has(t.id));
-  }, [groupedTasks, isArchivedColumn, selectedTaskIds]);
+    if (selectAllTaskIds.length === 0) return false;
+    return selectAllTaskIds.every((id) => selectedTaskIds.has(id));
+  }, [selectAllTaskIds, selectedTaskIds]);
 
-  // Check if some (but not all) visible tasks are selected
+  // Check if some (but not all) rendered tasks are selected
   const isSelectIndeterminate = useMemo(() => {
-    const visibleTaskIds = Object.values(groupedTasks)
-      .flat()
-      .filter((t) => !isArchivedColumn(t.column));
-    if (visibleTaskIds.length === 0) return false;
-    const selectedCount = visibleTaskIds.filter((t) => selectedTaskIds.has(t.id)).length;
-    return selectedCount > 0 && selectedCount < visibleTaskIds.length;
-  }, [groupedTasks, isArchivedColumn, selectedTaskIds]);
+    if (selectAllTaskIds.length === 0) return false;
+    const selectedCount = selectAllTaskIds.filter((id) => selectedTaskIds.has(id)).length;
+    return selectedCount > 0 && selectedCount < selectAllTaskIds.length;
+  }, [selectAllTaskIds, selectedTaskIds]);
 
   // Bulk edit state and handlers (must be after groupedTasks and clearSelection definition)
   const [availableNodes, setAvailableNodes] = useState<NodeInfo[]>([]);

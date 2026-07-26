@@ -1,4 +1,5 @@
 import { appendTokenQuery } from "./auth";
+import { visibleEdgeStaggerDelayMs } from "./hooks/visibilitySuspension";
 import { pushTrace } from "./utils/dashboardTraceBuffer";
 import { recordResumeEvent } from "./utils/resumeInstrumentation";
 
@@ -60,13 +61,36 @@ interface Channel {
    * registered, so the visibilitychange reopen path can bring it back for the same consumers.
    * `openChannel` refuses to run while it is set so nothing (reconnect timers, late subscribes)
    * can re-establish traffic behind the suspend.
+   *
+   * FNXC:DashboardSSE 2026-07-26-16:20:
+   * CORRECTION of the claim previously written here. This flag alone did NOT stop "late subscribes"
+   * re-establishing traffic, and asserting that it did hid a real hole: `closeChannel` deletes the
+   * channel when the last subscriber leaves, so a later `subscribeSse` for the same URL builds a
+   * fresh channel with `suspended: false` and opens a socket plus a 30s keepalive for the rest of
+   * the hidden window. Per-channel state cannot survive channel recreation. The authority is now
+   * the module-level `isHiddenSuspendElapsed()` condition below; this flag is only the per-channel
+   * record of "this channel was torn down by the suspend", used by the resume paths.
    */
   suspended: boolean;
+  /**
+   * FNXC:DashboardSSE 2026-07-26-16:20:
+   * Pending staggered onReconnect fan-out timers (see `fanOutReconnect`). Tracked per channel so
+   * teardown/suspend/close can cancel them: a hidden tab must hold NO armed timer, and a cancelled
+   * reconnect must not deliver a resync signal into subscribers of a channel that no longer exists.
+   */
+  reconnectFanoutTimers: Set<ReturnType<typeof setTimeout>>;
 }
 
 const channels = new Map<string, Channel>();
 let lastVisibilityReopenAt = 0;
 let hiddenSuspendTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * FNXC:DashboardSSE 2026-07-26-16:20:
+ * Timestamp of the transition into `hidden`, i.e. the anchor the suspend threshold is measured from.
+ * Module-level (not per-channel) because it must survive a channel being destroyed and rebuilt by a
+ * subscribe/unsubscribe cycle inside the hidden window.
+ */
+let hiddenSinceMs: number | null = null;
 
 function createClientId(): string {
   const cryptoApi = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
@@ -225,6 +249,68 @@ function startClientKeepalive(channel: Channel): void {
  * `beforeunload` does, including the unload path, and it is the only one of the two that fires
  * when the page is frozen into bfcache. Restore performance is the point of this deletion.
  */
+/*
+FNXC:DashboardSSE 2026-07-26-16:20:
+Hidden-suspend authority, module-level rather than per-channel.
+
+Requirement: once the document has been hidden past SSE_HIDDEN_SUSPEND_DELAY_MS the page must hold no
+EventSource and no armed timer, because that background work is what makes a mobile browser discard the
+tab (the operator sees a white-splash reload). The previous implementation enforced this with a
+per-channel `suspended` flag armed by a single hidden-transition timer. Two gaps followed, both silent:
+1. `hiddenSuspendTimer` is nulled when it fires, and only a hidden TRANSITION re-arms it — which cannot
+   happen again while the tab is already hidden. A channel first subscribed during the hidden window was
+   therefore created with `suspended: false` and opened a live socket + keepalive for the rest of it.
+2. `closeChannel` deletes the channel at zero subscribers, so the flag itself is discarded by any
+   subscribe/unsubscribe cycle.
+Both are fixed by deriving suspension from `document.visibilityState` plus elapsed hidden time, which no
+channel lifecycle event can reset, and by letting `openChannel` re-arm the grace timer when it opens a
+channel during the grace window (so a channel born mid-window is still torn down at the threshold).
+*/
+function isHiddenSuspendElapsed(): boolean {
+  if (typeof document === "undefined") return false;
+  if (document.visibilityState !== "hidden") return false;
+  if (hiddenSinceMs === null) return false;
+  return Date.now() - hiddenSinceMs >= SSE_HIDDEN_SUSPEND_DELAY_MS;
+}
+
+/*
+FNXC:DashboardSSE 2026-07-26-10:28:
+Hidden-tab suspend. Only tears the transport down if the document is STILL hidden when the grace
+timer expires, so app-switching away for a few seconds costs nothing. Subscribers and channel
+registration survive; the module-level hidden condition blocks any reopen until the tab is visible.
+*/
+function suspendChannelsWhileHidden(): void {
+  hiddenSuspendTimer = null;
+  if (typeof document === "undefined" || document.visibilityState === "visible") return;
+
+  const suspendable = Array.from(channels.values()).filter((c) => !c.closed && !c.suspended);
+  if (suspendable.length === 0) return;
+
+  console.info("[sse-bus] suspend-hidden", { channelCount: suspendable.length });
+  pushTrace("sse-bus", "suspend-hidden", { channelCount: suspendable.length });
+  for (const channel of suspendable) {
+    tearDownChannelTransport(channel);
+    channel.suspended = true;
+  }
+}
+
+/** Arm (or re-arm) the grace timer for the REMAINDER of the current hidden window. */
+function scheduleHiddenSuspend(): void {
+  if (typeof document === "undefined" || document.visibilityState === "visible") return;
+  if (hiddenSinceMs === null) hiddenSinceMs = Date.now();
+  if (hiddenSuspendTimer) return;
+  const remainingMs = Math.max(0, SSE_HIDDEN_SUSPEND_DELAY_MS - (Date.now() - hiddenSinceMs));
+  hiddenSuspendTimer = setTimeout(suspendChannelsWhileHidden, remainingMs);
+}
+
+function clearHiddenSuspendState(): void {
+  hiddenSinceMs = null;
+  if (hiddenSuspendTimer) {
+    clearTimeout(hiddenSuspendTimer);
+    hiddenSuspendTimer = null;
+  }
+}
+
 if (typeof window !== "undefined" && typeof document !== "undefined") {
   const closeAllChannels = () => {
     console.info("[sse-bus] pagehide", { channelCount: channels.size });
@@ -234,32 +320,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       tearDownChannelTransport(channel);
       channel.closed = true;
     }
-  };
-
-  /*
-  FNXC:DashboardSSE 2026-07-26-10:28:
-  Hidden-tab suspend. Only tears the transport down if the document is STILL hidden when the grace
-  timer expires, so app-switching away for a few seconds costs nothing. Subscribers and channel
-  registration survive; `suspended` blocks any reopen until visibilitychange says otherwise.
-  */
-  const suspendChannelsWhileHidden = () => {
-    hiddenSuspendTimer = null;
-    if (document.visibilityState === "visible") return;
-
-    const suspendable = Array.from(channels.values()).filter((c) => !c.closed && !c.suspended);
-    if (suspendable.length === 0) return;
-
-    console.info("[sse-bus] suspend-hidden", { channelCount: suspendable.length });
-    pushTrace("sse-bus", "suspend-hidden", { channelCount: suspendable.length });
-    for (const channel of suspendable) {
-      tearDownChannelTransport(channel);
-      channel.suspended = true;
-    }
-  };
-
-  const scheduleHiddenSuspend = () => {
-    if (hiddenSuspendTimer) return;
-    hiddenSuspendTimer = setTimeout(suspendChannelsWhileHidden, SSE_HIDDEN_SUSPEND_DELAY_MS);
   };
 
   const reopenSubscribedChannels = (event: PageTransitionEvent) => {
@@ -282,7 +342,10 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       with permanently silent channels. Only release when the restored page is actually visible; a
       pageshow into a still-hidden document keeps the suspend.
       */
-      if (document.visibilityState !== "hidden") channel.suspended = false;
+      if (document.visibilityState !== "hidden") {
+        channel.suspended = false;
+        clearHiddenSuspendState();
+      }
       channel.closed = false;
       openChannel(channel);
     }
@@ -345,10 +408,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
 
   const handleVisibilityChange = () => {
     if (document.visibilityState === "visible") {
-      if (hiddenSuspendTimer) {
-        clearTimeout(hiddenSuspendTimer);
-        hiddenSuspendTimer = null;
-      }
+      clearHiddenSuspendState();
       reopenVisibleChannels();
       return;
     }
@@ -381,6 +441,7 @@ function tearDownChannelTransport(channel: Channel): void {
     clearTimeout(channel.reconnectTimer);
     channel.reconnectTimer = null;
   }
+  cancelReconnectFanout(channel);
   sendDisconnectBeacon(channel);
   if (channel.es) {
     try {
@@ -391,6 +452,59 @@ function tearDownChannelTransport(channel: Channel): void {
     channel.es = null;
   }
   channel.nativeListeners.clear();
+}
+
+/*
+FNXC:DashboardSSE 2026-07-26-16:20:
+Staggered onReconnect fan-out.
+
+Requirement: a reconnect must not issue every subscriber's resync fetch in one tick. ~28 subscribers now
+declare `onReconnect`, and a browser allows ~6 concurrent HTTP/1.1 connections per origin. A same-tick
+burst on a waking mobile radio saturates that pool, the EventSource reconnect cannot get a slot, it
+errors, forceReconnect runs again, and the burst repeats every RECONNECT_DELAY_MS — the resume path
+starves itself.
+
+This is the SAME defect and the SAME remedy as the polling side's visible-edge stagger, so it uses the
+SAME primitive: `visibleEdgeStaggerDelayMs` from `hooks/visibilitySuspension.ts` gives a deterministic
+slot = (index % SLOTS) * STEP, derived from insertion order, no randomness, slot 0 synchronous so a
+single subscriber is unchanged, and the spread bounded by the window regardless of subscriber count.
+
+FNXC:DashboardSSE 2026-07-26-17:40:
+CORRECTION — this block previously carried a private copy of the constants and the slot formula, marked
+KNOWN DUPLICATION because the primitive was not yet exported. It is exported now and this file imports
+it. Do NOT reintroduce local copies: the poll fan-out and the SSE fan-out burst on the SAME
+visibilitychange against the SAME ~6-connection-per-origin cap, so two independently-tuned staggers
+would each bound their own spread while leaving their union unbounded — which is the bug, not the fix.
+A hand-copied helper that drifts from its original is the documented root cause of several defects in
+this change set; one primitive, one place to tune it.
+*/
+function cancelReconnectFanout(channel: Channel): void {
+  for (const timer of channel.reconnectFanoutTimers) clearTimeout(timer);
+  channel.reconnectFanoutTimers.clear();
+}
+
+function fanOutReconnect(channel: Channel): void {
+  const subs = Array.from(channel.subscribers).filter((sub) => !!sub.onReconnect);
+  if (subs.length === 0) return;
+
+  subs.forEach((sub, index) => {
+    const delayMs = visibleEdgeStaggerDelayMs(index);
+    if (delayMs === 0) {
+      sub.onReconnect?.();
+      return;
+    }
+    const timer = setTimeout(() => {
+      channel.reconnectFanoutTimers.delete(timer);
+      // Re-check at fire time: the channel may have been closed, suspended, replaced, or the
+      // subscriber unmounted during the stagger window. A resync signal delivered after any of those
+      // is either wasted work on a hidden tab or an update into a torn-down consumer.
+      if (channel.closed || channel.suspended) return;
+      if (channels.get(channel.url) !== channel) return;
+      if (!channel.subscribers.has(sub)) return;
+      sub.onReconnect?.();
+    }, delayMs);
+    channel.reconnectFanoutTimers.add(timer);
+  });
 }
 
 function resetHeartbeat(channel: Channel): void {
@@ -429,6 +543,7 @@ function forceReconnect(channel: Channel, cause: "heartbeat-timeout" | "error" |
     channel.es = null;
   }
   stopClientKeepalive(channel);
+  cancelReconnectFanout(channel);
   channel.nativeListeners.clear();
 
   // A suspended channel is deliberately quiet: never let a late error/heartbeat callback from the
@@ -436,16 +551,24 @@ function forceReconnect(channel: Channel, cause: "heartbeat-timeout" | "error" |
   if (channel.closed || channel.suspended) return;
   if (channel.subscribers.size === 0 || channel.reconnectTimer) return;
 
-  // Guard against calling onReconnect callbacks for a channel that has been
-  // closed while the heartbeat timer fired. This prevents stale SSE events from
-  // firing into unsubscribed/mounted-out consumers during rapid view switches.
+  // Guard against reconnecting a channel that has been closed while the heartbeat timer fired.
   const ch = channels.get(channel.url);
   if (!ch || ch !== channel) return;
 
-  // A teardown means events may have been missed while the stream was
-  // down. Signal resync to each subscriber so they can refetch
-  // authoritative state.
-  for (const sub of channel.subscribers) sub.onReconnect?.();
+  /*
+  FNXC:DashboardSSE 2026-07-26-16:20:
+  The synchronous `for (const sub of channel.subscribers) sub.onReconnect?.()` that used to run here was
+  REMOVED and must not be reinstated. It made every reconnect cycle fire onReconnect TWICE ~3s apart: once
+  here, and again when the reconnect's EventSource opened (the `open` handler treats any open after the
+  first as a reconnect). With expensive handlers now wired to it — AgentDetailView refetches an unbounded
+  run log and replaces its whole buffer — a 1500-entry log was refetched twice per reconnect, and
+  `useAgentLogs`' resyncInFlightRef only dedupes OVERLAPPING resyncs, not two 3s apart.
+  The successful `open` is now the single authority, for two reasons: (1) a reconnect that never succeeds
+  must not claim to have resynced, and (2) firing here put the resync burst BEFORE the EventSource had a
+  connection slot, so the burst competed with the reconnect it was supposed to follow — the exact
+  pool-starvation loop the staggered fan-out exists to prevent. A failed attempt errors and re-enters
+  forceReconnect, so each cycle still ends in exactly one signal once the stream is actually back.
+  */
 
   channel.reconnectTimer = setTimeout(() => {
     channel.reconnectTimer = null;
@@ -487,10 +610,23 @@ function openChannel(channel: Channel): void {
   });
   if (channel.es) return;
   if (channel.closed) return;
-  // Hidden-suspended: the only legitimate reopen is the visibilitychange resume path, which clears
-  // `suspended` first. Everything else (reconnect timers, a component subscribing while the tab is
-  // backgrounded) must stay quiet so the page keeps no live connection while hidden.
+  // Hidden-suspended: the only legitimate reopen is the visibilitychange/pageshow resume path, which
+  // clears `suspended` first. Everything else (reconnect timers, a component subscribing while the tab
+  // is backgrounded) must stay quiet so the page keeps no live connection while hidden.
   if (channel.suspended) return;
+  /*
+  FNXC:DashboardSSE 2026-07-26-16:20:
+  Module-level suspend gate. A channel created DURING the hidden window (a component subscribing to a
+  URL nobody held, or a subscribe/unsubscribe cycle that deleted and rebuilt the channel) starts with
+  `suspended: false`, so the per-channel flag alone let it open a socket and a 30s keepalive for the
+  rest of the hidden period — reinstating exactly the background work the suspend exists to remove.
+  Mark it suspended so the resume paths adopt it like any other suspended channel.
+  */
+  if (isHiddenSuspendElapsed()) {
+    channel.suspended = true;
+    pushTrace("sse-bus", "openChannel-blocked-hidden", { url: channel.url });
+    return;
+  }
   if (channel.reconnectTimer) {
     clearTimeout(channel.reconnectTimer);
     channel.reconnectTimer = null;
@@ -502,15 +638,19 @@ function openChannel(channel: Channel): void {
   const es = new EventSource(appendTokenQuery(appendClientIdQuery(channel.url)));
   channel.es = es;
   startClientKeepalive(channel);
+  // Opened inside the grace window: re-arm the suspend timer for its remainder so a channel born
+  // mid-window is still torn down at the threshold (the hidden transition that armed the original
+  // timer cannot fire again while the tab stays hidden).
+  scheduleHiddenSuspend();
 
   es.addEventListener("open", () => {
     resetHeartbeat(channel);
     const reconnect = channel.hasOpenedOnce;
     channel.hasOpenedOnce = true;
-    for (const sub of channel.subscribers) {
-      sub.onOpen?.();
-      if (reconnect) sub.onReconnect?.();
-    }
+    // onOpen is a cheap connection-status signal — no stagger. onReconnect triggers refetches, so it
+    // goes through the staggered fan-out.
+    for (const sub of channel.subscribers) sub.onOpen?.();
+    if (reconnect) fanOutReconnect(channel);
   });
 
   es.addEventListener("error", (event) => {
@@ -573,6 +713,7 @@ function closeChannel(channel: Channel): void {
   channel.closed = true;
   if (channel.heartbeatTimer) clearTimeout(channel.heartbeatTimer);
   stopClientKeepalive(channel);
+  cancelReconnectFanout(channel);
   if (channel.reconnectTimer) clearTimeout(channel.reconnectTimer);
   if (channel.es) channel.es.close();
   channel.es = null;
@@ -654,6 +795,7 @@ export function subscribeSse(url: string, sub: SseSubscription = {}): () => void
       hasOpenedOnce: false,
       closed: false,
       suspended: false,
+      reconnectFanoutTimers: new Set(),
     };
     channels.set(url, channel);
   }
@@ -709,12 +851,9 @@ export function __resetSseBus(): void {
   resyncGapsByUrl.clear();
   memoryClientId = null;
   lastVisibilityReopenAt = 0;
-  // The hidden-suspend grace timer outlives channels; leaving it armed retains a handle and can
-  // fire into a later test file's bus.
-  if (hiddenSuspendTimer) {
-    clearTimeout(hiddenSuspendTimer);
-    hiddenSuspendTimer = null;
-  }
+  // The hidden-suspend grace timer and its hidden-since anchor outlive channels; leaving either set
+  // retains a handle and can fire into (or silently suspend) a later test file's bus.
+  clearHiddenSuspendState();
 }
 
 /** Test-only: inspect the number of live channels. */

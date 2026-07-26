@@ -629,6 +629,16 @@ describe("useAgentLogs", () => {
       expect(result.current.entries.some(isLogGapMarker)).toBe(false);
     });
 
+    /*
+    FNXC:AgentLogResync 2026-07-26-19:40:
+    This case previously asserted that the pre-suspend entries were ABSENT after a no-overlap resync
+    ("the unreconcilable prefix is not silently glued onto a page it does not touch"). The
+    de-duplication half of that was right; the discarding half was the defect: a reader who paged
+    back five times and then backgrounded the tab lost ~600 explicitly fetched entries and their
+    scroll position, replaced by the newest 100. The entries are now RETAINED below the marker, which
+    is what makes the discontinuity visible in place instead of implied by absence. The
+    no-blind-concatenation invariant is still asserted — the marker sits between the two windows.
+    */
     it("renders an explicit gap marker when the missed window exceeds one authoritative page", async () => {
       mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
         entries: [logEntry(0, "before-suspend")],
@@ -663,16 +673,18 @@ describe("useAgentLogs", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.entries).toHaveLength(INITIAL_LOAD_LIMIT + 1);
+        expect(result.current.entries).toHaveLength(INITIAL_LOAD_LIMIT + 2);
       });
 
-      expect(isLogGapMarker(result.current.entries[0])).toBe(true);
-      expect(result.current.entries[0].text.length).toBeGreaterThan(0);
-      expect(result.current.entries.slice(1).map((entry) => entry.text)).toEqual(
+      // History kept, discontinuity marked in place, refetched page below it.
+      expect(result.current.entries[0].text).toBe("before-suspend");
+      expect(isLogGapMarker(result.current.entries[1])).toBe(true);
+      expect(result.current.entries[1].text.length).toBeGreaterThan(0);
+      expect(result.current.entries.slice(2).map((entry) => entry.text)).toEqual(
         authoritativePage.map((entry) => entry.text),
       );
-      // The unreconcilable prefix is not silently glued onto a page it does not touch.
-      expect(result.current.entries.some((entry) => entry.text === "before-suspend")).toBe(false);
+      // The two windows are never glued together as if they touched.
+      expect(result.current.entries.filter(isLogGapMarker)).toHaveLength(1);
       expect(result.current.hasMore).toBe(true);
     });
 
@@ -744,6 +756,354 @@ describe("useAgentLogs", () => {
       await waitFor(() => {
         expect(result.current.entries.map((entry) => entry.text)).toEqual(["page-1", "raced-later"]);
       });
+    });
+
+    /*
+    FNXC:AgentLogPaging 2026-07-26-19:48:
+    P2: nothing used to arbitrate loadMore against a reconnect resync. loadMore captures its offset
+    from the rendered buffer; a resync landing while that fetch is in flight replaces the buffer, and
+    prepending the offset page onto the replacement produced `[entries 500-600][newest 100]` — a hole
+    with no marker, and every later offset wrong. The stale page must be DISCARDED, not spliced.
+    */
+    it("discards a loadMore page whose buffer was replaced by a reconnect resync", async () => {
+      const initialPage = Array.from({ length: 5 }, (_, index) => logEntry(index, `hist-${index}`));
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: initialPage, total: 400, hasMore: true });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(5);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      // The "load older" page is still on the radio when the socket reopens.
+      const olderPage = createDeferred<{ entries: any[]; total: number; hasMore: boolean }>();
+      mockFetchAgentLogsWithMeta.mockReturnValueOnce(olderPage.promise);
+
+      let loadMorePromise: Promise<void> | undefined;
+      act(() => {
+        loadMorePromise = result.current.loadMore();
+      });
+
+      // Reconnect resync replaces the buffer (no overlap with the held window).
+      const authoritativePage = Array.from({ length: 3 }, (_, index) => logEntry(index + 30, `fresh-${index}`));
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: authoritativePage,
+        total: 403,
+        hasMore: true,
+      });
+
+      await act(async () => {
+        es._fire("open");
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries.some((entry) => entry.text === "fresh-0")).toBe(true);
+      });
+      const afterResync = result.current.entries.map((entry) => entry.text);
+
+      await act(async () => {
+        olderPage.resolve({
+          entries: Array.from({ length: 4 }, (_, index) => logEntry(index, `stale-older-${index}`)),
+          total: 400,
+          hasMore: true,
+        });
+        await loadMorePromise;
+      });
+
+      expect(result.current.entries.map((entry) => entry.text)).toEqual(afterResync);
+      expect(result.current.entries.some((entry) => entry.text.startsWith("stale-older-"))).toBe(false);
+      // The affordance stays reachable so the reader can page again from the corrected offset.
+      expect(result.current.hasMore).toBe(true);
+    });
+
+    /*
+    FNXC:AgentLogPaging 2026-07-26-19:56:
+    P2: a no-overlap resync used to replace explicitly paged-back history with the newest page.
+    History is now retained below the gap marker, and each subsequent "load older" pages from the
+    NEWEST contiguous block (offset = entries below the marker) so the gap fills from the bottom
+    until it overlaps the retained history and the marker retires.
+    */
+    it("retains paged-back history below the gap marker and fills the gap from below", async () => {
+      const page1 = Array.from({ length: 100 }, (_, index) => logEntry(index + 100, `mid-${index}`));
+      const page0 = Array.from({ length: 100 }, (_, index) => logEntry(index, `old-${index}`));
+      mockFetchAgentLogsWithMeta
+        .mockResolvedValueOnce({ entries: page1, total: 1000, hasMore: true })
+        .mockResolvedValueOnce({ entries: page0, total: 1000, hasMore: true });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(100);
+      });
+      await act(async () => {
+        await result.current.loadMore();
+      });
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(200);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      const freshPage = Array.from({ length: 100 }, (_, index) => logEntry(index + 500, `fresh-${index}`));
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: freshPage, total: 1000, hasMore: true });
+
+      await act(async () => {
+        es._fire("open");
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(301);
+      });
+      expect(result.current.entries[0].text).toBe("old-0");
+      expect(isLogGapMarker(result.current.entries[200])).toBe(true);
+      expect(result.current.entries[201].text).toBe("fresh-0");
+
+      // Gap-fill page: overlaps the retained history by 10 entries, so the marker is proven closed.
+      const gapFill = [
+        ...page1.slice(90),
+        ...Array.from({ length: 90 }, (_, index) => logEntry(index + 300, `gap-${index}`)),
+      ];
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: gapFill, total: 1000, hasMore: true });
+
+      await act(async () => {
+        await result.current.loadMore();
+      });
+
+      // Offset is the newest contiguous block (the refetched page), not every real entry held.
+      expect(mockFetchAgentLogsWithMeta).toHaveBeenLastCalledWith("FN-001", undefined, {
+        limit: INITIAL_LOAD_LIMIT,
+        offset: 100,
+      });
+      await waitFor(() => {
+        expect(result.current.entries.some(isLogGapMarker)).toBe(false);
+      });
+      const texts = result.current.entries.map((entry) => entry.text);
+      expect(new Set(texts).size).toBe(texts.length);
+      expect(texts.slice(0, 3)).toEqual(["old-0", "old-1", "old-2"]);
+      expect(texts.slice(-1)).toEqual(["fresh-99"]);
+      expect(texts).toContain("gap-0");
+    });
+
+    /*
+    FNXC:AgentLogPaging 2026-07-26-20:04:
+    The server resolves `offset` against its CURRENT total, so entries persisted between the client
+    reading its offset and the server reading the log shift the returned window newer. Blind
+    concatenation duplicated the overlapping seam; the merge de-duplicates it.
+    */
+    it("does not duplicate the seam when the log grew between the offset read and the server read", async () => {
+      const held = [logEntry(10, "held-a"), logEntry(11, "held-b")];
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: held, total: 20, hasMore: true });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(2);
+      });
+
+      // Shifted page: its tail is the buffer's head.
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: [logEntry(8, "older-a"), logEntry(9, "older-b"), logEntry(10, "held-a")],
+        total: 21,
+        hasMore: true,
+      });
+
+      await act(async () => {
+        await result.current.loadMore();
+      });
+
+      expect(result.current.entries.map((entry) => entry.text)).toEqual([
+        "older-a",
+        "older-b",
+        "held-a",
+        "held-b",
+      ]);
+    });
+
+    /*
+    FNXC:AgentLogResync 2026-07-26-20:12:
+    P2: forceReconnect fires onReconnect at teardown and again ~3s later on the successful open. A
+    first resync that outlived that delay swallowed the second reconnect at the single-flight early
+    return, so the lines emitted between the first fetch's snapshot and the socket reopening were
+    never fetched and never streamed — and the merge left NO gap marker, rendering a real hole as
+    contiguous output. A superseded reconnect must re-run the resync once the in-flight one settles.
+    */
+    it("re-runs the resync when a reconnect arrives while one is in flight", async () => {
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: [logEntry(0, "hist-1")],
+        total: 1,
+        hasMore: false,
+      });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(1);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      const slowResync = createDeferred<{ entries: any[]; total: number; hasMore: boolean }>();
+      mockFetchAgentLogsWithMeta.mockReturnValueOnce(slowResync.promise);
+
+      act(() => {
+        es._fire("open");
+      });
+      const callsAfterFirstReconnect = mockFetchAgentLogsWithMeta.mock.calls.length;
+
+      // Second reconnect while the first refetch is still on the radio.
+      act(() => {
+        es._fire("open");
+      });
+      expect(mockFetchAgentLogsWithMeta.mock.calls.length).toBe(callsAfterFirstReconnect);
+
+      // The re-run's page is the only source of the lines emitted during the second outage.
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: [logEntry(0, "hist-1"), logEntry(1, "during-outage")],
+        total: 2,
+        hasMore: false,
+      });
+
+      await act(async () => {
+        slowResync.resolve({ entries: [logEntry(0, "hist-1")], total: 1, hasMore: false });
+        await slowResync.promise;
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries.map((entry) => entry.text)).toEqual(["hist-1", "during-outage"]);
+      });
+      expect(mockFetchAgentLogsWithMeta.mock.calls.length).toBe(callsAfterFirstReconnect + 1);
+    });
+
+    /*
+    FNXC:AgentLogResync 2026-07-26-20:22:
+    P3: live events parked during an in-flight resync had no ceiling, so a verbose agent on a waking
+    radio rebuilt exactly the unbounded array MAX_LOG_ENTRIES exists to eliminate. At the cap the
+    resync is abandoned and the parked batch is flushed into the ring: bounded memory, no dropped
+    lines beyond the ring's own newest-wins trim, and a fresh resync once the abandoned fetch settles.
+    */
+    it("bounds live events parked during a resync and flushes them into the ring", async () => {
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: [], total: 0, hasMore: false });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(MockEventSource.instances).toHaveLength(1);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      const stuckResync = createDeferred<{ entries: any[]; total: number; hasMore: boolean }>();
+      mockFetchAgentLogsWithMeta.mockReturnValueOnce(stuckResync.promise);
+      act(() => {
+        es._fire("open");
+      });
+
+      const streamed = MAX_LOG_ENTRIES + 40;
+      act(() => {
+        for (let index = 0; index < streamed; index++) {
+          es._emit("agent:log", {
+            timestamp: `2026-01-01T${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00Z`,
+            taskId: "FN-001",
+            text: `parked-${index}`,
+            type: "text",
+          });
+        }
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(MAX_LOG_ENTRIES);
+      });
+      expect(result.current.entries.at(-1)?.text).toBe(`parked-${streamed - 1}`);
+      expect(result.current.hasMore).toBe(true);
+
+      // The abandoned resync's result is discarded, and a fresh one runs once it settles.
+      const callsBeforeSettle = mockFetchAgentLogsWithMeta.mock.calls.length;
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({ entries: [], total: streamed, hasMore: true });
+      await act(async () => {
+        stuckResync.resolve({ entries: [logEntry(0, "stale-snapshot")], total: 1, hasMore: false });
+        await stuckResync.promise;
+      });
+
+      expect(result.current.entries.some((entry) => entry.text === "stale-snapshot")).toBe(false);
+      await waitFor(() => {
+        expect(mockFetchAgentLogsWithMeta.mock.calls.length).toBe(callsBeforeSettle + 1);
+      });
+    });
+
+    /*
+    FNXC:AgentLogResync 2026-07-26-20:30:
+    P3: the live-tail trim must never evict the gap marker. Once the buffer is at the ring ceiling,
+    each streamed line drops the oldest entry; when the entry above the marker is gone the marker
+    becomes the head and MUST survive every later trim, or the rendered log loses the only signal
+    that output is missing above while the output stays missing.
+    */
+    it("never trims away the gap marker while streaming at the ring ceiling", async () => {
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: [logEntry(0, "before-suspend")],
+        total: 1,
+        hasMore: false,
+      });
+
+      const { result } = renderHook(() => useAgentLogs("FN-001", true));
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(1);
+      });
+
+      const es = MockEventSource.instances[0];
+      act(() => {
+        es._fire("open");
+      });
+
+      const authoritativePage = Array.from({ length: 100 }, (_, index) => logEntry(index + 5, `fresh-${index}`));
+      mockFetchAgentLogsWithMeta.mockResolvedValueOnce({
+        entries: authoritativePage,
+        total: 500,
+        hasMore: true,
+      });
+      await act(async () => {
+        es._fire("open");
+        await Promise.resolve();
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries.some(isLogGapMarker)).toBe(true);
+      });
+
+      act(() => {
+        for (let index = 0; index < MAX_LOG_ENTRIES; index++) {
+          es._emit("agent:log", {
+            timestamp: `2026-02-01T${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00Z`,
+            taskId: "FN-001",
+            text: `after-${index}`,
+            type: "text",
+          });
+        }
+      });
+
+      await waitFor(() => {
+        expect(result.current.entries).toHaveLength(MAX_LOG_ENTRIES);
+      });
+      expect(isLogGapMarker(result.current.entries[0])).toBe(true);
+      expect(result.current.entries.filter(isLogGapMarker)).toHaveLength(1);
+      expect(result.current.entries.at(-1)?.text).toBe(`after-${MAX_LOG_ENTRIES - 1}`);
+      expect(result.current.hasMore).toBe(true);
     });
 
     it("keeps streaming into the buffer when the reconnect refetch fails", async () => {

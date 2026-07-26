@@ -3,178 +3,56 @@ import type { AgentLogEntry } from "@fusion/core";
 import { fetchAgentLogsWithMeta } from "../api";
 import { subscribeSse } from "../sse-bus";
 import { recordResumeEvent } from "../utils/resumeInstrumentation";
+import {
+  MAX_LOG_ENTRIES,
+  appendLiveEntries,
+  appendLiveEntry,
+  countNewestContiguousEntries,
+  hasLogGapMarker,
+  mergeOlderPage,
+  reconcileReconnectedEntries,
+} from "./logStreamReconcile";
 
 const INITIAL_LOAD_LIMIT = 100;
 
 /*
-FNXC:MobileTabRetention 2026-07-26-10:20:
-Mobile browsers (iOS Safari tabs, iOS PWAs, Chrome Android) discard a backgrounded page whose
-resident set is large, which the operator sees as a full white-splash reload on return. Every live
-log tail must therefore be a bounded ring, never an array that grows for the lifetime of the session:
-an agent streaming for an hour otherwise pins tens of MB of log entries per open surface.
-500 matches the caps already enforced by useMultiAgentLogs and useDevServerLogs — one number so the
-per-surface memory ceiling stays predictable.
-*/
-export const MAX_LOG_ENTRIES = 500;
+FNXC:AgentLogResync 2026-07-26-18:42:
+Ceiling on live events parked while a reconnect refetch is in flight. `fetchAgentLogsWithMeta`
+accepts no AbortSignal (it lives in ../api, and widening that signature is out of this change's
+scope), so a resync on a waking radio can stay outstanding for a long time while a verbose agent
+streams. Parked events sit OUTSIDE the ring buffer, so without this bound they are exactly the
+unbounded array MAX_LOG_ENTRIES was introduced to eliminate.
 
-/**
- * Keep only the newest `cap` items of a streaming buffer.
- *
- * Whole-list cap: it bounds how many entries are retained, never the content of an individual
- * entry. Newest-wins — a log tail is read from the bottom, so dropping the oldest entries is the
- * only truncation that preserves what the reader is actually looking at.
- *
- * Generic so the agent-detail and command-center streams can share this one implementation instead
- * of each re-deriving the same `slice(-N)` (see AGENTS.md "Reuse Components ... (No Drift)").
- */
-export function capLogEntries<T>(entries: T[], cap: number = MAX_LOG_ENTRIES): T[] {
-  return entries.length > cap ? entries.slice(-cap) : entries;
-}
+On overflow the parking is ABANDONED rather than the events dropped: the in-flight resync's result is
+discarded by generation, the parked batch is flushed into the ring (bounded, newest-wins, `hasMore`
+signals the trim), live events resume streaming straight into the buffer, and a fresh resync is
+re-run once the abandoned fetch settles. Nothing is silently lost that the ring itself would not have
+dropped anyway.
+
+RESYNC_TIMEOUT_MS bounds the resync STATE, not the HTTP request: with no signal to pass, the timeout
+races the promise so the hook stops parking events and re-runs, while the underlying fetch is left to
+settle on its own and is then discarded by generation. Do not describe this as request cancellation.
+*/
+const MAX_PENDING_LIVE_ENTRIES = MAX_LOG_ENTRIES;
+const RESYNC_TIMEOUT_MS = 15_000;
 
 /*
-FNXC:AgentLogResync 2026-07-26-14:05:
-`/api/tasks/:id/logs/stream` is a LIVE-ONLY channel: it pipes `agent:log` events as they happen and
-sends nothing but `: connected` on open — no ring buffer, no Last-Event-ID replay. Every line the
-server emitted while the channel was down is therefore unrecoverable from the socket, and after the
-hidden-tab SSE suspend (SSE_HIDDEN_SUSPEND_DELAY_MS) that window is minutes long on desktop as well
-as mobile. Before this, `onReconnect` only recorded an instrumentation event, so the rendered list
-silently skipped those lines while still LOOKING contiguous.
-On reconnect the hook now refetches the authoritative newest page over the existing REST path
-(`fetchAgentLogsWithMeta`, offset 0) and splices it onto the buffer. Where the splice cannot be
-proven — the missed window is larger than one page, so the refetched page shares no entries with what
-the reader already has — the buffer is resynced to the authoritative page behind a VISIBLE gap
-marker. A visible gap plus a working "load older" is always preferable to implied continuity the
-client cannot guarantee.
+FNXC:AgentLogResync 2026-07-26-16:20:
+Buffer bounding, gap marking, and reconnect reconciliation now live in ./logStreamReconcile so this
+hook and useMultiAgentLogs share ONE implementation. Both tail the same live-only
+`/api/tasks/:id/logs/stream`, and a hand-copied reconcile is how the silent-suspend-gap defect
+survived into a third round. Re-exported here because existing call sites (AgentDetailView,
+SystemControlsArea, TaskChatTab, tests) import these names from this module.
 */
-const LOG_GAP_MARKER_FLAG = "__fusionLogGap";
-
-export const LOG_GAP_MARKER_TEXT =
-  "Log stream reconnected. Output emitted while this view was disconnected is not shown above; use \"load older\" to fetch it.";
-
-/** A synthetic, client-only entry marking a proven discontinuity in the rendered log. */
-export type AgentLogGapMarker = AgentLogEntry & { readonly [LOG_GAP_MARKER_FLAG]: true };
-
-/**
- * True for the synthetic gap marker. Renderers use it to style the break; the hook uses it to keep
- * the marker out of every count that maps onto server-side offsets.
- */
-export function isLogGapMarker(entry: AgentLogEntry): boolean {
-  return (entry as Partial<AgentLogGapMarker>)[LOG_GAP_MARKER_FLAG] === true;
-}
-
-function createLogGapMarker(taskId: string, timestamp: string): AgentLogGapMarker {
-  return { timestamp, taskId, text: LOG_GAP_MARKER_TEXT, type: "status", [LOG_GAP_MARKER_FLAG]: true };
-}
-
-/**
- * Identity of a log entry for de-duplication. Agent log rows carry no server id, so the full
- * persisted content is the only available key; `timestamp` alone is not unique (streamed deltas
- * share a millisecond).
- *
- * FNXC:DashboardLogs 2026-07-26-10:15:
- * The separator MUST stay written as the `\u0000` escape, never as a raw NUL byte in the source.
- * A literal NUL makes git classify this file as binary (`git diff` prints "Bin", so the file becomes
- * undiffable and unreviewable) and makes plain `grep` skip it entirely — both were observed here.
- * The runtime value is identical; only the on-disk encoding differs.
- */
-function logEntryKey(entry: AgentLogEntry): string {
-  return [entry.timestamp, entry.type, entry.text, entry.detail ?? "", entry.agent ?? ""].join("\u0000");
-}
-
-/**
- * Length of the longest suffix of `prev` that is also a prefix of `next`, i.e. how much of `next`
- * the caller already holds. 0 means the two windows do not provably touch.
- *
- * The LARGEST such overlap is chosen deliberately: with repeated identical lines several alignments
- * can match, and the largest one is the only choice that cannot duplicate entries (it can at worst
- * treat a repeat as already-held, which the next event corrects).
- */
-export function findLogWindowOverlap(prev: AgentLogEntry[], next: AgentLogEntry[]): number {
-  const max = Math.min(prev.length, next.length);
-  if (max === 0) return 0;
-  const prevKeys = prev.slice(prev.length - max).map(logEntryKey);
-  const nextKeys = next.slice(0, max).map(logEntryKey);
-  for (let k = max; k > 0; k--) {
-    let matches = true;
-    for (let i = 0; i < k; i++) {
-      if (prevKeys[max - k + i] !== nextKeys[i]) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) return k;
-  }
-  return 0;
-}
-
-/** Append `next` after `prev`, dropping the leading entries of `next` that `prev` already holds. */
-function appendWithoutDuplicates(prev: AgentLogEntry[], next: AgentLogEntry[]): AgentLogEntry[] {
-  if (next.length === 0) return prev;
-  if (prev.length === 0) return next;
-  const overlap = findLogWindowOverlap(prev, next);
-  return [...prev.slice(0, prev.length - overlap), ...next];
-}
-
-/*
-FNXC:AgentLogResync 2026-07-26-14:12:
-Reconnect reconciliation. Inputs: the buffer as rendered (`prev`, which may already carry a leading
-gap marker), the authoritative newest page (`fresh`), and any live events that arrived while the
-refetch was in flight (`pending`, held out of `prev` so the merge sees a stable snapshot).
-
-Overlap case: the reader's buffer and the refetched page share entries, so the missed lines are
-exactly `fresh`'s non-overlapping tail — splice and keep the whole paged-back history.
-No-overlap case: more than one page was missed. The unreconcilable older prefix is DROPPED and a gap
-marker is put at the head rather than concatenated blindly, because keeping it would (a) imply a
-continuity that does not exist and (b) break `loadMore`'s offset arithmetic, which requires the
-buffer to stay a contiguous suffix of the server log. The dropped prefix is re-fetchable: the first
-"load older" pulls the true entries below the gap and the marker is retired.
-
-Cap: the merged buffer honours the same ring ceiling as the live tail (`max(MAX_LOG_ENTRIES,
-prev.length)`) so a resync cannot blow past the memory budget that the mobile-retention work exists
-to enforce. The marker is re-attached after the cap, so a trim can never silently swallow the very
-signal that says entries are missing.
-*/
-export function reconcileReconnectedEntries(
-  prev: AgentLogEntry[],
-  fresh: AgentLogEntry[],
-  pending: AgentLogEntry[],
-  taskId: string,
-): { entries: AgentLogEntry[]; trimmed: boolean; gapInserted: boolean } {
-  const hadGapMarker = prev.length > 0 && isLogGapMarker(prev[0]);
-  const previousGapMarker = hadGapMarker ? (prev[0] as AgentLogGapMarker) : null;
-  const prevReal = hadGapMarker ? prev.slice(1) : prev;
-
-  let gapMarker: AgentLogGapMarker | null = previousGapMarker;
-  let gapInserted = false;
-  let merged: AgentLogEntry[];
-
-  if (fresh.length === 0) {
-    merged = prevReal;
-  } else if (prevReal.length === 0) {
-    merged = fresh;
-  } else {
-    const overlap = findLogWindowOverlap(prevReal, fresh);
-    if (overlap > 0) {
-      merged = [...prevReal.slice(0, prevReal.length - overlap), ...fresh];
-    } else {
-      merged = fresh;
-      gapMarker = createLogGapMarker(taskId, fresh[0]?.timestamp ?? new Date(0).toISOString());
-      gapInserted = true;
-    }
-  }
-
-  merged = appendWithoutDuplicates(merged, pending);
-
-  const limit = Math.max(MAX_LOG_ENTRIES, prev.length);
-  const trimmed = merged.length > limit;
-  if (trimmed) merged = merged.slice(merged.length - limit);
-
-  return {
-    entries: gapMarker ? [gapMarker, ...merged] : merged,
-    trimmed,
-    gapInserted,
-  };
-}
+export {
+  MAX_LOG_ENTRIES,
+  capLogEntries,
+  isLogGapMarker,
+  findLogWindowOverlap,
+  reconcileReconnectedEntries,
+  LOG_GAP_MARKER_TEXT,
+} from "./logStreamReconcile";
+export type { AgentLogGapMarker } from "./logStreamReconcile";
 
 function getActiveContextKey(taskId: string | null, enabled: boolean, projectId?: string): string | null {
   if (!taskId || !enabled) return null;
@@ -236,6 +114,35 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
   // stable `prev` snapshot and cannot duplicate or drop lines that race the fetch.
   const resyncInFlightRef = useRef(false);
   const pendingLiveRef = useRef<AgentLogEntry[]>([]);
+  /*
+  FNXC:AgentLogResync 2026-07-26-18:48:
+  `resyncInFlightRef` single-flights resyncs, which used to mean a reconnect arriving DURING a resync
+  was silently discarded. forceReconnect fires onReconnect at teardown and again ~RECONNECT_DELAY_MS
+  later when the socket reopens; if the first refetch outlived that delay, the second reconnect hit
+  the early return, the lines emitted between the first fetch's snapshot and the socket reopening were
+  never fetched and never streamed, and the merge produced a buffer with NO gap marker — a real hole
+  rendered as contiguous output. A superseded reconnect now sets `resyncRerunRef` and the resync
+  re-runs exactly once after the in-flight one settles.
+
+  `resyncGenerationRef` is the discard token: an abandoned resync (pending-buffer overflow or the
+  settle timeout) bumps it, so the late result cannot be merged into a buffer that has moved on and
+  cannot clear the in-flight flag of the resync that replaced it.
+  */
+  const resyncRerunRef = useRef(false);
+  const resyncGenerationRef = useRef(0);
+  /*
+  FNXC:AgentLogPaging 2026-07-26-18:52:
+  `loadMore` captures its offset from the rendered buffer and fetches at that offset. A resync that
+  lands while that fetch is in flight REPLACES the buffer, after which prepending the offset page
+  produces `[entries 500-600][newest 100]` — a hole with no marker, and every later offset wrong.
+  Every buffer replacement bumps this version; a loadMore whose base version changed discards its
+  page instead of splicing it. Bumped by: context change, clear, a resync merge, a parked-event flush,
+  and a live append that TRIMS (a front trim removes exactly the entries the in-flight page would be
+  spliced against). A non-trimming live append deliberately does NOT bump it: it shifts the server
+  offset, but `mergeOlderPage` de-duplicates that shift, so invalidating on every streamed line would
+  make "load older" unusable on a busy stream for no correctness gain.
+  */
+  const bufferVersionRef = useRef(0);
 
   // Track the project context version to detect stale SSE events after project switches.
   // Incremented whenever projectId changes, invalidating any in-flight SSE handlers.
@@ -274,7 +181,10 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
     // Clear entries immediately on context change to prevent stale data visibility
     trimmedLiveTailRef.current = false;
     resyncInFlightRef.current = false;
+    resyncRerunRef.current = false;
+    resyncGenerationRef.current++;
     pendingLiveRef.current = [];
+    bufferVersionRef.current++;
     setEntries([]);
     setLoading(false);
     setHasMore(false);
@@ -321,23 +231,66 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
     duplicate or swallow them. If the refetch itself fails the buffer is left alone and the parked
     events are flushed — a degraded live tail is still better than dropping lines on the floor.
     */
+    /*
+    FNXC:AgentLogResync 2026-07-26-18:58:
+    Abandon the in-flight resync: discard its result by generation, stop parking live events, and
+    flush what is already parked into the ring. Used by the pending-buffer overflow and the settle
+    timeout. It does NOT itself re-run — the abandoned fetch's `finally` does, once it settles, so a
+    hung request cannot fan out into concurrent refetches.
+    */
+    function abandonResync(): AgentLogEntry[] {
+      resyncGenerationRef.current++;
+      resyncInFlightRef.current = false;
+      resyncRerunRef.current = true;
+      const parked = pendingLiveRef.current;
+      pendingLiveRef.current = [];
+      return parked;
+    }
+
+    function flushParkedEntries(parked: AgentLogEntry[]) {
+      if (parked.length === 0) return;
+      bufferVersionRef.current++;
+      setEntries((prev) => {
+        const appended = appendLiveEntries(prev, parked);
+        if (appended.trimmed) trimmedLiveTailRef.current = true;
+        return appended.entries;
+      });
+    }
+
     async function resyncFromServer() {
-      if (!currentTaskId || resyncInFlightRef.current || isStale()) return;
+      if (!currentTaskId || isStale()) return;
+      if (resyncInFlightRef.current) {
+        // Superseded reconnect: remember it so the missed window is fetched once this one settles.
+        resyncRerunRef.current = true;
+        return;
+      }
       const resyncTaskId: string = currentTaskId;
+      const generation = ++resyncGenerationRef.current;
       resyncInFlightRef.current = true;
       pendingLiveRef.current = [];
       let reconciled = false;
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       try {
-        const result = await fetchAgentLogsWithMeta(resyncTaskId, currentProjectId, {
-          limit: INITIAL_LOAD_LIMIT,
-        });
-        if (isStale()) return;
+        const result = await Promise.race([
+          fetchAgentLogsWithMeta(resyncTaskId, currentProjectId, { limit: INITIAL_LOAD_LIMIT }),
+          new Promise<never>((_resolve, reject) => {
+            timeoutHandle = setTimeout(() => {
+              flushParkedEntries(abandonResync());
+              reject(new Error("agent-log resync timed out"));
+            }, RESYNC_TIMEOUT_MS);
+          }),
+        ]);
+        // A superseded/abandoned resync must not merge a snapshot the buffer has moved past.
+        if (isStale() || resyncGenerationRef.current !== generation) return;
 
         const pending = pendingLiveRef.current;
         pendingLiveRef.current = [];
         reconciled = true;
+        bufferVersionRef.current++;
         setEntries((prev) => {
-          const outcome = reconcileReconnectedEntries(prev, result.entries, pending, resyncTaskId);
+          const outcome = reconcileReconnectedEntries(prev, result.entries, pending, resyncTaskId, {
+            preservePagedHistory: true,
+          });
           if (outcome.trimmed) trimmedLiveTailRef.current = true;
           return outcome.entries;
         });
@@ -347,15 +300,17 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
         // merged, so nothing older is left behind — see the trimmedLiveTailRef note above.
         if (!result.hasMore) trimmedLiveTailRef.current = false;
       } catch {
-        // Fall through: the live tail keeps running and the next reconnect retries the resync.
+        // Fall through: the live tail keeps running and the resync is retried below/on next reconnect.
       } finally {
-        resyncInFlightRef.current = false;
-        if (!reconciled && !isStale()) {
-          const pending = pendingLiveRef.current;
-          pendingLiveRef.current = [];
-          if (pending.length > 0) {
-            setEntries((prev) => appendWithoutDuplicates(prev, pending));
-          }
+        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+        const current = resyncGenerationRef.current === generation;
+        if (current) {
+          resyncInFlightRef.current = false;
+          if (!reconciled && !isStale()) flushParkedEntries(pendingLiveRef.current.splice(0));
+        }
+        if (resyncRerunRef.current && !isStale()) {
+          resyncRerunRef.current = false;
+          void resyncFromServer();
         }
       }
     }
@@ -442,8 +397,19 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
                 resync sets the authoritative count.
                 */
                 if (resyncInFlightRef.current) {
-                  pendingLiveRef.current.push(entry);
-                  return;
+                  if (pendingLiveRef.current.length < MAX_PENDING_LIVE_ENTRIES) {
+                    pendingLiveRef.current.push(entry);
+                    return;
+                  }
+                  /*
+                  FNXC:AgentLogResync 2026-07-26-19:04:
+                  Parking is bounded (MAX_PENDING_LIVE_ENTRIES). At the ceiling the resync is
+                  abandoned instead of the buffer growing without limit: the parked batch is flushed
+                  into the ring, this event falls through to the normal live append, and a fresh
+                  resync runs once the abandoned fetch settles. Dropping the parked events instead
+                  would put an unmarked hole in the middle of the rendered log.
+                  */
+                  flushParkedEntries(abandonResync());
                 }
                 /*
                 FNXC:MobileTabRetention 2026-07-26-10:24:
@@ -459,10 +425,21 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
                 idempotent so React's double-invoked updaters cannot corrupt it.
                 */
                 setEntries((prev) => {
-                  const limit = Math.max(MAX_LOG_ENTRIES, prev.length);
-                  if (prev.length + 1 <= limit) return [...prev, entry];
-                  trimmedLiveTailRef.current = true;
-                  return [...prev.slice(prev.length + 1 - limit), entry];
+                  const appended = appendLiveEntry(prev, entry);
+                  if (appended.trimmed) {
+                    trimmedLiveTailRef.current = true;
+                    /*
+                    FNXC:AgentLogPaging 2026-07-26-20:44:
+                    A trimming append drops entries off the FRONT, which is exactly where an in-flight
+                    loadMore page is about to be spliced: prepending it after the trim leaves the
+                    trimmed entries missing between the page and the buffer, unmarked. So a trim — and
+                    only a trim — invalidates the buffer version. A plain append does not: it shifts
+                    the server offset, but mergeOlderPage de-duplicates that shift, and invalidating
+                    every streamed line would make "load older" unusable on a busy stream.
+                    */
+                    bufferVersionRef.current++;
+                  }
+                  return appended.entries;
                 });
                 setTotal((prev) => (prev !== null ? prev + 1 : null));
               } catch {
@@ -486,13 +463,18 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
   }, [taskId, enabled, projectId]);
 
   /*
-  FNXC:AgentLogPaging 2026-07-26-15:22:
-  The reconnect gap marker is a client-only row and always sits at index 0, so one count keeps every
-  server-offset calculation honest. Derived as a number rather than from the array so `loadMore`'s
-  identity churns no more often than it did before the marker existed (once per buffer-length
-  change), not on every streamed line.
+  FNXC:AgentLogPaging 2026-07-26-19:10:
+  CORRECTION to the note that stood here: it asserted the gap marker "always sits at index 0". That
+  is no longer true and the code that relied on it is gone — a history-preserving resync leaves the
+  marker BETWEEN the retained history and the refetched page. Two derived values replace the single
+  leading-marker count:
+    - `newestContiguousCount` is the only sound `loadMore` offset (entries below the last marker);
+      counting through a marker would page past the gap and splice the wrong window in at the top.
+    - `gapPresent` scans the whole buffer, because a gap anywhere means older output is still
+      fetchable and the "load older" affordance must stay reachable to fill it.
   */
-  const gapMarkerCount = entries.length > 0 && isLogGapMarker(entries[0]) ? 1 : 0;
+  const newestContiguousCount = countNewestContiguousEntries(entries);
+  const gapPresent = hasLogGapMarker(entries);
 
   /**
    * Load more older entries.
@@ -502,13 +484,15 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
     if (!taskId || loadingMore) return;
 
     const contextVersionAtStart = projectContextVersionRef.current;
+    const baseBufferVersion = bufferVersionRef.current;
     /*
-    FNXC:AgentLogPaging 2026-07-26-14:38:
-    The server offset counts back from the newest entry, so it must be the number of REAL entries
-    held. A synthetic gap marker is client-only and would shift the whole page by one, re-fetching an
-    entry the reader already has and leaving a one-entry hole below it.
+    FNXC:AgentLogPaging 2026-07-26-19:14:
+    The server offset counts back from the newest entry, so it must be the number of REAL entries in
+    the newest CONTIGUOUS run. A synthetic gap marker is client-only, and entries retained above a
+    marker are not adjacent to the newest run, so counting either of them would fetch the wrong
+    window.
     */
-    const currentEntriesCount = entries.length - gapMarkerCount;
+    const currentEntriesCount = newestContiguousCount;
     const currentTaskId = taskId;
 
     setLoadingMore(true);
@@ -525,17 +509,27 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
       }
 
       /*
-      FNXC:AgentLogPaging 2026-07-26-14:41:
-      Prepend older entries. Those entries are exactly the ones immediately below the buffer, so a
-      gap marker at the head is now closed by real data and must be retired; a `hasMore:false`
-      response also retires it because the server has proven nothing older exists. Leaving a stale
-      marker in place would claim a discontinuity that the page just filled.
+      FNXC:AgentLogPaging 2026-07-26-19:16:
+      A reconnect resync that landed while this page was in flight replaced the buffer, so this page
+      was fetched at an offset that no longer describes it. Splicing it anyway produced
+      `[entries 500-600][newest 100]` — an unmarked hole plus permanently wrong offsets. Discard it
+      instead: the resync already set authoritative `hasMore`/`total`, `hasMore` stays true, and the
+      reader's next "load older" pages from the corrected offset. A discarded page renders nothing
+      new; it never renders something wrong.
       */
-      const retireGapMarker = result.entries.length > 0 || !result.hasMore;
-      setEntries((prev) => {
-        const base = retireGapMarker ? prev.filter((entry) => !isLogGapMarker(entry)) : prev;
-        return [...result.entries, ...base];
-      });
+      if (bufferVersionRef.current !== baseBufferVersion) return;
+
+      /*
+      FNXC:AgentLogPaging 2026-07-26-19:18:
+      Merge through the shared `mergeOlderPage`, which de-duplicates the seam (the server resolves
+      `offset` against its CURRENT total, so entries persisted since the offset was read shift the
+      window), fills a gap from below, and retires the marker only on proof — page overlap with the
+      retained history, or the page reaching entry 0. The previous inline prepend retired the marker
+      on ANY non-empty page, which claimed a multi-page gap was closed after fetching 100 entries of
+      it.
+      */
+      setEntries((prev) => mergeOlderPage(prev, result.entries, { serverHasMore: result.hasMore }));
+      bufferVersionRef.current++;
       setHasMore(result.hasMore);
       setTotal(result.total);
       // Paging reached entry 0: the buffer is contiguous back to the beginning, so the live-tail
@@ -546,11 +540,12 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
     } finally {
       setLoadingMore(false);
     }
-  }, [taskId, projectId, entries.length, gapMarkerCount, loadingMore]);
+  }, [taskId, projectId, newestContiguousCount, loadingMore]);
 
   const clear = useCallback(() => {
     trimmedLiveTailRef.current = false;
     pendingLiveRef.current = [];
+    bufferVersionRef.current++;
     setEntries([]);
   }, []);
   const initialContextLoading = Boolean(activeContextKey && loadedContextKey !== activeContextKey);
@@ -561,13 +556,14 @@ export function useAgentLogs(taskId: string | null, enabled: boolean, projectId?
     clear,
     loadMore,
     /*
-    FNXC:AgentLogPaging 2026-07-26-14:44:
-    A trimmed live tail, or a reconnect gap marker at the head, means older entries are still on the
-    server, so the "load older" affordance must stay reachable even when the last fetch said
-    otherwise. Both signals are retired by the paging response that proves the buffer reaches entry 0
-    — `hasMore` is now true iff older entries actually remain.
+    FNXC:AgentLogPaging 2026-07-26-19:24:
+    A trimmed live tail, or a reconnect gap marker ANYWHERE in the buffer, means older entries are
+    still on the server, so the "load older" affordance must stay reachable even when the last fetch
+    said otherwise. Both signals are retired by proof: the trim flag by a response reaching entry 0,
+    the marker by `mergeOlderPage` splicing the gap closed. `hasMore` is true iff output the reader
+    cannot currently see is still fetchable.
     */
-    hasMore: hasMore || trimmedLiveTailRef.current || gapMarkerCount > 0,
+    hasMore: hasMore || trimmedLiveTailRef.current || gapPresent,
     total,
     loadingMore,
   };

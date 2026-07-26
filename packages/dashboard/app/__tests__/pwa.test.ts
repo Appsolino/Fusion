@@ -2,17 +2,42 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { inflateSync } from "node:zlib";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadAllAppCss } from "../test/cssFixture";
+import {
+  clearAllLocalCache,
+  PURGE_CACHES_MESSAGE,
+  purgeCacheStorage,
+} from "../utils/swrCache";
 
 /*
 FNXC:PWAOffline 2026-07-26-10:44:
 Restore latency after a mobile discard is a behavior, not a source-string shape, so it needs an executable seam. Evaluating sw.js in a fresh vm context with fake `caches`/`fetch` exercises the real fetch handler without a browser, a build step, or any timers — the cheapest harness that can prove "cache hit means zero network calls".
 */
-type FakeResponse = { ok: boolean; body: string; clone: () => FakeResponse };
+type FakeResponse = {
+  ok: boolean;
+  body: string;
+  clone: () => FakeResponse;
+  headers?: { get: (name: string) => string | null };
+};
 
 function makeResponse(body: string, ok = true): FakeResponse {
   const response: FakeResponse = { ok, body, clone: () => response };
+  return response;
+}
+
+/*
+FNXC:PWAOffline 2026-07-26-15:40:
+A cache entry written by a PREVIOUS service-worker session has no in-memory put timestamp, so the SW
+falls back to the response's `Date` header to prove its age. This models that entry shape.
+*/
+function makeDatedResponse(body: string, dateHeaderValue: string | null): FakeResponse {
+  const response: FakeResponse = {
+    ok: true,
+    body,
+    clone: () => response,
+    headers: { get: (name: string) => (name.toLowerCase() === "date" ? dateHeaderValue : null) },
+  };
   return response;
 }
 
@@ -55,15 +80,53 @@ function loadServiceWorker(existingStore?: Map<string, FakeResponse>) {
     keys: async () => [...store.keys()].map((url) => ({ url })),
     delete: async (request: { url: string }) => store.delete(request.url),
   };
+  /*
+  FNXC:PWAOffline 2026-07-26-18:05:
+  `keys()`/`delete()` used to be inert stubs, which made a whole-bucket purge untestable. They now model
+  one real bucket named after the CACHE_NAME the source declares, so `activate`'s cross-generation
+  cleanup still sees only the current generation (nothing to delete) while a PURGE_CACHES message can be
+  observed actually emptying the store.
+  */
+  const cacheName = /const CACHE_NAME = "([^"]+)"/.exec(source)?.[1] ?? "fusion-cache";
   const caches = {
     open: async () => cache,
     match: async (request: FakeRequest) => store.get(request.url),
-    keys: async () => [],
-    delete: async () => true,
+    keys: async () => [cacheName],
+    delete: async (key: string) => {
+      if (key !== cacheName) {
+        return false;
+      }
+      store.clear();
+      return true;
+    },
   };
+
+  /*
+  FNXC:PWAOffline 2026-07-26-15:40:
+  The /api/ fallback is bounded by AGE, so the test needs to move time without waiting. The SW reads
+  the clock only through `Date.now()`/`Date.parse()`, so a stub Date on the vm global is the narrowest
+  seam that can express "this entry is six minutes old" — no fake timers, no sleeps, no real elapsed
+  time anywhere in the suite.
+  */
+  const clock = { now: Date.UTC(2026, 6, 26, 12, 0, 0) };
+  const DateStub = Object.assign(
+    function DateStub(this: unknown, ...args: unknown[]) {
+      return new (Date as unknown as new (...a: unknown[]) => Date)(...args);
+    },
+    { now: () => clock.now, parse: Date.parse, UTC: Date.UTC },
+  );
 
   const listeners = new Map<string, (event: unknown) => void>();
   const sandbox = {
+    Date: DateStub,
+    /*
+    FNXC:PWAOffline 2026-07-26-18:05:
+    Real `Response`/`Headers` so the durable put-time stamp (SW_CACHED_AT_HEADER) can be exercised end
+    to end. Safe for every other test: the lightweight FakeResponse carries no `status`, so
+    buildStampedResponse bails and the plain-clone path those tests assert on is unchanged.
+    */
+    Response,
+    Headers,
     self: {
       addEventListener: (type: string, handler: (event: unknown) => void) => {
         listeners.set(type, handler);
@@ -109,7 +172,26 @@ function loadServiceWorker(existingStore?: Map<string, FakeResponse>) {
     if (pending) await pending;
   }
 
-  return { handleFetch, runActivate, fetchMock, store, cache };
+  async function runMessage(data: unknown): Promise<void> {
+    const messageListener = listeners.get("message");
+    expect(messageListener).toBeTypeOf("function");
+
+    let pending: Promise<unknown> | undefined;
+    messageListener!({
+      data,
+      waitUntil: (value: Promise<unknown>) => {
+        pending = value;
+      },
+    });
+
+    if (pending) await pending;
+  }
+
+  function advanceClock(ms: number): void {
+    clock.now += ms;
+  }
+
+  return { handleFetch, runActivate, runMessage, fetchMock, store, cache, clock, advanceClock, cacheName };
 }
 
 /*
@@ -129,6 +211,18 @@ function buildAssetUrl(build: number, index: number): string {
 
 function countCachedAssets(store: Map<string, FakeResponse>): number {
   return [...store.keys()].filter((url) => url.includes("/assets/")).length;
+}
+
+function countCachedApiEntries(store: Map<string, FakeResponse>): number {
+  return [...store.keys()].filter((url) => url.includes("/api/")).length;
+}
+
+/** Mirrors MAX_API_CACHE_ENTRIES / MAX_API_CACHE_AGE_MS in sw.js. */
+const MAX_API_ENTRIES = 100;
+const API_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function apiUrl(index: number): string {
+  return `https://fusion.test/api/tasks/FN-${String(index).padStart(4, "0")}?project=p1`;
 }
 
 const HASHED_ASSET_URL = "https://fusion.test/assets/index-CydU98D-.js";
@@ -323,7 +417,7 @@ describe("PWA configuration", () => {
     expect(swSource).toContain('addEventListener("install"');
     expect(swSource).toContain('addEventListener("fetch"');
     expect(swSource).toContain('addEventListener("activate"');
-    expect(swSource).toContain('const CACHE_NAME = "fusion-cache-v6";');
+    expect(swSource).toContain('const CACHE_NAME = "fusion-cache-v7";');
   });
 
   it("service worker bypasses SSE requests instead of trying to cache them", () => {
@@ -541,6 +635,410 @@ describe("PWA configuration", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(response?.body).toBe(`network:${apiUrl}`);
     });
+
+    /*
+    FNXC:PWAOffline 2026-07-26-15:40:
+    The hashed-asset cap left the other unbounded writer in sw.js untouched: every GET /api/ response
+    was cached and nothing evicted it. The dashboard emits an open-ended set of distinct /api/ URLs
+    (per project, per task, per query string), so the API half grew forever — the same iOS
+    all-or-nothing origin-quota hazard that can take localStorage down with it. These tests pin both
+    halves of the bound: a count cap, and a freshness bound on the fallback so a stale response can
+    never be served as if it were live.
+    */
+    it("bounds the /api/ cache across many distinct URLs instead of growing forever", async () => {
+      const { handleFetch, store } = loadServiceWorker();
+      const requestCount = 150;
+
+      for (let index = 0; index < requestCount; index += 1) {
+        await handleFetch(makeRequest(apiUrl(index)));
+      }
+      await flushPendingPrune();
+
+      // Unbounded growth would be 150.
+      expect(countCachedApiEntries(store)).toBeLessThanOrEqual(MAX_API_ENTRIES);
+
+      // Eviction is oldest-first, so the most recent responses are the ones that survive.
+      expect(store.has(apiUrl(requestCount - 1))).toBe(true);
+      expect(store.has(apiUrl(0))).toBe(false);
+    });
+
+    it("keeps /api/ eviction from touching cached assets or the shell", async () => {
+      const store = new Map<string, FakeResponse>();
+      store.set("https://fusion.test/", makeResponse("cached-shell"));
+      store.set(HASHED_ASSET_URL, makeResponse("cached-entry-chunk"));
+      const { handleFetch } = loadServiceWorker(store);
+
+      for (let index = 0; index < 150; index += 1) {
+        await handleFetch(makeRequest(apiUrl(index)));
+      }
+      await flushPendingPrune();
+
+      expect(store.has("https://fusion.test/")).toBe(true);
+      expect(store.has(HASHED_ASSET_URL)).toBe(true);
+    });
+
+    it("serves a recently cached /api/ response when the network fails", async () => {
+      const { handleFetch, fetchMock, advanceClock } = loadServiceWorker();
+      const url = apiUrl(1);
+
+      await handleFetch(makeRequest(url));
+      fetchMock.mockImplementation(async () => {
+        throw new Error("offline");
+      });
+      advanceClock(30_000);
+
+      const response = await handleFetch(makeRequest(url));
+      expect(response?.body).toBe(`network:${url}`);
+    });
+
+    it("refuses to serve an expired /api/ entry and evicts it instead", async () => {
+      const { handleFetch, fetchMock, store, advanceClock } = loadServiceWorker();
+      const url = apiUrl(2);
+
+      await handleFetch(makeRequest(url));
+      expect(store.has(url)).toBe(true);
+
+      fetchMock.mockImplementation(async () => {
+        throw new Error("offline");
+      });
+      advanceClock(API_CACHE_TTL_MS + 1_000);
+
+      await expect(handleFetch(makeRequest(url))).rejects.toThrow("offline");
+      expect(store.has(url)).toBe(false);
+    });
+
+    /*
+    FNXC:PWAOffline 2026-07-26-15:40:
+    A tab discarded by iOS restarts the service worker, so the put-time timestamps are gone while the
+    cache entries persist. Age must then be provable from the response's `Date` header (Fusion serves
+    its API from Node, which always sets it), and an entry whose age cannot be proven at all must
+    fail closed rather than be served.
+    */
+    it("honours the freshness bound from the Date header after a service-worker restart", async () => {
+      const store = new Map<string, FakeResponse>();
+      const freshUrl = apiUrl(3);
+      const staleUrl = apiUrl(4);
+      const { handleFetch, fetchMock, clock } = loadServiceWorker(store);
+      store.set(freshUrl, makeDatedResponse("previous-session-fresh", new Date(clock.now - 60_000).toUTCString()));
+      store.set(
+        staleUrl,
+        makeDatedResponse("previous-session-stale", new Date(clock.now - API_CACHE_TTL_MS - 60_000).toUTCString()),
+      );
+      fetchMock.mockImplementation(async () => {
+        throw new Error("offline");
+      });
+
+      const fresh = await handleFetch(makeRequest(freshUrl));
+      expect(fresh?.body).toBe("previous-session-fresh");
+
+      await expect(handleFetch(makeRequest(staleUrl))).rejects.toThrow("offline");
+      expect(store.has(staleUrl)).toBe(false);
+    });
+
+    it("fails closed for an /api/ entry whose age cannot be proven", async () => {
+      const store = new Map<string, FakeResponse>();
+      const url = apiUrl(5);
+      store.set(url, makeResponse("age-unknown"));
+      const { handleFetch, fetchMock } = loadServiceWorker(store);
+      fetchMock.mockImplementation(async () => {
+        throw new Error("offline");
+      });
+
+      await expect(handleFetch(makeRequest(url))).rejects.toThrow("offline");
+      expect(store.has(url)).toBe(false);
+    });
+
+    it("keeps serving /api/ requests when cache pruning throws", async () => {
+      const { handleFetch, cache, store } = loadServiceWorker();
+      cache.keys = async () => {
+        throw new Error("quota inspection failed");
+      };
+
+      for (let index = 0; index < 15; index += 1) {
+        const response = await handleFetch(makeRequest(apiUrl(index)));
+        expect(response?.body).toBe(`network:${apiUrl(index)}`);
+      }
+      await flushPendingPrune();
+
+      expect(store.has(apiUrl(14))).toBe(true);
+    });
+
+    /*
+    FNXC:PWAOffline 2026-07-26-18:05:
+    Every successful GET /api/* response used to be written to durable Cache Storage. GET /api/settings
+    and /api/settings/global return plaintext `daemonToken`, `githubAuthToken`, `gitlabAuthToken`, and
+    `ntfyAccessToken`, so dashboard credentials were persisted on the origin and survived logout, token
+    rotation, and project switch. The entry cap and TTL added earlier bound size and staleness; neither
+    is a confidentiality control.
+
+    These tests assert the INVARIANT ("a non-allow-listed /api/ URL is never written to and never read
+    from the cache") across every credential-bearing surface named in the review plus the token-in-URL
+    shape, not just the single reported endpoint — an allow-list regressed back to a deny-list would
+    still pass a one-endpoint test.
+    */
+    const CREDENTIAL_BEARING_API_URLS = [
+      "https://fusion.test/api/settings",
+      "https://fusion.test/api/settings/global",
+      "https://fusion.test/api/settings/export",
+      "https://fusion.test/api/settings/auth-export",
+      "https://fusion.test/api/secrets",
+      "https://fusion.test/api/secrets/list?projectId=p1",
+      "https://fusion.test/api/auth/providers/anthropic/login?state=xyz",
+      "https://fusion.test/api/agents",
+      "https://fusion.test/api/git/status?projectId=p1",
+      "https://fusion.test/api/chat/sessions",
+      // Allow-listed PREFIX, non-allow-listed depth: attachments carry the bearer token in the URL.
+      "https://fusion.test/api/tasks/FN-0001/attachments/screenshot.png?fn_token=daemon-token",
+      "https://fusion.test/api/artifacts/art-1/media?fn_token=daemon-token",
+      // Allow-listed path that nonetheless carries a token query param.
+      "https://fusion.test/api/tasks?projectId=p1&fn_token=daemon-token",
+    ];
+
+    it.each(CREDENTIAL_BEARING_API_URLS)("never writes %s to the cache", async (url) => {
+      const { handleFetch, store } = loadServiceWorker();
+
+      await handleFetch(makeRequest(url));
+      await flushPendingPrune();
+
+      expect(store.has(url)).toBe(false);
+      expect(store.size).toBe(0);
+    });
+
+    it.each(CREDENTIAL_BEARING_API_URLS)(
+      "never serves %s from a cache entry an older worker left behind",
+      async (url) => {
+        const store = new Map<string, FakeResponse>();
+        store.set(url, makeResponse('{"daemonToken":"leaked"}'));
+        const { handleFetch, fetchMock } = loadServiceWorker(store);
+        fetchMock.mockImplementation(async () => {
+          throw new Error("offline");
+        });
+
+        // The service worker declines to handle the request at all, so the browser performs it
+        // directly and the leftover entry is never read.
+        await expect(handleFetch(makeRequest(url))).resolves.toBeUndefined();
+      },
+    );
+
+    it("never caches a failed /api/ response as an offline fallback", async () => {
+      const { handleFetch, fetchMock, store } = loadServiceWorker();
+      const url = "https://fusion.test/api/tasks?projectId=p1";
+      // A 401 right after a token rotation, or a 500 from a restarting daemon.
+      fetchMock.mockImplementation(async () => makeResponse('{"error":"unauthorized"}', false));
+
+      const response = await handleFetch(makeRequest(url));
+
+      expect(response?.body).toBe('{"error":"unauthorized"}');
+      expect(store.has(url)).toBe(false);
+    });
+
+    it("still caches the allow-listed board reads the mobile restore path depends on", async () => {
+      const { handleFetch, store } = loadServiceWorker();
+      const allowed = [
+        "https://fusion.test/api/tasks?projectId=p1",
+        "https://fusion.test/api/tasks/FN-0042",
+        "https://fusion.test/api/projects",
+      ];
+
+      for (const url of allowed) {
+        const response = await handleFetch(makeRequest(url));
+        expect(response?.body).toBe(`network:${url}`);
+      }
+
+      for (const url of allowed) {
+        expect(store.has(url)).toBe(true);
+      }
+    });
+
+    /*
+    FNXC:PWAOffline 2026-07-26-18:05:
+    The operator's "Clear all cached data" affordance walked localStorage only; nothing in the app
+    touched the caches API, so every cached response — credentials included — survived it. The purge now
+    routes through the service worker because the caller reloads immediately, which can abort an in-page
+    delete; the worker is not torn down by that reload.
+    */
+    it("purges Cache Storage on a PURGE_CACHES message", async () => {
+      const { runMessage, store } = loadServiceWorker();
+      store.set(HASHED_ASSET_URL, makeResponse("cached-entry-chunk"));
+      store.set("https://fusion.test/api/tasks", makeResponse("cached-tasks"));
+      store.set("https://fusion.test/", makeResponse("cached-shell"));
+
+      await runMessage({ type: "PURGE_CACHES" });
+
+      expect(store.size).toBe(0);
+    });
+
+    it("ignores unrelated service-worker messages instead of purging", async () => {
+      const { runMessage, store } = loadServiceWorker();
+      store.set(HASHED_ASSET_URL, makeResponse("cached-entry-chunk"));
+
+      await runMessage({ type: "SKIP_WAITING" });
+
+      expect(store.size).toBe(1);
+    });
+
+    /*
+    FNXC:PWAOffline 2026-07-26-18:05:
+    Browsers idle-terminate a service worker after ~30s with no events — the normal state of the
+    BACKGROUNDED tab this whole feature targets. The next wake is a cold start whose `apiCacheTimestamps`
+    and `sessionReferencedAssets` are EMPTY, so a prune then has no put-time record and no pin set. It
+    must still bound the cache rather than throw, no-op, or evict everything.
+    */
+    it("prunes correctly on a cold start with no in-memory timestamps or pins", async () => {
+      const store = new Map<string, FakeResponse>();
+      for (let index = 0; index < 250; index += 1) {
+        store.set(buildAssetUrl(4, index), makeResponse("previous-session-chunk"));
+      }
+      for (let index = 0; index < 250; index += 1) {
+        store.set(apiUrl(index), makeResponse("previous-session-api"));
+      }
+      store.set("https://fusion.test/", makeResponse("cached-shell"));
+
+      const { runActivate } = loadServiceWorker(store);
+      await runActivate();
+
+      expect(countCachedAssets(store)).toBe(200);
+      expect(countCachedApiEntries(store)).toBe(MAX_API_ENTRIES);
+      // Oldest-first: the newest entries of each class are the survivors.
+      expect(store.has(buildAssetUrl(4, 249))).toBe(true);
+      expect(store.has(apiUrl(249))).toBe(true);
+      expect(store.has(buildAssetUrl(4, 0))).toBe(false);
+      expect(store.has(apiUrl(0))).toBe(false);
+      // Unowned entries stay put.
+      expect(store.has("https://fusion.test/")).toBe(true);
+    });
+
+    /*
+    FNXC:PWAOffline 2026-07-26-18:05:
+    Freshness must survive that same cold start. The put-time stamp written into the stored response is
+    the only age proof here — the fake network response carries no `Date` header — so this proves the
+    durable header, not the in-memory map.
+    */
+    it("proves /api/ entry age from the durable put-time stamp after a worker restart", async () => {
+      const store = new Map<string, FakeResponse>();
+      const url = "https://fusion.test/api/tasks?projectId=p1";
+
+      const first = loadServiceWorker(store);
+      first.fetchMock.mockImplementation(
+        async () => new Response("live-tasks", { status: 200 }) as unknown as FakeResponse,
+      );
+      await first.handleFetch(makeRequest(url));
+      expect(store.has(url)).toBe(true);
+
+      // Cold start: a brand-new worker instance over the same persistent cache, with empty maps.
+      const restarted = loadServiceWorker(store);
+      restarted.fetchMock.mockImplementation(async () => {
+        throw new Error("offline");
+      });
+      restarted.advanceClock(60_000);
+
+      const served = (await restarted.handleFetch(makeRequest(url))) as unknown as Response;
+      expect(await served.text()).toBe("live-tasks");
+
+      // Past the freshness bound the same cold-started worker must refuse and evict it.
+      const expired = loadServiceWorker(store);
+      expired.fetchMock.mockImplementation(async () => {
+        throw new Error("offline");
+      });
+      expired.advanceClock(API_CACHE_TTL_MS + 1_000);
+
+      await expect(expired.handleFetch(makeRequest(url))).rejects.toThrow("offline");
+      expect(store.has(url)).toBe(false);
+    });
+  });
+
+  /*
+  FNXC:PWAOffline 2026-07-26-18:05:
+  Settings -> "Clear all cached data" is the operator's only purge affordance, and it reached
+  localStorage ONLY — nothing in the dashboard touched the caches API, so every service-worker-cached
+  response (credentials included, before the sw.js allow-list) survived it intact. These tests pin that
+  the purge now reaches Cache Storage through both paths: the service-worker message (which survives the
+  immediate reload the click handler performs) and the direct in-page walk (which covers a page no
+  worker controls).
+  */
+  describe("operator cache purge", () => {
+    const originalCaches = (globalThis as { caches?: unknown }).caches;
+    const originalServiceWorker = Object.getOwnPropertyDescriptor(navigator, "serviceWorker");
+
+    function installFakeCacheStorage(bucketNames: string[]) {
+      const buckets = new Set(bucketNames);
+      const fake = {
+        keys: vi.fn(async () => [...buckets]),
+        delete: vi.fn(async (key: string) => buckets.delete(key)),
+        open: vi.fn(),
+        match: vi.fn(),
+        has: vi.fn(),
+      };
+      Object.defineProperty(globalThis, "caches", { value: fake, configurable: true, writable: true });
+      return { fake, buckets };
+    }
+
+    function installController(): { postMessage: ReturnType<typeof vi.fn> } | null {
+      const controller = { postMessage: vi.fn() };
+      Object.defineProperty(navigator, "serviceWorker", {
+        value: { controller },
+        configurable: true,
+      });
+      return controller;
+    }
+
+    afterEach(() => {
+      Object.defineProperty(globalThis, "caches", {
+        value: originalCaches,
+        configurable: true,
+        writable: true,
+      });
+      if (originalServiceWorker) {
+        Object.defineProperty(navigator, "serviceWorker", originalServiceWorker);
+      } else {
+        delete (navigator as unknown as Record<string, unknown>).serviceWorker;
+      }
+      localStorage.clear();
+      vi.restoreAllMocks();
+    });
+
+    it("purgeCacheStorage deletes every cache bucket on the origin", async () => {
+      const { fake, buckets } = installFakeCacheStorage(["fusion-cache-v7", "fusion-cache-v6"]);
+
+      const deleted = await purgeCacheStorage();
+
+      expect(deleted).toBe(2);
+      expect(buckets.size).toBe(0);
+      expect(fake.delete).toHaveBeenCalledWith("fusion-cache-v7");
+      expect(fake.delete).toHaveBeenCalledWith("fusion-cache-v6");
+    });
+
+    it("purgeCacheStorage is a no-op when Cache Storage is unavailable", async () => {
+      Object.defineProperty(globalThis, "caches", { value: undefined, configurable: true, writable: true });
+
+      await expect(purgeCacheStorage()).resolves.toBe(0);
+    });
+
+    it("clearAllLocalCache asks the controlling worker to purge and clears localStorage", async () => {
+      installFakeCacheStorage(["fusion-cache-v7"]);
+      const controller = installController();
+      localStorage.setItem("kb-dashboard-tasks-cache:p1", "{}");
+      localStorage.setItem("fn.authToken", "keep-me");
+
+      const removed = clearAllLocalCache();
+
+      expect(removed).toBeGreaterThan(0);
+      expect(localStorage.getItem("kb-dashboard-tasks-cache:p1")).toBeNull();
+      expect(localStorage.getItem("fn.authToken")).toBe("keep-me");
+      expect(controller?.postMessage).toHaveBeenCalledWith({ type: PURGE_CACHES_MESSAGE });
+    });
+
+    it("clearAllLocalCache still purges Cache Storage directly when no worker controls the page", async () => {
+      const { buckets } = installFakeCacheStorage(["fusion-cache-v7"]);
+      Object.defineProperty(navigator, "serviceWorker", { value: undefined, configurable: true });
+      localStorage.setItem("kb-dashboard-projects-cache", "{}");
+
+      clearAllLocalCache();
+      // The direct purge is fire-and-forget; drain the microtask/macrotask chain it queued.
+      await flushPendingPrune();
+
+      expect(buckets.size).toBe(0);
+    });
   });
 
   describe("logo assets", () => {
@@ -625,7 +1123,7 @@ describe("PWA configuration", () => {
 
       expect(indexHtml).toContain('<link rel="icon" type="image/svg+xml" href="/logo.svg" />');
       expect(indexHtml).toContain('<link rel="apple-touch-icon" href="/icons/icon-192.png" />');
-      expect(swSource).toContain('const CACHE_NAME = "fusion-cache-v6";');
+      expect(swSource).toContain('const CACHE_NAME = "fusion-cache-v7";');
     });
   });
 });

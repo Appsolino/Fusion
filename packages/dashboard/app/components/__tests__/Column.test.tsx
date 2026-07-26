@@ -760,6 +760,43 @@ describe("Column pagination", () => {
     expect(screen.getByRole("button", { name: /Load 25 more/i })).toBeTruthy();
   });
 
+  /*
+  FNXC:BoardColumnWindowing 2026-07-26-14:24:
+  The reset used to key on the `isSearchActive` boolean, so refining one broad query into another kept
+  the boolean true and carried an expanded window (up to hundreds of mounted TaskCards) into a brand-new
+  result set. These cases pin the corrected contract: a DIFFERENT search result set collapses back to
+  one screenful, while an unchanged one keeps the operator's expanded window (nothing to bound).
+  */
+  it("collapses an expanded window when the search result set changes while search stays active", () => {
+    const tasks = Array.from({ length: 110 }, (_, index) => makeTask(`KB-${String(index + 1).padStart(3, "0")}`));
+    const { rerender } = render(<Column {...defaultProps} column="todo" tasks={tasks} isSearchActive={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Load 25 more/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Load 25 more/i }));
+    expect(screen.getAllByTestId(/task-/)).toHaveLength(100);
+
+    // Operator edits the query from one broad term to another: isSearchActive is STILL true, but the
+    // result set is entirely different.
+    const nextTasks = Array.from({ length: 130 }, (_, index) => makeTask(`FN-${String(index + 1).padStart(3, "0")}`));
+    rerender(<Column {...defaultProps} column="todo" tasks={nextTasks} isSearchActive={true} />);
+
+    expect(screen.getAllByTestId(/task-/)).toHaveLength(50);
+  });
+
+  it("keeps the expanded window across a re-render that yields the same search result set", () => {
+    const tasks = Array.from({ length: 110 }, (_, index) => makeTask(`KB-${String(index + 1).padStart(3, "0")}`));
+    const { rerender } = render(<Column {...defaultProps} column="todo" tasks={tasks} isSearchActive={true} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Load 25 more/i }));
+    expect(screen.getAllByTestId(/task-/)).toHaveLength(75);
+
+    // A poll hands back an equal-but-not-identical array; the window must not be yanked from under the
+    // operator.
+    rerender(<Column {...defaultProps} column="todo" tasks={[...tasks]} isSearchActive={true} />);
+
+    expect(screen.getAllByTestId(/task-/)).toHaveLength(75);
+  });
+
   it("preserves non-search pagination behavior when isSearchActive is not provided", () => {
     const tasks = Array.from({ length: 110 }, (_, index) => makeTask(`KB-${String(index + 1).padStart(3, "0")}`));
     render(<Column {...defaultProps} column="todo" tasks={tasks} />);
