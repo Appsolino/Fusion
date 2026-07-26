@@ -272,6 +272,14 @@ const PRE_EXECUTION_WORKTREE_MAX_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
 export interface SelfHealingOptions {
   /** Project root directory (parent of .worktrees/) */
   rootDir: string;
+  /*
+   * FNXC:PlanReviewLease 2026-07-26-20:30:
+   * This engine's cluster node id, matching what the graph stamps into
+   * `WorkflowStepResult.leaseNodeId`. Only used to recognize review-gate leases left by a PREVIOUS
+   * process on this same node so they can be reclaimed immediately rather than waiting out the
+   * 15-minute staleness floor. Unset (single-node, tests) keeps floor-only semantics.
+   */
+  localNodeId?: string;
   /** Optional callback to release TaskExecutor in-memory worktree ownership for a task. */
   releaseExecutorWorktreeOwnership?: (taskId: string) => void;
   /**
@@ -7161,9 +7169,28 @@ export class SelfHealingManager {
           re-attaches an in-review graph run after a restart, so those leases simply age out and
           are then marked failed as before.
           */
+          /*
+          FNXC:PlanReviewLease 2026-07-26-20:26:
+          FN-8603 follow-up. The paragraph above accepts that "restart-orphaned gates simply age
+          out" — that acceptance is what cost FN-8603 ~14 minutes of dead wait after an engine
+          restart killed its Code Review session 34s in. Passing this node's identity lets
+          classifyReviewLease reclaim a lease THIS node's previous process took (proven dead: it
+          predates our boot) without touching the floor that protects peer-owned and legacy
+          unattributed leases. When localNodeId is unset the argument is undefined and behavior is
+          exactly as before.
+          */
+          const localNodeLeaseIdentity = this.options.localNodeId
+            ? { nodeId: this.options.localNodeId, processBootAt: this.processBootStartedAt }
+            : undefined;
           const hasLiveReviewLease = (result: WorkflowStepResult): boolean => {
             if (!result.leaseOwner || !result.startedAt) return false;
-            return classifyReviewLease([result], result.workflowStepId, Date.now(), PLAN_REVIEW_LEASE_STALENESS_MS).kind === "adopt";
+            return classifyReviewLease(
+              [result],
+              result.workflowStepId,
+              Date.now(),
+              PLAN_REVIEW_LEASE_STALENESS_MS,
+              localNodeLeaseIdentity,
+            ).kind === "adopt";
           };
           const { results, orphanedCount } = resolveOrphanedPendingStepResults<WorkflowStepResult>(
             fresh.workflowStepResults,

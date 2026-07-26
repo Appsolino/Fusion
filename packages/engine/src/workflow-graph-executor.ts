@@ -127,6 +127,15 @@ export interface WorkflowNodePreparationRequirement {
 }
 
 export interface WorkflowGraphExecutorDeps {
+  /*
+   * FNXC:PlanReviewLease 2026-07-26-20:18:
+   * Cluster node id stamped onto review-gate leases (`WorkflowStepResult.leaseNodeId`). It lets a
+   * node later recognize a lease its OWN previous process left behind and reclaim it without
+   * waiting out the staleness floor; peer-owned leases stay protected by the floor. Optional —
+   * when unset the lease is written unattributed and keeps pure floor semantics, which is the
+   * pre-existing behavior.
+   */
+  localNodeId?: string;
   handlers?: Partial<Record<WorkflowIrNode["kind"], WorkflowNodeHandler>>;
   /*
    * FNXC:WorkflowNodeRunners 2026-07-01-00:00:
@@ -818,6 +827,14 @@ export class WorkflowGraphExecutor {
             // U3/KTD-4: stamp the lease owner so a concurrent/crashed re-entry
             // adopts this pending gate instead of dispatching a second reviewer.
             leaseOwner: runId,
+            /*
+            FNXC:PlanReviewLease 2026-07-26-20:20:
+            Stamp WHERE the lease runs, not just which run holds it. `runId` cannot distinguish
+            "this node's dead previous process" from "a peer node running right now", so without
+            this every restart-orphaned gate had to wait out the full staleness floor. Omitted when
+            the node id is unknown, which preserves the previous floor-only behavior.
+            */
+            ...(this.deps.localNodeId ? { leaseNodeId: this.deps.localNodeId } : {}),
           });
           this.deps.logTaskEntry?.(`${logPrefix} Starting workflow step: ${groupName}`);
 

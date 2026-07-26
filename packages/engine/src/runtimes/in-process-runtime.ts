@@ -325,6 +325,8 @@ export class InProcessRuntime
    */
   private cliAgentRuntime?: BootstrappedCliAgentRuntime;
   private usageLimitPauser?: UsageLimitPauser;
+  /** FNXC:PlanReviewLease 2026-07-26-20:42: cluster node id stamped onto review-gate leases; undefined until start() resolves it, or if resolution fails. */
+  private localNodeId?: string;
   private selfHealingManager?: SelfHealingManager;
   private leaseManager?: MeshLeaseManager;
   private leaseCentralClaimStore?: AsyncCentralClaimStore;
@@ -1201,8 +1203,26 @@ export class InProcessRuntime
         if (!chatLayer2) throw new Error("Self-healing ChatStore requires the project PostgreSQL AsyncDataLayer");
         this.chatStore ??= new ChatStore(chatLayer2);
       }
+      /*
+      FNXC:PlanReviewLease 2026-07-26-20:40:
+      Resolve this engine's cluster node id once at start so review-gate leases can be attributed.
+      Attribution is what lets self-healing tell "a lease my own dead process left behind" from "a
+      peer node's lease that is genuinely running" — the former is reclaimed immediately, the latter
+      keeps the 15-minute staleness floor. Fail-soft: on any error the id stays undefined, leases are
+      written unattributed, and floor-only semantics (the pre-existing behavior) apply.
+      */
+      let localNodeId: string | undefined;
+      try {
+        const registeredNodes = await this.centralCore.listNodes();
+        localNodeId = registeredNodes.find((node) => node.type === "local")?.id;
+      } catch (error) {
+        runtimeLog.warn(`Could not resolve local node id for review-gate lease attribution: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      this.localNodeId = localNodeId;
+
       this.selfHealingManager = new SelfHealingManager(this.taskStore, {
         rootDir: this.config.workingDirectory,
+        localNodeId,
         agentStore: this.agentStore,
         isWorktreeResumeReserved: this.cliAgentRuntime?.isWorktreeResumeReserved,
         recoverCompletedTask: (task) => this.executor.recoverCompletedTask(task),
