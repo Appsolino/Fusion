@@ -108,7 +108,23 @@ export interface DefaultWorkflowMoveContext {
 // the resolved onEnter/onExit hook bodies for the default workflow's traits.
 
 /** `timing` trait (in-progress): accumulate active ms on exit, stamp timing on
- *  entry. */
+ *  entry.
+ *
+ *  FNXC:WorkflowReviewGates 2026-07-26-16:20:
+ *  SCOPE: `cumulativeActiveMs` measures time in WIP columns only — it is a sum of `in-progress`
+ *  segments, closed on each exit. Since the pre-merge review gates moved into `in-review`, gate
+ *  runtime is NOT included: the segment closes when the card crosses into review, and no new
+ *  segment opens until remediation re-enters `in-progress`. Read it as "implementation time",
+ *  not "wall clock from start to merge" — consumers that want the latter must use
+ *  `executionStartedAt`/`executionCompletedAt`, which still span the whole run and therefore
+ *  legitimately diverge from this sum.
+ *  Deliberately NOT fixed by adding the `timing` trait to `in-review`: that column also holds the
+ *  arbitrary human merge-wait, so counting it would overstate active time by hours of idle
+ *  latency — a worse distortion than omitting the gate's own minutes. Attributing gate runtime
+ *  properly needs node-scoped timing (a separate field), not a column trait.
+ *  Consumers of this scope: `packages/core/src/productivity-analytics.ts`,
+ *  `packages/core/src/task-timing.ts`, and the dashboard duration displays.
+ */
 export function applyTimingEffects(ctx: DefaultWorkflowMoveContext): void {
   const { task, fromColumn, toColumn } = ctx;
   if (fromColumn === "in-progress" && toColumn !== "in-progress") {

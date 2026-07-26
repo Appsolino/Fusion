@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkflowColumnsEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, resolveWorkflowIrForTask, resolveReboundTarget, planLegacyAdoption, resolveOrphanedPendingStepResults, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult } from "@fusion/core";
+import { resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkflowColumnsEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, resolveWorkflowIrForTask, resolveReboundTarget, planLegacyAdoption, resolveOrphanedPendingStepResults, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult } from "@fusion/core";
 import { finalizePlanningSegment } from "@fusion/core";
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
 import { createLogger, schedulerLog } from "./logger.js";
@@ -6972,6 +6972,9 @@ export class SelfHealingManager {
       const pageSize = 500;
       let offset = 0;
       let recovered = 0;
+      // FNXC:WorkflowReviewGates 2026-07-26-15:55: read once per sweep, used only to LABEL the
+      // audit event (needsOperatorBypass). This sweep takes no auto-merge-dependent action.
+      const settings = await this.store.getSettings().catch(() => undefined);
 
       const isSessionLive = (taskId: string): boolean => {
         const livePaths = activeSessionRegistry.pathsForTask(taskId);
@@ -6994,9 +6997,31 @@ export class SelfHealingManager {
           // a merger/planner that wrote a fresh pending lease after the page was fetched.
           const fresh = await this.store.getTask(task.id);
           if (!fresh || fresh.userPaused === true || fresh.column === "in-progress") continue;
-          const { results, orphanedCount } = resolveOrphanedPendingStepResults(
+          /*
+          FNXC:WorkflowReviewGates 2026-07-26-15:50:
+          Honor a LIVE review-gate lease, not just in-process session liveness.
+          Plan Review has always had lease semantics here (`classifyReviewLease`: a `leaseOwner`
+          with a `startedAt` inside the staleness floor is adopted, never re-dispatched), but the
+          `code-review` / `browser-verification` optional groups write a bare `pending` record with
+          no such guard. That asymmetry became reachable when those gates moved into `in-review`:
+          this sweep also runs from PERIODIC MAINTENANCE, in the same live process as an active
+          graph run, so a tick landing between the lease write and the session-registry
+          registration could stamp a gate that just started — and is genuinely running — as
+          `failed`, closing the merge gate against a task nothing is wrong with.
+          Treating a within-floor lease as live closes that window. It does NOT defeat FN-8492: a
+          lease past the floor classifies as `reclaim` and is still marked failed, so cleanup of a
+          genuinely dead lease is delayed by at most the staleness floor — the same floor Plan
+          Review already relies on. Restart-orphaned gates are unaffected in substance: nothing
+          re-attaches an in-review graph run after a restart, so those leases simply age out and
+          are then marked failed as before.
+          */
+          const hasLiveReviewLease = (result: WorkflowStepResult): boolean => {
+            if (!result.leaseOwner || !result.startedAt) return false;
+            return classifyReviewLease([result], result.workflowStepId, Date.now(), PLAN_REVIEW_LEASE_STALENESS_MS).kind === "adopt";
+          };
+          const { results, orphanedCount } = resolveOrphanedPendingStepResults<WorkflowStepResult>(
             fresh.workflowStepResults,
-            () => isSessionLive(task.id),
+            (result) => isSessionLive(task.id) || hasLiveReviewLease(result),
             {
               output: "Step session did not survive an engine restart or crash; marked failed by self-healing (FN-8492).",
               completedAt: new Date().toISOString(),
@@ -7023,12 +7048,26 @@ export class SelfHealingManager {
             }).database({
               type: "task:reconcile-orphaned-pending-step-results",
               target: task.id,
+              /*
+              FNXC:WorkflowReviewGates 2026-07-26-15:55:
+              `needsOperatorBypass` labels the case that has no automatic way out. When the row is
+              not auto-merge-eligible (`autoMerge:false` / PR-based human-review contract),
+              `recoverReviewTasksWithFailedPreMergeSteps` deliberately skips it, so the `failed`
+              result this sweep just wrote will never be auto-recovered — the only resolution is an
+              operator running `fn_task_bypass_review` / `POST /tasks/:id/bypass-review` (FN-7720).
+              Without this flag the event is indistinguishable from an ordinary auto-recoverable
+              rewrite, and the board shows only a generic merge-blocked badge, so the card sits
+              silently. Metadata stays ids/counts/outcomes-only — this is a boolean label, and the
+              event takes no lifecycle action, so the autoMerge:false terminal-until-human contract
+              is untouched.
+              */
               // ids/counts/outcomes only — never step output or reviewer prose.
               metadata: {
                 taskId: task.id,
                 column: task.column,
                 orphanedCount,
                 resultCount: results.length,
+                needsOperatorBypass: settings ? !allowsAutoMergeProcessing(fresh, settings) : undefined,
               },
             });
           } catch (error) {
@@ -7409,11 +7448,29 @@ export class SelfHealingManager {
       if (settings.globalPause || settings.enginePaused) return 0;
       const maxAutoMergeRetries = resolveMaxAutoMergeRetries(settings);
       const tasks = await this.store.listTasks({ column: "in-review", slim: true });
+      /*
+      FNXC:WorkflowReviewGates 2026-07-26-15:30:
+      Liveness gate, mirroring `recoverGhostReviewTasks` and
+      `recoverReviewTasksWithFailedPreMergeSteps` which already filter on `executingIds`. This
+      sweep was the odd one out, and that became reachable once the pre-merge review gates moved
+      into `in-review`: the graph commits the column crossing at node ENTRY and only then writes the
+      gate's `pending` lease (two DB round trips later), so there is a durable window where the card
+      is in `in-review` with every step done and NO pre-merge result yet. `getTaskMergeBlocker`
+      blocks on pending/failed RESULTS and has no notion of "enabled but resultless", so in that
+      window it returns undefined and this sweep would enqueue a merge with Code Review never run.
+      The graph run holds `executingTaskLock` for its whole duration, so excluding executing tasks
+      closes the window; it only defers the merge until the run releases the lock, which it must do
+      before the task is genuinely finished with its pre-merge gates.
+      Same hazard class as FN-8492 (the merge gate reasons about results, not about enablement) —
+      but a different manifestation: there the entry was stale, here it does not exist yet.
+      */
+      const executingIds = this.options.getExecutingTaskIds?.() ?? new Set<string>();
 
       const mergeable = tasks.filter((t) =>
         t.column === "in-review" &&
         allowsAutoMergeProcessing(t, settings) &&
         !t.paused &&
+        !executingIds.has(t.id) &&
         t.status !== "failed" &&
         // Exclude transient merge statuses. Active merges should be left alone;
         // stale ones are handled by recoverStaleMergingStatus().

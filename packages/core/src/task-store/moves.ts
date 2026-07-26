@@ -69,6 +69,15 @@ async function resolveTaskWorkflowIrForMove(store: TaskStore, id: string): Promi
 import {enqueueMergeQueueInTransaction, dequeueMergeQueueOnColumnExitInTransaction} from "../task-store/async-merge-coordination.js";
 
 /*
+FNXC:WorkflowReviewGates 2026-07-26-15:05:
+Lease length for the symmetric symbol-lock re-acquire on a !wip -> wip crossing. Matches the
+engine scheduler's SYMBOL_LOCK_LEASE_MS (10 min) so a lock reclaimed by a lifecycle transition and
+one taken at dispatch expire on the same clock; the engine renews both through renewSymbolLocks.
+Duplicated rather than imported because @fusion/core must not depend on @fusion/engine.
+*/
+const SYMBOL_LOCK_REACQUIRE_LEASE_MS = 10 * 60_000;
+
+/*
 FNXC:WorkflowTransitionPolicy 2026-07-18-19:52:
 Resolve a column's trait-derived facts (id + OR-merged flags) for the shared
 transition validator (KTD-5). An unknown/legacy column absent from the workflow
@@ -1199,6 +1208,55 @@ export async function moveTaskInternalImpl(store: TaskStore, id: string, toColum
       const symbols = resolveTaskSymbolsForTask(task);
       if (symbols.resolvable) {
         await store.releaseSymbolLocks(symbols.symbols, id);
+      }
+    }
+    /*
+    FNXC:WorkflowReviewGates 2026-07-26-15:05:
+    Symmetric RE-ACQUIRE on the reverse crossing (!wip -> wip). FN-8306 made the lifecycle
+    transition the release authority but wrote no counterpart, which was harmless while a task only
+    ever left WIP at handoff/terminal. It stopped being harmless when the pre-merge review gates
+    moved into `in-review`: the gate crossing releases the task's declared symbols, then the paired
+    remediation node re-enters `in-progress` and edits the SAME files in the SAME live worktree with
+    its fine-grained locks gone. The only two acquire sites (the scheduler's todo->in-progress
+    dispatch and `claimDueWorkflowWorkItem`) are not on the graph's re-entry path, so nothing
+    reclaimed them.
+
+    Deliberately BEST-EFFORT: on conflict we log and proceed unlocked rather than rejecting the
+    move. Rejecting would park the remediation behind a symbol another task now holds — turning a
+    lock-granularity problem into the stranding failure this whole change set exists to avoid — and
+    would need a new `TransitionRejectionCode`. Proceeding unlocked is exactly the pre-fix posture,
+    so the contended case is no worse than today while the common (symbol free) case is repaired.
+    Coarse protection still applies via `shouldHoldActiveFileScopeLease`, which keeps a live
+    in-review task's file-scope lease held against scheduler todo-dispatch overlap.
+    */
+    if (store.backendMode && !fromIsImplementation && toIsImplementation) {
+      const symbols = resolveTaskSymbolsForTask(task);
+      if (symbols.resolvable && symbols.symbols.length > 0) {
+        try {
+          const reacquired = await store.acquireSymbolLocks(
+            symbols.symbols,
+            { ownerTaskId: id, missionId: task.missionId, agentId: "lifecycle-transition" },
+            SYMBOL_LOCK_REACQUIRE_LEASE_MS,
+          );
+          if (!reacquired.acquired) {
+            const conflict = reacquired.conflicts[0];
+            storeLog.warn("symbol lock re-acquire on WIP re-entry lost to another holder", {
+              phase: "moveTaskInternal:symbol-reacquire",
+              taskId: id,
+              fromColumn,
+              toColumn,
+              symbolKey: conflict?.symbolKey,
+              ownerTaskId: conflict?.ownerTaskId,
+            });
+          }
+        } catch (error) {
+          // Never fail a lifecycle transition on lock bookkeeping.
+          storeLog.warn("symbol lock re-acquire failed", {
+            phase: "moveTaskInternal:symbol-reacquire",
+            taskId: id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     }
 
