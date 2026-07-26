@@ -7053,3 +7053,64 @@ describe("FN-4774 regression: triage duplicate detection over done/archived task
     expect(text).toContain("(done):");
   });
 });
+
+/*
+FNXC:TriageStalePlanning 2026-07-26-17:30:
+Regression for the FN-8596 strand: a plan-review REVISE routed to `plan-replan`, triage claimed the
+card with `status:"planning"` and ran the revision, and the session died after writing the revised
+PROMPT.md but before finalizing. The card sat in `triage` with `status:"planning"` and no workflow
+continuation — invisible to rediscovery (it looks claimed) and unrecoverable until an engine
+restart, because the only sweep that clears that status ran at startup.
+
+These cases pin the periodic sweep AND its guards. The guards are the risky half: a sweep that
+clears too eagerly would yank the status out from under a healthy planner and let a second planner
+claim the same card, so "in-process planner" and "recently touched" are asserted as protected.
+*/
+describe("TriageProcessor.sweepStalePlanningStatuses", () => {
+  const NOW = Date.parse("2026-07-26T14:30:00.000Z");
+  const STALE = "2026-07-26T13:53:00.000Z";  // ~37m old, past the 20m floor
+  const FRESH = "2026-07-26T14:29:00.000Z";  // 1m old
+
+  function sweep(store: ReturnType<typeof createMockStore>, tasks: Task[], processing: string[] = []) {
+    const processor = new TriageProcessor(store as never, "/tmp/root");
+    for (const id of processing) (processor as unknown as { processing: Set<string> }).processing.add(id);
+    return (processor as unknown as {
+      sweepStalePlanningStatuses(t: Task[], n: number): Promise<void>;
+    }).sweepStalePlanningStatuses(tasks, NOW);
+  }
+
+  it("clears a stale planning status so triage can re-pick the card", async () => {
+    const store = createMockStore();
+    await sweep(store, [createTriageTask({ id: "FN-8596", status: "planning", updatedAt: STALE })]);
+    expect(store.updateTask).toHaveBeenCalledWith("FN-8596", { status: null });
+  });
+
+  it("does not touch a card whose planner is live in this process", async () => {
+    const store = createMockStore();
+    await sweep(store, [createTriageTask({ id: "FN-LIVE", status: "planning", updatedAt: STALE })], ["FN-LIVE"]);
+    expect(store.updateTask).not.toHaveBeenCalled();
+  });
+
+  it("does not touch a recently-touched card (may be another node's live planner)", async () => {
+    const store = createMockStore();
+    await sweep(store, [createTriageTask({ id: "FN-FRESH", status: "planning", updatedAt: FRESH })]);
+    expect(store.updateTask).not.toHaveBeenCalled();
+  });
+
+  it("never disturbs an operator park", async () => {
+    const store = createMockStore();
+    await sweep(store, [
+      createTriageTask({ id: "FN-PAUSED", status: "planning", updatedAt: STALE, userPaused: true } as Partial<Task>),
+    ]);
+    expect(store.updateTask).not.toHaveBeenCalled();
+  });
+
+  it("ignores cards outside the planning columns and non-planning statuses", async () => {
+    const store = createMockStore();
+    await sweep(store, [
+      createTriageTask({ id: "FN-INPROG", column: "in-progress", status: "planning", updatedAt: STALE }),
+      createTriageTask({ id: "FN-OTHER", status: "needs-replan", updatedAt: STALE }),
+    ]);
+    expect(store.updateTask).not.toHaveBeenCalled();
+  });
+});

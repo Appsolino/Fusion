@@ -159,6 +159,15 @@ import { isOperatorActionableAgentError, isTransientError, isSilentTransientErro
 import { withRateLimitRetry } from "./rate-limit-retry.js";
 import { computeRecoveryDecision, formatDelay, MAX_RECOVERY_RETRIES } from "./recovery-policy.js";
 import type { StuckTaskDetector } from "./stuck-task-detector.js";
+
+/*
+FNXC:TriageStalePlanning 2026-07-26-17:20:
+Staleness floor before the periodic sweep may clear a `status:"planning"` claim. Generous on
+purpose: it must never race a slow-but-healthy planner, including one owned by another node whose
+in-process `processing` set this engine cannot see. A genuinely stranded card waits at most this
+long instead of until the next engine restart.
+*/
+const STALE_PLANNING_STATUS_GRACE_MS = 20 * 60_000;
 import { exec } from "node:child_process";
 import { readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -649,6 +658,53 @@ export class TriageProcessor {
     this.pollInterval = setInterval(() => this.poll(), interval);
     this.poll();
     planLog.log("Processor started");
+  }
+
+  /*
+  FNXC:TriageStalePlanning 2026-07-26-17:20:
+  PERIODIC counterpart to `clearStaleSpecifyingStatuses`, which runs at STARTUP ONLY.
+  Observed strand (FN-8596): a plan-review REVISE routed to `plan-replan`, triage claimed the card
+  with `status:"planning"` and ran the revision session, the session wrote the revised PROMPT.md and
+  then died WITHOUT finalizing. The card was left in `triage` with `status:"planning"`, a live
+  worktree, and no workflow continuation. Nothing re-dispatched it: triage rediscovery skips cards
+  already marked `planning` (they look claimed), and the only sweep that clears that status ran at
+  startup — so the card sat stranded until an operator restarted the engine. The leaked-slot reaper
+  then reclaimed its concurrency slot, which made the card look idle without making it runnable.
+
+  Clearing the status is the whole repair: the card is back in triage with a real spec, so ordinary
+  rediscovery re-picks it on the next poll. This does NOT move, pause, or fail the card.
+
+  Two guards keep it from racing a healthy planner:
+    - `this.processing` excludes sessions this process owns.
+    - a staleness floor excludes cards touched recently, which covers planners owned by ANOTHER
+      node/process that this process's `processing` set cannot see.
+  User-paused cards are never touched (an operator park is authoritative).
+  */
+  private async sweepStalePlanningStatuses(allTasks: Task[], now: number): Promise<void> {
+    try {
+      const stale = allTasks.filter((t) => {
+        if (t.status !== "planning") return false;
+        if (t.column !== "triage" && t.column !== "todo") return false;
+        if (this.processing.has(t.id)) return false;
+        if (t.userPaused === true || t.paused === true) return false;
+        const touchedAt = Date.parse(t.updatedAt ?? t.columnMovedAt ?? "");
+        if (!Number.isFinite(touchedAt)) return false;
+        return now - touchedAt >= STALE_PLANNING_STATUS_GRACE_MS;
+      });
+      for (const t of stale) {
+        planLog.warn(
+          `Stale 'planning' status on ${t.id} (column=${t.column}, no live planner) — clearing so triage can re-pick it`,
+        );
+        await this.store.updateTask(t.id, { status: null });
+        await this.store.logEntry(
+          t.id,
+          "Auto-recovered: cleared stale planning status left by a planner that never finished",
+        ).catch(() => undefined);
+      }
+    } catch (err) {
+      // Never let a housekeeping sweep break the poll.
+      planLog.warn(`Stale planning-status sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async clearStaleSpecifyingStatuses(): Promise<void> {
@@ -1372,6 +1428,8 @@ export class TriageProcessor {
       // Fetch all tasks (not just triage) to count active agents across columns.
       const allTasks = await this.store.listTasks({ slim: true, includeArchived: false });
       const now = Date.now();
+
+      await this.sweepStalePlanningStatuses(allTasks, now);
 
       if (this.options.semaphore) {
         const result = recoverIdleSemaphoreLeakCandidate({
