@@ -12,9 +12,19 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  getLegacyWorkflowStepSnapshotImpl,
   isTaskArchivedImpl,
   isTaskIdPresentInArchivedTasksTableImpl,
 } from "../../task-store/task-id-integrity.js";
+import { getMergeRequestRecordImpl } from "../../task-store/task-store-helpers.js";
+import {
+  getSettingsSyncImpl,
+  getTaskWorkflowSelectionImpl,
+  healthCheckImpl,
+} from "../../task-store/workflow-definitions.js";
+import { getWorkflowPromptOverridesImpl } from "../../task-store/task-mutation-ops.js";
+import { getWorkflowSettingValuesImpl } from "../../task-store/branch-and-pr-entities.js";
+import { getRunAuditEventsImpl } from "../../task-store/project-store-ops.js";
 import type { TaskStore } from "../../store.js";
 
 const workspaceRoot = join(__dirname, "..", "..", "..", "..", "..");
@@ -142,7 +152,13 @@ describe("SQLite production reader inventory (cutover ratchet)", () => {
   });
 });
 
-describe("incomplete PG archive guards (shipped helpers)", () => {
+describe("incomplete PG sync-reader stubs (shipped helpers)", () => {
+  /*
+  FNXC:SqliteInventoryRatchet 2026-07-26-20:05:
+  Category (e) incomplete-pg-port: sync APIs empty-return on backendMode because
+  PostgreSQL is async-only. Drive the real exported impls so a future “fix”
+  that reintroduces store.db.prepare on these paths fails loudly.
+  */
   function backendModeStore(): TaskStore {
     // Minimal TaskStore shape: backendMode true must never touch store.db.
     return {
@@ -162,12 +178,44 @@ describe("incomplete PG archive guards (shipped helpers)", () => {
   }
 
   it("isTaskIdPresentInArchivedTasksTableImpl returns false under backend mode without opening SQLite", () => {
-    const store = backendModeStore();
-    expect(isTaskIdPresentInArchivedTasksTableImpl(store, "FN-9999")).toBe(false);
+    expect(isTaskIdPresentInArchivedTasksTableImpl(backendModeStore(), "FN-9999")).toBe(false);
   });
 
   it("isTaskArchivedImpl returns false under backend mode without opening SQLite", () => {
-    const store = backendModeStore();
-    expect(isTaskArchivedImpl(store, "FN-9999")).toBe(false);
+    expect(isTaskArchivedImpl(backendModeStore(), "FN-9999")).toBe(false);
+  });
+
+  it("getMergeRequestRecordImpl returns null under backend mode (sync callers must use Async sibling)", () => {
+    expect(getMergeRequestRecordImpl(backendModeStore(), "FN-9999")).toBeNull();
+  });
+
+  it("getTaskWorkflowSelectionImpl returns undefined under backend mode (sync IR falls back to defaults)", () => {
+    expect(getTaskWorkflowSelectionImpl(backendModeStore(), "FN-9999")).toBeUndefined();
+  });
+
+  it("getWorkflowPromptOverridesImpl returns {} under backend mode (sync prompt path applies no overrides)", () => {
+    expect(getWorkflowPromptOverridesImpl(backendModeStore(), "wf_default", "proj_test")).toEqual({});
+  });
+
+  it("getWorkflowSettingValuesImpl returns {} under backend mode", () => {
+    expect(getWorkflowSettingValuesImpl(backendModeStore(), "wf_default", "proj_test")).toEqual({});
+  });
+
+  it("getRunAuditEventsImpl returns [] under backend mode (intentional safe-default; async query is authoritative)", () => {
+    expect(getRunAuditEventsImpl(backendModeStore(), {})).toEqual([]);
+  });
+
+  it("getLegacyWorkflowStepSnapshotImpl returns undefined under backend mode (no legacy SQLite config.workflowSteps)", () => {
+    expect(getLegacyWorkflowStepSnapshotImpl(backendModeStore(), "step-1")).toBeUndefined();
+  });
+
+  it("getSettingsSyncImpl returns DEFAULT_SETTINGS shape under backend mode without opening SQLite", () => {
+    const settings = getSettingsSyncImpl(backendModeStore());
+    expect(settings).toBeTruthy();
+    expect(typeof settings).toBe("object");
+  });
+
+  it("healthCheckImpl returns true under backend mode (real health is AsyncDataLayer.ping)", () => {
+    expect(healthCheckImpl(backendModeStore())).toBe(true);
   });
 });
