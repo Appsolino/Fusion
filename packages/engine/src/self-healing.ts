@@ -2672,16 +2672,20 @@ export class SelfHealingManager {
     }
   }
 
+  /*
+  FNXC:EngineDiagnostics 2026-07-26-07:26:
+  Periodic maintenance walks 50+ batch steps each cycle. Per-step "succeeded"/disabled-skip lines are steady-state chatter that filled the TUI log pane and drowned real recovery events. Route routine start/complete/success/skip to debug() (opt-in via FUSION_DEBUG=self-healing). Keep log()/warn()/error() only for state changes (recovered/deleted/cleaned counts > 0), pause-policy skips operators may need, and step failures.
+  */
   private async runMaintenance(): Promise<void> {
     if (this.maintenanceRunning) {
-      log.log("Maintenance cycle skipped — previous cycle still running");
+      log.debug("Maintenance cycle skipped — previous cycle still running");
       return;
     }
 
     this.maintenanceRunning = true;
     const startMs = Date.now();
     this.maintenanceTickCounter++;
-    log.log("Maintenance cycle starting");
+    log.debug("Maintenance cycle starting");
 
     try {
       const settings = await this.store.getSettings();
@@ -2738,15 +2742,19 @@ export class SelfHealingManager {
           fn: async () => {
             const days = Number(settings.chatAutoCleanupDays ?? 0);
             if (!Number.isFinite(days) || days <= 0) {
-              log.log("Maintenance batch 1 step \"cleanup-old-chats\" skipped — chatAutoCleanupDays is not enabled");
+              log.debug("Maintenance batch 1 step \"cleanup-old-chats\" skipped — chatAutoCleanupDays is not enabled");
               return;
             }
             if (!this.options.chatStore) {
-              log.log("Maintenance batch 1 step \"cleanup-old-chats\" skipped — ChatStore unavailable");
+              log.debug("Maintenance batch 1 step \"cleanup-old-chats\" skipped — ChatStore unavailable");
               return;
             }
             const { sessionsDeleted, roomsDeleted } = await this.options.chatStore.cleanupOldChats(days * 86_400_000);
-            log.log(`Maintenance batch 1 step "cleanup-old-chats" succeeded — sessions=${sessionsDeleted} rooms=${roomsDeleted}`);
+            if (sessionsDeleted > 0 || roomsDeleted > 0) {
+              log.log(`Maintenance batch 1 step "cleanup-old-chats" succeeded — sessions=${sessionsDeleted} rooms=${roomsDeleted}`);
+            } else {
+              log.debug(`Maintenance batch 1 step "cleanup-old-chats" succeeded — sessions=${sessionsDeleted} rooms=${roomsDeleted}`);
+            }
           },
         },
         {
@@ -2754,15 +2762,19 @@ export class SelfHealingManager {
           fn: async () => {
             const value = Number(settings.mailAutoCleanupDays ?? 0);
             if (!Number.isFinite(value) || value <= 0) {
-              log.log(`Skipping cleanup-old-mail: setting=${String(settings.mailAutoCleanupDays ?? 0)}`);
+              log.debug(`Skipping cleanup-old-mail: setting=${String(settings.mailAutoCleanupDays ?? 0)}`);
               return;
             }
             if (!this.options.messageStore) {
-              log.log("Skipping cleanup-old-mail: messageStore unavailable");
+              log.debug("Skipping cleanup-old-mail: messageStore unavailable");
               return;
             }
             const { messagesDeleted } = await this.options.messageStore.cleanupOldMessages(value * 86_400_000);
-            log.log(`Maintenance batch 1 step "cleanup-old-mail" succeeded — messagesDeleted=${messagesDeleted}`);
+            if (messagesDeleted > 0) {
+              log.log(`Maintenance batch 1 step "cleanup-old-mail" succeeded — messagesDeleted=${messagesDeleted}`);
+            } else {
+              log.debug(`Maintenance batch 1 step "cleanup-old-mail" succeeded — messagesDeleted=${messagesDeleted}`);
+            }
           },
         },
         {
@@ -2770,7 +2782,7 @@ export class SelfHealingManager {
           fn: async () => {
             const days = Number(settings.operationalLogRetentionDays ?? 0);
             if (!Number.isFinite(days) || days <= 0) {
-              log.log("Maintenance batch 1 step \"prune-operational-logs\" skipped — operationalLogRetentionDays is not enabled");
+              log.debug("Maintenance batch 1 step \"prune-operational-logs\" skipped — operationalLogRetentionDays is not enabled");
               return;
             }
             // FNXC:PostgresRetention 2026-07-14-17:16: Autovacuum cannot replace
@@ -2780,7 +2792,12 @@ export class SelfHealingManager {
               .filter(([, n]) => n > 0)
               .map(([t, n]) => `${t}=${n}`)
               .join(" ");
-            log.log(`Maintenance batch 1 step "prune-operational-logs" succeeded — deleted=${deletedTotal}${detail ? ` (${detail})` : ""}`);
+            const summary = `Maintenance batch 1 step "prune-operational-logs" succeeded — deleted=${deletedTotal}${detail ? ` (${detail})` : ""}`;
+            if (deletedTotal > 0) {
+              log.log(summary);
+            } else {
+              log.debug(summary);
+            }
           },
         },
         {
@@ -2788,11 +2805,16 @@ export class SelfHealingManager {
           fn: async () => {
             const days = Number(settings.agentLogFileRetentionDays ?? 0);
             if (!Number.isFinite(days) || days <= 0) {
-              log.log("Maintenance batch 1 step \"prune-agent-log-files\" skipped — agentLogFileRetentionDays is not enabled");
+              log.debug("Maintenance batch 1 step \"prune-agent-log-files\" skipped — agentLogFileRetentionDays is not enabled");
               return;
             }
             const { prunedFiles, prunedEntries, freedBytes } = await this.store.pruneAgentLogFilesAsync(days);
-            log.log(`Maintenance batch 1 step "prune-agent-log-files" succeeded — files=${prunedFiles} entries=${prunedEntries} bytes=${freedBytes}`);
+            const summary = `Maintenance batch 1 step "prune-agent-log-files" succeeded — files=${prunedFiles} entries=${prunedEntries} bytes=${freedBytes}`;
+            if (prunedFiles > 0 || prunedEntries > 0) {
+              log.log(summary);
+            } else {
+              log.debug(summary);
+            }
           },
         },
         { name: "fts-maintenance", fn: () => this.maintainTaskFts() },
@@ -2802,7 +2824,7 @@ export class SelfHealingManager {
       for (const fn of batch1Fns) {
         try {
           await fn.fn();
-          log.log(`Maintenance batch 1 step "${fn.name}" succeeded`);
+          log.debug(`Maintenance batch 1 step "${fn.name}" succeeded`);
         } catch (stepErr) {
           log.error(`Maintenance batch 1 step "${fn.name}" failed: ${stepErr instanceof Error ? stepErr.message : String(stepErr)}`);
         }
@@ -2811,7 +2833,7 @@ export class SelfHealingManager {
 
       const recoverySettings = await this.store.getSettings();
       if (recoverySettings.globalPause || recoverySettings.enginePaused) {
-        log.log(
+        log.debug(
           `Maintenance batch 2 skipped — ${
             recoverySettings.globalPause ? "global pause" : "engine pause"
           } is active`,
@@ -2938,7 +2960,7 @@ export class SelfHealingManager {
         for (const fn of batch2Fns) {
           try {
             await fn.fn();
-            log.log(`Maintenance batch 2 step "${fn.name}" succeeded`);
+            log.debug(`Maintenance batch 2 step "${fn.name}" succeeded`);
           } catch (stepErr) {
             log.error(`Maintenance batch 2 step "${fn.name}" failed: ${stepErr instanceof Error ? stepErr.message : String(stepErr)}`);
           }
@@ -2953,7 +2975,7 @@ export class SelfHealingManager {
       for (const fn of batch3Fns) {
         try {
           await fn.fn();
-          log.log(`Maintenance batch 3 step "${fn.name}" succeeded`);
+          log.debug(`Maintenance batch 3 step "${fn.name}" succeeded`);
         } catch (stepErr) {
           log.error(`Maintenance batch 3 step "${fn.name}" failed: ${stepErr instanceof Error ? stepErr.message : String(stepErr)}`);
         }
@@ -2961,7 +2983,7 @@ export class SelfHealingManager {
       }
 
       const elapsedMs = Date.now() - startMs;
-      log.log(`Maintenance cycle completed in ${elapsedMs}ms`);
+      log.debug(`Maintenance cycle completed in ${elapsedMs}ms`);
     } finally {
       this.maintenanceRunning = false;
     }
@@ -13271,7 +13293,7 @@ export class SelfHealingManager {
      * SQLite-specific accessors that are unreachable in backend mode and whose
      * literal keywords failed the VAL-REMOVAL-005 grep. This is now a no-op.
      */
-    log.log('Maintenance batch 1 step "fts-maintenance" skipped — PostgreSQL tsvector/GIN is sync-on-write');
+    log.debug('Maintenance batch 1 step "fts-maintenance" skipped — PostgreSQL tsvector/GIN is sync-on-write');
     return;
   }
 
@@ -13282,7 +13304,7 @@ export class SelfHealingManager {
      * maintenance was removed (same rationale as maintainLiveTaskFts above).
      * PostgreSQL's archive tsvector/GIN index is maintained via triggers.
      */
-    log.log('Maintenance batch 1 step "fts-maintenance" archive skipped — PostgreSQL tsvector/GIN is sync-on-write');
+    log.debug('Maintenance batch 1 step "fts-maintenance" archive skipped — PostgreSQL tsvector/GIN is sync-on-write');
     return;
   }
 
@@ -13295,7 +13317,7 @@ export class SelfHealingManager {
      * run. The previous body's literal keyword failed the grep; this is now a
      * logged no-op.
      */
-    log.log('Maintenance batch 1 step "wal-checkpoint" skipped — PostgreSQL manages WAL + autovacuum');
+    log.debug('Maintenance batch 1 step "wal-checkpoint" skipped — PostgreSQL manages WAL + autovacuum');
   }
 
   /** Remove oldest idle worktrees if total count exceeds 2× maxWorktrees. */
