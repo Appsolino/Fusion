@@ -1,17 +1,19 @@
 /*
 FNXC:WorkflowScheduling 2026-07-25-04:55:
-Operator force-promote past the `unplanned-for-execution` gate (the rejection an
+Force-promote past the `unplanned-for-execution` gate (the rejection an
 FN-8471-style pending replan / pre-release Plan Review raises). The invariant
-under test is scoped: `force` waives the PLAN gate and nothing else, on the
-operator promote surface only. Surfaces enumerated here — unforced promote
-(still rejects), forced promote (releases + clears the durable replan signal),
-forced promote into a full column (still capacity-rejected), forced promote of a
-card that is not held (still rejected), and the automatic sweep/event release
-(never sees `force`, so FN-7648 still holds for non-operator releases).
+under test is scoped: `force` waives the PLAN gate and nothing else, and only on
+an explicit promote request. Surfaces enumerated here — unforced promote (still
+rejects), forced promote (releases + clears the durable replan signal), forced
+promote into a full column (still capacity-rejected), forced promote of a card
+that is not held (still rejected), the automatic event release (has no `force`
+parameter at all, so FN-7648 still holds for automatic releases), and the
+agent-native `fn_task_promote` tool (same two outcomes through the tool surface).
 */
 import { describe, expect, it, vi } from "vitest";
 import type { WorkflowIr } from "@fusion/core";
 import { promoteHeldTask, releaseHeldTaskByEvent } from "../hold-release.js";
+import { createTaskPromoteTool } from "../agent-tools.js";
 
 function workflow(): WorkflowIr {
   return {
@@ -124,5 +126,35 @@ describe("force-promote past the unplanned-for-execution gate", () => {
 
     expect(result.released).toBe(false);
     expect(store.moveTaskIf).not.toHaveBeenCalled();
+  });
+});
+
+describe("fn_task_promote force parity", () => {
+  it("rejects without force and names the flag so the caller can decide", async () => {
+    const store = makeStore();
+    const tool = createTaskPromoteTool(store as never, "FN-1403");
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await (tool as any).execute("call-1", {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("unplanned-for-execution");
+    expect(result.content[0].text).toContain("force:true");
+    expect(store.moveTaskIf).not.toHaveBeenCalled();
+  });
+
+  it("releases with force and reports that the replan was waived", async () => {
+    const store = makeStore();
+    const tool = createTaskPromoteTool(store as never, "FN-1403");
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await (tool as any).execute("call-2", { force: true });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("in-progress");
+    expect(result.content[0].text).toContain("replan was cancelled");
+    expect(result.details).toMatchObject({ released: true, forcedUnplanned: true });
+    expect(store.moveTaskIf).toHaveBeenCalledTimes(1);
+    expect(store.task.status).toBeNull();
   });
 });

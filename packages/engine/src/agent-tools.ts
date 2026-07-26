@@ -253,6 +253,22 @@ export const taskPromoteParams = Type.Object({
   task_id: Type.Optional(
     Type.String({ description: "Held task to promote. Defaults to the current task." }),
   ),
+  /*
+  FNXC:WorkflowScheduling 2026-07-25-05:40:
+  Agent-native parity with the dashboard's force-promote override: an agent that
+  has read the card and judged the pending replan / Plan Review not worth waiting
+  for can start execution anyway. Opt-in per call and never defaulted on — the
+  automatic surfaces (hold-release sweep, webhook release) still cannot force, so
+  FN-7648 holds for everything that is not an explicit promote request.
+  */
+  force: Type.Optional(
+    Type.Boolean({
+      description:
+        "Start execution even when the task is still waiting on planning or plan review "
+        + "(rejection 'unplanned-for-execution'). Waives ONLY that gate — hold membership and "
+        + "downstream capacity still apply — and cancels the pending replan. Default false.",
+    }),
+  ),
 });
 
 export const workflowCreateParams = Type.Object({
@@ -2781,6 +2797,13 @@ export function createWorkflowSelectTool(store: TaskStore, currentTaskId: string
  * Create a `fn_task_promote` tool that manually releases a held task out of its
  * hold column — the agent-native equivalent of the dashboard's "promote" action.
  * Defaults to the current task. Wraps {@link promoteHeldTask}.
+ *
+ * FNXC:WorkflowScheduling 2026-07-25-05:40:
+ * `force: true` mirrors the dashboard's confirm-dialog override for the
+ * `unplanned-for-execution` rejection. The rejection message names the flag so a
+ * caller that hit the gate can decide to waive it rather than guessing; the
+ * result text says so explicitly when a promote was forced, because "started
+ * without its plan review" is not a detail to bury.
  */
 export function createTaskPromoteTool(store: TaskStore, currentTaskId: string): ToolDefinition {
   return {
@@ -2790,25 +2813,39 @@ export function createTaskPromoteTool(store: TaskStore, currentTaskId: string): 
       "Manually promote a held task out of its hold column, releasing it regardless of the " +
       "hold's release kind (the explicit operator action a 'manual' hold waits for). Defaults " +
       "to the current task. Returns the destination column, or a rejection reason when the task " +
-      "is not held or the destination is full.",
+      "is not held or the destination is full. Pass force:true to start execution even when " +
+      "planning or plan review is still outstanding (that waives the plan gate and cancels the " +
+      "pending replan; capacity still applies).",
     parameters: taskPromoteParams,
     execute: async (_id: string, params: Static<typeof taskPromoteParams>) => {
       const taskId = params.task_id?.trim() || currentTaskId;
+      const force = params.force === true;
       try {
-        const outcome = await promoteHeldTask(store, taskId);
+        const outcome = await promoteHeldTask(store, taskId, {}, { force });
         if (outcome.released) {
+          const forcedNote = outcome.forcedUnplanned
+            ? " Forced past the outstanding planning/plan review — the pending replan was cancelled."
+            : "";
           return {
             content: [{
               type: "text" as const,
-              text: `Promoted ${taskId} to column '${outcome.toColumn}'.`,
+              text: `Promoted ${taskId} to column '${outcome.toColumn}'.${forcedNote}`,
             }],
-            details: { taskId, released: true, toColumn: outcome.toColumn },
+            details: {
+              taskId,
+              released: true,
+              toColumn: outcome.toColumn,
+              forcedUnplanned: outcome.forcedUnplanned === true,
+            },
           };
         }
+        const forceHint = outcome.rejection === "unplanned-for-execution"
+          ? " Pass force:true to start execution anyway."
+          : "";
         return {
           content: [{
             type: "text" as const,
-            text: `ERROR: Could not promote ${taskId}: ${outcome.rejection ?? "unknown"}.`,
+            text: `ERROR: Could not promote ${taskId}: ${outcome.rejection ?? "unknown"}.${forceHint}`,
           }],
           details: { taskId, released: false, rejection: outcome.rejection },
           isError: true,
