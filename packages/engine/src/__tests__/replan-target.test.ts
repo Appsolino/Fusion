@@ -38,7 +38,12 @@ const planStep = (name: string): TaskStep => ({ name, status: "pending" });
 const planningGuardCases: PlanningGuardCase[] = [
   { label: "empty triage task", task: { column: "triage", steps: [] }, stillPlanning: true },
   { label: "unplanned todo seed", task: { column: "todo", steps: [] }, stillPlanning: true },
-  { label: "todo task with a worktree", task: { column: "todo", worktree: "/tmp/FN-1", steps: [] }, stillPlanning: false },
+  /*
+  FNXC:NodeWorktreeIsolation 2026-07-26-20:50:
+  Planning acquires the task worktree up front, so worktree alone is NOT advancement.
+  Only execution timestamps / execution columns prove the card left planning.
+  */
+  { label: "todo task with a worktree", task: { column: "todo", worktree: "/tmp/FN-1", steps: [] }, stillPlanning: true },
   {
     label: "planned-and-queued todo task with materialized steps",
     task: { column: "todo", steps: [planStep("step-1")] },
@@ -80,11 +85,11 @@ const planningGuardCases: PlanningGuardCase[] = [
     stillPlanning: true,
   },
 
-  // FN-7977's protections must survive: real advancement still outranks a planning status.
+  // Worktree under a planning status is still planning; execution timestamps are the durable signal.
   {
-    label: "triage card an executor already claimed a worktree for",
+    label: "triage card that already has a planning worktree",
     task: { column: "triage", worktree: "/tmp/FN-1", steps: [planStep("step-1")], status: "needs-replan" },
-    stillPlanning: false,
+    stillPlanning: true,
   },
   {
     label: "card that reached execution while a planning recovery was in flight",
