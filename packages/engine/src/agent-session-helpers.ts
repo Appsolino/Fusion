@@ -37,6 +37,7 @@ import {
   isRetryableModelSelectionError,
   wrapToolsWithActionGate,
   wrapToolsWithPermanentAgentGating,
+  wrapToolsWithOutputBudget,
   wrapToolsWithRtkRewrite,
   type FallbackModelUsedPayload,
 } from "./pi.js";
@@ -95,7 +96,11 @@ export function wrapCustomToolsForPluginRuntime(
   }
   const withRtk = wrapToolsWithRtkRewrite(tools);
   const withPermanent = wrapToolsWithPermanentAgentGating(withRtk, options.permanentAgentGating);
-  return wrapToolsWithActionGate(withPermanent, options.actionGateContext);
+  const withActionGate = wrapToolsWithActionGate(withPermanent, options.actionGateContext);
+  // FNXC:ToolOutputBudget 2026-08-06-12:00:
+  // Non-pi runtimes do not pass through createFnAgent, so apply the same outermost
+  // per-result clamp here exactly once rather than letting plugin tool output bypass it.
+  return wrapToolsWithOutputBudget(withActionGate);
 }
 
 function shouldWrapCustomToolsForRuntime(runtimeId: string): boolean {

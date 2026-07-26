@@ -36,6 +36,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
+  clampToolOutputBlocks,
   customProviderRegistryKey,
   getEnabledPiExtensionPaths,
   getFusionAgentDir,
@@ -50,6 +51,7 @@ import {
   registerBuiltInGrokProvider,
   registerBuiltInZaiProvider,
   resolvePiExtensionProjectRoot,
+  resolveToolOutputBudget,
 } from "@fusion/core";
 import type {
   AgentPermissionPolicyActionCategory,
@@ -1873,6 +1875,53 @@ export function wrapToolsWithBoundary(
   });
 }
 
+/*
+FNXC:ToolOutputBudget 2026-08-06-12:00:
+FN-8614 requires one finite budget for the total model-visible text in every
+engine-injected tool result. Overrides may choose only another finite positive
+integer cap; there is deliberately no unbounded sentinel or opt-out. The audit
+found no legitimate result that needs more than the shared 16,000-character cap.
+*/
+export const TOOL_OUTPUT_BUDGET_OVERRIDES: Readonly<Record<string, number>> = {};
+
+/**
+ * Enforce the shared per-result text budget without changing result metadata or
+ * non-text content blocks. This is intentionally the outermost pi wrapper.
+ */
+export function wrapToolsWithOutputBudget(
+  tools: ToolDefinition[],
+  options: { overrides?: Readonly<Record<string, number | null | undefined>> } = {},
+): ToolDefinition[] {
+  return tools.map((tool) => {
+    const originalExecute = tool.execute as any;
+    return {
+      ...tool,
+      execute: async (...args: any[]) => {
+        const result = await originalExecute(...args);
+        if (!result || !Array.isArray(result.content)) return result;
+
+        const textPositions: number[] = [];
+        const texts: (string | undefined)[] = [];
+        result.content.forEach((block: { type?: unknown; text?: unknown }, index: number) => {
+          if (block?.type === "text") {
+            textPositions.push(index);
+            texts.push(typeof block.text === "string" ? block.text : undefined);
+          }
+        });
+        if (textPositions.length === 0) return result;
+
+        const budget = resolveToolOutputBudget(tool.name, options.overrides ?? TOOL_OUTPUT_BUDGET_OVERRIDES);
+        const clamped = clampToolOutputBlocks(texts, { maxChars: budget });
+        const content = result.content.map((block: unknown) => block);
+        textPositions.forEach((position, index) => {
+          content[position] = { ...(content[position] as Record<string, unknown>), text: clamped[index] };
+        });
+        return { ...result, content };
+      },
+    };
+  });
+}
+
 export function wrapToolsWithRtkRewrite(
   tools: ToolDefinition[],
   options: RtkRewriteOptions = resolveRtkRewriteOptions(),
@@ -2519,12 +2568,15 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
       toolsWithPermanentGating,
       options.actionGateContext,
     );
-    const customToolList: ToolDefinition[] = wrapToolsWithBoundary(
+    const boundaryWrappedTools = wrapToolsWithBoundary(
       toolsWithActionGate,
       boundaryContext.worktreePath,
       boundaryContext.worktreeProjectRoot,
       normalizedAdditionalSkillPaths,
     );
+    // FNXC:ToolOutputBudget 2026-08-06-12:00:
+    // Keep this outermost so policy-gate and boundary rejection text is bounded too.
+    const customToolList: ToolDefinition[] = wrapToolsWithOutputBudget(boundaryWrappedTools);
     // Sort tools alphabetically by name for deterministic ordering.
     // Prompt caching requires the tool list to be byte-identical across
     // sessions — reordering breaks cache prefix matching.
