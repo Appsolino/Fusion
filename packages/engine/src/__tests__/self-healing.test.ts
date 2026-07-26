@@ -63,7 +63,10 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-vi.mock("../worktree-pool.js", () => ({
+vi.mock("../worktree-pool.js", async () => {
+  const { existsSync: fsExistsSync } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  return {
   WorktreePool: vi.fn(),
   // FN-4811: Must mirror the production `RemovalReason` const in worktree-backend.ts
   // exactly — every key referenced as `RemovalReason.X` in production code (self-healing,
@@ -87,13 +90,21 @@ vi.mock("../worktree-pool.js", () => ({
   scanOrphanedBranches: vi.fn().mockResolvedValue([]),
   cleanupOrphanedWorktrees: vi.fn().mockResolvedValue(0),
   isUsableTaskWorktree: vi.fn().mockResolvedValue(true),
+  /*
+  FNXC:MissingWorktreeRecovery 2026-07-26-07:15:
+  Keep the real `.git` probe: the unusable-worktree recovery decides whether to PRESERVE
+  `task.worktree` from it, so a blanket `true` would re-hide the MG-047 strand (a recorded
+  worktree that is gone must be cleared, not carried into the next dispatch).
+  */
+  hasRequiredWorktreeFiles: vi.fn((worktreePath: string) => fsExistsSync(joinPath(worktreePath, ".git"))),
   classifyTaskWorktree: vi.fn().mockResolvedValue({ ok: false, classification: "missing", reason: "test-default" }),
   getRegisteredWorktreePaths: vi.fn().mockResolvedValue(new Set<string>()),
   getRegisteredWorktreeBranchMap: vi.fn().mockResolvedValue(new Map<string, string>()),
   removeWorktree: vi.fn().mockResolvedValue(undefined),
   relocateReclaimableWorktreeIntoRoot: vi.fn(async ({ sourcePath }: { sourcePath: string }) => ({ kind: "ready", path: sourcePath, relocated: false })),
   resolveWorktreeBackend: vi.fn(),
-}));
+  };
+});
 
 const { selfHealingLoggerMock } = vi.hoisted(() => ({
   selfHealingLoggerMock: {
@@ -117,7 +128,7 @@ import { HEARTBEAT_ERROR_RECOVERY_METADATA_KEY, HEARTBEAT_ERROR_RETRY_EXHAUSTED_
 import type { TaskStore, Settings, Task, AgentStore, Agent, NotificationProvider } from "@fusion/core";
 import { EventEmitter } from "node:events";
 import { execSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -3365,7 +3376,15 @@ describe("SelfHealingManager", () => {
       expect(source).not.toMatch(/Refusing to start coding agent/);
     });
 
-    it("requeues failed in-review tasks with unusable-worktree session-start errors", async () => {
+    /*
+    FNXC:MissingWorktreeRecovery 2026-07-26-07:15:
+    The mismatch-preserve branch needs a worktree that is REALLY there (temp dir + `.git`), because
+    the recovery now proves usability before carrying `task.worktree` forward. A fictional path is
+    indistinguishable from the MG-047 strand where the recorded worktree had been removed.
+    */
+    it("requeues failed in-review tasks with unusable-worktree session-start errors, preserving a live task worktree", async () => {
+      const liveWorktree = mkdtempSync(join(tmpdir(), "fusion-live-worktree-"));
+      writeFileSync(join(liveWorktree, ".git"), "gitdir: /tmp/test-project/.git/worktrees/fn-3900\n");
       const managerWithRecovery = new SelfHealingManager(store, {
         rootDir: "/tmp/test-project",
       });
@@ -3376,7 +3395,7 @@ describe("SelfHealingManager", () => {
           column: "in-review",
           paused: false,
           status: "failed",
-          worktree: "/tmp/project/.worktrees/fn-3900-stale",
+          worktree: liveWorktree,
           branch: "fusion/fn-3900",
           sessionFile: "/tmp/project/.fusion/sessions/fn-3900.json",
           error: "Refusing to start coding agent in missing worktree: /tmp/other/.worktrees/fn-3900",
@@ -3392,7 +3411,7 @@ describe("SelfHealingManager", () => {
         status: null,
         error: null,
         worktreeSessionRetryCount: 1,
-        worktree: "/tmp/project/.worktrees/fn-3900-stale",
+        worktree: liveWorktree,
         branch: "fusion/fn-3900",
         sessionFile: null,
       });
@@ -3402,7 +3421,7 @@ describe("SelfHealingManager", () => {
       );
       expect(store.logEntry).toHaveBeenCalledWith(
         "FN-3900",
-        expect.stringContaining("/tmp/project/.worktrees/fn-3900-stale"),
+        expect.stringContaining(liveWorktree),
       );
       expect(store.logEntry).toHaveBeenCalledWith(
         "FN-3900",
@@ -3410,10 +3429,36 @@ describe("SelfHealingManager", () => {
       );
       expect(store.moveTask).toHaveBeenCalledWith("FN-3900", "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
 
+      rmSync(liveWorktree, { recursive: true, force: true });
       managerWithRecovery.stop();
     });
 
-    it("requeues incomplete-worktree failures and clears stale worktree metadata", async () => {
+    /*
+    FNXC:MissingWorktreeRecovery 2026-07-26-07:15:
+    Reported strand (in-review MG-047): the session-start refusal named an AI-merge clean room
+    ("incomplete worktree") while the RECORDED task worktree had already been removed. Preserving
+    the recorded path because it merely differed from the failing one re-dispatched the card into a
+    directory that no longer existed ("Working directory does not exist … Cannot execute bash
+    commands") on every retry, until the budget burned out and the card parked failed in review.
+    Surfaces: the failing path may be a clean room or the task worktree, and the recorded worktree
+    may be gone entirely or present-but-incomplete (no `.git`) — both must clear the metadata.
+    */
+    it.each([
+      {
+        label: "recorded task worktree no longer exists",
+        seed: (base: string) => join(base, "removed-by-cleanup"),
+      },
+      {
+        label: "recorded task worktree exists but has no .git",
+        seed: (base: string) => {
+          const dir = join(base, "incomplete");
+          mkdirSync(dir, { recursive: true });
+          return dir;
+        },
+      },
+    ])("requeues incomplete-worktree failures and clears stale worktree metadata when the $label", async ({ seed }) => {
+      const base = mkdtempSync(join(tmpdir(), "fusion-dead-worktree-"));
+      const recordedWorktree = seed(base);
       const managerWithRecovery = new SelfHealingManager(store, {
         rootDir: "/tmp/test-project",
       });
@@ -3424,10 +3469,11 @@ describe("SelfHealingManager", () => {
           column: "in-review",
           paused: false,
           status: "failed",
-          worktree: "/tmp/project/.worktrees/noble-eagle-stale",
+          worktree: recordedWorktree,
           branch: "fusion/FN-4559",
           sessionFile: "/tmp/project/.fusion/sessions/FN-4559.json",
-          error: "Refusing to start coding agent in incomplete worktree: /tmp/project/.worktrees/noble-eagle",
+          // The refusal names the AI-merge clean room, NOT the recorded task worktree.
+          error: "Refusing to start coding agent in incomplete worktree: /tmp/project/.worktrees/.ai-merge/fusion-ai-merge-fn-4559-TGahla",
           steps: [{ status: "done" }, { status: "pending" }],
           log: [],
         },
@@ -3440,10 +3486,11 @@ describe("SelfHealingManager", () => {
         status: null,
         error: null,
         worktreeSessionRetryCount: 1,
-        worktree: "/tmp/project/.worktrees/noble-eagle-stale",
-        branch: "fusion/FN-4559",
+        worktree: null,
+        branch: null,
         sessionFile: null,
       });
+      rmSync(base, { recursive: true, force: true });
       expect(store.logEntry).toHaveBeenCalledWith(
         "FN-4559",
         expect.stringContaining("Auto-recovered"),

@@ -140,6 +140,23 @@ const planningGuardCases: PlanningGuardCase[] = [
     },
     stillPlanning: false,
   },
+  /*
+  FNXC:WorkflowReplan 2026-07-26-07:40:
+  `planning` is the TRANSIENT planner claim, not a durable park: when a stamp lands on a
+  `planning` row, execution won the FN-8361 race and recovery must not clear the status out from
+  under it. Only the durable park statuses outrank the stamps.
+  */
+  {
+    label: "planning row claimed by execution mid-race (FN-8361)",
+    task: {
+      column: "triage",
+      steps: [],
+      status: "planning",
+      worktree: "/tmp/claimed",
+      firstExecutionAt: "2026-07-26T04:35:29.068Z",
+    },
+    stillPlanning: false,
+  },
   {
     label: "triage card parked by a reviewer outage after an execution attempt",
     task: {

@@ -35,7 +35,8 @@ import { finalizePlanningSegment } from "@fusion/core";
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
 import { createLogger, schedulerLog } from "./logger.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
-import { RemovalReason, classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "./worktree-pool.js";
+import { RemovalReason, classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, hasRequiredWorktreeFiles, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "./worktree-pool.js";
+import { isUsableWorktreeDirectory } from "./step-runner.js";
 import {
   classifyMissingWorktreeSessionStartFailure,
   extractMissingWorktreePathFromSessionStartFailure,
@@ -592,8 +593,25 @@ export async function autoRecoverWorktreeSessionStartFailure(
 
   const staleWorktree = task.worktree;
   const missingWorktreePath = extractMissingWorktreePathFromSessionStartFailure(opts.failure);
-  const hasMismatchedLiveWorktree =
+  /*
+  FNXC:MissingWorktreeRecovery 2026-07-26-07:15:
+  A failing path that DIFFERS from `task.worktree` does not prove the recorded worktree is live.
+  The reported strand (in-review MG-047) had both gone: an AI-merge clean room refused as an
+  "incomplete worktree" while the recorded task worktree had already been removed. The mismatch
+  branch preserved that dead path, so every requeue re-dispatched into a directory that no longer
+  existed ("Working directory does not exist: …" / "Cannot execute bash commands") until the retry
+  budget burned out and the card parked failed in review. Preserve the recorded worktree only when
+  it is STILL a usable checkout; otherwise clear it so the next dispatch builds a fresh one from
+  the branch. Filesystem-only probe (exists + `.git`, the same first two gates as
+  classifyTaskWorktree) — recovery must not spawn git, and this runs on a failure path.
+  */
+  const recordedWorktreeStillUsable =
     typeof staleWorktree === "string" && staleWorktree.length > 0
+    && isUsableWorktreeDirectory(staleWorktree)
+    && hasRequiredWorktreeFiles(staleWorktree);
+  const hasMismatchedLiveWorktree =
+    recordedWorktreeStillUsable
+    && typeof staleWorktree === "string" && staleWorktree.length > 0
     && typeof missingWorktreePath === "string" && missingWorktreePath.length > 0
     && resolve(staleWorktree) !== resolve(missingWorktreePath);
   const noProgress = !hasStepProgress(task);

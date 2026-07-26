@@ -43,6 +43,16 @@ legal from every legacy column and eligibleTriageTasks re-specifies unconditiona
 /** Statuses that explicitly park a card for (re)planning, whichever column holds it. */
 const PLANNING_STAGE_STATUSES = new Set(["planning", "needs-replan", "plan-review-unavailable"]);
 
+/*
+FNXC:WorkflowReplan 2026-07-26-07:40:
+The DURABLE subset of the above: a card parked here was deliberately sent back by Plan Review (or
+by a reviewer outage) and stays parked until a planner re-specifies it. Only these outrank the
+execution timestamps below. `planning` is deliberately excluded — it is the TRANSIENT in-flight
+planner claim, and a fresh execution stamp on a `planning` row means execution won the race that
+FN-8361 guards (recovery must not clear the status out from under the claiming executor).
+*/
+const REPLAN_PARK_STATUSES = new Set(["needs-replan", "plan-review-unavailable"]);
+
 export function hasAdvancedPastPlanning(
   task: Pick<Task, "column" | "worktree" | "steps" | "status">
     & Partial<Pick<Task, "firstExecutionAt" | "executionStartedAt">>,
@@ -57,17 +67,17 @@ export function hasAdvancedPastPlanning(
   }
   /*
   FNXC:WorkflowReplan 2026-07-26-06:10:
-  An explicit parked-for-planning STATUS outranks execution evidence, because that evidence is
-  STICKY while a replan is a legitimate BACKWARD move. `firstExecutionAt`/`executionStartedAt` are
-  never cleared once implementation starts, so a card that executed, failed Plan Review, and was
-  rebounded to a planner lane (`needs-replan`) read as "advanced past planning" forever: triage's
-  discovery filter (`column === "triage" && isTaskStillInPlanningStage`) never re-admitted it and
-  the card sat in triage/needs-replan permanently — "stuck in planning" on the board (FN-8594). It
-  hit every triage-column workflow (builtin:coding, the default); plan-in-place Ideas cards escaped
-  only because todo discovery admits `needs-replan` without consulting this guard.
+  A DURABLE parked-for-replan status outranks execution evidence, because that evidence is STICKY
+  while a replan is a legitimate BACKWARD move. `firstExecutionAt`/`executionStartedAt` are never
+  cleared once implementation starts, so a card that executed, failed Plan Review, and was rebounded
+  to a planner lane (`needs-replan`) read as "advanced past planning" forever: triage's discovery
+  filter (`column === "triage" && isTaskStillInPlanningStage`) never re-admitted it and the card sat
+  in triage/needs-replan permanently — "stuck in planning" on the board (FN-8594). It hit every
+  triage-column workflow (builtin:coding, the default); plan-in-place Ideas cards escaped only
+  because todo discovery admits `needs-replan` without consulting this guard.
   This check covers BOTH planner lanes — the "triage" column and the plan-in-place "todo" lane.
   */
-  if (task.status != null && PLANNING_STAGE_STATUSES.has(task.status)) {
+  if (task.status != null && REPLAN_PARK_STATUSES.has(task.status)) {
     return false;
   }
   /*
@@ -89,6 +99,11 @@ export function hasAdvancedPastPlanning(
   // The planner column itself is never "advanced" — nothing executes out of triage, and the steps
   // below belong to the card's previous planning pass.
   if (task.column === "triage") {
+    return false;
+  }
+  // Plan-in-place planner lane ("todo"): a card explicitly parked for planning has not advanced.
+  // Reached only by `planning` here — the durable park statuses already returned above.
+  if (task.status != null && PLANNING_STAGE_STATUSES.has(task.status)) {
     return false;
   }
   return (task.steps?.length ?? 0) > 0;
