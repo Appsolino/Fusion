@@ -2264,6 +2264,48 @@ export class SelfHealingManager {
     return false;
   }
 
+  /**
+   * FNXC:WorkflowRecovery 2026-07-25-09:40:
+   * Single shared decision for "is this branch tip's foreign `Fusion-Task-Id`/`Fusion-Task-Lineage` trailer real
+   * evidence of cross-task contamination, or just an inherited start point?"
+   *
+   * A task branch cut from the integration branch points at whatever landed last. When the task has not committed
+   * anything of its own (planning aborted, spec revise, operator move back to `todo`), the branch tip IS that
+   * previous task's commit — a foreign trailer with zero foreign intent. FN-1406 hit exactly this: `fusion/fn-1406`
+   * was cut from `main` at FN-1401's landed commit, planning ended without a commit, and the reclaim sweep logged
+   * `already-merged rejected ... owner=FN-1401 reason=foreign-task-tip` every pass instead of clearing the stale
+   * worktree/branch metadata.
+   *
+   * Merge-base-to-tip diff proof separates the two: no unique diff means the branch carries no task content, so the
+   * foreign trailer is inherited and the caller may treat the row as stale metadata. The one exception is when the
+   * base ALREADY has an explicit commit for this task — then the branch should have been sitting on the task's own
+   * landed commit, and a foreign tip is genuine misbinding worth rejecting.
+   *
+   * Callers: already-merged recovery (`branchTipForeignOwnership`), branch-misbound recovery
+   * (`isBranchTipMisboundToTask`), and the self-owned-branch reclaim sweep's `tip-already-merged` arm. Keeping the
+   * three on one helper is the point — the reclaim arm drifted without the diff proof and that was the bug.
+   */
+  private async foreignTipRejection(input: {
+    taskId: string;
+    lineageId?: string;
+    branchTip: string;
+    baseBranch: string;
+    ownership: Awaited<ReturnType<SelfHealingManager["readCommitTaskOwnership"]>>;
+  }): Promise<{ reason: "foreign-task-tip" | "foreign-lineage-tip"; owner?: string } | null> {
+    const { taskId, lineageId, branchTip, baseBranch, ownership } = input;
+    if (ownership.rejectionReason !== "foreign-task" && ownership.rejectionReason !== "foreign-lineage") return null;
+
+    const hasNoUniqueDiff = await this.branchHasNoUniqueDiff(branchTip, baseBranch).catch(() => false);
+    const baseAlreadyHasCurrentTask = hasNoUniqueDiff
+      ? await this.baseHasExplicitTaskOwnership(taskId, lineageId, baseBranch).catch(() => false)
+      : false;
+    if (hasNoUniqueDiff && !baseAlreadyHasCurrentTask) return null;
+
+    return ownership.rejectionReason === "foreign-task"
+      ? { reason: "foreign-task-tip", owner: ownership.ownerTaskId }
+      : { reason: "foreign-lineage-tip", owner: ownership.ownerLineageId };
+  }
+
   private async rejectForeignAlreadyMergedCandidate(input: {
     task: Pick<Task, "id" | "lineageId">;
     candidateSha: string;
@@ -2326,7 +2368,6 @@ export class SelfHealingManager {
     }
     const sha = stdout.trim();
     if (!sha) return null;
-    const hasNoUniqueDiff = await this.branchHasNoUniqueDiff(sha, baseBranch).catch(() => false);
     let ownership: Awaited<ReturnType<SelfHealingManager["readCommitTaskOwnership"]>>;
     try {
       ownership = await this.readCommitTaskOwnership(sha, taskId, lineageId);
@@ -2336,16 +2377,12 @@ export class SelfHealingManager {
     /*
     FNXC:WorkflowRecovery 2026-07-03-21:35:
     Already-merged recovery must classify no-diff task branches before enforcing branch-tip trailers. A branch created from main can point at a previous task's landed commit and later sit behind main after unrelated commits; reject foreign trailers only when merge-base-to-tip diff proof shows the branch contains real task-branch content.
+
+    FNXC:WorkflowRecovery 2026-07-25-09:40:
+    That diff-proof classification now lives in `foreignTipRejection` so this path, branch-misbound recovery, and the reclaim sweep cannot drift apart again.
     */
-    const baseAlreadyHasCurrentTask = hasNoUniqueDiff
-      ? await this.baseHasExplicitTaskOwnership(taskId, lineageId, baseBranch).catch(() => false)
-      : false;
-    if ((!hasNoUniqueDiff || baseAlreadyHasCurrentTask) && ownership.rejectionReason === "foreign-task") {
-      return { sha, owner: ownership.ownerTaskId, reason: "foreign-task-tip" };
-    }
-    if ((!hasNoUniqueDiff || baseAlreadyHasCurrentTask) && ownership.rejectionReason === "foreign-lineage") {
-      return { sha, owner: ownership.ownerLineageId, reason: "foreign-lineage-tip" };
-    }
+    const rejection = await this.foreignTipRejection({ taskId, lineageId, branchTip: sha, baseBranch, ownership });
+    if (rejection) return { sha, owner: rejection.owner, reason: rejection.reason };
     return null;
   }
 
@@ -3809,14 +3846,32 @@ export class SelfHealingManager {
             if (!ownership) {
               continue;
             }
-            if (ownership?.rejectionReason === "foreign-task" || ownership?.rejectionReason === "foreign-lineage") {
+            /*
+            FNXC:SelfHealingReclaim 2026-07-25-09:40:
+            The foreign-trailer veto here must use the same merge-base diff proof as already-merged and branch-misbound
+            recovery. A `tip-already-merged` verdict means the tip is an ancestor of the integration ref, which is the
+            normal shape of a task branch that was cut from the base and never committed anything: its inherited tip is
+            the PREVIOUS task's landed commit. Vetoing on the trailer alone left that row holding stale
+            worktree/branch/baseCommitSha metadata and re-logged `reason=foreign-task-tip` on every sweep (FN-1406,
+            inheriting FN-1401's tip). `foreignTipRejection` only rejects when the branch has unique content, or when
+            the base already carries this task's own commit (real misbinding); otherwise fall through to the stale-cached
+            -metadata reclaim below, which is safe precisely because the branch contains nothing unique to lose.
+            */
+            const foreignRejection = await this.foreignTipRejection({
+              taskId: task.id,
+              lineageId: task.lineageId,
+              branchTip: inspection.tipSha,
+              baseBranch: inspection.integrationRef,
+              ownership,
+            });
+            if (foreignRejection) {
               await this.rejectForeignAlreadyMergedCandidate({
                 task,
                 candidateSha: inspection.tipSha,
-                candidateOwner: ownership.rejectionReason === "foreign-task" ? ownership.ownerTaskId : ownership.ownerLineageId,
+                candidateOwner: foreignRejection.owner,
                 taskBranch: branchName,
                 baseBranch: inspection.integrationRef,
-                reason: ownership.rejectionReason === "foreign-task" ? "foreign-task-tip" : "foreign-lineage-tip",
+                reason: foreignRejection.reason,
                 phase: "tip-already-merged",
               });
               continue;
@@ -10222,20 +10277,17 @@ export class SelfHealingManager {
       maxBuffer: 1024 * 1024,
     });
     const branchTip = tipOut.trim();
-    const hasNoUniqueDiff = await this.branchHasNoUniqueDiff(branchTip, baseBranch).catch(() => false);
     const ownership = await this.readCommitTaskOwnership(branchTip, taskId, lineageId);
     /*
     FNXC:WorkflowRecovery 2026-07-03-21:39:
     Branch-misbound recovery shares the no-op inheritance edge case with already-merged recovery. Check merge-base-to-tip diff state first so a branch with no unique task content is not mislabeled misbound solely because its inherited tip belongs to the previously landed task, even after base advances.
+
+    FNXC:WorkflowRecovery 2026-07-25-09:40:
+    Shared with already-merged recovery and the reclaim sweep via `foreignTipRejection`.
     */
-    const baseAlreadyHasCurrentTask = hasNoUniqueDiff
-      ? await this.baseHasExplicitTaskOwnership(taskId, lineageId, baseBranch).catch(() => false)
-      : false;
-    if ((!hasNoUniqueDiff || baseAlreadyHasCurrentTask) && ownership.rejectionReason === "foreign-task") {
-      return { misbound: false, branchTip, landed: null, rejection: { reason: "foreign-task-tip", owner: ownership.ownerTaskId } };
-    }
-    if ((!hasNoUniqueDiff || baseAlreadyHasCurrentTask) && ownership.rejectionReason === "foreign-lineage") {
-      return { misbound: false, branchTip, landed: null, rejection: { reason: "foreign-lineage-tip", owner: ownership.ownerLineageId } };
+    const rejection = await this.foreignTipRejection({ taskId, lineageId, branchTip, baseBranch, ownership });
+    if (rejection) {
+      return { misbound: false, branchTip, landed: null, rejection };
     }
     const hasTaskId = ownership.ownerTaskId === taskId;
     const hasLineage = lineageId ? ownership.ownerLineageId === lineageId : false;
