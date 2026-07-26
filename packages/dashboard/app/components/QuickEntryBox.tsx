@@ -22,6 +22,7 @@ import { WorkflowIcon } from "./WorkflowIcon";
 import { PendingAttachmentPreviews } from "./PendingAttachmentPreviews";
 import { getPriorityColorVar, getPriorityIcon, getPriorityLabel } from "../utils/priorityIndicator";
 import { validateQuickAddStartWorkflow, workflowSupportsQuickAddStart, resolveQuickAddStartInitialColumn, resolveQuickAddStartTargetColumn, type ValidatedQuickAddWorkflow } from "../utils/quickAddStart";
+import { computeFixedMenuPosition, getLayoutViewportSize } from "../utils/fixedMenuPosition";
 
 const STORAGE_KEY = "kb-quick-entry-text";
 const ALLOWED_TASK_ATTACHMENT_TYPES = new Set([
@@ -1102,361 +1103,200 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
     );
   }, []);
 
-  const getEffectiveViewport = useCallback(() => {
-    const vv = window.visualViewport;
-    if (vv && vv.width > 0 && vv.height > 0) {
-      return {
-        width: vv.width,
-        height: vv.height,
-        offsetTop: vv.offsetTop,
-        offsetLeft: vv.offsetLeft,
-      };
-    }
-
-    return {
-      width: window.innerWidth,
-      height: window.innerHeight,
-      offsetTop: 0,
-      offsetLeft: 0,
-    };
-  }, []);
-
+  /*
+  FNXC:QuickAddDepsMenu 2026-07-25-12:00:
+  All Quick Add portaled menus (Deps, Models, workflow, agent, node, priority) share anchor-first
+  layout-viewport positioning. Mixing visualViewport offsets with getBoundingClientRect, or clamping
+  top away from the trigger to preserve a min height floor, made Deps (and siblings) float too high
+  and unattached when free space was tight.
+  */
   const updateModelMenuPosition = useCallback(() => {
     const trigger = modelTriggerRef.current;
     if (!trigger) return;
 
     const rect = trigger.getBoundingClientRect();
-    const { width: viewportWidth, height: viewportHeight, offsetTop, offsetLeft } = getEffectiveViewport();
+    const { width: viewportWidth, height: viewportHeight } = getLayoutViewportSize();
     const horizontalPadding = 16;
-    const verticalPadding = 16;
-    const gap = 4;
     const isMobile = viewportWidth <= 768;
-
     const preferredHeight = isMobile
       ? Math.min(viewportHeight * 0.6, 360)
       : Math.min(viewportHeight * 0.5, 360);
-
-    const preferredDesktopWidth = Math.max(rect.width * 1.35, 320);
     const preferredWidth = isMobile
       ? Math.min(viewportWidth - horizontalPadding * 2, 360)
-      : preferredDesktopWidth;
+      : Math.max(rect.width * 1.35, 320);
 
-    const width = Math.min(
+    const position = computeFixedMenuPosition({
+      triggerRect: rect,
+      viewportWidth,
+      viewportHeight,
       preferredWidth,
-      Math.max(viewportWidth - horizontalPadding * 2, 240),
-    );
-
-    const triggerTop = rect.top - offsetTop;
-    const triggerBottom = rect.bottom - offsetTop;
-    const triggerLeft = rect.left - offsetLeft;
-
-    const spaceBelow = viewportHeight - triggerBottom;
-    const spaceAbove = triggerTop;
-    const availableBelow = Math.max(spaceBelow - verticalPadding - gap, 160);
-    const availableAbove = Math.max(spaceAbove - verticalPadding - gap, 160);
-    const openUpward = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
-
-    const maxHeight = Math.max(
-      Math.min(openUpward ? availableAbove : availableBelow, preferredHeight),
-      160,
-    );
-
-    const left = Math.min(
-      Math.max(triggerLeft, horizontalPadding),
-      viewportWidth - horizontalPadding - width,
-    ) + offsetLeft;
-
-    const top = openUpward
-      ? Math.max(verticalPadding + offsetTop, triggerTop - maxHeight - gap + offsetTop)
-      : Math.min(
-          triggerBottom + gap + offsetTop,
-          viewportHeight + offsetTop - verticalPadding - maxHeight,
-        );
-
-    setModelMenuPosition({
-      top,
-      left,
-      width,
-      maxHeight,
+      preferredHeight,
+      minWidth: 240,
+      horizontalPadding,
     });
-  }, [getEffectiveViewport]);
+    setModelMenuPosition({
+      top: position.top,
+      left: position.left,
+      width: position.width,
+      maxHeight: position.maxHeight,
+    });
+  }, []);
 
   const updateWorkflowPickerPosition = useCallback(() => {
     const trigger = workflowTriggerRef.current;
     if (!trigger) return;
 
     const rect = trigger.getBoundingClientRect();
-    const { width: viewportWidth, height: viewportHeight, offsetTop, offsetLeft } = getEffectiveViewport();
+    const { width: viewportWidth, height: viewportHeight } = getLayoutViewportSize();
     const horizontalPadding = 16;
-    const verticalPadding = 16;
-    const gap = 4;
     const isMobile = viewportWidth <= 768;
     const preferredHeight = Math.min(viewportHeight * (isMobile ? 0.6 : 0.5), 360);
     /*
     FNXC:QuickAddWorkflow 2026-06-30-16:16:
-    The workflow menu is wider than its compact trigger, so portal and clamp it against the visual viewport instead of anchoring it to the trigger's inline start. This keeps right-side Board columns and wrapped mobile action rows readable without horizontal overflow.
+    The workflow menu is wider than its compact trigger, so portal and clamp it against the layout viewport instead of anchoring it to the trigger's inline start. This keeps right-side Board columns and wrapped mobile action rows readable without horizontal overflow.
+
+    FNXC:QuickAddDepsMenu 2026-07-25-12:00:
+    Width still expands past the compact trigger; vertical placement uses the shared anchor-first helper so the menu stays attached like Deps/Models.
     */
     const preferredWidth = isMobile
       ? Math.min(viewportWidth - horizontalPadding * 2, 448)
       : Math.min(Math.max(rect.width * 3, 448), 512);
-    const width = Math.min(
+
+    const position = computeFixedMenuPosition({
+      triggerRect: rect,
+      viewportWidth,
+      viewportHeight,
       preferredWidth,
-      Math.max(viewportWidth - horizontalPadding * 2, 240),
-    );
-
-    const triggerTop = rect.top - offsetTop;
-    const triggerBottom = rect.bottom - offsetTop;
-    const triggerLeft = rect.left - offsetLeft;
-    const spaceBelow = viewportHeight - triggerBottom;
-    const spaceAbove = triggerTop;
-    const availableBelow = Math.max(spaceBelow - verticalPadding - gap, 180);
-    const availableAbove = Math.max(spaceAbove - verticalPadding - gap, 180);
-    const openUpward = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
-    const maxHeight = Math.max(
-      Math.min(openUpward ? availableAbove : availableBelow, preferredHeight),
-      180,
-    );
-
-    const left = Math.min(
-      Math.max(triggerLeft, horizontalPadding),
-      viewportWidth - horizontalPadding - width,
-    ) + offsetLeft;
-    const top = openUpward
-      ? Math.max(verticalPadding + offsetTop, triggerTop - maxHeight - gap + offsetTop)
-      : Math.min(
-          triggerBottom + gap + offsetTop,
-          viewportHeight + offsetTop - verticalPadding - maxHeight,
-        );
-
-    setWorkflowPickerPosition({ top, left, width, maxHeight });
-  }, [getEffectiveViewport]);
+      preferredHeight,
+      minWidth: 240,
+      horizontalPadding,
+    });
+    setWorkflowPickerPosition({
+      top: position.top,
+      left: position.left,
+      width: position.width,
+      maxHeight: position.maxHeight,
+    });
+  }, []);
 
   const updateDepDropdownPosition = useCallback(() => {
     const trigger = depTriggerRef.current;
     if (!trigger) return;
 
     const rect = trigger.getBoundingClientRect();
-    const { width: viewportWidth, height: viewportHeight, offsetTop, offsetLeft } = getEffectiveViewport();
+    const { width: viewportWidth, height: viewportHeight } = getLayoutViewportSize();
     const horizontalPadding = 16;
-    const verticalPadding = 16;
-    const gap = 4;
     const isMobile = viewportWidth <= 768;
-
     const preferredHeight = isMobile
       ? Math.min(viewportHeight * 0.6, 320)
       : Math.min(viewportHeight * 0.5, 320);
-
     // Wider dropdown for dependency selection - easier to read task names
     const preferredWidth = isMobile
       ? Math.min(viewportWidth - horizontalPadding * 2, 360)
       : Math.max(rect.width, 280);
 
-    const width = Math.min(
+    const position = computeFixedMenuPosition({
+      triggerRect: rect,
+      viewportWidth,
+      viewportHeight,
       preferredWidth,
-      Math.max(viewportWidth - horizontalPadding * 2, 240),
-    );
-
-    const triggerTop = rect.top - offsetTop;
-    const triggerBottom = rect.bottom - offsetTop;
-    const triggerLeft = rect.left - offsetLeft;
-
-    const spaceBelow = viewportHeight - triggerBottom;
-    const spaceAbove = triggerTop;
-    const availableBelow = Math.max(spaceBelow - verticalPadding - gap, 200);
-    const availableAbove = Math.max(spaceAbove - verticalPadding - gap, 200);
-    const openUpward = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
-
-    const maxHeight = Math.max(
-      Math.min(openUpward ? availableAbove : availableBelow, preferredHeight),
-      200,
-    );
-
-    const left = Math.min(
-      Math.max(triggerLeft, horizontalPadding),
-      viewportWidth - horizontalPadding - width,
-    ) + offsetLeft;
-
-    const top = openUpward
-      ? Math.max(verticalPadding + offsetTop, triggerTop - maxHeight - gap + offsetTop)
-      : Math.min(
-          triggerBottom + gap + offsetTop,
-          viewportHeight + offsetTop - verticalPadding - maxHeight,
-        );
-
-    setDepDropdownPosition({
-      top,
-      left,
-      width,
-      maxHeight,
+      preferredHeight,
+      minWidth: 240,
+      horizontalPadding,
     });
-  }, [getEffectiveViewport]);
+    setDepDropdownPosition({
+      top: position.top,
+      left: position.left,
+      width: position.width,
+      maxHeight: position.maxHeight,
+    });
+  }, []);
 
   const updateAgentPickerPosition = useCallback(() => {
     const trigger = agentPickerRef.current?.querySelector("button") as HTMLButtonElement | null;
     if (!trigger) return;
 
     const rect = trigger.getBoundingClientRect();
-    const { width: viewportWidth, height: viewportHeight, offsetTop, offsetLeft } = getEffectiveViewport();
+    const { width: viewportWidth, height: viewportHeight } = getLayoutViewportSize();
     const horizontalPadding = 16;
-    const verticalPadding = 16;
-    const gap = 4;
     const isMobile = viewportWidth <= 768;
-
     const preferredHeight = isMobile
       ? Math.min(viewportHeight * 0.6, 320)
       : Math.min(viewportHeight * 0.5, 320);
-
     const preferredWidth = isMobile
       ? Math.min(viewportWidth - horizontalPadding * 2, 280)
       : Math.max(rect.width, 240);
 
-    const width = Math.min(
+    const position = computeFixedMenuPosition({
+      triggerRect: rect,
+      viewportWidth,
+      viewportHeight,
       preferredWidth,
-      Math.max(viewportWidth - horizontalPadding * 2, 200),
-    );
-
-    const triggerTop = rect.top - offsetTop;
-    const triggerBottom = rect.bottom - offsetTop;
-    const triggerLeft = rect.left - offsetLeft;
-
-    const spaceBelow = viewportHeight - triggerBottom;
-    const spaceAbove = triggerTop;
-    const availableBelow = Math.max(spaceBelow - verticalPadding - gap, 160);
-    const availableAbove = Math.max(spaceAbove - verticalPadding - gap, 160);
-    const openUpward = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
-
-    const maxHeight = Math.max(
-      Math.min(openUpward ? availableAbove : availableBelow, preferredHeight),
-      160,
-    );
-
-    const left = Math.min(
-      Math.max(triggerLeft, horizontalPadding),
-      viewportWidth - horizontalPadding - width,
-    ) + offsetLeft;
-
-    const top = openUpward
-      ? Math.max(verticalPadding + offsetTop, triggerTop - maxHeight - gap + offsetTop)
-      : Math.min(
-          triggerBottom + gap + offsetTop,
-          viewportHeight + offsetTop - verticalPadding - maxHeight,
-        );
-
-    setAgentPickerPosition({
-      top,
-      left,
-      width,
-      maxHeight,
+      preferredHeight,
+      minWidth: 200,
+      horizontalPadding,
     });
-  }, [getEffectiveViewport]);
+    setAgentPickerPosition({
+      top: position.top,
+      left: position.left,
+      width: position.width,
+      maxHeight: position.maxHeight,
+    });
+  }, []);
 
   const updateNodePickerPosition = useCallback(() => {
     const trigger = nodePickerRef.current?.querySelector("button") as HTMLButtonElement | null;
     if (!trigger) return;
 
     const rect = trigger.getBoundingClientRect();
-    const { width: viewportWidth, height: viewportHeight, offsetTop, offsetLeft } = getEffectiveViewport();
+    const { width: viewportWidth, height: viewportHeight } = getLayoutViewportSize();
     const horizontalPadding = 16;
-    const verticalPadding = 16;
-    const gap = 4;
     const isMobile = viewportWidth <= 768;
-
     const preferredHeight = isMobile
       ? Math.min(viewportHeight * 0.6, 320)
       : Math.min(viewportHeight * 0.5, 320);
-
     const preferredWidth = isMobile
       ? Math.min(viewportWidth - horizontalPadding * 2, 280)
       : Math.max(rect.width, 240);
 
-    const width = Math.min(
+    const position = computeFixedMenuPosition({
+      triggerRect: rect,
+      viewportWidth,
+      viewportHeight,
       preferredWidth,
-      Math.max(viewportWidth - horizontalPadding * 2, 200),
-    );
-
-    const triggerTop = rect.top - offsetTop;
-    const triggerBottom = rect.bottom - offsetTop;
-    const triggerLeft = rect.left - offsetLeft;
-
-    const spaceBelow = viewportHeight - triggerBottom;
-    const spaceAbove = triggerTop;
-    const availableBelow = Math.max(spaceBelow - verticalPadding - gap, 160);
-    const availableAbove = Math.max(spaceAbove - verticalPadding - gap, 160);
-    const openUpward = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
-
-    const maxHeight = Math.max(
-      Math.min(openUpward ? availableAbove : availableBelow, preferredHeight),
-      160,
-    );
-
-    const left = Math.min(
-      Math.max(triggerLeft, horizontalPadding),
-      viewportWidth - horizontalPadding - width,
-    ) + offsetLeft;
-
-    const top = openUpward
-      ? Math.max(verticalPadding + offsetTop, triggerTop - maxHeight - gap + offsetTop)
-      : Math.min(
-          triggerBottom + gap + offsetTop,
-          viewportHeight + offsetTop - verticalPadding - maxHeight,
-        );
-
-    setNodePickerPosition({
-      top,
-      left,
-      width,
-      maxHeight,
+      preferredHeight,
+      minWidth: 200,
+      horizontalPadding,
     });
-  }, [getEffectiveViewport]);
+    setNodePickerPosition({
+      top: position.top,
+      left: position.left,
+      width: position.width,
+      maxHeight: position.maxHeight,
+    });
+  }, []);
 
   const updatePriorityPickerPosition = useCallback(() => {
     const trigger = priorityPickerRef.current?.querySelector("button") as HTMLButtonElement | null;
     if (!trigger) return;
 
     const rect = trigger.getBoundingClientRect();
-    const { width: viewportWidth, height: viewportHeight, offsetTop, offsetLeft } = getEffectiveViewport();
-    const horizontalPadding = 16;
-    const verticalPadding = 16;
-    const gap = 4;
-    const preferredHeight = 220;
-    const width = Math.min(
-      Math.max(rect.width, 200),
-      Math.max(viewportWidth - horizontalPadding * 2, 200),
-    );
-
-    const triggerTop = rect.top - offsetTop;
-    const triggerBottom = rect.bottom - offsetTop;
-    const triggerLeft = rect.left - offsetLeft;
-
-    const spaceBelow = viewportHeight - triggerBottom;
-    const spaceAbove = triggerTop;
-    const availableBelow = Math.max(spaceBelow - verticalPadding - gap, 160);
-    const availableAbove = Math.max(spaceAbove - verticalPadding - gap, 160);
-    const openUpward = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
-    const maxHeight = Math.max(
-      Math.min(openUpward ? availableAbove : availableBelow, preferredHeight),
-      160,
-    );
-
-    const left = Math.min(
-      Math.max(triggerLeft, horizontalPadding),
-      viewportWidth - horizontalPadding - width,
-    ) + offsetLeft;
-
-    const top = openUpward
-      ? Math.max(verticalPadding + offsetTop, triggerTop - maxHeight - gap + offsetTop)
-      : Math.min(
-          triggerBottom + gap + offsetTop,
-          viewportHeight + offsetTop - verticalPadding - maxHeight,
-        );
-
-    setPriorityPickerPosition({
-      top,
-      left,
-      width,
-      maxHeight,
+    const { width: viewportWidth, height: viewportHeight } = getLayoutViewportSize();
+    const position = computeFixedMenuPosition({
+      triggerRect: rect,
+      viewportWidth,
+      viewportHeight,
+      preferredWidth: Math.max(rect.width, 200),
+      preferredHeight: 220,
+      minWidth: 200,
     });
-  }, [getEffectiveViewport]);
+    setPriorityPickerPosition({
+      top: position.top,
+      left: position.left,
+      width: position.width,
+      maxHeight: position.maxHeight,
+    });
+  }, []);
 
   // Keep model menu portal anchored during scroll/resize
   useEffect(() => {

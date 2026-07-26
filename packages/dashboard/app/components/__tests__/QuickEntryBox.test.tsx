@@ -3075,6 +3075,53 @@ describe("QuickEntryBox", () => {
         expect(dropdown?.classList.contains("dep-dropdown--portal")).toBe(true);
       });
 
+      /*
+      FNXC:QuickAddDepsMenu 2026-07-25-12:00:
+      Symptom verification: Deps portal menu must open attached to the Deps button, not float high
+      with a gap when free space is shorter than the preferred dropdown height.
+      */
+      it("anchors the deps portal menu to the Deps button when free space is tight", () => {
+        const viewportWidth = 390;
+        const viewportHeight = 220;
+        vi.spyOn(window, "innerWidth", "get").mockReturnValue(viewportWidth);
+        vi.spyOn(window, "innerHeight", "get").mockReturnValue(viewportHeight);
+        // Prefer window.inner* in this case: leave documentElement client dims at jsdom 0 so layout
+        // size falls back cleanly and we do not leak clientWidth into later suite tests.
+        renderQuickEntryBox({});
+        expandQuickEntry();
+        fireEvent.change(screen.getByTestId("quick-entry-input"), { target: { value: "Task with deps" } });
+
+        const depsButton = screen.getByTestId("quick-entry-deps");
+        // Trigger near the bottom of a short viewport — preferred 320px height cannot fit below or fully above.
+        vi.spyOn(depsButton, "getBoundingClientRect").mockReturnValue({
+          x: 20,
+          y: 150,
+          width: 64,
+          height: 32,
+          top: 150,
+          right: 84,
+          bottom: 182,
+          left: 20,
+          toJSON: () => ({}),
+        } as DOMRect);
+
+        openDepsMenu();
+
+        const dropdown = document.querySelector(".dep-dropdown") as HTMLElement;
+        expect(dropdown).toBeTruthy();
+        expect(dropdown.classList.contains("dep-dropdown--portal")).toBe(true);
+        expect(dropdown.style.position).toBe("fixed");
+
+        const top = parseFloat(dropdown.style.top);
+        const maxHeight = parseFloat(dropdown.style.maxHeight);
+        const gap = 4;
+        // Menu bottom edge must sit `gap` above the trigger top (open upward, attached).
+        expect(top + maxHeight).toBeCloseTo(150 - gap, 5);
+        // Must not float at the old detached clamp (top ≈ 16 with maxHeight 200 leaving a large gap).
+        expect(top + maxHeight + gap).toBeCloseTo(150, 5);
+        expect(maxHeight).toBeLessThanOrEqual(150 - 16 - gap);
+      });
+
       it("shows long task titles without aggressive truncation", () => {
         const longTitleTask: Task = {
           id: "FN-999",
