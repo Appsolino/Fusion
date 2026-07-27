@@ -105,7 +105,7 @@ params: {
     return params.moveSource === "user" && params.fromColumn === "in-progress" && params.toColumn === "todo";
 }
 
-export function getMergeRequestRecordImpl(store: TaskStore, taskId: string): MergeRequestRecord | null {
+export function getMergeRequestRecordImpl(_store: TaskStore, _taskId: string): MergeRequestRecord | null {
     /*
     FNXC:PostgresCutover 2026-07-04:
     Synchronous read of merge_requests cannot run against PostgreSQL (Drizzle
@@ -118,9 +118,8 @@ export function getMergeRequestRecordImpl(store: TaskStore, taskId: string): Mer
     degradation) instead of throwing. Callers that need the real record in PG
     must use getMergeRequestRecordAsync below.
     */
-    if (store.backendMode) return null;
-    const row = store.db.prepare("SELECT * FROM merge_requests WHERE taskId = ?").get(taskId) as MergeRequestRow | undefined;
-    return row ? store.rowToMergeRequestRecord(row) : null;
+    /* FNXC:SqliteDualPathCleanup 2026-07-26-14:20: sync merge-request reader is incomplete-PG; use getMergeRequestRecordAsync. */
+    return null;
 }
 
 /**
@@ -133,7 +132,7 @@ export function getMergeRequestRecordImpl(store: TaskStore, taskId: string): Mer
  * mode it delegates to the sync impl.
  */
 export async function getMergeRequestRecordAsyncImpl(store: TaskStore, taskId: string): Promise<MergeRequestRecord | null> {
-    if (!store.backendMode) return store.getMergeRequestRecord(taskId);
+    /* FNXC:SqliteDualPathCleanup 2026-07-26-14:15: always PostgreSQL path below. */
     const layer = store.asyncLayer!;
     const rows = await layer.db
       .select()
@@ -222,9 +221,7 @@ silently dropped operator customizations from getWorkflowDefinition / move IR.
 export async function applyBuiltInPromptOverridesAsyncImpl(store: TaskStore, workflowId: string, ir: WorkflowIr): Promise<WorkflowIr> {
     if (!isBuiltinWorkflowId(workflowId)) return ir;
     const projectId = store.getWorkflowSettingsProjectId();
-    const overrides = store.backendMode
-      ? await store.getWorkflowPromptOverridesAsync(workflowId, projectId)
-      : store.getWorkflowPromptOverrides(workflowId, projectId);
+    const overrides = await store.getWorkflowPromptOverridesAsync(workflowId, projectId);
     return applyPromptOverridesToIr(ir, overrides);
 }
 
@@ -307,12 +304,15 @@ export function refreshDatabaseHealthImpl(store: TaskStore): ReturnType<TaskStor
     a layer is present, then return the last snapshot (or optimistic healthy
     until the first probe completes). Prefer refreshDatabaseHealthAsync from
     async callers (self-healing surfaceDbCorruption).
+
+    FNXC:SqliteDualPathCleanup 2026-07-27-06:15:
+    Only schedule the async probe when asyncLayer exists. Without a layer,
+    refreshDatabaseHealthAsyncImpl used to call back into this sync entry and
+    re-schedule forever (unbounded health-refresh microtask recursion).
     */
-    if (store.backendMode) {
+    if (store.asyncLayer) {
       void refreshDatabaseHealthAsyncImpl(store).catch(() => undefined);
-      return store.getDatabaseHealth();
     }
-    store.db.refreshIntegrityCheck();
     return store.getDatabaseHealth();
 }
 
@@ -323,8 +323,13 @@ the result on TaskStore.postgresHealthSnapshot for sync getDatabaseHealth /
 healthCheck readers.
 */
 export async function refreshDatabaseHealthAsyncImpl(store: TaskStore): Promise<ReturnType<TaskStore["getDatabaseHealth"]>> {
-    if (!store.backendMode || !store.asyncLayer) {
-      return refreshDatabaseHealthImpl(store);
+    if (!store.asyncLayer) {
+      /*
+      FNXC:SqliteDualPathCleanup 2026-07-27-06:15:
+      No AsyncDataLayer: return the cached/safe incomplete-PG snapshot. Do not call
+      refreshDatabaseHealthImpl here — that path re-schedules this function and would recurse.
+      */
+      return store.getDatabaseHealth();
     }
     store.postgresHealthSnapshot = {
       healthy: store.postgresHealthSnapshot?.healthy ?? true,
@@ -352,15 +357,11 @@ export async function clearActivityLogImpl(store: TaskStore): Promise<void> {
      * In backend mode, use the async layer to clear the activity log via
      * Drizzle instead of the SQLite-specific db.prepare() path.
      */
-    if (store.backendMode) {
-      const layer = store.asyncLayer!;
-      await layer.db
-        .delete(schema.project.activityLog)
-        .where(eq(schema.project.activityLog.projectId, activityProjectPartition(layer.projectId ?? "")));
-      return;
-    }
-    store.db.prepare("DELETE FROM activityLog").run();
-    store.db.bumpLastModified();
+        const layer = store.asyncLayer!;
+    await layer.db
+      .delete(schema.project.activityLog)
+      .where(eq(schema.project.activityLog.projectId, activityProjectPartition(layer.projectId ?? "")));
+    return;
 }
 
 export function getInsightStoreImpl(store: TaskStore): InsightStore | AsyncInsightStore {
@@ -371,15 +372,12 @@ export function getInsightStoreImpl(store: TaskStore): InsightStore | AsyncInsig
       // project_insight_run_events). The sync SQLite InsightStore (store.db) is
       // used only in legacy SQLite mode. Both expose the same method names; the
       // dashboard insights routes await the result so either works.
-      if (store.backendMode) {
-        const layer = store.getAsyncLayer();
-        if (!layer) {
-          throw new Error("InsightStore is not available: AsyncDataLayer not initialized in backend mode");
-        }
-        store.insightStore = new AsyncInsightStore(layer);
-      } else {
-        store.insightStore = new InsightStore(store.db);
+            const layer = store.getAsyncLayer();
+      if (!layer) {
+        throw new Error("InsightStore is not available: AsyncDataLayer not initialized in backend mode");
       }
+      store.insightStore = new AsyncInsightStore(layer);
+
     }
     return store.insightStore;
 }
@@ -394,15 +392,12 @@ export function getResearchStoreImpl(store: TaskStore): ResearchStore | AsyncRes
       // routes await the result so either works. AI research EXECUTION (the engine
       // ResearchOrchestrator/ResearchRunDispatcher) stays degraded in PG mode — those
       // are coupled to the sync EventEmitter ResearchStore and are out of scope here.
-      if (store.backendMode) {
-        const layer = store.getAsyncLayer();
-        if (!layer) {
-          throw new Error("ResearchStore is not available: AsyncDataLayer not initialized in backend mode");
-        }
-        store.researchStore = new AsyncResearchStore(layer);
-      } else {
-        store.researchStore = new ResearchStore(store.db);
+            const layer = store.getAsyncLayer();
+      if (!layer) {
+        throw new Error("ResearchStore is not available: AsyncDataLayer not initialized in backend mode");
       }
+      store.researchStore = new AsyncResearchStore(layer);
+
     }
     return store.researchStore;
 }
@@ -414,15 +409,12 @@ export function getTodoStoreImpl(store: TaskStore): TodoStore | AsyncTodoStore {
       // over project.todo_lists / project.todo_items). The sync SQLite TodoStore
       // (store.db) is used only in legacy SQLite mode. Both expose the same
       // method names; the dashboard todo routes await the result so either works.
-      if (store.backendMode) {
-        const layer = store.getAsyncLayer();
-        if (!layer) {
-          throw new Error("TodoStore is not available: AsyncDataLayer not initialized in backend mode");
-        }
-        store.todoStore = new AsyncTodoStore(layer);
-      } else {
-        store.todoStore = new TodoStore(store.db);
+            const layer = store.getAsyncLayer();
+      if (!layer) {
+        throw new Error("TodoStore is not available: AsyncDataLayer not initialized in backend mode");
       }
+      store.todoStore = new AsyncTodoStore(layer);
+
     }
     return store.todoStore;
 }

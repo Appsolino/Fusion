@@ -197,16 +197,18 @@ export async function updateTaskDependenciesImpl(store: TaskStore, id: string, m
        * Replace with async store.getTask() calls.
        */
       const assertTaskExists = async (dependencyId: string) => {
-        if (store.backendMode) {
-          try {
-            await store.getTask(dependencyId);
-          } catch {
+        /*
+        FNXC:SqliteDualPathCleanup 2026-07-26-15:00:
+        Map only not-found/deleted errors to "Dependency task not found"; rethrow transport and other PostgreSQL failures.
+        */
+        try {
+          await store.getTask(dependencyId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/not found|TaskDeleted|deleted/i.test(msg)) {
             throw new Error(`Dependency task ${dependencyId} not found`);
           }
-          return;
-        }
-        if (!store.readTaskFromDb(dependencyId)) {
-          throw new Error(`Dependency task ${dependencyId} not found`);
+          throw err;
         }
       };
       const assertUnique = (dependencies: readonly string[]) => {
@@ -306,10 +308,17 @@ export async function updateTaskDependenciesImpl(store: TaskStore, id: string, m
        * to resolve unresolved dependency and current blocker columns.
        */
       const readDepTask = async (depId: string): Promise<Task | null> => {
-        if (store.backendMode) {
-          try { return await store.getTask(depId); } catch { return null; }
+        /*
+        FNXC:SqliteDualPathCleanup 2026-07-26-15:00:
+        Treat not-found as null; rethrow unexpected PostgreSQL failures.
+        */
+        try {
+          return await store.getTask(depId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/not found|TaskDeleted|deleted/i.test(msg)) return null;
+          throw err;
         }
-        return store.readTaskFromDb(depId) ?? null;
       };
 
       const allDepTasks = await Promise.all(nextDependencies.map(readDepTask));

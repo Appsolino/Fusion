@@ -6,7 +6,6 @@ import * as schema from "./postgres/schema/index.js";
 import { type FSWatcher } from "node:fs";
 import type { Task, TaskDetail, TaskCreateInput, TaskAttachment, AgentLogEntry, BoardConfig, Column, ColumnId, CheckoutClaimPrecondition, MergeResult, Settings, GlobalSettings, ProjectSettings, ActivityLogEntry, ActivityEventType, TaskDocument, TaskDocumentRevision, TaskDocumentCreateInput, ArchivedTaskDocumentAdditionInput, ArchivedTaskDocumentAdditionResult, TaskDocumentWithTask, Artifact, ArtifactCreateInput, ArtifactType, ArtifactWithTask, InboxTask, TaskLogEntry, RunMutationContext, RunAuditEvent, RunAuditEventInput, RunAuditEventFilter, ArchivedTaskEntry, ArchiveAgentLogMode, TaskPriority, WorkflowStepTemplate, Agent, AutostashOrphanRecord, TaskCommitAssociation, CommitAssociationDiffBackfillReport, GithubIssueAction, MergeQueueEntry, MergeQueueEnqueueOptions, MergeQueueAcquireOptions, MergeQueueReleaseOutcome, HandoffToReviewOptions, GoalCitation, GoalCitationFilter, GoalCitationInput, GoalCitationSurface, BranchGroup, BranchGroupCreateInput, BranchGroupUpdate, TaskBranchAssignmentMode, MergeRequestRecord, MergeRequestState, MergeRequestWorkflowProjectionOptions, CompletionHandoffMarker, WorkflowWorkItem, WorkflowWorkItemDueFilter, WorkflowWorkItemKind, WorkflowWorkItemState, WorkflowWorkItemTransitionPatch, WorkflowWorkItemUpsertInput, PrEntity, PrEntityCreateInput, PrEntityUpdate, PrThreadState, PrThreadOutcome, PluginActivation, PluginActivationInput } from "./types.js";
 
-
 export type OverlapBlockerRepairReason =
   | "task-not-found"
   | "no-overlap-blocker"
@@ -128,7 +127,7 @@ import { createWorkflowStepImpl, updateWorkflowStepImpl, updateWorkflowDefinitio
 import { initImpl, setupActivityLogListenersImpl, reconcileOrphanedTaskDirsImpl, watchImpl, checkForChangesImpl, migrateAgentLogEntriesImpl, migrateMovedSettingsImpl, recoverStaleTransitionPendingImpl, migrateLegacyWorkflowStepsImpl, emitTaskLifecycleEventSafelyImpl } from "./task-store/lifecycle-ops.js";
 import { updateStepImpl, startStepImpl, acquireMergeQueueLeaseImpl, mergeTaskImpl } from "./task-store/merge-queue-ops.js";
 import { addCommentImpl, publishArchivedTaskDocumentAdditionImpl, upsertTaskDocumentImpl } from "./task-store/comments-ops.js";
-import { deleteTaskImpl, deleteTaskIfImpl, archiveTaskImpl, type DeleteTaskIfResult } from "./task-store/archive-lifecycle.js";
+import { deleteTaskImpl, archiveTaskImpl, type DeleteTaskIfResult } from "./task-store/archive-lifecycle.js";
 import type { TaskDeleteAuditContext } from "./task-delete-attribution.js";
 import { updateSettingsImpl, updateGlobalSettingsImpl } from "./task-store/settings-ops.js";
 import { createTaskBackendImpl, _createTaskInternalBackendImpl, createTaskImpl, createTaskWithReservedIdImpl, _createTaskInternalImpl, _maybeAutoArchiveSameAgentDuplicateImpl } from "./task-store/task-creation.js";
@@ -144,7 +143,6 @@ import { __setTaskActivityLogLimitsForTesting } from "./task-store/comments.js";
 import type { BranchGroupRow, PrEntityRow, TaskDocumentRow, ArtifactRow, TaskDocumentRevisionRow, GoalCitationRow, RunAuditEventRow, MergeQueueRow, MergeRequestRow, CompletionHandoffMarkerRow, WorkflowWorkItemRow } from "./task-store/row-types.js";
 
 /** Database row shape for the tasks table (all columns). */
-
 
 export interface TaskStoreEvents {
   "task:created": [task: Task];
@@ -957,20 +955,10 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   }
   public async _createTaskInternal( input: TaskCreateInput, title: string | undefined, resolvedWorkflowSteps: string[] | undefined, id: string, options?: { createdAt?: string; updatedAt?: string; promptOverride?: string; invokeTaskCreatedHook?: boolean; resolvedEntryColumn?: string; onProposalClaimConflict?: (task: Task) => void; }, ): Promise<Task> {
     /*
-    FNXC:SqliteFinalRemoval 2026-06-25-10:35:
-    Route to the async backend variant when the store is in backend mode so
-    callers like createTaskWithReservedId (which go through this internal
-    create path with an explicit reserved id) work against PostgreSQL. The
-    sync path uses atomicCreateTaskJson -> store.db.transactionImmediate(),
-    which throws "SQLite Database is not available in backend mode". The
-    backend variant uses layer.transactionImmediate + insertTaskRowInTransaction
-    against PostgreSQL, preserving create-class non-destructive insert
-    semantics (see docs/storage.md invariants).
+    FNXC:SqliteDualPathCleanup 2026-07-26-14:05:
+    Task create is PostgreSQL-only (layer.transactionImmediate + insertTaskRowInTransaction). The former sync SQLite _createTaskInternalImpl arm is deleted; production always injects AsyncDataLayer.
     */
-    if (this.backendMode) {
-      return _createTaskInternalBackendImpl(this, input, title, resolvedWorkflowSteps, id, options);
-    }
-    return _createTaskInternalImpl(this, input, title, resolvedWorkflowSteps, id, options);
+    return _createTaskInternalBackendImpl(this, input, title, resolvedWorkflowSteps, id, options);
   }
   public async _maybeAutoArchiveSameAgentDuplicate(task: Task, input: TaskCreateInput): Promise<void> {
     return _maybeAutoArchiveSameAgentDuplicateImpl(this, task, input);
@@ -1077,34 +1065,29 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   async findOpenRevertTaskForSource(sourceTaskId: string): Promise<Task | null> {
     const trimmedId = sourceTaskId.trim();
     if (trimmedId.length === 0) return null;
-    if (this.backendMode) {
-      const layer = this.asyncLayer!;
-      const rows = await layer.db.select()
-        .from(schema.project.tasks)
-        .where(and(
-          isNull(schema.project.tasks.deletedAt),
-          ne(schema.project.tasks.column, "archived"),
-          ne(schema.project.tasks.column, "done"),
-          eq(sql`json_extract(${schema.project.tasks.sourceMetadata}->>'revertOf')`, trimmedId),
-        ))
-        .orderBy(schema.project.tasks.createdAt)
-        .limit(1);
-      if (rows.length === 0) return null;
-      return this.rowToTask(this.pgRowToTaskRow(rows[0] as Record<string, unknown>));
+    /*
+    FNXC:SqliteDualPathCleanup 2026-07-26-15:00:
+    PostgreSQL jsonb uses `->>` for text extraction; the former SQLite json_extract wrapper was invalid on PG.
+    Scope by asyncLayer.projectId so a revert task from another project cannot match.
+    */
+    const layer = this.asyncLayer!;
+    const conditions = [
+      isNull(schema.project.tasks.deletedAt),
+      ne(schema.project.tasks.column, "archived"),
+      ne(schema.project.tasks.column, "done"),
+      sql`${schema.project.tasks.sourceMetadata}->>'revertOf' = ${trimmedId}`,
+    ];
+    if (layer.projectId) {
+      conditions.push(eq(schema.project.tasks.projectId, layer.projectId));
     }
-    const selectClause = this.getTaskSelectClause(false, "t");
-    const row = this.db.prepare(`
-      SELECT ${selectClause}
-      FROM tasks t
-      WHERE t."deletedAt" IS NULL
-        AND t."column" != 'archived'
-        AND t."column" != 'done'
-        AND json_extract(t.sourceMetadata, '$.revertOf') = ?
-      ORDER BY t.createdAt DESC
-      LIMIT 1
-    `).get(trimmedId) as TaskRow | undefined;
-    return row ? this.rowToTask(row) : null;
-  }
+    const rows = await layer.db.select()
+      .from(schema.project.tasks)
+      .where(and(...conditions))
+      .orderBy(schema.project.tasks.createdAt)
+      .limit(1);
+    if (rows.length === 0) return null;
+    return this.rowToTask(this.pgRowToTaskRow(rows[0] as Record<string, unknown>));
+}
 
 /** Persist (idempotent upsert) one branch's progress for a fan-out run (#1407). */
    async saveWorkflowRunBranch(state: { taskId: string; runId: string; branchId: string; currentNodeId: string; status: string; }): Promise<void> {
@@ -2005,8 +1988,11 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     predicate: (live: Task) => boolean | Promise<boolean>,
     options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext },
   ): Promise<DeleteTaskIfResult> {
-    if (this.backendMode) return deleteTaskIfBackendImpl(this, id, predicate, options);
-    return deleteTaskIfImpl(this, id, predicate, options);
+    /*
+    FNXC:SqliteDualPathCleanup 2026-07-26-14:05:
+    Conditional delete is PostgreSQL-only; the SQLite deleteTaskIfImpl arm is deleted.
+    */
+    return deleteTaskIfBackendImpl(this, id, predicate, options);
   }
   public deleteTaskById(taskId: string): void {
     return deleteTaskByIdImpl(this, taskId);
