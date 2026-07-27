@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConnectNodeModal } from "../ConnectNodeModal";
 import { assertModalGeometryRecoveryAndSheetContracts, assertRenderedModalTouchGeometry } from "./floatingWindowMigration.test-helpers";
+import { expectStableTyping } from "./typingStability.test-helpers";
 import type { NodeInfo } from "../../api";
 
 const mockFetch = vi.fn();
@@ -38,6 +39,19 @@ describe("ConnectNodeModal", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+
+  /*
+  FNXC:TypingStability 2026-07-26-22:15:
+  Per-character typing guard. The FN-8606 floating-window migration made Planning Mode and Settings
+  untypable and no test noticed, because field coverage here uses fireEvent.change, which never needs
+  the input to stay mounted. This asserts the field keeps its DOM node, value, and focus while typed.
+  */
+  it("keeps the node name field mounted and focused while typing", async () => {
+    render(<ConnectNodeModal {...defaultProps} />);
+    const field = screen.getByPlaceholderText("Build Server") as HTMLInputElement;
+    await expectStableTyping(field, "build-server", () => screen.getByPlaceholderText("Build Server"));
   });
 
   it("renders when open", () => {
