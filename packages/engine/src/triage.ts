@@ -986,6 +986,32 @@ export class TriageProcessor {
       this.activeSessions.delete(taskId);
       this.stuckAborted.delete(taskId);
       this.finalizing.delete(taskId);
+      /*
+      FNXC:ConcurrencyAdmission 2026-07-26-14:20:
+      Eviction must release EVERY admission-side claim the hung planner still holds, not just
+      `processing`. Symptom this fixes: an operator reported a Todo card stuck on "Queued to plan"
+      with free concurrency slots and NO explanation in either diagnostic — no "Plan throttled by"
+      log line and no `task:plan-admission-throttled` run-audit row.
+
+      Cause: `coordinatorAdmittedTaskIds` was only cleared by specifyTask's `finally` (and its
+      duplicate-claim guard), so a promise that never settles — exactly the case this eviction
+      exists for — left the id in the set permanently. Planning discovery does not consult that
+      set, so the card stayed in `triageTasks` and `maxToStart` stayed positive, which means the
+      throttle branch (the only thing that logs or emits) never fired; but `admitOldest`'s
+      `refresh()` filters on the set, so the coordinator saw no candidate. Silent stall until
+      engine restart, and the badge (a pure client-side "unplanned + idle in Todo" inference) kept
+      claiming the card was queued.
+
+      The pre-held host slot is the second claim on the same path. A promise hung INSIDE
+      retryableWork has already transferred ownership, so the drop is a no-op there by design; a
+      promise hung BEFORE `takePreHeldExecutorSlot` still holds an untransferred registration, and
+      returning it here is the difference between a reclaimed slot and one the semaphore's
+      stale-excess valve cannot touch for 600s. If such a run later resumes, its take() returns
+      false and it acquires through `semaphore.run` normally, so the register/take-or-drop pairing
+      invariant holds either way.
+      */
+      this.coordinatorAdmittedTaskIds.delete(taskId);
+      dropPreHeldExecutorSlot(taskId, this.options.semaphore);
       evicted.add(taskId);
     }
 
