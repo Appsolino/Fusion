@@ -636,6 +636,55 @@ interface GitHubActionViewModel {
   readyVia: "oauth" | "gh-cli" | null;
 }
 
+/*
+FNXC:ModelOnboarding 2026-07-26-21:05:
+Status badges stay at module scope like the other onboarding subcomponents. Declared inside
+ModelOnboardingModal's render they were a new element type per render, remounting each badge on every
+onboarding state change; `fusion-react/no-nested-component-definitions` now enforces this.
+Both read their copy from useTranslation directly, so they need no props beyond `status`.
+*/
+function ProviderStatusBadge({ status }: { status: ProviderConnectionStatus }) {
+  const { t } = useTranslation("app");
+  const config: Record<ProviderConnectionStatus, { text: string; className: string }> = {
+    connected: { text: t("setup.statusConnected", "✓ Connected"), className: "auth-status-badge connected" },
+    "not-connected": { text: t("setup.statusNotConnected", "Not connected"), className: "auth-status-badge not-connected" },
+    skipped: { text: t("setup.statusSkipped", "Skipped"), className: "auth-status-badge skipped" },
+    retry: { text: t("setup.statusRetry", "Retry"), className: "auth-status-badge retry" },
+  };
+  const { text, className: badgeClassName } = config[status];
+  return (
+    <span
+      data-testid="provider-status-badge"
+      className={badgeClassName}
+      data-status={status}
+    >
+      {text}
+    </span>
+  );
+}
+
+function GitHubStatusBadge({ status }: { status: GitHubConnectionStatus }) {
+  const { t } = useTranslation("app");
+  const config: Record<GitHubConnectionStatus, { text: string; className: string }> = {
+    connected: { text: t("setup.statusConnected", "✓ Connected"), className: "auth-status-badge connected" },
+    pending: { text: t("setup.statusConnecting", "⏳ Connecting…"), className: "auth-status-badge pending" },
+    failed: { text: t("setup.statusConnectionFailed", "✗ Connection failed"), className: "auth-status-badge retry" },
+    skipped: { text: t("setup.statusSkipped", "Skipped"), className: "auth-status-badge skipped" },
+    "not-connected": { text: t("setup.statusNotConnected", "Not connected"), className: "auth-status-badge not-connected" },
+  };
+
+  const { text, className: badgeClassName } = config[status];
+  return (
+    <span
+      data-testid="github-status-badge"
+      className={badgeClassName}
+      data-status={status}
+    >
+      {text}
+    </span>
+  );
+}
+
 const GIT_INSTALL_URL = "https://git-scm.com/downloads";
 const GH_CLI_INSTALL_URL = "https://github.com/cli/cli/releases/latest";
 
@@ -1050,26 +1099,6 @@ export function ModelOnboardingModal({
     return "not-connected";
   }, [loginOutcomes, skippedProviders]);
 
-  // Status badge component for provider connection status
-  function ProviderStatusBadge({ status }: { status: ProviderConnectionStatus }) {
-    const config: Record<ProviderConnectionStatus, { text: string; className: string }> = {
-      connected: { text: t("setup.statusConnected", "✓ Connected"), className: "auth-status-badge connected" },
-      "not-connected": { text: t("setup.statusNotConnected", "Not connected"), className: "auth-status-badge not-connected" },
-      skipped: { text: t("setup.statusSkipped", "Skipped"), className: "auth-status-badge skipped" },
-      retry: { text: t("setup.statusRetry", "Retry"), className: "auth-status-badge retry" },
-    };
-    const { text, className: badgeClassName } = config[status];
-    return (
-      <span
-        data-testid="provider-status-badge"
-        className={badgeClassName}
-        data-status={status}
-      >
-        {text}
-      </span>
-    );
-  }
-
   const getGitHubStatus = useCallback((): GitHubConnectionStatus => {
     if (githubActionState.ready) {
       return "connected";
@@ -1087,27 +1116,6 @@ export function ModelOnboardingModal({
 
     return "not-connected";
   }, [githubActionState]);
-
-  function GitHubStatusBadge({ status }: { status: GitHubConnectionStatus }) {
-    const config: Record<GitHubConnectionStatus, { text: string; className: string }> = {
-      connected: { text: t("setup.statusConnected", "✓ Connected"), className: "auth-status-badge connected" },
-      pending: { text: t("setup.statusConnecting", "⏳ Connecting…"), className: "auth-status-badge pending" },
-      failed: { text: t("setup.statusConnectionFailed", "✗ Connection failed"), className: "auth-status-badge retry" },
-      skipped: { text: t("setup.statusSkipped", "Skipped"), className: "auth-status-badge skipped" },
-      "not-connected": { text: t("setup.statusNotConnected", "Not connected"), className: "auth-status-badge not-connected" },
-    };
-
-    const { text, className: badgeClassName } = config[status];
-    return (
-      <span
-        data-testid="github-status-badge"
-        className={badgeClassName}
-        data-status={status}
-      >
-        {text}
-      </span>
-    );
-  }
 
   // Load models
   const loadModels = useCallback(async () => {
