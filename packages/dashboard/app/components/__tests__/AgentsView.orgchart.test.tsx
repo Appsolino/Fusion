@@ -147,6 +147,26 @@ describe("AgentsView org chart interactions", () => {
     });
   });
 
+  it("renders heartbeat controls nowhere in either org-chart layout", async () => {
+    const { container } = render(<AgentsView addToast={vi.fn()} />);
+    fireEvent.click(await screen.findByLabelText("Org Chart view"));
+
+    const assertHeartbeatControlsAreAbsent = () => {
+      const chart = screen.getByTestId("agent-org-chart");
+      expect(container.querySelectorAll(".org-chart-node__actions")).toHaveLength(0);
+      expect(Array.from(chart.querySelectorAll("button")).filter((button) => /Disable heartbeat|Enable heartbeat/i.test(button.getAttribute("aria-label") ?? button.textContent ?? ""))).toHaveLength(0);
+      expect(chart.querySelectorAll(".org-chart-node button")).toHaveLength(0);
+    };
+
+    await screen.findByText("Eng C");
+    assertHeartbeatControlsAreAbsent();
+
+    const layoutToggle = screen.getByTestId("agent-org-chart-layout-toggle");
+    fireEvent.click(layoutToggle.querySelector<HTMLButtonElement>('[data-layout-value="vertical"]')!);
+    await waitFor(() => expect(screen.getByTestId("agent-org-chart")).toHaveAttribute("data-layout-mode", "vertical"));
+    assertHeartbeatControlsAreAbsent();
+  });
+
   it("does not render connector paths for empty or single-root org chart data states", async () => {
     mockFetchOrgTree.mockResolvedValueOnce([]);
     const empty = render(<AgentsView addToast={vi.fn()} />);
