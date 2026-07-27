@@ -360,6 +360,14 @@ const quarantinedDashboardTests: string[] = [
   */
 ];
 
+/*
+FNXC:DashboardTests 2026-08-13-17:10:
+Chromium CDP touch geometry needs its own opt-in project: browser launch is costly and binary-dependent,
+and coordinate hit testing cannot run in jsdom or an API shard. Keep this single spec outside both the
+quality backfill and deep API lanes so Chromium availability produces an explicit lane result, not duplicate coverage.
+*/
+const browserTouchTests = ["src/__tests__/task-modal-touch-resize-browser.test.ts"];
+
 const qualityApiTests = [
   // Critical HTTP/server behavior: auth, task/project/settings mutation,
   // git/GitHub, agents, nodes, chat/files, realtime, and isolation guards.
@@ -404,6 +412,7 @@ const qualityAppBackfillTests = ["app/**/*.test.{ts,tsx}"];
 
 const backfillApiExclude = [
   ...qualityApiTests,
+  ...browserTouchTests,
   /*
   FNXC:DashboardDistArtifacts 2026-07-17-15:10:
   FN-8245 reclassified plugin-registry-dist as a curated skip-list build-only
@@ -426,6 +435,7 @@ const qualityApiBackfillTests = ["src/**/*.test.{ts,tsx}"];
 const deepLaneEnabled = process.env.FUSION_DASHBOARD_DEEP === "1";
 const deepAppInclude = deepLaneEnabled ? ["app/**/*.test.{ts,tsx}"] : [];
 const deepApiInclude = deepLaneEnabled ? ["src/**/*.test.{ts,tsx}"] : [];
+const deepApiExclude = [...browserTouchTests, ...quarantinedDashboardTests];
 
 // Footgun guard: with the deep lanes gated off, selecting one explicitly
 // (`vitest run --project dashboard-app`) matches zero files and exits green in
@@ -485,6 +495,10 @@ export const dashboardQualityProjectGlobs = {
   },
   "dashboard-api-quality": {
     include: qualityApiTests,
+    exclude: quarantinedDashboardTests,
+  },
+  "dashboard-browser-touch": {
+    include: browserTouchTests,
     exclude: quarantinedDashboardTests,
   },
   "dashboard-app-quality-backfill": {
@@ -772,6 +786,18 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: "dashboard-browser-touch",
+          environment: "node",
+          include: browserTouchTests,
+          exclude: quarantinedDashboardTests,
+          css: { include: [] },
+          testTimeout: 45_000,
+          hookTimeout: 45_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: "dashboard-api-quality-backfill",
           environment: "node",
           include: qualityApiBackfillTests,
@@ -802,7 +828,7 @@ export default defineConfig({
           // Empty unless FUSION_DASHBOARD_DEEP=1 (deep escape hatch); see the
           // dashboard-app note above.
           include: deepApiInclude,
-          exclude: quarantinedDashboardTests,
+          exclude: deepApiExclude,
           css: { include: [] },
         },
       },
