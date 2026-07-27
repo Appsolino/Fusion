@@ -1,5 +1,15 @@
 # runfusion.ai
 
+## 0.74.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies [c21fb0d]
+- Updated dependencies [7065d03]
+- Updated dependencies [beebd27]
+- Updated dependencies [5ea98f7]
+  - @runfusion/fusion@0.74.0-beta.5
+
 ## 0.74.0-beta.4
 
 ### Patch Changes

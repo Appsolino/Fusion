@@ -2,6 +2,22 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.74.0-beta.5
+
+### Highlights
+
+- Planning Mode and Settings keep every character you type, not just the first
+- Cards no longer stall on "Queued to plan" with free slots after a planner hangs
+- "Queued to plan" and "Ready" badges match what the engine will actually do with the card
+- Expanded Mailbox reply-context rows stay open when you expand another row
+
+### Fixed
+
+- Planning Mode and Settings no longer drop typed text after the first character — the modal shell was remounting the focused input on every render.
+- Cards stuck on "Queued to plan" while concurrency slots sat free are now re-offered for planning after a hung planner is evicted, instead of waiting for an engine restart.
+- The "Queued to plan" and "Ready" badges on Todo cards now reflect whether the card is genuinely awaiting planning, rather than guessing from its step count. Todo rows carry this state through live board updates.
+- Expanded reply-context rows in the Mailbox modal stay expanded when another row is opened; the recursive reply thread no longer remounts and collapses.
+
 ## 0.74.0-beta.4
 
 ### Highlights

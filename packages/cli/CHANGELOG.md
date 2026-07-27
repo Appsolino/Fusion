@@ -1,5 +1,22 @@
 # @runfusion/fusion
 
+## 0.74.0-beta.5
+
+### Patch Changes
+
+- c21fb0d: summary: Keep expanded Mailbox reply-context rows open when another row is expanded.
+  category: fix
+  dev: `ReplyContextExpandable` was declared inside `MailboxModal`'s render, so every parent update produced a new element type and remounted the recursive reply thread, collapsing already-expanded rows. Hoisted to module scope with an explicit `env` prop.
+- 7065d03: summary: Fix Planning Mode and Settings dropping typed text after the first character.
+  category: fix
+  dev: The FN-8606 floating-window migration declared `ModalShell` as a component inside `PlanningModeModal`/`SettingsModal` render, so each render produced a new element type and remounted the whole subtree, destroying the focused input. Replaced with a plain `renderModalShell(children)` call so element types stay stable.
+- beebd27: summary: "Queued to plan" and "Ready" badges now match what the engine will actually do with the card.
+  category: fix
+  dev: New shared `isTaskAwaitingPlanning` predicate (PROMPT.md seed-ness + replan park) replaces TaskCard's `steps.length` proxy; `GET /api/tasks` attaches transient `awaitingPlanning` for Todo rows (best-effort, capped at 200 reads/request), carried across same-column SSE updates while the step count is unchanged.
+- 5ea98f7: summary: Fix cards stuck on "Queued to plan" with free concurrency slots after a hung planner.
+  category: fix
+  dev: TriageProcessor.evictStaleProcessing now also clears `coordinatorAdmittedTaskIds` and drops any untransferred pre-held host slot, so an evicted planner's card is re-offered by the admission coordinator's refresh instead of being filtered out until engine restart.
+
 ## 0.74.0-beta.4
 
 ### Minor Changes

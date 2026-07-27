@@ -53,6 +53,8 @@
     "fair-boards-page-one-column",
     "faster-board-scroll-no-desktop-snap",
     "fix-duplicate-warning-open-deep-link",
+    "fix-mailbox-reply-context-remount",
+    "fix-planning-settings-composer-remount",
     "fn-8556-windows-agent-selection",
     "fn-8561-task-card-dates",
     "fn-8562-chat-conversation-tags",
@@ -96,6 +98,7 @@
     "planning-worktree-reclaim-race",
     "project-switch-modal-reset",
     "promote-force-unplanned",
+    "queued-to-plan-badge-engine-agreement",
     "quick-add-start-button",
     "quick-add-start-seeds-prompt",
     "quick-chat-tablet-drag-header",
@@ -118,6 +121,7 @@
     "task-not-found-404",
     "terminal-blank-until-keypress-refresh",
     "theme-mailbox-markdown-links",
+    "triage-eviction-admission-claim-leak",
     "triage-stale-planning-sweep",
     "truthful-abort-provenance"
   ]
