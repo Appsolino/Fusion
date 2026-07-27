@@ -4619,7 +4619,13 @@ export function SettingsModal({
   FNXC:Settings 2026-06-22-00:00:
   Embedded settings is a main-content destination, not a dialog. It drops the fixed `.modal-overlay` backdrop and the inner card chrome (modal-overlay/modal/settings-modal classes), and instead uses `settings-embedded right-dock-embedded-view` (host) + `settings-modal--embedded` (panel) to fill the pane flush like other embedded views (Planning, Command Center). The modal path stays byte-identical.
   */
-  const ModalShell = ({ children }: { children: ReactNode }) => isEmbedded ? (
+  /*
+  FNXC:ModalTouchGeometry 2026-07-26-19:40:
+  The shell MUST stay a plain render function, never a component declared inside this render. A nested component is a
+  new element type on every render, so React remounts the whole Settings subtree on each keystroke and text inputs lose
+  focus after one character. Keep the returned element types (div / FloatingWindow) stable by calling this directly.
+  */
+  const renderModalShell = (children: ReactNode) => isEmbedded ? (
     <div
       className="settings-embedded right-dock-embedded-view"
       data-testid="settings-view"
@@ -4648,8 +4654,8 @@ export function SettingsModal({
     </FloatingWindow>
   );
 
-  return (
-    <ModalShell>
+  return renderModalShell(
+    <>
       <div
         className={isEmbedded ? "modal modal-lg settings-modal settings-modal--embedded" : "modal modal-lg settings-modal"}
         style={isEmbedded ? undefined : keyboardStyle}
@@ -5391,7 +5397,7 @@ export function SettingsModal({
           </div>
         </div>
       )}
-    </ModalShell>
+    </>
   );
 }
 

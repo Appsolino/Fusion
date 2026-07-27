@@ -3540,7 +3540,14 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   );
 
   /* FNXC:ModalTouchGeometry 2026-07-26-14:25: Preserve Planning Mode's pre-migration responsive desktop shell as the FloatingWindow seed so shared persistence does not shrink the surface. */
-  const ModalShell = ({ children }: { children: ReactNode }) => isEmbedded ? (
+  /*
+  FNXC:ModalTouchGeometry 2026-07-26-19:40:
+  The shell MUST be a plain render function, never a component declared inside this render. A nested component is a
+  brand-new element type on every render, so React unmounts and remounts the entire Planning subtree on each keystroke:
+  the composer textarea is recreated, loses DOM focus, and typing appears dead after the first character. Keep the
+  returned element types (div / FloatingWindow) stable by calling this directly.
+  */
+  const renderModalShell = (children: ReactNode) => isEmbedded ? (
     <div className="planning-view open" data-testid="planning-view" role="region" aria-label={t("planning.title", "Planning Mode")}>
       {children}
     </div>
@@ -3564,8 +3571,8 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     </FloatingWindow>
   );
 
-  return (
-    <ModalShell>
+  return renderModalShell(
+    (
       <div className={isEmbedded ? "modal modal-lg planning-modal planning-modal--embedded" : "modal modal-lg planning-modal"} ref={modalRef}>
         {/*
         FNXC:PlanningMode 2026-06-22-00:00:
@@ -4250,7 +4257,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
 
         </div>
       </div>
-    </ModalShell>
+    )
   );
 }
 

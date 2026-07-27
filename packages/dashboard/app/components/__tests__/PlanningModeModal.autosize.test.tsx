@@ -186,6 +186,27 @@ describe("PlanningModeModal autosize", () => {
     expect(screen.getByText("Generating initial plan…")).toBeInTheDocument();
   });
 
+  /*
+  FNXC:PlanningMode 2026-07-26-19:40:
+  Typing into a Planning composer must keep the SAME textarea node mounted and focused. The FN-8606 floating-window
+  migration declared the modal/embedded shell as a component inside render, so every keystroke produced a new element
+  type, remounted the whole subtree, and dropped focus after one character — Planning Mode became untypable. Assert the
+  invariant with real per-character typing (fireEvent.change cannot see it) across both presentation surfaces.
+  */
+  it.each(["modal", "embedded"] as const)("keeps the %s composer mounted and focused across keystrokes", async (presentation) => {
+    mockCreatePlanningDraft.mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    render(<PlanningModeModal isOpen={true} onClose={vi.fn()} onTaskCreated={vi.fn()} onTasksCreated={vi.fn()} tasks={mockTasks} presentation={presentation} />);
+
+    const textarea = screen.getByPlaceholderText(/Build a user authentication/i) as HTMLTextAreaElement;
+    await user.click(textarea);
+    await user.type(textarea, "auth flow");
+
+    expect(screen.getByPlaceholderText(/Build a user authentication/i)).toBe(textarea);
+    expect(textarea.value).toBe("auth flow");
+    expect(document.activeElement).toBe(textarea);
+  });
+
   it("grows initial planning textarea and caps at max", async () => {
     // This assertion owns the blank composer; do not let its draft debounce replace it with a
     // session view while verifying the textarea's height contract.
