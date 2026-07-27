@@ -147,26 +147,32 @@ describe.runIf(executablePath)("Task modal tablet touch resize browser regressio
       await page.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=task-detail&reset=1&detailSize=600x500`);
       await page.waitForTimeout(350);
       expect(await page.evaluate(() => window.scrollX === 0 && window.scrollY === 0)).toBe(true);
-      expect(await page.evaluate(() => document.querySelectorAll("[data-resize-hit-target='true']").length)).toBe(1);
+      expect(await page.evaluate(() => document.querySelectorAll("[data-resize-hit-target='true']").length)).toBe(9);
       await mkdir(screenshots, { recursive: true });
       if (width === 820) await page.screenshot({ path: path.join(screenshots, "tablet-before.png") });
 
-      const detailSelector = "[data-testid='task-detail-modal'] .modal-resize-grip";
+      const detailPanel = "[data-testid='floating-window-task-detail-fixture']";
+      const detailSelector = `${detailPanel} [data-testid='floating-window-resize-se']`;
       const detailPoint = await targetCenter(page, detailSelector);
       expect(await page.evaluate((point) => document.elementFromPoint(point.x, point.y)?.getAttribute("data-resize-hit-target"), detailPoint)).toBe("true");
-      const detailBefore = await rect(page, "[data-testid='task-detail-modal']");
+      const detailBefore = await rect(page, detailPanel);
       await touchDrag(cdp, detailPoint);
       await page.waitForTimeout(250);
-      const detailAfter = await rect(page, "[data-testid='task-detail-modal']");
+      const detailAfter = await rect(page, detailPanel);
       expect(detailAfter.width).toBeGreaterThan(detailBefore.width);
       expect(detailAfter.height).toBeGreaterThan(detailBefore.height);
-      expect(detailAfter.width).toBeLessThanOrEqual(width);
-      expect(detailAfter.height).toBeLessThanOrEqual(height);
-      expect(await page.evaluate(() => localStorage.getItem("task-detail-modal-size"))).not.toBeNull();
+      expect(detailAfter.width).toBeLessThanOrEqual(width - 32);
+      expect(detailAfter.height).toBeLessThanOrEqual(height - 32);
+      const persistedTaskDetailGeometry = await page.evaluate(() => {
+        const raw = localStorage.getItem("floating-window:task-detail");
+        return raw ? JSON.parse(raw) : null;
+      });
+      expect(persistedTaskDetailGeometry?.size.width).toBeCloseTo(detailAfter.width);
+      expect(persistedTaskDetailGeometry?.size.height).toBeCloseTo(detailAfter.height);
 
       await page.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=new-task`);
       await page.waitForTimeout(350);
-      expect(await page.evaluate(() => document.querySelectorAll("[data-resize-hit-target='true']").length)).toBe(8);
+      expect(await page.evaluate(() => document.querySelectorAll("[data-resize-hit-target='true']").length)).toBe(9);
       const newTaskPanel = ".new-task-modal";
       const headerPoint = await targetCenter(page, "[data-testid='new-task-drag-handle']");
       const newTaskBeforeHeaderDrag = await rect(page, newTaskPanel);
@@ -178,7 +184,7 @@ describe.runIf(executablePath)("Task modal tablet touch resize browser regressio
       expect(newTaskAfterHeaderDrag.width).toBe(newTaskBeforeHeaderDrag.width);
       expect(newTaskAfterHeaderDrag.height).toBe(newTaskBeforeHeaderDrag.height);
 
-      const newTaskTarget = "[data-testid='new-task-resize-se']";
+      const newTaskTarget = "[data-testid='floating-window-resize-se']";
       const newTaskPoint = await targetCenter(page, newTaskTarget);
       expect(await page.evaluate((point) => document.elementFromPoint(point.x, point.y)?.getAttribute("data-resize-hit-target"), newTaskPoint)).toBe("true");
       const newTaskBeforeResize = await rect(page, newTaskPanel);
@@ -189,8 +195,16 @@ describe.runIf(executablePath)("Task modal tablet touch resize browser regressio
       expect(newTaskAfterResize.height).toBeGreaterThan(newTaskBeforeResize.height);
       expect(newTaskAfterResize.width).toBeLessThanOrEqual(width - 32);
       expect(newTaskAfterResize.height).toBeLessThanOrEqual(height - 32);
-      expect(await page.evaluate(() => localStorage.getItem("fusion:new-task-modal-size"))).not.toBeNull();
-      expect(await page.evaluate(() => localStorage.getItem("fusion:new-task-modal-position"))).not.toBeNull();
+      /*
+      FNXC:ModalTouchGeometry 2026-07-26-19:51:
+      The browser regression must prove FloatingWindow persisted usable resized geometry, not merely created the storage key.
+      */
+      const persistedNewTaskGeometry = await page.evaluate(() => {
+        const raw = localStorage.getItem("fusion:new-task-modal-geometry");
+        return raw ? JSON.parse(raw) : null;
+      });
+      expect(persistedNewTaskGeometry?.size.width).toBeCloseTo(newTaskAfterResize.width);
+      expect(persistedNewTaskGeometry?.size.height).toBeCloseTo(newTaskAfterResize.height);
       if (width === 820) await page.screenshot({ path: path.join(screenshots, "tablet-after.png") });
       await page.close();
     }, 30_000);
@@ -283,15 +297,13 @@ describe.runIf(executablePath)("Task modal tablet touch resize browser regressio
     await desktop.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=task-detail&reset=1`);
     await desktop.waitForTimeout(250);
     const desktopTaskDetail = {
-      panel: await boxMetrics(desktop, "[data-testid='task-detail-modal']"),
-      header: await boxMetrics(desktop, ".task-detail-modal .modal-header"),
-      body: await boxMetrics(desktop, ".task-detail-modal .modal-body"),
-      overlay: await boxMetrics(desktop, ".modal-overlay"),
+      panel: await boxMetrics(desktop, "[data-testid='floating-window-task-detail-fixture']"),
+      header: await boxMetrics(desktop, ".task-detail-content .modal-header"),
+      body: await boxMetrics(desktop, ".task-detail-content .modal-body"),
+      overlay: await boxMetrics(desktop, "[data-testid='task-detail-modal-overlay']"),
+      handle: await boxMetrics(desktop, "[data-testid='floating-window-task-detail-fixture'] [data-testid='floating-window-resize-se']"),
     };
-    // The desktop overlay is the intentional density baseline: 10vh top placement with no
-    // panel-internal padding added by touch geometry.
-    expect(parseFloat(desktopTaskDetail.overlay.paddingBlockStart)).toBeCloseTo(100);
-    expect(desktopTaskDetail.panel.y).toBeCloseTo(parseFloat(desktopTaskDetail.overlay.paddingBlockStart));
+    expect(parseFloat(desktopTaskDetail.overlay.paddingBlockStart)).toBe(0);
     await desktop.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=new-task&reset=1`);
     await desktop.waitForTimeout(250);
     const desktopNewTask = {
@@ -307,28 +319,28 @@ describe.runIf(executablePath)("Task modal tablet touch resize browser regressio
     await tablet.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=task-detail&reset=1`);
     await tablet.waitForTimeout(250);
     const tabletTaskDetail = {
-      panel: await boxMetrics(tablet, "[data-testid='task-detail-modal']"),
-      header: await boxMetrics(tablet, ".task-detail-modal .modal-header"),
-      body: await boxMetrics(tablet, ".task-detail-modal .modal-body"),
-      overlay: await boxMetrics(tablet, ".modal-overlay"),
-      grip: await boxMetrics(tablet, ".task-detail-modal .modal-resize-grip"),
+      panel: await boxMetrics(tablet, "[data-testid='floating-window-task-detail-fixture']"),
+      header: await boxMetrics(tablet, ".task-detail-content .modal-header"),
+      body: await boxMetrics(tablet, ".task-detail-content .modal-body"),
+      overlay: await boxMetrics(tablet, "[data-testid='task-detail-modal-overlay']"),
+      handle: await boxMetrics(tablet, "[data-testid='floating-window-task-detail-fixture'] [data-testid='floating-window-resize-se']"),
     };
-    // The production tablet breakpoint intentionally sizes the panel to 98vw and offsets it
-    // by 6vh. Checking computed overlay padding plus the actual panel rect catches a painted
-    // inset regression that the fixed overlay's own y=0 rect cannot observe.
-    expect(parseFloat(tabletTaskDetail.overlay.paddingBlockStart)).toBeCloseTo(1024 * 0.06);
-    expect(tabletTaskDetail.panel.y).toBeCloseTo(parseFloat(tabletTaskDetail.overlay.paddingBlockStart));
-    expect(tabletTaskDetail.panel.width).toBeCloseTo(768 * 0.98, 1);
-    expect(tabletTaskDetail.panel.x).toBeCloseTo((768 - tabletTaskDetail.panel.width) / 2, 1);
+    /*
+    FNXC:ModalTouchGeometry 2026-07-26-20:08:
+    Task Detail and New Task share FloatingWindow's zero-inset tablet geometry while preserving
+    desktop content density and 44px touch handles.
+    */
+    expect(tabletTaskDetail.overlay.paddingBlockStart).toBe(desktopTaskDetail.overlay.paddingBlockStart);
+    expect(tabletTaskDetail.panel.width).toBe(desktopTaskDetail.panel.width);
+    expect(tabletTaskDetail.panel.x).toBeGreaterThanOrEqual(0);
     expect(tabletTaskDetail.overlay.paddingInlineStart).toBe(desktopTaskDetail.overlay.paddingInlineStart);
     expect(tabletTaskDetail.overlay.paddingInlineEnd).toBe(desktopTaskDetail.overlay.paddingInlineEnd);
-    expect(tabletTaskDetail.panel.width).toBeLessThan(desktopTaskDetail.panel.width);
     expect(tabletTaskDetail.header.paddingBlockStart).toBe(desktopTaskDetail.header.paddingBlockStart);
     expect(tabletTaskDetail.header.paddingBlockEnd).toBe(desktopTaskDetail.header.paddingBlockEnd);
     expect(tabletTaskDetail.body.paddingBlockStart).toBe(desktopTaskDetail.body.paddingBlockStart);
     expect(tabletTaskDetail.body.paddingBlockEnd).toBe(desktopTaskDetail.body.paddingBlockEnd);
-    expect(tabletTaskDetail.grip.width).toBe(44);
-    expect(tabletTaskDetail.grip.height).toBe(44);
+    expect(tabletTaskDetail.handle.width).toBe(44);
+    expect(tabletTaskDetail.handle.height).toBe(44);
 
     await tablet.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=new-task&reset=1`);
     await tablet.waitForTimeout(250);
@@ -337,7 +349,7 @@ describe.runIf(executablePath)("Task modal tablet touch resize browser regressio
       body: await boxMetrics(tablet, ".new-task-modal .modal-body"),
       overlay: await boxMetrics(tablet, "[data-testid='new-task-modal-overlay']"),
       panel: await boxMetrics(tablet, ".new-task-modal"),
-      handle: await boxMetrics(tablet, "[data-testid='new-task-resize-se']"),
+      handle: await boxMetrics(tablet, "[data-testid='floating-window-resize-se']"),
     };
     expect(tabletNewTask.header.paddingBlockStart).toBe(desktopNewTask.header.paddingBlockStart);
     expect(tabletNewTask.header.paddingBlockEnd).toBe(desktopNewTask.header.paddingBlockEnd);
