@@ -729,23 +729,24 @@ describe("TaskDetailModal", () => {
 
       expect(css).not.toContain(".activity-toolbar");
       expect(css).not.toContain("activity-toolbar--expand-only");
-      expect(css).toContain(".detail-activity {\n  position: relative;\n  padding-inline-end: calc(var(--space-2xl) + var(--space-md));\n}");
+      expect(css).toContain(".detail-activity {\n  position: relative;\n  padding-inline-end: 0;\n}");
+      expect(css).toContain(".detail-activity:not(.detail-activity--interventions) > h4,");
+      expect(css).toContain("padding-inline-end: calc(var(--space-2xl) + var(--space-md));");
       expect(overlayBlock).toContain("position: absolute;");
       expect(overlayBlock).toContain("top: var(--space-md);");
       expect(overlayBlock).toContain("right: var(--space-md);");
-      expect(mobileBlock).toContain("  .detail-activity {\n    padding-inline-end: 0;\n  }");
+      expect(mobileBlock).not.toContain("  .detail-activity {\n    padding-inline-end:");
       expect(mobileOverlayBlock).toContain("top: var(--space-sm);");
       expect(mobileOverlayBlock).toContain("right: var(--space-sm);");
 
       /*
-      FNXC:TaskDetailActivity 2026-07-16-00:00:
-      FN-8166 requires Feed to inherit the symmetric mobile `.detail-body` inset,
-      while only its first visible row reserves space for the opaque overlay toggle.
-      This contract also prevents non-Feed task-detail surfaces from adding a
-      container-level right-only inset or mobile horizontal overflow.
+      FNXC:TaskDetailActivity 2026-07-27-02:15:
+      FN-8624 requires Feed to inherit the symmetric `.detail-body` inset at every
+      breakpoint, while only its first visible row reserves space for the opaque overlay.
+      This contract covers modal, pop-out, embedded, and mobile task-detail surfaces.
       */
       const mobileDetailBodyBlock = getExactCssRuleBlock(mobileBlock, ".detail-body");
-      const mobileInterventionsBlock = getExactCssRuleBlock(mobileBlock, ".detail-activity--interventions");
+      const baseInterventionsBlock = getExactCssRuleBlock(css, ".detail-activity--interventions");
       const mobilePrBlock = getExactCssRuleBlock(
         getCssAtRuleBlockContainingExactRule(css, "@media (max-width: 768px)", ".detail-pr-tab"),
         ".detail-pr-tab",
@@ -758,7 +759,7 @@ describe("TaskDetailModal", () => {
 
       expect(mobileDetailBodyBlock).toContain("padding: calc(var(--space-md) + var(--space-xs) / 2);");
       expect(mobileDetailBodyBlock).toContain("overflow-x: hidden;");
-      expect(mobileInterventionsBlock).toContain("padding-inline-end: 0;");
+      expect(baseInterventionsBlock).toContain("padding-inline-end: 0;");
       expect(mobileBlock).toContain(".detail-activity:not(.detail-activity--interventions) > h4,");
       expect(mobileBlock).toContain(".detail-activity:not(.detail-activity--interventions) > .detail-log-loading,");
       expect(mobileBlock).toContain(".detail-activity:not(.detail-activity--interventions) > .detail-log-empty,");
@@ -797,6 +798,7 @@ describe("TaskDetailModal", () => {
       const mobileScrollbarBlock = getExactCssRuleBlock(mobileBlock, ".detail-body::-webkit-scrollbar");
       const mobileActivityBlock = getExactCssRuleBlock(mobileBlock, ".detail-activity");
       const mobileInterventionsBlock = getExactCssRuleBlock(mobileBlock, ".detail-activity--interventions");
+      const baseInterventionsBlock = getExactCssRuleBlock(css, ".detail-activity--interventions");
       const mobilePrBlock = getExactCssRuleBlock(
         getCssAtRuleBlockContainingExactRule(css, "@media (max-width: 768px)", ".detail-pr-tab"),
         ".detail-pr-tab",
@@ -815,9 +817,10 @@ describe("TaskDetailModal", () => {
       expect(mobileDetailBodyBlock).toContain("scrollbar-width: none;");
       expect(mobileScrollbarBlock).toContain("display: none;");
 
-      expect(mobileActivityBlock).toContain("padding-inline-end: 0;");
+      expect(mobileActivityBlock).toBe("");
       expect(mobileBlock).toContain("padding-inline-end: calc(var(--space-2xl) + var(--space-sm));");
-      expect(mobileInterventionsBlock).toContain("padding-inline-end: 0;");
+      expect(mobileInterventionsBlock).toBe("");
+      expect(baseInterventionsBlock).toContain("padding-inline-end: 0;");
       expect(mobilePrBlock.trim()).toBe("gap: var(--space-md);");
       expect(allMobileCss).not.toMatch(/\.task-changes-tab\s*\{[^}]*\bpadding(?:-[\w-]+)?\s*:/);
       expect(embeddedBodyBlock).toContain("width: 100%;");

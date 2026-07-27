@@ -928,12 +928,14 @@ describe("TaskDetailModal", () => {
 
       expect(css).not.toContain(".activity-toolbar");
       expect(css).not.toContain("activity-toolbar--expand-only");
-      expect(css).toContain(".detail-activity {\n  position: relative;\n  padding-inline-end: calc(var(--space-2xl) + var(--space-md));\n}");
+      expect(css).toContain(".detail-activity {\n  position: relative;\n  padding-inline-end: 0;\n}");
+      expect(css).toContain(".detail-activity:not(.detail-activity--interventions) > h4,");
+      expect(css).toContain("padding-inline-end: calc(var(--space-2xl) + var(--space-md));");
       expect(activityOverlayRule).toContain("position: absolute");
       expect(activityOverlayRule).toContain("top: var(--space-md)");
       expect(activityOverlayRule).toContain("right: var(--space-md)");
       expect(activityOverlayRule).toContain("z-index: 3");
-      expect(mobileCss).toContain("  .detail-activity {\n    padding-inline-end: 0;\n  }");
+      expect(mobileCss).not.toContain("  .detail-activity {\n    padding-inline-end:");
       expect(mobileCss).toContain("  .activity-expand-toggle--overlay {\n    top: var(--space-sm);\n    right: var(--space-sm);\n  }");
       expect(expandedTitleRule).not.toContain("display: none");
       expect(expandedMetaRule).toContain("display: none");
