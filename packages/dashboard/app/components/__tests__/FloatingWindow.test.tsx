@@ -25,6 +25,7 @@ const QUICK_CHAT_PORTALED_MENU_CLASSES = [
   "node-picker-dropdown--portal",
   "agent-picker-dropdown--portal",
   "priority-picker-dropdown--portal",
+  "activity-view-menu",
 ] as const;
 
 function cssRuleFor(css: string, selector: string): string {

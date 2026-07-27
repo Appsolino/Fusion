@@ -102,7 +102,7 @@ Use `FloatingWindow` for a moveable and resizable dashboard surface rather than 
 
 <!-- FNXC:ModalTouchGeometryDocs 2026-07-26-13:50: Core/workflow modal migrations use stable window keys so one shared primitive owns drag, resize, clamping, stacking, and persisted geometry. -->
 
-Core/workflow FloatingWindow modals use `persistGeometryKey="floating-window:<windowKey>"`: `automation` (Scheduled Tasks), `settings`, `git-manager`, `planning-mode`, `changes-diff`, `model-onboarding`, `activity-log`, `scripts`, `add-node`, `connect-node`, `node-detail`, `workflow-add-step`, and `group-task`. The former size-only `fusion:settings-modal-size`, `fusion:git-modal-size`, `fusion:planning-modal-size`, `fusion:changes-diff-modal-size`, and `fusion:model-onboarding-modal-size` keys are superseded by their matching complete geometry records. All of these windows suspend reading and writing geometry on phone and short (`max-height: 480px`) sheet viewports, so a desktop position never leaks into the sheet and a sheet never overwrites the desktop choice.
+Core/workflow FloatingWindow modals use `persistGeometryKey="floating-window:<windowKey>"`: `automation` (Scheduled Tasks), `settings`, `git-manager`, `planning-mode`, `changes-diff`, `model-onboarding`, `activity-log`, `scripts`, `add-node`, `connect-node`, `node-detail`, `workflow-add-step`, `group-task`, and `create-room`. Create Room uses `floating-window:create-room`; its member picker remains a nested scroll container within the shared window body. The former size-only `fusion:settings-modal-size`, `fusion:git-modal-size`, `fusion:planning-modal-size`, `fusion:changes-diff-modal-size`, and `fusion:model-onboarding-modal-size` keys are superseded by their matching complete geometry records. All of these windows suspend reading and writing geometry on phone and short (`max-height: 480px`) sheet viewports, so a desktop position never leaks into the sheet and a sheet never overwrites the desktop choice.
 
 <!-- FNXC:ModalTouchGeometryDocs 2026-07-26-16:35: FN-8607 requires every non-trivial modal to share the FloatingWindow contract so tablet touch users receive one consistent move/resize implementation. -->
 
@@ -111,6 +111,20 @@ All non-trivial modals must use `FloatingWindow` with `hideHeader`, a modal-owne
 `closeOnOutsidePointerDown` defaults to **off**. A modal that previously dismissed on its backdrop must pass it explicitly, while first-run/blocking flows must omit it. The `FloatingWindow` panel is the sole `role="dialog"`/`aria-modal` owner; hosted content must not nest a second dialog. Its backdrop remains a real opt-in outside-pointer dismissal target, while nested dialogs and body-portaled menus are safe surfaces. Preserve the existing focus, Escape, ARIA, close guard, and scroll-container behavior when hosting content. `AgentListModal`, `AgentImportModal`, `AgentGenerationModal`, `AgentOnboardingModal`, `ExperimentalAgentOnboardingModal`, `SetupWizardModal`, `NativeShellOnboardingModal`, `DockerNodeOnboardingModal`, `MailboxModal`, `MilestoneSliceInterviewModal`, and `SubtaskBreakdownModal` use this contract. `modalFloatingWindowContract.test.tsx` and `migratedModalFixtures.tsx` ratchet their host, geometry, and dismissal configuration.
 
 Static opt-outs are only brief single-decision alerts without reflowable content or long dwell time: `DuplicateWarningModal`, `AgentErrorDetailsModal`, `ModelSelectionModal`, `ReportModal`, `ResearchTaskActionModal`, `SettingsSyncConflictModal`, and `StashConflictModal`. Their focused acknowledgement or urgent-conflict semantics do not benefit from persistent movable geometry; additions require a documented inventory justification.
+
+<!-- FNXC:ModalTouchGeometryDocs 2026-07-26-19:25: FN-8621 closes the complex-modal batch by making FloatingWindow the canonical non-trivial modal host while publishing the narrow embedded and docked presentations that legitimately retain their owners. -->
+### Supported presentation exceptions
+
+Every non-trivial dashboard modal is hosted by `FloatingWindow`. It uses the physical-screen-aware `isTabletTouchViewport` contract: phones are **≤767.98px**, tablet-class touch is **≥768px plus touch**, and delegated drag plus all resize hit areas carry `data-resize-hit-target="true"` with an effective target of at least **44px**. This is hit-area-only and never a bare `(pointer: coarse)` rule. `closeOnOutsidePointerDown` defaults **off**; only a surface whose pre-migration backdrop dismissed the dialog may opt in explicitly, preserving its dismissal contract.
+
+These are supported presentation exceptions, not silently unmigrated dialogs:
+
+- `TerminalModal` stays docked in docked mode, including its dock-height control; only floating mode is a `FloatingWindow` with project-scoped geometry.
+- `AgentDetailView` stays embedded for inline presentation, while its modal presentation uses `FloatingWindow`; the inline branch owns no floating geometry.
+- `GitHubImportModal` stays embedded when `useEmbeddedPresentation` resolves embedded presentation. Its `resizePersistEnabled` modal-only gate keeps container-filling imports free of floating chrome; modal presentation uses `FloatingWindow`.
+- `RightDockExpandModal` preserves dock-origin content behavior (`surface: "expand"`) while its expanded shell is a `FloatingWindow`.
+
+A new embedded/docked exception is legitimate only when an owning container must retain its layout, lifecycle, and content origin; it must have an explicit presentation gate and an inventory justification. Brief static opt-outs remain limited to the focused, one-decision dialogs listed above and require the same documented justification.
 
 ## Mobile/PWA app icons
 

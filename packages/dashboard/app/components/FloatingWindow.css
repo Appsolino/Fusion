@@ -274,7 +274,9 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
 .floating-window--model-onboarding .floating-window__body,
 .floating-window--git-manager .floating-window__body,
 .floating-window--settings .floating-window__body,
-.floating-window--planning-mode .floating-window__body {
+.floating-window--planning-mode .floating-window__body,
+/* FNXC:ModalTouchGeometry 2026-07-26-19:25: Create Room shares migrated dialogs' host-owned body sizing while its nested member list retains picker scrolling. */
+.floating-window--create-room .floating-window__body {
   overflow: hidden;
 }
 
@@ -289,7 +291,8 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
 .floating-window--model-onboarding .model-onboarding-modal,
 .floating-window--git-manager .gm-modal,
 .floating-window--settings .settings-modal,
-.floating-window--planning-mode .planning-modal {
+.floating-window--planning-mode .planning-modal,
+.floating-window--create-room .create-room-modal {
   width: 100%;
   height: 100%;
   max-width: none;
@@ -326,6 +329,8 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
   .floating-window--setup-wizard,
   .floating-window--native-shell-onboarding,
   .floating-window--docker-node-onboarding,
+  .floating-window--agent-detail,
+  .floating-window--github-import,
   .floating-window--mailbox,
   .floating-window--milestone-slice-interview,
   .floating-window--subtask-breakdown,
@@ -342,6 +347,7 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
   .floating-window--git-manager,
   .floating-window--settings,
   .floating-window--planning-mode,
+  .floating-window--create-room,
   .floating-window--chat {
     inset: 0 !important;
     width: 100vw !important;
@@ -366,6 +372,8 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
   .floating-window--setup-wizard .floating-window__resize-handle,
   .floating-window--native-shell-onboarding .floating-window__resize-handle,
   .floating-window--docker-node-onboarding .floating-window__resize-handle,
+  .floating-window--agent-detail .floating-window__resize-handle,
+  .floating-window--github-import .floating-window__resize-handle,
   .floating-window--mailbox .floating-window__resize-handle,
   .floating-window--milestone-slice-interview .floating-window__resize-handle,
   .floating-window--subtask-breakdown .floating-window__resize-handle,
@@ -382,6 +390,7 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
   .floating-window--git-manager .floating-window__resize-handle,
   .floating-window--settings .floating-window__resize-handle,
   .floating-window--planning-mode .floating-window__resize-handle,
+  .floating-window--create-room .floating-window__resize-handle,
   .floating-window--chat .floating-window__resize-handle {
     display: none;
   }

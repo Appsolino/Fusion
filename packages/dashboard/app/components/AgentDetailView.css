@@ -16,23 +16,13 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   width: 100%;
-  min-width: calc(var(--space-xl) * 20);
-  max-width: calc(100vw - var(--space-2xl) - var(--space-xs) * 2);
-  min-height: calc(var(--space-xl) * 13 + var(--space-sm));
-  max-height: calc(100dvh - var(--space-2xl) - var(--space-xs) * 2);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  resize: both;
   box-shadow: var(--shadow-lg);
-}
-
-/* Initial size — applied only when no persisted size has been restored. */
-.agent-detail-modal:not([style*="width"]) {
-  width: min(calc(var(--space-xl) * 37 + var(--space-md)), calc(100vw - var(--space-2xl) - var(--space-xs) * 2));
-}
-.agent-detail-modal:not([style*="height"]) {
-  height: min(85vh, calc(100dvh - var(--space-2xl) - var(--space-xs) * 2));
 }
 
 .agent-detail-inline-shell {

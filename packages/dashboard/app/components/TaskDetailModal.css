@@ -8,25 +8,11 @@
 }
 
 .modal.task-detail-modal {
-  width: min(95vw, 800px);
-  max-width: 95vw;
-  min-width: 480px;
-  height: 85vh;
-  min-height: 480px;
-  max-height: calc(100dvh - var(--overlay-padding-top, 10vh) - 16px);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
-  resize: both;
-}
-
-/*
-FNXC:TaskModalResize 2026-07-26-11:06:
-The tablet-only grip expands outside Task Detail's painted corner. Its default
-overflow clipping would make the 44px finger target visible in layout but
-unreachable by browser hit testing, so only the explicit touch-resize surface
-permits the target outside the panel; true-phone sheets retain clipped content.
-*/
-.modal.task-detail-modal.task-modal--touch-resize {
-  overflow: visible;
 }
 
 /*
@@ -1795,36 +1781,6 @@ FN-6500 fixes a tablet regression from FN-5599: the task-detail overlay offset a
     border: none;
     border-radius: 0;
     resize: none;
-  }
-
-  /*
-  FNXC:TaskModalResize 2026-08-07-00:00:
-  Phone CSS also matches a known 768px touch tablet. The shared runtime class
-  records the physical-screen-aware tablet result, restoring bounded modal
-  geometry and the existing resize grip without weakening true-phone sheets.
-  */
-  .modal-overlay:has(.task-detail-modal.task-modal--tablet) {
-    --overlay-padding-top: 6vh;
-    padding-top: var(--overlay-padding-top);
-    align-items: flex-start;
-    justify-content: center;
-  }
-
-  .modal.task-detail-modal.task-modal--tablet {
-    width: 98vw;
-    min-width: 480px;
-    max-width: 98vw;
-    height: 92vh;
-    min-height: 480px;
-    max-height: calc(100dvh - var(--overlay-padding-top, 6vh) - var(--space-md));
-    margin: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    resize: both;
-  }
-
-  .task-modal--tablet .modal-resize-grip {
-    display: block;
   }
 
 

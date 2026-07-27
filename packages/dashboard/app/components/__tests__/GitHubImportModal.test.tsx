@@ -981,15 +981,15 @@ describe("GitHubImportModal", () => {
 
     it("keeps the modal overlay and Escape-to-close in modal mode", async () => {
       vi.mocked(fetchGitRemotes).mockResolvedValueOnce([]);
-      const { container } = render(
+      const { baseElement } = render(
         <GitHubImportModal isOpen={true} onClose={onClose} onImport={onImport} tasks={[]} />,
       );
 
       await waitFor(() => {
         expect(screen.getByText("Import from GitHub")).toBeTruthy();
       });
-      expect(container.querySelector(".modal-overlay")).not.toBeNull();
-      expect(container.querySelector(".github-import-modal--embedded")).toBeNull();
+      expect(baseElement.querySelector("[data-testid='floating-window-overlay-github-import']")).not.toBeNull();
+      expect(baseElement.querySelector(".github-import-modal--embedded")).toBeNull();
       fireEvent.keyDown(document, { key: "Escape" });
       expect(onClose).toHaveBeenCalled();
     });
@@ -2900,7 +2900,7 @@ describe("GitHubImportModal", () => {
     expect(importSheetRule).toBe(chatSheetRule);
     expect(importSheetRule).toBe(taskSheetRule);
     expect(importSheetRule).toContain("inset: 0 !important;");
-    expect(source).toMatch(/@media \(max-width: 768px\)[\s\S]*\.floating-window--github-import-detail \.floating-window__resize-handle\s*\{\s*display: none;/);
+    expect(source).toMatch(/@media \(max-width: 767\.98px\), \(max-height: 480px\)[\s\S]*\.floating-window--github-import-detail \.floating-window__resize-handle\s*\{\s*display: none;/);
     expect(source).toContain(".floating-window:not(.floating-window--chat):not(.floating-window--github-import-detail)");
   });
 

@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
@@ -58,6 +59,12 @@ export interface FloatingWindowProps {
    * Persistent task/terminal pop-outs must omit this so page clicks do not close them.
    */
   closeOnOutsidePointerDown?: boolean;
+  /** Mouse-only handlers for hosts whose historical backdrop dismissal cannot use pointer-down semantics. */
+  backdropMouseHandlers?: {
+    onMouseDown?: (event: ReactMouseEvent<HTMLDivElement>) => void;
+    onMouseUp?: (event: ReactMouseEvent<HTMLDivElement>) => void;
+    onClick?: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  };
   /** Render as a blocking dialog instead of the default coexisting utility window. */
   modal?: boolean;
   /** Optional legacy hook for callers whose overlay is asserted by existing tests. */
@@ -109,9 +116,14 @@ const FLOATING_WINDOW_OUTSIDE_POINTER_SAFE_SURFACE_SELECTOR = [
   ".node-picker-dropdown--portal",
   ".agent-picker-dropdown--portal",
   ".priority-picker-dropdown--portal",
+  ".activity-view-menu",
 ].join(", ");
 
 /*
+FNXC:ModalTouchGeometry 2026-08-13-12:00:
+FN-8619: Task Detail's body-portaled activity-view menu is a logical child of its modal.
+Treating it as safe prevents a preference-enabled outside pointer-down from closing the host.
+
 FNXC:FloatingWindow 2026-07-13-08:01:
 FN-7943: Quick Chat's outside-pointer dismissal must treat body-portaled dropdowns as logical children of the FloatingWindow. Keep this selector in sync with the sibling FN-7916 ChatThinkingLevelControl and FN-2860 QuickEntryBox portal guards so model, thinking-level, agent, dependency, node, and priority selections do not dismiss the host chat window while bare-page clicks still close it.
 */
@@ -203,6 +215,7 @@ export function FloatingWindow({
   suspendGeometryPersistenceOnMobile = false,
   suspendGeometryPersistenceOnShortViewport = false,
   closeOnOutsidePointerDown = false,
+  backdropMouseHandlers,
   modal = false,
   testId,
   hidden = false,
@@ -618,6 +631,8 @@ export function FloatingWindow({
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledBy}
       data-testid={testId ?? `floating-window-overlay-${windowKey}`}
+      {...backdropMouseHandlers}
+      // FNXC:ModalTouchGeometry 2026-08-13-12:00: FN-8619 keeps Agent Detail's paired mouse-only backdrop contract at the shared modal backdrop; this deliberately does not alter pointer-down dismissal.
       // FNXC:FloatingWindow 2026-06-22-23:00: The z-index MUST live on the position:fixed overlay (which creates a stacking context), not the panel. A panel z-index is trapped inside the overlay's context and loses to page elements that are stacking contexts in body's context (e.g. the right dock at position:absolute z-index:20). With z on the overlay, the whole window sits at the shared floating band in body's stacking context and reliably paints above page content + tap-to-front reorders correctly.
       style={{ zIndex }}
     >
