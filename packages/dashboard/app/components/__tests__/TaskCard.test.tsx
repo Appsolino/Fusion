@@ -2718,6 +2718,73 @@ describe("TaskCard", () => {
         unmount();
       }
     });
+
+    /*
+    FNXC:CodingIdeasWorkflow 2026-07-26-15:30:
+    Original symptom: this badge claimed a card was waiting for a PLANNING slot when the engine was
+    never going to plan it. The step count is TaskCard's own proxy for "unplanned", while every engine
+    lane decides from PROMPT.md seed-ness, so the two disagreed in both directions. The server now
+    ships that answer as `awaitingPlanning` (same `isTaskAwaitingPlanning` predicate as triage's
+    todo-discovery) and it OUTRANKS the step count.
+
+    Surface enumeration — every combination of (flag present/absent) x (steps present/absent):
+     - flag false + no steps -> Ready (the reported repro: real spec that parsed to zero steps).
+     - flag true + steps -> Queued to plan (the reverse mislabel: re-seeded card with stale steps).
+     - flag absent -> step-count fallback preserved in both directions (SSE payloads, older server).
+     - exactly one of the two badges renders in every case, since both derive from one value.
+    */
+    describe("server awaitingPlanning outranks the step count", () => {
+      const readyBadge = (container: HTMLElement) =>
+        container.querySelector('[data-testid="card-ready-FN-QUEUED-PLAN"]');
+
+      it("renders Ready for a stepless card the server says is already planned", () => {
+        const { container } = render(
+          <TaskCard
+            task={queuedToPlanTask({ steps: [] as Task["steps"], awaitingPlanning: false })}
+            onOpenDetail={noop}
+            addToast={noop}
+          />,
+        );
+
+        expect(badge(container)).toBeNull();
+        expect(readyBadge(container)).toHaveTextContent("Ready");
+      });
+
+      it("renders Queued to plan for a card with stale steps the server says is unplanned", () => {
+        const { container } = render(
+          <TaskCard
+            task={queuedToPlanTask({
+              steps: [{ name: "stale step", status: "pending" }] as Task["steps"],
+              awaitingPlanning: true,
+            })}
+            onOpenDetail={noop}
+            addToast={noop}
+          />,
+        );
+
+        expect(badge(container)).toHaveTextContent("Queued to plan");
+        expect(readyBadge(container)).toBeNull();
+      });
+
+      it("falls back to the step count in both directions when the field is absent", () => {
+        const stepless = render(
+          <TaskCard task={queuedToPlanTask({ steps: [] as Task["steps"] })} onOpenDetail={noop} addToast={noop} />,
+        );
+        expect(badge(stepless.container)).toHaveTextContent("Queued to plan");
+        expect(readyBadge(stepless.container)).toBeNull();
+        stepless.unmount();
+
+        const withSteps = render(
+          <TaskCard
+            task={queuedToPlanTask({ steps: [{ name: "Step 1", status: "pending" }] as Task["steps"] })}
+            onOpenDetail={noop}
+            addToast={noop}
+          />,
+        );
+        expect(badge(withSteps.container)).toBeNull();
+        expect(readyBadge(withSteps.container)).toHaveTextContent("Ready");
+      });
+    });
   });
 
   it("renders the status badge after the card ID in DOM order", () => {

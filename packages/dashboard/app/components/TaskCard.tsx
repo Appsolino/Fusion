@@ -1412,12 +1412,28 @@ function TaskCardComponent({
   FNXC:CodingIdeasWorkflow 2026-07-21-22:18:
   Ready is the idle capacity-hold signal for Coding (Ideas) Todo cards that already have steps and no task.status. Plan Review (and any other agent-active work) also runs in Todo with status often cleared to null first, so Ready must suppress while plan-review is running or the card is agent-active — otherwise operators see both Ready and Reviewing on the same card.
   */
-  const showReadyBadge = !isPaused
+  /*
+  FNXC:CodingIdeasWorkflow 2026-07-26-15:30:
+  Which cap an idle Todo card is waiting on comes from the server's `awaitingPlanning` (derived from
+  PROMPT.md seed-ness by the SAME `isTaskAwaitingPlanning` predicate triage's todo-discovery uses),
+  because the client cannot read PROMPT.md. The old `steps.length` proxy disagreed with the engine in
+  both directions: a real spec that parsed to zero steps read as "Queued to plan" while the scheduler
+  was already treating it as a WIP-slot candidate, and a re-seeded card still carrying steps from a
+  previous pass read as "Ready" while triage was about to plan it.
+
+  The step-count heuristic remains the FALLBACK, not a second opinion: SSE task payloads are not
+  enriched, so a status-only live update or an older server leaves the field absent, and a card with
+  no steps is unplanned in the overwhelmingly common case. Deriving both badges from this one value
+  makes them strict complements — exactly one shows — instead of relying on the step count to keep
+  two independent conditions disjoint.
+  */
+  const awaitingPlanning = task.awaitingPlanning ?? ((task.steps?.length ?? 0) === 0);
+  const showIdleTodoBadge = !isPaused
     && task.column === "todo"
     && !visualStatus
-    && (task.steps?.length ?? 0) > 0
     && !planReviewRunning
     && !isAgentActive;
+  const showReadyBadge = showIdleTodoBadge && !awaitingPlanning;
   /*
   FNXC:CodingIdeasWorkflow 2026-07-25-12:05:
   "Queued to plan" is the exact complement of Ready: same idle-in-Todo conditions, but the card has
@@ -1428,14 +1444,13 @@ function TaskCardComponent({
 
   Three Todo states are now distinguishable: planning in flight (the "planning" status badge),
   unplanned and waiting for a planning slot (this badge), planned and waiting for a WIP slot
-  (Ready). The conditions are mutually exclusive by the steps count, so no card shows both.
+  (Ready).
+
+  FNXC:CodingIdeasWorkflow 2026-07-26-15:30:
+  Both badges now derive from the single `awaitingPlanning` value above, so "exact complement" is
+  structural rather than a property of the step count that two independent conditions had to agree on.
   */
-  const showQueuedToPlanBadge = !isPaused
-    && task.column === "todo"
-    && !visualStatus
-    && (task.steps?.length ?? 0) === 0
-    && !planReviewRunning
-    && !isAgentActive;
+  const showQueuedToPlanBadge = showIdleTodoBadge && awaitingPlanning;
   // Native HTML5 drag is desktop-mouse only — it doesn't move cards via touch.
   // On touch-primary devices the `draggable` attribute still arms the browser's
   // touch-drag heuristic, which intermittently hijacks horizontal swipes meant

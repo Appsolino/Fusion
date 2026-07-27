@@ -17,6 +17,7 @@ import {
   TaskDeletedError,
   buildTriageMemoryInstructions,
   isUnplannedSeedPrompt,
+  isTaskAwaitingPlanning,
   getTaskDuplicateLineage,
   parseExplicitDuplicateMarker,
   resolveAgentPrompt,
@@ -1362,10 +1363,18 @@ export class TriageProcessor {
       Only ENOENT is treated as unplanned; a genuine read fault (permissions, a directory in the
       file's place) still skips the card, but now says so in the log instead of vanishing.
       */
+      /*
+      FNXC:CodingIdeasWorkflow 2026-07-26-15:30:
+      Shared with the `GET /api/tasks` `awaitingPlanning` enrichment that drives the
+      "Queued to plan" / "Ready" badge pair, so the board cannot label a card's wait differently
+      from the lane that actually decides it. The three clauses of `isTaskAwaitingPlanning` are
+      exactly this loop's three branches: the `needs-replan` early-continue above, this content
+      check, and the ENOENT branch below (the helper's `null` case).
+      */
       try {
         const promptPath = join(this.rootDir, ".fusion", "tasks", todoTask.id, "PROMPT.md");
         const content = await readFile(promptPath, "utf-8");
-        if (isUnplannedSeedPrompt(content, todoTask.id, todoTask.title, todoTask.description)) {
+        if (isTaskAwaitingPlanning(todoTask, content)) {
           eligibleTodoTasks.push(todoTask);
         }
       } catch (err) {
