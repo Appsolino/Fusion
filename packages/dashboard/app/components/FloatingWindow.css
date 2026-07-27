@@ -308,21 +308,28 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
 
   /* FNXC:ModalTouchGeometry 2026-07-26-16:10: Automations shares every FN-8606 sheet breakpoint: a short viewport must not expose desktop geometry even when it remains wider than a phone. */
   /*
-  FNXC:ModalTouchGeometry 2026-07-27-20:00:
-  FN-8620's New Task, right-dock, and terminal hosts use the same short/phone sheet contract.
-  Their content owns custom chrome, but the shared host must fill the viewport when geometry is
-  suspended so hiding handles does not leave a stranded desktop-sized panel.
-
-  FNXC:ModalTouchGeometry 2026-07-26-17:31:
-  FN-8607's Agent List and Setup Wizard suspend geometry on true phones, so their migrated
-  FloatingWindow hosts must also fill the sheet viewport rather than retaining desktop dimensions.
+  FNXC:ModalTouchGeometry 2026-07-28-14:30:
+  FN-8607's agent, onboarding, mailbox, interview, and subtask modal classes use the
+  same phone/short-viewport sheet contract as the earlier FloatingWindow migrations.
+  FN-8620's New Task, right-dock, and terminal hosts share that contract and must remain
+  included. Geometry suspension in React must also change the panel, rather than leaving
+  a fixed desktop-sized dialog on a short or true-phone viewport.
   */
   .floating-window.new-task-modal,
   .floating-window.right-dock-expand-modal--floating,
   .floating-window.terminal-modal--floating,
-  .floating-window--automation,
   .floating-window--agent-list,
+  .floating-window--agent-import,
+  .floating-window--agent-generation,
+  .floating-window--agent-onboarding,
+  .floating-window--experimental-agent-onboarding,
   .floating-window--setup-wizard,
+  .floating-window--native-shell-onboarding,
+  .floating-window--docker-node-onboarding,
+  .floating-window--mailbox,
+  .floating-window--milestone-slice-interview,
+  .floating-window--subtask-breakdown,
+  .floating-window--automation,
   .floating-window--activity-log,
   .floating-window--scripts,
   .floating-window--add-node,
@@ -351,9 +358,18 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
   .floating-window.new-task-modal .floating-window__resize-handle,
   .floating-window.right-dock-expand-modal--floating .floating-window__resize-handle,
   .floating-window.terminal-modal--floating .floating-window__resize-handle,
-  .floating-window--automation .floating-window__resize-handle,
   .floating-window--agent-list .floating-window__resize-handle,
+  .floating-window--agent-import .floating-window__resize-handle,
+  .floating-window--agent-generation .floating-window__resize-handle,
+  .floating-window--agent-onboarding .floating-window__resize-handle,
+  .floating-window--experimental-agent-onboarding .floating-window__resize-handle,
   .floating-window--setup-wizard .floating-window__resize-handle,
+  .floating-window--native-shell-onboarding .floating-window__resize-handle,
+  .floating-window--docker-node-onboarding .floating-window__resize-handle,
+  .floating-window--mailbox .floating-window__resize-handle,
+  .floating-window--milestone-slice-interview .floating-window__resize-handle,
+  .floating-window--subtask-breakdown .floating-window__resize-handle,
+  .floating-window--automation .floating-window__resize-handle,
   .floating-window--activity-log .floating-window__resize-handle,
   .floating-window--scripts .floating-window__resize-handle,
   .floating-window--add-node .floating-window__resize-handle,

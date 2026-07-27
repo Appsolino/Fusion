@@ -451,7 +451,7 @@ export function SetupWizardModal({
 
   return (
     <FloatingWindow
-      windowKey="setup-wizard"
+      windowKey="setup-wizard" modal
       title={t("setup.welcomeToFusion", "Welcome to Fusion")}
       ariaLabelledBy="wizard-title"
       onClose={() => {}}
@@ -463,7 +463,6 @@ export function SetupWizardModal({
       persistGeometryKey="floating-window:setup-wizard"
       suspendGeometryPersistenceOnMobile
       suspendGeometryPersistenceOnShortViewport
-      modal
     >
       {/* FNXC:ModalTouchGeometry 2026-07-26-16:22: The first-run wizard remains blocking, while its reflowable steps use shared tablet geometry and suspend it for sheet viewports. */}
       <div className={modalClassName}>

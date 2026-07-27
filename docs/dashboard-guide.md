@@ -108,7 +108,7 @@ Core/workflow FloatingWindow modals use `persistGeometryKey="floating-window:<wi
 
 All non-trivial modals must use `FloatingWindow` with `hideHeader`, a modal-owned `dragHandleSelector`, a class name, sensible `defaultSize`/`minSize`, a stable `persistGeometryKey`, `suspendGeometryPersistenceOnMobile`, and `suspendGeometryPersistenceOnShortViewport`. Desktop drag and eight-direction resize remain active; only known tablet touch viewports (768px–1024px) enlarge active targets to at least 44px. Exactly 768px is tablet-class and persists geometry; 767px and below are full-screen sheets. A viewport at `max-height: 480px` is also a full-screen sheet regardless of width and never reads or writes geometry.
 
-`closeOnOutsidePointerDown` defaults to **off**. A modal that previously dismissed on its backdrop must pass it explicitly, while first-run/blocking flows must omit it. Preserve the existing focus, Escape, ARIA, close guard, and scroll-container behavior when hosting content. `AgentListModal`, `AgentImportModal`, `AgentGenerationModal`, `AgentOnboardingModal`, `ExperimentalAgentOnboardingModal`, `SetupWizardModal`, `NativeShellOnboardingModal`, `DockerNodeOnboardingModal`, `MailboxModal`, `MilestoneSliceInterviewModal`, and `SubtaskBreakdownModal` use this contract. `modalFloatingWindowContract.test.tsx` and `migratedModalFixtures.tsx` ratchet their host, geometry, and dismissal configuration.
+`closeOnOutsidePointerDown` defaults to **off**. A modal that previously dismissed on its backdrop must pass it explicitly, while first-run/blocking flows must omit it. The `FloatingWindow` panel is the sole `role="dialog"`/`aria-modal` owner; hosted content must not nest a second dialog. Its backdrop remains a real opt-in outside-pointer dismissal target, while nested dialogs and body-portaled menus are safe surfaces. Preserve the existing focus, Escape, ARIA, close guard, and scroll-container behavior when hosting content. `AgentListModal`, `AgentImportModal`, `AgentGenerationModal`, `AgentOnboardingModal`, `ExperimentalAgentOnboardingModal`, `SetupWizardModal`, `NativeShellOnboardingModal`, `DockerNodeOnboardingModal`, `MailboxModal`, `MilestoneSliceInterviewModal`, and `SubtaskBreakdownModal` use this contract. `modalFloatingWindowContract.test.tsx` and `migratedModalFixtures.tsx` ratchet their host, geometry, and dismissal configuration.
 
 Static opt-outs are only brief single-decision alerts without reflowable content or long dwell time: `DuplicateWarningModal`, `AgentErrorDetailsModal`, `ModelSelectionModal`, `ReportModal`, `ResearchTaskActionModal`, `SettingsSyncConflictModal`, and `StashConflictModal`. Their focused acknowledgement or urgent-conflict semantics do not benefit from persistent movable geometry; additions require a documented inventory justification.
 
@@ -2327,7 +2327,9 @@ its drag handle and supplies `hideHeader`, `dragHandleSelector`, `className`, `d
 `minSize`, `persistGeometryKey`, `suspendGeometryPersistenceOnMobile`, and
 `suspendGeometryPersistenceOnShortViewport`. Former blocking dialogs also pass `modal`: it enables
 the shared backdrop, `aria-modal` dialog semantics, and keyboard focus boundary while preserving
-shared touch geometry. `closeOnOutsidePointerDown` defaults to **off**; a dialog that previously
+shared touch geometry. The variant class must be included in the shared sheet reset: suspension of
+geometry and removal of handles are insufficient unless the host and its content fill the phone or
+short-viewport sheet. `closeOnOutsidePointerDown` defaults to **off**; a dialog that previously
 closed from its backdrop must opt in explicitly, and blocking first-run flows must omit it.
 
 | Viewport | Drag and resize | Persistence |

@@ -523,6 +523,18 @@ export function FloatingWindow({
       const panel = panelRef.current;
       if (panel?.contains(target)) return;
 
+      /*
+      FNXC:ModalTouchGeometry 2026-07-28-14:30:
+      FN-8607 modal hosts make the overlay pointer-active to block the application beneath.
+      The host also carries role="dialog", so it would otherwise match the portal-safe dialog
+      selector below and suppress its own backdrop dismissal. Only the host itself is outside;
+      nested portaled dialog surfaces remain safe.
+      */
+      if (target === panel?.parentElement) {
+        onClose();
+        return;
+      }
+
       const targetElement = target instanceof Element ? target : target.parentNode instanceof Element ? target.parentNode : null;
       if (targetElement?.closest(FLOATING_WINDOW_OUTSIDE_POINTER_SAFE_SURFACE_SELECTOR)) return;
 

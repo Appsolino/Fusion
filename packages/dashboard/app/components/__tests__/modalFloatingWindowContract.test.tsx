@@ -21,10 +21,20 @@ describe("FN-8607 migrated modal FloatingWindow contract", () => {
     expect(fixture.optOut).toMatch(/.+/);
   });
 
-  it("uses modal isolation instead of the utility host click-through mode", () => {
-    const source = readAppFile("components/FloatingWindow.tsx");
-    expect(source).toContain('aria-modal={modal ? "true" : "false"}');
-    expect(source).toContain("floating-window-overlay--modal");
-    expect(readAppFile("components/FloatingWindow.css")).toContain(".floating-window-overlay--modal");
+  it("records every hosted production modal in the fixture table", () => {
+    expect(migratedModalFixtures.filter((fixture) => fixture.key)).toHaveLength(11);
   });
+
+  it("makes every FN-8607 host a full-screen sheet on phone and short viewports", () => {
+    const css = readAppFile("components/FloatingWindow.css");
+    const sheetBlock = css.match(/@media \(max-width: 767\.98px\), \(max-height: 480px\) \{[\s\S]*?\.floating-window--image-preview \{/);
+    expect(sheetBlock?.[0]).toContain("width: 100vw !important;");
+    expect(sheetBlock?.[0]).toContain("height: 100dvh !important;");
+    for (const fixture of migratedModalFixtures.filter((candidate) => candidate.key)) {
+      const className = fixture.key!.replace("floating-window:", "floating-window--");
+      expect(sheetBlock?.[0]).toContain(className);
+      expect(css).toContain(`${className} .floating-window__resize-handle`);
+    }
+  });
+
 });

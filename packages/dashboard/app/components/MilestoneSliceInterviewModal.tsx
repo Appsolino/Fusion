@@ -407,7 +407,7 @@ export function MilestoneSliceInterviewModal({
   if (!isOpen) return null;
 
   return (
-    <FloatingWindow windowKey="milestone-slice-interview" title={t("missions.planTargetTitle", "Plan {{targetLabel}}: {{targetTitle}}", { targetLabel, targetTitle })} ariaLabel={t("missions.planTargetTitle", "Plan interview")} onClose={handleCancel} hideHeader dragHandleSelector=".planning-modal .modal-header" className="floating-window--milestone-slice-interview" defaultSize={{ width: 760, height: 640 }} minSize={{ width: 440, height: 320 }} persistGeometryKey="floating-window:milestone-slice-interview" suspendGeometryPersistenceOnMobile suspendGeometryPersistenceOnShortViewport closeOnOutsidePointerDown modal testId="milestone-slice-interview-modal">
+    <FloatingWindow windowKey="milestone-slice-interview" modal testId="milestone-slice-interview-modal" title={t("missions.planTargetTitle", "Plan {{targetLabel}}: {{targetTitle}}", { targetLabel, targetTitle })} ariaLabel={t("missions.planTargetTitle", "Plan interview")} onClose={handleCancel} hideHeader dragHandleSelector=".planning-modal .modal-header" className="floating-window--milestone-slice-interview" defaultSize={{ width: 760, height: 640 }} minSize={{ width: 440, height: 320 }} persistGeometryKey="floating-window:milestone-slice-interview" suspendGeometryPersistenceOnMobile suspendGeometryPersistenceOnShortViewport closeOnOutsidePointerDown>
       {/* FNXC:ModalTouchGeometry 2026-07-26-16:22: Interview dismissal still routes through handleCancel so confirmation semantics survive shared tablet geometry. */}
       <div className="modal modal-lg planning-modal" style={keyboardStyle}>
         <div className="modal-header">
