@@ -295,7 +295,6 @@ describe("FloatingWindow", () => {
 
     for (const selector of [
       ".right-dock-expand-modal__header--draggable",
-      ".terminal-header--draggable",
     ]) {
       expect(cssRuleFor(allAppCss, selector)).toContain("touch-action: none;");
     }
@@ -352,7 +351,6 @@ describe("FloatingWindow", () => {
       ".floating-window--pr-create .pr-create-modal__drag-handle",
       ".file-browser-modal-header",
       ".artifacts-gallery-viewer-header",
-      ".terminal-header--draggable",
       ".right-dock-expand-modal__header--draggable",
       ".new-task-modal__header--draggable",
       ".quick-chat-fab",
@@ -743,6 +741,31 @@ describe("FloatingWindow", () => {
     expect(panel.style.height).toBe("500px");
     expect(panel.style.top).toBe("16px");
     expect(Number.parseFloat(panel.style.left)).toBeLessThan(window.innerWidth);
+  });
+
+  it("reloads persisted geometry when a mounted host changes its project-scoped identity", () => {
+    const firstKey = "floating-window:project-one";
+    const secondKey = "floating-window:project-two";
+    const firstGeometry = { size: { width: 610, height: 430 }, position: { x: 80, y: 90 } };
+    const secondGeometry = { size: { width: 700, height: 500 }, position: { x: 120, y: 110 } };
+    localStorage.setItem(firstKey, JSON.stringify(firstGeometry));
+    localStorage.setItem(secondKey, JSON.stringify(secondGeometry));
+
+    const { rerender } = render(
+      <FloatingWindow windowKey="terminal-project-one" title="Terminal" onClose={() => {}} persistGeometryKey={firstKey}>
+        <div>terminal body</div>
+      </FloatingWindow>,
+    );
+    expect(screen.getByTestId("floating-window-terminal-project-one")).toHaveStyle({ width: "610px", height: "430px" });
+
+    rerender(
+      <FloatingWindow windowKey="terminal-project-two" title="Terminal" onClose={() => {}} persistGeometryKey={secondKey}>
+        <div>terminal body</div>
+      </FloatingWindow>,
+    );
+
+    expect(screen.getByTestId("floating-window-terminal-project-two")).toHaveStyle({ width: "700px", height: "500px" });
+    expect(JSON.parse(localStorage.getItem(firstKey) ?? "{}")).toEqual(firstGeometry);
   });
 
   it("falls back to default geometry when persisted geometry is malformed", () => {

@@ -20,6 +20,15 @@ sheet in the layout tree. `visibility: hidden` removes paint while preserving ch
 message-list scroll state; `pointer-events: none` keeps the already click-through overlay inert.
 Never replace this with `display: none`, which collapses layout and makes reopening visibly reflow.
 */
+/*
+FNXC:ModalTouchGeometry 2026-07-26-18:42:
+FN-8607's migrated dialogs remain blocking despite sharing FloatingWindow with non-blocking
+utilities. This opt-in backdrop prevents pointer events reaching the application beneath a modal.
+*/
+.floating-window-overlay--modal {
+  pointer-events: auto;
+}
+
 .floating-window-overlay--hidden {
   visibility: hidden;
   pointer-events: none;
@@ -298,6 +307,15 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
   }
 
   /* FNXC:ModalTouchGeometry 2026-07-26-16:10: Automations shares every FN-8606 sheet breakpoint: a short viewport must not expose desktop geometry even when it remains wider than a phone. */
+  /*
+  FNXC:ModalTouchGeometry 2026-07-27-20:00:
+  FN-8620's New Task, right-dock, and terminal hosts use the same short/phone sheet contract.
+  Their content owns custom chrome, but the shared host must fill the viewport when geometry is
+  suspended so hiding handles does not leave a stranded desktop-sized panel.
+  */
+  .floating-window.new-task-modal,
+  .floating-window.right-dock-expand-modal--floating,
+  .floating-window.terminal-modal--floating,
   .floating-window--automation,
   .floating-window--activity-log,
   .floating-window--scripts,
@@ -324,6 +342,9 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
     box-shadow: none;
   }
 
+  .floating-window.new-task-modal .floating-window__resize-handle,
+  .floating-window.right-dock-expand-modal--floating .floating-window__resize-handle,
+  .floating-window.terminal-modal--floating .floating-window__resize-handle,
   .floating-window--automation .floating-window__resize-handle,
   .floating-window--activity-log .floating-window__resize-handle,
   .floating-window--scripts .floating-window__resize-handle,

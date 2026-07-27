@@ -1,4 +1,5 @@
 import "./MailboxModal.css";
+import { FloatingWindow } from "./FloatingWindow";
 import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -767,15 +768,8 @@ export function MailboxModal({
   // ── Render ────────────────────────────────────────────────────────────
 
   return (
-    <div
-      className="modal-overlay open"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      role="dialog"
-      aria-modal="true"
-      data-testid="mailbox-modal-overlay"
-    >
+    <FloatingWindow windowKey="mailbox" title={t("mailbox.title", "Mailbox")} ariaLabel={t("mailbox.title", "Mailbox")} onClose={onClose} hideHeader dragHandleSelector=".mailbox-modal .modal-header" className="floating-window--mailbox" defaultSize={{ width: 860, height: 680 }} minSize={{ width: 480, height: 360 }} persistGeometryKey="floating-window:mailbox" suspendGeometryPersistenceOnMobile suspendGeometryPersistenceOnShortViewport closeOnOutsidePointerDown modal testId="mailbox-modal-overlay">
+      {/* FNXC:ModalTouchGeometry 2026-07-26-16:22: Mailbox is a long-lived workspace; preserve outside dismissal and keep keyboard positioning inside the hosted panel. */}
       <div className="modal modal-lg mailbox-modal" style={containerKeyboardStyle} data-testid="mailbox-modal">
         {/* Header */}
         <div className="modal-header mailbox-header">
@@ -1265,7 +1259,7 @@ export function MailboxModal({
         </div>
 
       </div>
-    </div>
+    </FloatingWindow>
   );
 }
 

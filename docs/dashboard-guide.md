@@ -104,6 +104,14 @@ Use `FloatingWindow` for a moveable and resizable dashboard surface rather than 
 
 Core/workflow FloatingWindow modals use `persistGeometryKey="floating-window:<windowKey>"`: `automation` (Scheduled Tasks), `settings`, `git-manager`, `planning-mode`, `changes-diff`, `model-onboarding`, `activity-log`, `scripts`, `add-node`, `connect-node`, `node-detail`, `workflow-add-step`, and `group-task`. The former size-only `fusion:settings-modal-size`, `fusion:git-modal-size`, `fusion:planning-modal-size`, `fusion:changes-diff-modal-size`, and `fusion:model-onboarding-modal-size` keys are superseded by their matching complete geometry records. All of these windows suspend reading and writing geometry on phone and short (`max-height: 480px`) sheet viewports, so a desktop position never leaks into the sheet and a sheet never overwrites the desktop choice.
 
+<!-- FNXC:ModalTouchGeometryDocs 2026-07-26-16:35: FN-8607 requires every non-trivial modal to share the FloatingWindow contract so tablet touch users receive one consistent move/resize implementation. -->
+
+All non-trivial modals must use `FloatingWindow` with `hideHeader`, a modal-owned `dragHandleSelector`, a class name, sensible `defaultSize`/`minSize`, a stable `persistGeometryKey`, `suspendGeometryPersistenceOnMobile`, and `suspendGeometryPersistenceOnShortViewport`. Desktop drag and eight-direction resize remain active; only known tablet touch viewports (768px–1024px) enlarge active targets to at least 44px. Exactly 768px is tablet-class and persists geometry; 767px and below are full-screen sheets. A viewport at `max-height: 480px` is also a full-screen sheet regardless of width and never reads or writes geometry.
+
+`closeOnOutsidePointerDown` defaults to **off**. A modal that previously dismissed on its backdrop must pass it explicitly, while first-run/blocking flows must omit it. Preserve the existing focus, Escape, ARIA, close guard, and scroll-container behavior when hosting content. `AgentListModal`, `AgentImportModal`, `AgentGenerationModal`, `AgentOnboardingModal`, `ExperimentalAgentOnboardingModal`, `SetupWizardModal`, `NativeShellOnboardingModal`, `DockerNodeOnboardingModal`, `MailboxModal`, `MilestoneSliceInterviewModal`, and `SubtaskBreakdownModal` use this contract. `modalFloatingWindowContract.test.tsx` and `migratedModalFixtures.tsx` ratchet their host, geometry, and dismissal configuration.
+
+Static opt-outs are only brief single-decision alerts without reflowable content or long dwell time: `DuplicateWarningModal`, `AgentErrorDetailsModal`, `ModelSelectionModal`, `ReportModal`, `ResearchTaskActionModal`, `SettingsSyncConflictModal`, and `StashConflictModal`. Their focused acknowledgement or urgent-conflict semantics do not benefit from persistent movable geometry; additions require a documented inventory justification.
+
 ## Mobile/PWA app icons
 
 The installed mobile/PWA home-screen icons are generated from `packages/dashboard/app/public/logo.svg` by the desktop icon generator. When the Fusion brand mark changes, run `pnpm --filter @fusion/desktop generate:icons` so `packages/dashboard/app/public/icons/icon-192.png` and `packages/dashboard/app/public/icons/icon-512.png` stay aligned with the canonical logo. Also bump `CACHE_NAME` in `packages/dashboard/app/public/sw.js` whenever those icon assets change so installed PWAs refresh the cached launcher images.
@@ -2310,3 +2318,42 @@ Direct conversations can be organized with reusable tags. Open a conversation's 
 ### Tablet touch modal resize
 
 Task Detail and New Task retain their desktop resize chrome, but tablet-class touch viewports expose a 44px `data-resize-hit-target` around resize controls. The target is enabled only by the shared tablet-touch viewport classifier; true-phone sheets and desktop coarse-pointer devices do not expose it.
+
+## Floating modal contract
+
+All non-trivial, reflowable dashboard dialogs use `FloatingWindow`; do not create a second drag,
+resize, or viewport-classification implementation. A migration uses the dialog's existing header as
+its drag handle and supplies `hideHeader`, `dragHandleSelector`, `className`, `defaultSize`,
+`minSize`, `persistGeometryKey`, `suspendGeometryPersistenceOnMobile`, and
+`suspendGeometryPersistenceOnShortViewport`. Former blocking dialogs also pass `modal`: it enables
+the shared backdrop, `aria-modal` dialog semantics, and keyboard focus boundary while preserving
+shared touch geometry. `closeOnOutsidePointerDown` defaults to **off**; a dialog that previously
+closed from its backdrop must opt in explicitly, and blocking first-run flows must omit it.
+
+| Viewport | Drag and resize | Persistence |
+| --- | --- | --- |
+| Desktop (including coarse-pointer desktop), ≥1025px | Active desktop mouse drag and eight-direction resize; targets are unchanged | Persisted |
+| Touch tablet, 768–1024px | Active touch drag and resize with ≥44px `data-resize-hit-target` controls | Persisted |
+| True phone, ≤767px | Full-screen sheet; no active geometry affordance | Suspended |
+| Any viewport ≤480px tall | Full-screen sheet; this overrides the width row | Suspended |
+
+Exactly **768px** is touch-tablet when the shared `isTabletTouchViewport` classifier identifies a
+touch tablet; **767px** starts the true-phone sheet range. Do not use bare `@media (pointer:
+coarse)`: desktop coarse-pointer hardware retains normal desktop controls, while only the shared
+classifier activates enlarged tablet targets. Preserve focus, Escape, ARIA labels, existing scroll
+containers, and each dialog's dismissal/confirmation behavior when moving its content to the host.
+
+`AgentListModal`, `AgentImportModal`, `AgentGenerationModal`, `AgentOnboardingModal`,
+`ExperimentalAgentOnboardingModal`, `SetupWizardModal`, `NativeShellOnboardingModal`,
+`DockerNodeOnboardingModal`, `MailboxModal`, `MilestoneSliceInterviewModal`, and
+`SubtaskBreakdownModal` use this contract. Outside dismissal is explicit for Agent List/Import/
+Generation, Docker onboarding (guarded while submitting), Mailbox, Milestone/Slice Interview, and
+Subtask Breakdown; the four onboarding flows remain blocking.
+
+Only transient, single-decision confirm/alert dialogs with no reflowable content or long dwell time
+may remain static. The inventory opt-outs are `AgentErrorDetailsModal` (brief acknowledgement),
+`ModelSelectionModal` (compact focused choice), `ReportModal` (brief reporting action),
+`ResearchTaskActionModal` (bounded confirmation), `SettingsSyncConflictModal` (urgent conflict
+choice), and `StashConflictModal` (urgent bounded recovery). The executable inventory is guarded by
+`modalFloatingWindowContract.test.tsx`; `migratedModalFixtures.tsx` keeps every hosted surface in
+per-modal geometry coverage.

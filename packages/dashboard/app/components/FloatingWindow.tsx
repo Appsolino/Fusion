@@ -58,6 +58,10 @@ export interface FloatingWindowProps {
    * Persistent task/terminal pop-outs must omit this so page clicks do not close them.
    */
   closeOnOutsidePointerDown?: boolean;
+  /** Render as a blocking dialog instead of the default coexisting utility window. */
+  modal?: boolean;
+  /** Optional legacy hook for callers whose overlay is asserted by existing tests. */
+  testId?: string;
   /*
   FNXC:FloatingWindow 2026-07-18-00:00:
   Quick Chat must hide without unmounting so its active session, messages, and scroll position
@@ -199,6 +203,8 @@ export function FloatingWindow({
   suspendGeometryPersistenceOnMobile = false,
   suspendGeometryPersistenceOnShortViewport = false,
   closeOnOutsidePointerDown = false,
+  modal = false,
+  testId,
   hidden = false,
   layer = "utility",
   ariaLabel,
@@ -236,6 +242,29 @@ export function FloatingWindow({
     initialGeometry.current!.size
   );
   const [position, setPosition] = useState<FloatingWindowPosition>(() => initialGeometry.current!.position);
+  const geometryIdentityRef = useRef({ windowKey, persistGeometryKey });
+
+  /*
+  FNXC:ModalTouchGeometry 2026-07-27-20:00:
+  A project-scoped floating host can stay mounted while its window/storage identity changes.
+  Reload that identity's geometry before passive persistence runs so Terminal never copies one
+  project's geometry into another project's key.
+  */
+  useLayoutEffect(() => {
+    const previousIdentity = geometryIdentityRef.current;
+    if (previousIdentity.windowKey === windowKey && previousIdentity.persistGeometryKey === persistGeometryKey) return;
+
+    const fallbackSize = clampSize(defaultSize ?? { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT }, resolvedMinSize);
+    const fallbackPosition = defaultPosition ? clampPosition(defaultPosition, fallbackSize) : defaultPositionFor(windowKey, fallbackSize);
+    const nextGeometry = geometryPersistenceSuspended
+      ? { size: fallbackSize, position: fallbackPosition }
+      : readPersistedGeometry(persistGeometryKey, fallbackSize, fallbackPosition, resolvedMinSize);
+    geometryIdentityRef.current = { windowKey, persistGeometryKey };
+    initialGeometry.current = nextGeometry;
+    setSize(nextGeometry.size);
+    setPosition(nextGeometry.position);
+  }, [defaultPosition, defaultSize, geometryPersistenceSuspended, persistGeometryKey, resolvedMinSize, windowKey]);
+
   const claimFrontZ = useCallback(() => (layer === "task-detail" ? nextTaskDetailFloatingZ() : nextFloatingZ()), [layer]);
   const readCurrentZ = useCallback(() => (layer === "task-detail" ? currentTaskDetailFloatingZ() : currentFloatingZ()), [layer]);
   /*
@@ -524,6 +553,32 @@ export function FloatingWindow({
     }
   }, [geometryPersistenceSuspended, hidden, persistGeometryKey, position, size]);
 
+  /*
+  FNXC:ModalTouchGeometry 2026-07-26-18:42:
+  FN-8607 migrates former blocking dialogs into the shared geometry host. Modal callers opt into
+  a real backdrop and keyboard focus boundary; utility windows retain the historical click-through
+  behavior by default so this does not change existing multi-window surfaces.
+  */
+  useEffect(() => {
+    if (!modal || hidden || typeof document === "undefined") return;
+    const panel = panelRef.current;
+    const priorFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panel?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !panel) return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hasAttribute("hidden"));
+      if (focusable.length === 0) { event.preventDefault(); panel.focus(); return; }
+      const current = document.activeElement;
+      const index = focusable.indexOf(current as HTMLElement);
+      if (event.shiftKey && (index <= 0 || !panel.contains(current))) { event.preventDefault(); focusable.at(-1)?.focus(); }
+      else if (!event.shiftKey && index === focusable.length - 1) { event.preventDefault(); focusable[0]?.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); priorFocus?.focus(); };
+  }, [hidden, modal]);
+
   const panelStyle = {
     left: `${position.x}px`,
     top: `${position.y}px`,
@@ -544,13 +599,13 @@ export function FloatingWindow({
   */
   return createPortal(
     <div
-      className={`floating-window-overlay${hidden ? " floating-window-overlay--hidden" : ""}`}
+      className={`floating-window-overlay${modal ? " floating-window-overlay--modal" : ""}${hidden ? " floating-window-overlay--hidden" : ""}`}
       role="dialog"
-      aria-modal="false"
+      aria-modal={modal ? "true" : "false"}
       aria-hidden={hidden || undefined}
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledBy}
-      data-testid={`floating-window-overlay-${windowKey}`}
+      data-testid={testId ?? `floating-window-overlay-${windowKey}`}
       // FNXC:FloatingWindow 2026-06-22-23:00: The z-index MUST live on the position:fixed overlay (which creates a stacking context), not the panel. A panel z-index is trapped inside the overlay's context and loses to page elements that are stacking contexts in body's context (e.g. the right dock at position:absolute z-index:20). With z on the overlay, the whole window sits at the shared floating band in body's stacking context and reliably paints above page content + tap-to-front reorders correctly.
       style={{ zIndex }}
     >
@@ -562,6 +617,7 @@ export function FloatingWindow({
         onPointerDownCapture={bringToFront}
         onPointerDown={handlePanelPointerDown}
         onFocusCapture={bringToFront}
+        tabIndex={modal ? -1 : undefined}
       >
         {/*
         FNXC:ModalTouchGeometry 2026-07-26-16:54:
