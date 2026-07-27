@@ -9,6 +9,8 @@ import { FloatingWindow } from "./components/FloatingWindow";
 import { useModalResizePersist } from "./hooks/useModalResizePersist";
 import { isTabletTouchViewport, useViewportMode } from "./hooks/useViewportMode";
 import { NewTaskModal } from "./components/NewTaskModal";
+import { AgentListModal } from "./components/AgentListModal";
+import { SetupWizardModal } from "./components/SetupWizardModal";
 import { ConfirmDialogProvider } from "./hooks/useConfirm";
 
 const params = new URLSearchParams(window.location.search);
@@ -36,14 +38,21 @@ void i18n.use(initReactI18next).init({
   interpolation: { escapeValue: false },
 });
 
-// Browser fixtures provide the production form's minimal typed API payloads. The resize assertions
-// exercise NewTaskModal itself rather than an API-dependent form failure.
+/*
+FNXC:ModalTouchGeometry 2026-07-27-09:15:
+The FN-8607 evidence surfaces mount the migrated production modals, not lookalike harnesses.
+The wizard deliberately uses its standalone default first step; `includeAgentStep={false}` would instead
+render the parent onboarding flow's Step 3 of 5 project sub-flow and misrepresent the required capture.
+Their minimal API payloads keep first render deterministic so the CDP assertions prove FloatingWindow
+geometry before each committed screenshot is captured.
+*/
 window.fetch = async (input) => {
   const url = String(input);
   const payload = url.includes("/models")
     ? { models: [], favoriteProviders: [], favoriteModels: [] }
     : url.includes("/settings") ? {}
-      : [];
+      : url.includes("/agents") || url.includes("/nodes") ? []
+        : [];
   return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } });
 };
 
@@ -125,7 +134,7 @@ function GenericFloatingWindowHarness() {
 function Fixture() {
   return <I18nextProvider i18n={i18n}>
     <ConfirmDialogProvider skipConfirmations>
-      {surface === "floating-window" ? <FloatingWindowHarness /> : surface === "floating-window-headerless" ? <HeaderlessFloatingWindowHarness /> : surface === "floating-window-generic" ? <GenericFloatingWindowHarness /> : surface === "task-detail" ? <TaskDetailResizeHarness /> : <NewTaskModal
+      {surface === "agent-list-modal" ? <AgentListModal isOpen onClose={() => undefined} addToast={() => undefined} /> : surface === "setup-wizard-modal" ? <SetupWizardModal onProjectRegistered={() => undefined} onClose={() => undefined} /> : surface === "floating-window" ? <FloatingWindowHarness /> : surface === "floating-window-headerless" ? <HeaderlessFloatingWindowHarness /> : surface === "floating-window-generic" ? <GenericFloatingWindowHarness /> : surface === "task-detail" ? <TaskDetailResizeHarness /> : <NewTaskModal
         isOpen
         tasks={[]}
         onClose={() => undefined}

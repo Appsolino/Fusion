@@ -25,6 +25,7 @@ if (!executablePath) {
 }
 const screenshots = path.resolve(process.cwd(), "e2e/__screenshots__/fn-8602");
 const floatingWindowScreenshots = path.resolve(process.cwd(), "e2e/__screenshots__/fn-8605");
+const fn8607Screenshots = path.resolve(process.cwd(), "e2e/__screenshots__/fn-8607");
 
 async function touchDrag(cdp: Cdp, point: Point, delta = { x: 48, y: 36 }) {
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y, id: 1 }] });
@@ -381,6 +382,104 @@ describe.runIf(executablePath)("Task modal tablet touch resize browser regressio
 
     await desktop.close();
     await tablet.close();
+  }, 30_000);
+
+  /*
+  FNXC:ModalTouchGeometry 2026-07-26-17:31:
+  FN-8607 required visual proof that its Agent List and Setup Wizard migrations use the shared
+  FloatingWindow touch path. Each capture follows a real CDP resize and header drag assertion so
+  the committed evidence cannot silently regress to a static overlay screenshot.
+  */
+  for (const modal of [
+    {
+      name: "AgentListModal",
+      surface: "agent-list-modal",
+      panelSelector: "[data-testid='floating-window-agent-list']",
+      dragHandleSelector: ".agent-list-modal .modal-header",
+      persistGeometryKey: "floating-window:agent-list",
+      screenshot: "tablet-agent-list-after.png",
+    },
+    {
+      name: "SetupWizardModal",
+      surface: "setup-wizard-modal",
+      panelSelector: "[data-testid='floating-window-setup-wizard']",
+      dragHandleSelector: ".setup-wizard-modal .setup-wizard-header",
+      persistGeometryKey: "floating-window:setup-wizard",
+      initialStepTitle: "Welcome to Fusion",
+      screenshot: "tablet-setup-wizard-after.png",
+    },
+  ]) {
+    it(`renders, resizes, and drags migrated ${modal.name} at the tablet boundary`, async () => {
+      const width = 820;
+      const height = 1180;
+      const page = await browser.newPage({ viewport: { width, height } });
+      const cdp = await page.context().newCDPSession(page);
+      await setTabletMetrics(cdp, width, height);
+      await page.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=${modal.surface}&reset=1`);
+      await page.waitForTimeout(250);
+
+      expect(await page.evaluate((selector) => document.querySelector(selector) !== null, modal.panelSelector)).toBe(true);
+      if ("initialStepTitle" in modal) {
+        expect(await page.locator(`${modal.panelSelector} #wizard-title`).textContent()).toBe(modal.initialStepTitle);
+        expect(await page.locator(`${modal.panelSelector} .setup-wizard-step-context`).count()).toBe(0);
+      }
+      const resizeSelector = `${modal.panelSelector} [data-testid='floating-window-resize-se']`;
+      let resizePoint = await targetCenter(page, resizeSelector);
+      expect(await page.evaluate((point) => document.elementFromPoint(point.x, point.y)?.getAttribute("data-resize-hit-target"), resizePoint)).toBe("true");
+      let beforeResize = await rect(page, modal.panelSelector);
+      // AgentListModal's production default reaches the tablet width clamp. Retract it through the
+      // existing northwest control first, then prove the required southeast gesture grows it again.
+      if (beforeResize.width >= width - 32 || beforeResize.height >= height - 32) {
+        await touchDrag(cdp, await targetCenter(page, `${modal.panelSelector} [data-testid='floating-window-resize-nw']`), { x: 96, y: 72 });
+        await page.waitForTimeout(100);
+        beforeResize = await rect(page, modal.panelSelector);
+        resizePoint = await targetCenter(page, resizeSelector);
+      }
+      await touchDrag(cdp, resizePoint, { x: 24, y: 36 });
+      await page.waitForTimeout(100);
+      const afterResize = await rect(page, modal.panelSelector);
+      expect(afterResize.width).toBeGreaterThan(beforeResize.width);
+      expect(afterResize.height).toBeGreaterThan(beforeResize.height);
+      expect(afterResize.x).toBeGreaterThanOrEqual(0);
+      expect(afterResize.y).toBeGreaterThanOrEqual(0);
+      expect(afterResize.width).toBeLessThanOrEqual(width - 32);
+      expect(afterResize.height).toBeLessThanOrEqual(height - 32);
+
+      const headerPoint = await targetCenter(page, modal.dragHandleSelector);
+      const beforeDrag = await rect(page, modal.panelSelector);
+      await touchDrag(cdp, headerPoint, { x: -28, y: 24 });
+      await page.waitForTimeout(100);
+      const afterDrag = await rect(page, modal.panelSelector);
+      expect(afterDrag.x).not.toBe(beforeDrag.x);
+      expect(afterDrag.y).not.toBe(beforeDrag.y);
+      expect(afterDrag.width).toBe(beforeDrag.width);
+      expect(afterDrag.height).toBe(beforeDrag.height);
+      expect(await page.evaluate((key) => localStorage.getItem(key), modal.persistGeometryKey)).not.toBeNull();
+
+      await mkdir(fn8607Screenshots, { recursive: true });
+      await page.screenshot({ path: path.join(fn8607Screenshots, modal.screenshot) });
+      await page.close();
+    }, 30_000);
+  }
+
+  it("captures the migrated AgentListModal true-phone full-screen sheet", async () => {
+    const width = 767;
+    const height = 1024;
+    const page = await browser.newPage({ viewport: { width, height } });
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, screenWidth: 390, screenHeight: 844, deviceScaleFactor: 1, mobile: false });
+    await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+    await page.goto(`${baseUrl}app/task-modal-touch-resize-e2e-fixture.html?surface=agent-list-modal&reset=1`);
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(() => document.querySelector("[data-resize-hit-target]") === null)).toBe(true);
+    expect(await page.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>("[data-testid='floating-window-agent-list']");
+      return panel ? panel.getBoundingClientRect().height >= window.innerHeight * 0.9 : false;
+    })).toBe(true);
+    expect(await page.evaluate(() => localStorage.getItem("floating-window:agent-list"))).toBeNull();
+    await mkdir(fn8607Screenshots, { recursive: true });
+    await page.screenshot({ path: path.join(fn8607Screenshots, "phone-fullscreen-sheet.png") });
+    await page.close();
   }, 30_000);
 
   it("keeps the 767px FloatingWindow phone sheet free of active targets", async () => {
