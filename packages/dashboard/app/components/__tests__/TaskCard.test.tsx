@@ -47,6 +47,8 @@ vi.mock("lucide-react", () => ({
   ArrowUp: ({ style, ...props }: React.SVGProps<SVGSVGElement>) => <svg data-testid="priority-icon-high" className="lucide-arrow-up" style={style} {...props} />,
   TriangleAlert: ({ style, ...props }: React.SVGProps<SVGSVGElement>) => <svg data-testid="priority-icon-urgent" className="lucide-triangle-alert" style={style} {...props} />,
   ArrowUpRight: () => null,
+  // FNXC:RefinementTitle 2026-07-26-20:10: icon on the "Refines <id>" provenance chip.
+  Sparkles: () => null,
   // FN-7592: the overseer badge now renders an icon child instead of a text label,
   // so tests must see a real SVG (like Zap) rather than a no-op render.
   Eye: () => <svg data-testid="icon-eye" />,
@@ -6969,6 +6971,67 @@ describe("TaskCard near-duplicate chip", () => {
     await waitFor(() => {
       expect(onUpdateTask).toHaveBeenCalledWith("FN-001", { dismissNearDuplicate: true });
     });
+  });
+});
+
+/*
+FNXC:RefinementTitle 2026-07-26-20:10:
+A refinement card is titled by the operator's feedback now, so the title no longer says the card
+is a refinement. The "Refines <id>" chip is what carries that, and this covers the affordance's
+surfaces: present for a `task_refine` task with a parent, absent for an ordinary task (with no
+empty chip shell left behind), and absent when the parent is unresolvable — a chip whose only
+content is the parent id must not render without one.
+*/
+describe("TaskCard refines chip", () => {
+  it("renders the refines chip for a refinement task", () => {
+    render(
+      <TaskCard
+        task={makeTask({ sourceType: "task_refine", sourceParentTaskId: "FN-1234" })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    expect(screen.getByText("Refines FN-1234")).toBeInTheDocument();
+  });
+
+  it("renders no refines chip and no empty shell for an ordinary task", () => {
+    render(
+      <TaskCard
+        task={makeTask({ sourceType: "cli", sourceParentTaskId: undefined })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    expect(screen.queryByText(/Refines /)).toBeNull();
+    expect(document.querySelector(".card-refine-chip")).toBeNull();
+  });
+
+  it("renders no refines chip when the refinement has no resolvable parent", () => {
+    render(
+      <TaskCard
+        task={makeTask({ sourceType: "task_refine", sourceParentTaskId: undefined })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    expect(document.querySelector(".card-refine-chip")).toBeNull();
+  });
+
+  // A non-refinement that merely carries a parent id (duplicates, agent-created follow-ups)
+  // must not be mislabeled as a refinement.
+  it("does not render the refines chip for a non-refinement task that has a parent", () => {
+    render(
+      <TaskCard
+        task={makeTask({ sourceType: "task_duplicate", sourceParentTaskId: "FN-1234" })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    expect(document.querySelector(".card-refine-chip")).toBeNull();
   });
 });
 

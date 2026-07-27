@@ -1047,6 +1047,43 @@ export interface ProjectSettings {
    * misconfigured id never breaks AI-undo task creation.
    */
   aiUndoTaskWorkflowId?: string;
+  /**
+   * FNXC:OriginWorkflowSelection 2026-07-26-19:40:
+   * Workflow applied to tasks opened programmatically by `fn task create` (CLI)
+   * and the `fn_task_create` agent tool. Blank/unset means "Selected workflow":
+   * the operator's current Board workflow lane (`boardSelectedWorkflowId`), and
+   * failing that the project default workflow — i.e. today's behavior. A concrete
+   * id PINS those tasks to that workflow regardless of the board lane.
+   * An explicit `workflow_id` argument on `fn_task_create` still wins over this.
+   * Resolution tolerates a missing/deleted/fragment id by falling back to inherit,
+   * mirroring `aiUndoTaskWorkflowId`, so a misconfigured id never breaks creation.
+   */
+  taskCreateWorkflowId?: string;
+  /**
+   * FNXC:OriginWorkflowSelection 2026-07-26-19:40:
+   * Workflow applied to refinement tasks (`TaskStore.refineTask` — the follow-up
+   * card spawned from a done/in-review task plus operator feedback, including the
+   * auto-refinement a comment on a done task triggers). Same semantics as
+   * `taskCreateWorkflowId`: blank/unset = "Selected workflow" (board lane, then
+   * project default), a concrete id pins. Replaces FN-8188's unconditional
+   * "refinements inherit the project default workflow" with an overridable choice.
+   */
+  refinementTaskWorkflowId?: string;
+  /**
+   * FNXC:OriginWorkflowSelection 2026-07-26-19:40:
+   * Server-side mirror of the operator's current Board workflow lane, written
+   * best-effort by the dashboard whenever the lane changes. The authoritative,
+   * instant-restore copy stays in project-scoped localStorage
+   * (`boardWorkflowSelection.ts`); this mirror exists ONLY so non-browser callers
+   * — `fn task create` from a terminal, the `fn_task_create` agent tool, the
+   * refinement path invoked from CLI/engine — can honor the "Selected workflow"
+   * option, which they otherwise could not read.
+   * Consequence to know: this is PROJECT-scoped, so two operators on the same
+   * project share one mirrored lane (last switch wins). The Board itself never
+   * reads it back. The all-workflows sentinel is never persisted here.
+   * Not a user-editable Settings field; there is no picker for it.
+   */
+  boardSelectedWorkflowId?: string;
   /** Built-in workflow ids visible/selectable in project workflow pickers.
    *  Undefined preserves the default of showing every built-in workflow. */
   enabledBuiltinWorkflowIds?: string[];

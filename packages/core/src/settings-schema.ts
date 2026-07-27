@@ -410,6 +410,11 @@ export const DEFAULT_PROJECT_SETTINGS = {
   // already-shipped code, so default them to the stricter review-heavy
   // workflow; empty/unset means inherit the project default workflow.
   aiUndoTaskWorkflowId: "builtin:review-heavy",
+  // FNXC:OriginWorkflowSelection 2026-07-26-19:40: unset = "Selected workflow"
+  // (board lane mirror, then project default). A concrete id pins the origin.
+  taskCreateWorkflowId: undefined,
+  refinementTaskWorkflowId: undefined,
+  boardSelectedWorkflowId: undefined,
   enabledBuiltinWorkflowIds: undefined,
   approvedWorkflowCliCommands: undefined,
   approvedCliAutonomyAdapters: undefined,

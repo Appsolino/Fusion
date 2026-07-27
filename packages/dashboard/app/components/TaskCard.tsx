@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, useMemo, type CSSProperties, type ReactElement } from "react";
 import { createPortal } from "react-dom";
-import { Link, Clock, Layers, Pencil, ChevronDown, Folder, Target, Bot, Trash2, RotateCw, Zap, GitBranch, GitPullRequest, AlertTriangle, ArrowUpRight, Eye, MoreHorizontal } from "lucide-react";
+import { Link, Clock, Layers, Pencil, ChevronDown, Folder, Target, Bot, Trash2, RotateCw, Zap, GitBranch, GitPullRequest, AlertTriangle, ArrowUpRight, Eye, MoreHorizontal, Sparkles } from "lucide-react";
 import type { Task, TaskDetail, Column, ColumnId, PrInfo, IssueInfo, TaskPriority, GithubIssueAction, MergeResult, PlannerOversightLevel } from "@fusion/core";
 import {
   DEFAULT_PLANNER_OVERSIGHT_LEVEL,
@@ -1510,6 +1510,17 @@ function TaskCardComponent({
   const revertOfId = getRevertOfId(task.sourceMetadata, task.sourceParentTaskId, task.sourceType);
   const showUndoOfChip = Boolean(revertOfId);
   /*
+  FNXC:RefinementTitle 2026-07-26-20:10:
+  A refinement card is now titled by the operator's feedback rather than "Refinement: <parent>",
+  so the title no longer announces what the card IS. This chip carries that provenance instead:
+  an icon plus the parent id, so a stack of ten refinements of one task stays both individually
+  readable (distinct titles) and recognizable as refinements (identical chip, distinct id).
+  Gated on `sourceParentTaskId` because the chip's whole value is naming the parent — a
+  refinement row with no resolvable parent would render a chip that answers nothing.
+  */
+  const refinesParentId = task.sourceType === "task_refine" ? task.sourceParentTaskId : undefined;
+  const showRefinesChip = Boolean(refinesParentId);
+  /*
    * FNXC:TaskRevert 2026-07-16-00:00:
    * FN-8066 makes the source-task revert marker visible only in its completed
    * surfaces. TaskCard serves both board and list views, so this one predicate
@@ -2934,6 +2945,7 @@ function TaskCardComponent({
     || timeIndicator
     || showNearDuplicateChip
     || showUndoOfChip
+    || showRefinesChip
     || showRevertedChip
     || ((showTrackingIndicator || showLinkedIssueChipForImport) && githubTrackedIssue)
     || (task.retrySummary?.total ?? 0) > 0);
@@ -2954,6 +2966,17 @@ function TaskCardComponent({
           aria-label={t("tasks.undoOfTitle", "Created to undo {{id}}", { id: String(revertOfId) })}
         >
           <span>{t("tasks.undoOf", "Undo of {{id}}", { id: String(revertOfId) })}</span>
+        </span>
+      )}
+      {showRefinesChip && (
+        <span
+          className="card-refine-chip"
+          title={t("tasks.refinesOfTitle", "Refinement of {{id}}", { id: String(refinesParentId) })}
+          aria-label={t("tasks.refinesOfTitle", "Refinement of {{id}}", { id: String(refinesParentId) })}
+        >
+          {/* Decorative: the accessible name is already on the chip via aria-label. */}
+          <Sparkles size={11} aria-hidden="true" />
+          <span>{t("tasks.refinesOf", "Refines {{id}}", { id: String(refinesParentId) })}</span>
         </span>
       )}
       {showRevertedChip && (

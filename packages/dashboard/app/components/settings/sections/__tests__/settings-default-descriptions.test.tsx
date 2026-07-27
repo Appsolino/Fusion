@@ -296,6 +296,9 @@ const SETTING_DESCRIPTION_KEYS: Record<string, string> = {
   defaultWorkflowId: "general.newTasksInheritThisCustomWorkflowsStepsOverridable",
   enabledBuiltinWorkflowIds: "general.disabledFusionWorkflowsAreHiddenFromWorkflow",
   aiUndoTaskWorkflowId: "general.aiUndoTaskWorkflowHelp",
+  // FNXC:OriginWorkflowSelection 2026-07-26-19:40: both default to unset = "Selected workflow".
+  taskCreateWorkflowId: "general.taskCreateWorkflowHelp",
+  refinementTaskWorkflowId: "general.refinementTaskWorkflowHelp",
   // ProjectModelsSection
   autoSelectModelPreset: "projectModels.autoSelectModelPresetHint",
   autoSummarizeTitles: "projectModels.whenEnabledTasksCreatedWithoutATitleBut",
@@ -316,6 +319,14 @@ const SETTING_DESCRIPTION_KEYS: Record<string, string> = {
 
 /** Setting keys intentionally not surfaced as a plain Settings UI description field, with reasons. */
 const NOT_SURFACED_ALLOWLIST: Record<string, string> = {
+  /*
+  FNXC:OriginWorkflowSelection 2026-07-26-19:40:
+  Server-side mirror of the operator's Board workflow lane, written by the dashboard
+  whenever the lane changes so non-browser callers can resolve the "Selected workflow"
+  option. It is UI state echoed into settings, not a user-editable Settings field —
+  there is deliberately no picker for it, so it has no description to document.
+  */
+  boardSelectedWorkflowId: "Board lane mirror written by the dashboard; not a user-editable Settings field",
   // Legacy compatibility input; GeneralSection exposes its policy replacement instead.
   ephemeralAgentsCanCreateTasks: "legacy compatibility input replaced by ephemeralAgentTaskCreationPolicy",
   // Global-only serve/dashboard LAN discovery switch; no Settings UI description field exists.
