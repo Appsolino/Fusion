@@ -955,6 +955,8 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
   Inline Agent Detail is the supported embedded presentation exception. It fills its owner and
   deliberately bypasses FloatingWindow chrome, persistence, and drag/resize affordances.
   */
+// FNXC:ModalTouchGeometry 2026-07-26-19:46: Nested Task Detail Agent Detail uses a distinct FloatingWindow identity, so its live dialog title id must also stay unique when both surfaces are open.
+  const agentDetailTitleId = `${floatingWindowKey}-modal-title`;
   const detailShellClassName = inline ? "agent-detail-inline" : "agent-detail-modal";
   const isPauseAllDisabled = isBulkEligibilityLoading || bulkPauseEligibleCount === 0;
   const isResumeAllDisabled = isBulkEligibilityLoading || bulkResumeEligibleCount === 0;
@@ -980,7 +982,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
               <AgentAvatar agent={agent} size={36} />
             </div>
             <div className="agent-detail-info">
-              <h2 id="agent-detail-modal-title">{agent.name}</h2>
+              <h2 id={agentDetailTitleId}>{agent.name}</h2>
               <div className="agent-detail-badges">
                 <span 
                   className="badge"
@@ -1329,7 +1331,7 @@ export function AgentDetailView({ agentId, projectId, onClose, addToast, onChild
     <FloatingWindow
       windowKey={floatingWindowKey}
       title={agent.name}
-      ariaLabelledBy="agent-detail-modal-title"
+      ariaLabelledBy={agentDetailTitleId}
       onClose={onClose}
       modal
       hideHeader

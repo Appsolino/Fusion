@@ -24,6 +24,10 @@ import {
   setupTaskDetailModalHooks,
 } from "./TaskDetailModal.test-helpers";
 import { TaskDetailModal, TaskDetailContent } from "../TaskDetailModal";
+import {
+  assertModalGeometryRecoveryAndSheetContracts,
+  assertRenderedModalTouchGeometry,
+} from "./floatingWindowMigration.test-helpers";
 
 setupTaskDetailModalHooks();
 
@@ -842,6 +846,26 @@ describe("TaskDetailModal", () => {
         expect(declarations, `${selector} mobile right inset`).not.toMatch(/\bpadding-(?:inline-end|right)\s*:/);
         expect(declarations, `${selector} mobile asymmetric padding`).not.toMatch(/\bpadding\s*:/);
       }
+    });
+
+    it("uses production FloatingWindow geometry for touch drag, eight-direction resize, recovery, and sheets", () => {
+      const mount = () => render(
+        <TaskDetailModal
+          task={makeTask({ column: "in-progress" as Column })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+      const rendered = mount();
+      const header = rendered.baseElement.querySelector("[data-testid='floating-window-task-detail'] .modal-header");
+      expect(header).not.toBeNull();
+      assertRenderedModalTouchGeometry("task-detail", header!);
+      rendered.unmount();
+      assertModalGeometryRecoveryAndSheetContracts("task-detail", mount);
     });
 
     it("keeps Task Detail resizable for a known touch tablet at 768px", () => {

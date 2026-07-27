@@ -21,11 +21,15 @@ message-list scroll state; `pointer-events: none` keeps the already click-throug
 Never replace this with `display: none`, which collapses layout and makes reopening visibly reflow.
 */
 /*
-FNXC:ModalTouchGeometry 2026-07-26-18:42:
-FN-8607's migrated dialogs remain blocking despite sharing FloatingWindow with non-blocking
-utilities. This opt-in backdrop prevents pointer events reaching the application beneath a modal.
+FNXC:ModalTouchGeometry 2026-07-26-19:46:
+FN-8619's blocking modal migrations retain the visible scrim and blur that Agent Detail previously
+owned locally. Modal windows block the application beneath them; utility FloatingWindows remain
+transparent and click-through so concurrent tools continue to coexist.
 */
 .floating-window-overlay--modal {
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  -webkit-backdrop-filter: blur(var(--space-xs));
+  backdrop-filter: blur(var(--space-xs));
   pointer-events: auto;
 }
 
