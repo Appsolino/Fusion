@@ -1,8 +1,12 @@
 import {
   computeDependencyBlockedTodoReport,
   computeInsightFingerprint,
+  resolveLifecycleColumns,
+  resolveWorkflowIrForTask,
   DEFAULT_DEPENDENCY_BLOCKED_TODO_MAX_GROUPS,
+  type Task,
   type TaskStore,
+  type WorkflowIr,
 } from "@fusion/core";
 import { createLogger } from "./logger.js";
 
@@ -32,6 +36,54 @@ export class DependencyBlockedTodoReporter {
     this.projectId = options.projectId;
     this.logger = options.logger ?? reporterLog;
     this.now = options.now ?? (() => Date.now());
+  }
+
+  /*
+  FNXC:WorkflowLifecycleColumns 2026-07-28-17:50 (PR #2479 review, P1 + P2):
+  Classify every task against ITS OWN workflow.
+
+  This replaces a board-wide UNION of roles, which was wrong in the way this whole
+  program is about: a column id means something only RELATIVE TO ITS WORKFLOW. If
+  one workflow calls `done` its hold column and another calls `done` terminal, a
+  union marks that column BOTH, so dependents count as held while the blocker
+  beside them is discarded as finished — from a single ambiguous id. Resolving per
+  task makes that impossible by construction instead of detectable afterwards.
+
+  It also fixes the sibling P2 as a side effect rather than needing its own memo
+  layer: ONE caller-owned `irCache` is shared across the whole pass, so
+  workflow-definition and prompt-override reads scale with the number of
+  WORKFLOWS, not the number of cards.
+
+  Fail-soft per task: a card whose workflow will not resolve falls back to the
+  legacy roles, so one bad workflow degrades that card to today's behavior instead
+  of breaking the report.
+  */
+  private async buildTaskLifecycleClassifier(
+    tasks: readonly Task[],
+  ): Promise<(task: Task) => { isHold: boolean; isTerminal: boolean }> {
+    const irCache = new Map<string, WorkflowIr>();
+    const rolesByTaskId = new Map<string, { isHold: boolean; isTerminal: boolean }>();
+
+    for (const task of tasks) {
+      try {
+        const lifecycle = resolveLifecycleColumns(await resolveWorkflowIrForTask(this.store, task.id, irCache));
+        if (!lifecycle) continue;
+        rolesByTaskId.set(task.id, {
+          isHold: lifecycle.hold !== undefined && task.column === lifecycle.hold,
+          isTerminal:
+            (lifecycle.complete !== undefined && task.column === lifecycle.complete) ||
+            (lifecycle.archived !== undefined && task.column === lifecycle.archived),
+        });
+      } catch {
+        // Leave unmapped: the legacy fallback below applies to this card only.
+      }
+    }
+
+    return (task: Task) =>
+      rolesByTaskId.get(task.id) ?? {
+        isHold: task.column === "todo",
+        isTerminal: task.column === "done" || task.column === "archived",
+      };
   }
 
   async report(): Promise<{ alerted: boolean; reason?: string; groupCount?: number }> {
@@ -66,12 +118,14 @@ export class DependencyBlockedTodoReporter {
       const tasks = await this.store.listTasks({ slim: true, includeArchived: false });
       const taskById = new Map(tasks.map((task) => [task.id, task]));
       const nowMs = this.now();
+      const classifyTask = await this.buildTaskLifecycleClassifier(tasks);
       const report = computeDependencyBlockedTodoReport(tasks, maxAutoMergeRetries, {
         now: nowMs,
         freshAgeMs,
         staleAgeMs,
         minBlockedTodoCount,
         maxGroups: DEFAULT_DEPENDENCY_BLOCKED_TODO_MAX_GROUPS,
+        classifyTask,
       });
 
       if (report.uniqueBlockerCount === 0) {

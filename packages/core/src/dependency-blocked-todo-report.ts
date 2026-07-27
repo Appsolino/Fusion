@@ -33,7 +33,45 @@ export interface DependencyBlockedTodoReportContext {
   staleAgeMs?: number;
   minBlockedTodoCount?: number;
   maxGroups?: number;
+  /*
+  FNXC:WorkflowLifecycleColumns 2026-07-28-02:40 (PR #2470 review, P1):
+  The task's resolved lifecycle roles. `computeBlockerFanoutMap` already accepted
+  these, but this report called it with NEITHER — so a renamed workflow silently
+  fell back to the legacy sets. The failures pointed in opposite directions: a
+  FINISHED blocker in a renamed terminal column counted as ACTIVE (over-reporting
+  dead blockers), while dependents in a renamed hold column were not counted as
+  blocked todos at all (under-reporting real ones).
+
+  Both default to the legacy values, so a caller that cannot resolve a workflow
+  is byte-identical.
+  */
+  /** Columns that end a task's life (`complete` + `archived` roles). */
+  terminalColumns?: readonly string[];
+  /** The capacity-wait column whose residents are the report's "blocked todos". */
+  holdColumn?: string;
+  /*
+  PLURAL form. This report runs BOARD-WIDE, and a board may span more than one
+  workflow — so there can be more than one hold column and collapsing them to one
+  silently drops every card held by the other workflows. The engine reporter
+  passes the union across the workflows actually present on the board.
+  */
+  holdColumns?: readonly string[];
+  /*
+  FNXC:WorkflowLifecycleColumns 2026-07-28-17:50 (PR #2479 review, P1):
+  PER-TASK classification against each task's OWN workflow — the only correct
+  option for this report, which is board-wide and therefore multi-workflow.
+  Board-wide sets assume a column id means the same thing in every workflow; when
+  two workflows reuse an id for different roles, a union marks that column both
+  held and terminal and misclassifies every card in it. Takes precedence over the
+  set-shaped options, which remain as the single-vocabulary/legacy fallback.
+  */
+  classifyTask?: (task: Task) => { isHold: boolean; isTerminal: boolean };
 }
+
+/* Legacy role ids — the builtin coding workflow's names, used when a caller
+   cannot resolve the task's workflow. */
+const DEFAULT_REPORT_TERMINAL_COLUMNS: readonly string[] = ["done", "archived"];
+const DEFAULT_REPORT_HOLD_COLUMN = "todo";
 
 export const DEFAULT_DEPENDENCY_BLOCKED_TODO_FRESH_MS = 30 * 60_000;
 export const DEFAULT_DEPENDENCY_BLOCKED_TODO_STALE_MS = 4 * 60 * 60_000;
@@ -71,8 +109,33 @@ export function computeDependencyBlockedTodoReport(
   context: DependencyBlockedTodoReportContext = {},
 ): DependencyBlockedTodoReport {
   const { now, freshMs, staleMs, minBlockedTodoCount, maxGroups } = sanitizeContext(context);
-  const blockerFanout = computeBlockerFanoutMap(tasks, maxAutoMergeRetries, { nowMs: now });
-  const todoTaskIds = new Set(tasks.filter((task) => task.column === "todo").map((task) => task.id));
+  /*
+  FNXC:WorkflowLifecycleColumns 2026-07-28-02:40 (PR #2470 review, P1):
+  Thread the resolved roles into the fan-out AND into this function's own two
+  literals below. Threading only the fan-out would leave the `todoTaskIds` filter
+  and the terminal-blocker skip on legacy ids, so a renamed workflow would still
+  report nothing — a fix that looks complete and changes no outcome.
+  */
+  const terminalColumns = context.terminalColumns ?? DEFAULT_REPORT_TERMINAL_COLUMNS;
+  const holdColumns = new Set(
+    context.holdColumns ?? [context.holdColumn ?? DEFAULT_REPORT_HOLD_COLUMN],
+  );
+  const terminalColumnSet = new Set(terminalColumns);
+
+  const classify = context.classifyTask;
+  const blockerFanout = computeBlockerFanoutMap(tasks, maxAutoMergeRetries, {
+    nowMs: now,
+    terminalColumns: terminalColumnSet,
+    holdColumns,
+    classify,
+  });
+  /* Held-ness is per task when a classifier is supplied; the set is the legacy
+     single-vocabulary fallback. */
+  const isHold = (task: Task): boolean =>
+    classify ? classify(task).isHold : holdColumns.has(task.column);
+  const isTerminal = (task: Task): boolean =>
+    classify ? classify(task).isTerminal : terminalColumnSet.has(task.column);
+  const todoTaskIds = new Set(tasks.filter(isHold).map((task) => task.id));
   const taskById = new Map(tasks.map((task) => [task.id, task]));
 
   const groups: DependencyBlockedTodoGroup[] = [];
@@ -83,7 +146,8 @@ export function computeDependencyBlockedTodoReport(
     }
 
     const blocker = taskById.get(blockerId);
-    if (!blocker || blocker.column === "done" || blocker.column === "archived") {
+    // Terminal by the blocker's OWN workflow, never by a board-wide union.
+    if (!blocker || isTerminal(blocker)) {
       continue;
     }
 
