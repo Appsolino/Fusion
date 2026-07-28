@@ -97,6 +97,7 @@ import {
 } from "./notifier.js";
 import type { GhostBugDecision } from "./triage-preflight.js";
 import { filterPathsByIgnoreList, getUnmetSchedulingDependencies, isCoordinationOnlyTask, pathsOverlap, shouldHoldActiveFileScopeLease } from "./scheduler.js";
+import { runSurfacingSweep, hours, type SurfacingCycle } from "./surfacing-sweeps.js";
 import { evaluateParkedAgentTaskLink, PARKED_AGENT_LINK_FRESH_RUN_MS } from "./task-agent-sync.js";
 import { describeSelfHealingNoActionWedge } from "./notification/task-wedge-notification.js";
 
@@ -1514,6 +1515,7 @@ export class SelfHealingManager {
     }
 
     // Each recovery step is isolated — one failure doesn't prevent subsequent steps.
+    const startupSurfacing = this.surfacingCycleMemo();
     const steps: Array<{ name: string; fn: () => Promise<unknown> }> = [
       // FNXC:LegacyAdoption 2026-07-19-04:20 (U9b / KTD-8): adoption runs FIRST. Every step
       // below reasons about `task.status` and column, so a pre-cutover row must be adopted
@@ -1595,9 +1597,11 @@ export class SelfHealingManager {
       { name: "reconcile-in-review-branch-rebind", fn: () => this.reconcileInReviewBranchRebind().then(() => undefined) },
       { name: "reclaim-stale-active-branches", fn: () => this.reclaimStaleActiveBranches().then(() => undefined) },
       { name: "surface-in-review-stalls", fn: () => this.surfaceInReviewStalls().then(() => undefined) },
-      { name: "surface-in-review-stalled", fn: () => this.surfaceInReviewStalled().then(() => undefined) },
-      { name: "surface-stale-paused-reviews", fn: () => this.surfaceStalePausedReviews().then(() => undefined) },
-      { name: "surface-stale-paused-todos", fn: () => this.surfaceStalePausedTodos().then(() => undefined) },
+      /* One shared cycle for the family — see `openSurfacingCycle`. Opened
+         lazily and awaited by all three, so the board is read once. */
+      { name: "surface-in-review-stalled", fn: () => this.surfaceInReviewStalled(startupSurfacing()).then(() => undefined) },
+      { name: "surface-stale-paused-reviews", fn: () => this.surfaceStalePausedReviews(startupSurfacing()).then(() => undefined) },
+      { name: "surface-stale-paused-todos", fn: () => this.surfaceStalePausedTodos(startupSurfacing()).then(() => undefined) },
       { name: "audit-no-commits-expected-candidates", fn: () => this.auditNoCommitsExpectedCandidates().then(() => undefined) },
     ];
 
@@ -2811,6 +2815,7 @@ export class SelfHealingManager {
         await this.reconcileStrandedHoldContinuations();
       } else {
         // Batch 2 — Task recovery (operations are independent of each other)
+        const maintenanceSurfacing = this.surfacingCycleMemo();
         const batch2Fns: Array<{ name: string; fn: () => Promise<unknown> }> = [
           {
             name: "recover-active-mission-validations",
@@ -2943,9 +2948,10 @@ export class SelfHealingManager {
           { name: "reconcile-in-review-branch-rebind", fn: () => this.reconcileInReviewBranchRebind().then(() => undefined) },
           { name: "reclaim-stale-active-branches", fn: () => this.reclaimStaleActiveBranches() },
           { name: "surface-in-review-stalls", fn: () => this.surfaceInReviewStalls() },
-          { name: "surface-in-review-stalled", fn: () => this.surfaceInReviewStalled() },
-          { name: "surface-stale-paused-reviews", fn: () => this.surfaceStalePausedReviews() },
-          { name: "surface-stale-paused-todos", fn: () => this.surfaceStalePausedTodos() },
+          /* One shared cycle for the family — see `openSurfacingCycle`. */
+          { name: "surface-in-review-stalled", fn: () => this.surfaceInReviewStalled(maintenanceSurfacing()) },
+          { name: "surface-stale-paused-reviews", fn: () => this.surfaceStalePausedReviews(maintenanceSurfacing()) },
+          { name: "surface-stale-paused-todos", fn: () => this.surfaceStalePausedTodos(maintenanceSurfacing()) },
           { name: "surface-db-corruption", fn: () => this.surfaceDbCorruption() },
           { name: "audit-no-commits-expected-candidates", fn: () => this.auditNoCommitsExpectedCandidates() },
         ];
@@ -8026,212 +8032,178 @@ export class SelfHealingManager {
       return 0;
     }
   }
+  /*
+  FNXC:WorkflowRecoveryPolicy 2026-07-27-23:20 (U4 — surfacing family retired onto the runner):
+  These three were three copies of one skeleton. The mechanism they shared —
+  pause gates, threshold resolution, the fresh-row skip, the at-most-once dedup,
+  the log write, the never-throw contract — now lives in `runSurfacingSweep`, and
+  each sweep is the part that was genuinely its own: which role it watches, which
+  operator setting it inherits, who is eligible, and what it says.
 
-  /**
-   * Surface quiet-window backlog-health diagnostics for unpaused in-review tasks.
-   *
-   * Non-overlap contract:
-   * - `surfaceStalePausedReviews()` owns paused in-review tasks.
-   * - `surfaceInReviewStalls()` owns reason-driven in-review stalls.
-   *
-   * Skips tasks not eligible for auto-merge processing (global `autoMerge`
-   * off without an explicit per-task `autoMerge: true` override) — PR-based
-   * review flow owns lifecycle until human merge.
-   */
-  async surfaceInReviewStalled(): Promise<number> {
+  Thresholds are now POLICY-OVER-SETTING. A workflow that declares
+  `recovery.stalenessMs` on the role's column wins; one that declares nothing
+  keeps reading the operator setting exactly as before, so this migration changes
+  nothing for an existing project and requires no workflow to be edited.
+
+  Surfacing is OBSERVATIONAL, so per the re-ratified invariant it reports on
+  user-paused cards — which is the entire point of the two paused sweeps.
+  */
+  /*
+  FNXC:WorkflowRecoveryPolicy 2026-07-28-03:10 (PR #2487 review — shared cycle):
+  ONE task snapshot and ONE workflow-IR cache shared across the three surfacing
+  sweeps.
+
+  Consolidating them onto a single runner made a pre-existing redundancy visible
+  for the first time: each sweep issued its own unfiltered non-slim `listTasks`
+  AND re-resolved every task's workflow from a fresh Map, and all three run
+  back-to-back in both startup recovery and the maintenance batch. That is three
+  full board reads and three IR resolutions per cycle where one of each suffices.
+
+  WHY SHARING A SNAPSHOT IS SAFE HERE, and it is a property rather than a hope:
+  the three sweeps PARTITION the task space, so no card is ever visible to two of
+  them and none can observe staleness another introduced.
+
+    surfaceStalePausedTodos    hold column   AND paused === true
+    surfaceStalePausedReviews  review column AND paused === true
+    surfaceInReviewStalled     review column AND paused !== true
+
+  A card sits in exactly one column, so hold and review are exclusive; within
+  review, `paused` splits the remaining two. `surfacing-family-shared.test.ts`
+  asserts this partition directly, so a future sweep that widens its eligibility
+  into another's territory fails rather than silently sharing a stale snapshot.
+
+  The sweeps are read-mostly regardless: they append a task-log entry under their
+  own distinct `logPrefix` and mutate no column or lifecycle field, and the
+  at-most-once dedup matches on that prefix, so one sweep's entry is invisible to
+  another's suppression check.
+  */
+  /** A once-only opener: the first caller starts the cycle, the rest await it. */
+  private surfacingCycleMemo(): () => Promise<SurfacingCycle | null> {
+    let pending: Promise<SurfacingCycle | null> | undefined;
+    return () => (pending ??= this.openSurfacingCycle());
+  }
+
+  private async openSurfacingCycle(): Promise<SurfacingCycle | null> {
+    const settings = await this.store.getSettings();
+    if (settings.globalPause || settings.enginePaused) return null;
+    return {
+      settings,
+      tasks: await this.store.listTasks({ slim: false }),
+      irCache: new Map(),
+      cycleStartMs: Date.now(),
+    };
+  }
+
+  private async runSurfacing(
+    spec: Parameters<typeof runSurfacingSweep>[0],
+    thresholdKey: "stalePausedTodoThresholdMs" | "stalePausedReviewThresholdMs" | "inReviewStalledThresholdMs",
+    label: string,
+    cycle?: SurfacingCycle | null | Promise<SurfacingCycle | null>,
+  ): Promise<number> {
     try {
-      const settings = await this.store.getSettings();
-      if (settings.globalPause || settings.enginePaused) return 0;
-      const cycleStartMs = Date.now();
-      const thresholdMs = settings.inReviewStalledThresholdMs;
-      if (!thresholdMs || thresholdMs <= 0) return 0;
-
-      const tasks = await this.store.listTasks({ column: "in-review", slim: false });
-      const activeMergeTaskId = this.options.getActiveMergeTaskId?.() ?? null;
-      const executingTaskIds = this.options.getExecutingTaskIds?.() ?? new Set<string>();
-      let surfaced = 0;
-
-      for (const task of tasks) {
-        if (task.deletedAt) continue;
-        if (!allowsAutoMergeProcessing(task, settings)) continue;
-        if (task.paused === true) continue;
-        if (task.id === activeMergeTaskId || executingTaskIds.has(task.id)) continue;
-        if (await this.isMergeLaneOwned(task.id)) continue;
-
-        const signal = getInReviewStalledSignal(task, {
-          now: cycleStartMs,
-          thresholdMs,
-          autoMerge: true,
-          activeMergeTaskId,
-          executingTaskIds,
+      /* A caller running the family together supplies the shared cycle; a
+         standalone call (tests, a single registry entry) opens its own. */
+      const active = cycle !== undefined ? await cycle : await this.openSurfacingCycle();
+      if (!active) return 0;
+      const { settings, tasks, irCache, cycleStartMs } = active;
+      const inheritedThresholdMs = Number(settings[thresholdKey] ?? 0);
+      return await runSurfacingSweep(spec, {
+        store: this.store,
+        tasks,
+        inheritedThresholdMs,
+        settings,
+        cycleStartMs,
+        irCache,
+        activation: {
           engineActiveSinceMs: settings.engineActiveSinceMs,
           engineActivationGraceMs: settings.engineActivationGraceMs,
-        });
-        if (!signal) continue;
-
-        if (Date.parse(task.updatedAt) >= cycleStartMs) {
-          continue;
-        }
-
-        const previous = [...(task.log ?? [])]
-          .reverse()
-          .find((entry) => entry.action.startsWith("In-review stalled surfaced ["));
-        if (previous) {
-          const parsed = /^In-review stalled surfaced \[([^\]]+)\]/.exec(previous.action);
-          const previousCode = parsed?.[1];
-          const previousAt = Date.parse(previous.timestamp);
-          if (Number.isFinite(previousAt) && previousAt >= cycleStartMs - thresholdMs && previousCode === signal.code) {
-            continue;
-          }
-        }
-
-        const hours = (signal.quietMs / 3_600_000).toFixed(1);
-        await this.store.logEntry(
-          task.id,
-          `In-review stalled surfaced [${signal.code}]: quiet ${hours}h beyond ${(thresholdMs / 3_600_000).toFixed(1)}h threshold; disposition options — nudge review, retry, archive, or create follow-up task. lastActivitySource=${signal.lastActivitySource}`,
-        );
-        surfaced += 1;
-      }
-
-      return surfaced;
+        },
+      });
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      log.error(`In-review stalled surfacing failed: ${errorMessage}`);
+      log.error(`${label} failed: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
     }
   }
 
-  async surfaceStalePausedReviews(): Promise<number> {
-    try {
-      const settings = await this.store.getSettings();
-      if (settings.globalPause || settings.enginePaused) return 0;
-
-      const cycleStartMs = Date.now();
-      const thresholdMs = settings.stalePausedReviewThresholdMs;
-      if (!thresholdMs || thresholdMs <= 0) return 0;
-
-      const tasks = await this.store.listTasks({ column: "in-review", slim: false });
-      let surfaced = 0;
-
-      for (const task of tasks) {
-        if (task.deletedAt) continue;
-        if (task.paused !== true) continue;
-        const signal = getStalePausedReviewSignal(task, {
-          now: cycleStartMs,
-          thresholdMs,
-          engineActiveSinceMs: settings.engineActiveSinceMs,
-          engineActivationGraceMs: settings.engineActivationGraceMs,
-        });
-        if (!signal) continue;
-        if (Date.parse(task.updatedAt) >= cycleStartMs) continue;
-
-        const previous = [...(task.log ?? [])]
-          .reverse()
-          .find((entry) => entry.action.startsWith("Stale paused review surfaced ["));
-        if (previous) {
-          const parsed = /^Stale paused review surfaced \[([^\]]+)\]/.exec(previous.action);
-          const previousCode = parsed?.[1];
-          const previousAt = Date.parse(previous.timestamp);
-          if (Number.isFinite(previousAt) && previousAt >= cycleStartMs - thresholdMs && previousCode === signal.code) {
-            continue;
-          }
-        }
-
-        const hours = (signal.ageMs / 3_600_000).toFixed(1);
-        await this.store.logEntry(
-          task.id,
-          `Stale paused review surfaced [${signal.code}]: paused ${hours}h; disposition options — unpause, retry, archive, or create follow-up task. pausedReason=${signal.pausedReason ?? "none"}`,
-        );
-        surfaced += 1;
-      }
-
-      return surfaced;
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      log.error(`Stale paused review surfacing failed: ${errorMessage}`);
-      return 0;
-    }
+  async surfaceStalePausedTodos(cycle?: SurfacingCycle | null | Promise<SurfacingCycle | null>): Promise<number> {
+    return this.runSurfacing(
+      {
+        logPrefix: "Stale paused todo surfaced",
+        role: "hold",
+        isEligible: (task) => task.paused === true,
+        evaluate: (task, thresholdMs, now, activation, roleColumn) =>
+          getStalePausedTodoSignal(task, { now, thresholdMs, holdColumn: roleColumn, ...activation }),
+        describe: (_task, signal, thresholdMs) =>
+          `paused ${hours(signal.ageMs)}h beyond ${hours(thresholdMs)}h threshold; disposition options — unpause, move to triage, archive, or create follow-up task. pausedReason=${(_task as { pausedReason?: string }).pausedReason ?? "none"}`,
+      },
+      "stalePausedTodoThresholdMs",
+      "Stale paused todo surfacing",
+      cycle,
+    );
   }
 
-  async surfaceStalePausedTodos(): Promise<number> {
-    try {
-      const settings = await this.store.getSettings();
-      if (settings.globalPause || settings.enginePaused) return 0;
-
-      const cycleStartMs = Date.now();
-      const thresholdMs = settings.stalePausedTodoThresholdMs;
-      if (!thresholdMs || thresholdMs <= 0) return 0;
-
-      /*
-      FNXC:WorkflowLifecycleColumns 2026-07-28-03:45 (PR #2470 review, P1):
-      This sweep needed TWO fixes, not one. `getStalePausedTodoSignal` gained a
-      `holdColumn` parameter in B1 but every caller omitted it, so the guard still
-      compared against the literal "todo" — and the QUERY was `{ column: "todo" }`,
-      so the sweep never even saw a card resting in a renamed hold column.
-      Threading only the signal would have left a correct guard that never runs.
-
-      The column filter is therefore dropped and the hold column resolved PER TASK
-      (a board can span workflows, each with its own hold column). Cost is
-      contained by ordering: `paused !== true` rejects almost every card before any
-      IR resolution, and the survivors share an `irCache`, so a board of 400 cards
-      with three paused ones resolves at most three times.
-      */
-      const tasks = await this.store.listTasks({ slim: false });
-      const irCache = new Map<string, Awaited<ReturnType<typeof resolveWorkflowIrForTask>>>();
-      let surfaced = 0;
-
-      for (const task of tasks) {
-        if (task.paused !== true) continue;
-
-        let holdColumn = "todo";
-        try {
-          const lifecycle = resolveLifecycleColumns(
-            await resolveWorkflowIrForTask(this.store, task.id, irCache),
-          );
-          // A workflow declaring no hold column keeps the legacy id rather than
-          // matching nothing (conservative: preserves today's behavior).
-          if (lifecycle?.hold) holdColumn = lifecycle.hold;
-        } catch {
-          holdColumn = "todo";
-        }
-
-        const signal = getStalePausedTodoSignal(task, {
-          now: cycleStartMs,
-          thresholdMs,
-          holdColumn,
-          engineActiveSinceMs: settings.engineActiveSinceMs,
-          engineActivationGraceMs: settings.engineActivationGraceMs,
-        });
-        if (!signal) continue;
-        if (Date.parse(task.updatedAt) >= cycleStartMs) continue;
-
-        const previous = [...(task.log ?? [])]
-          .reverse()
-          .find((entry) => entry.action.startsWith("Stale paused todo surfaced ["));
-        if (previous) {
-          const parsed = /^Stale paused todo surfaced \[([^\]]+)\]/.exec(previous.action);
-          const previousCode = parsed?.[1];
-          const previousAt = Date.parse(previous.timestamp);
-          if (Number.isFinite(previousAt) && previousAt >= cycleStartMs - thresholdMs && previousCode === signal.code) {
-            continue;
-          }
-        }
-
-        const hours = (signal.ageMs / 3_600_000).toFixed(1);
-        await this.store.logEntry(
-          task.id,
-          `Stale paused todo surfaced [${signal.code}]: paused ${hours}h beyond ${(thresholdMs / 3_600_000).toFixed(1)}h threshold; disposition options — unpause, move to triage, archive, or create follow-up task. pausedReason=${signal.pausedReason ?? "none"}`,
-        );
-        surfaced += 1;
-      }
-
-      return surfaced;
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      log.error(`Stale paused todo surfacing failed: ${errorMessage}`);
-      return 0;
-    }
+  async surfaceStalePausedReviews(cycle?: SurfacingCycle | null | Promise<SurfacingCycle | null>): Promise<number> {
+    return this.runSurfacing(
+      {
+        logPrefix: "Stale paused review surfaced",
+        role: "review",
+        isEligible: (task) => task.paused === true,
+        evaluate: (task, thresholdMs, now, activation, roleColumn) =>
+          getStalePausedReviewSignal(task, { now, thresholdMs, reviewColumn: roleColumn, ...activation }),
+        describe: (_task, signal) =>
+          `paused ${hours(signal.ageMs)}h; disposition options — unpause, retry, archive, or create follow-up task. pausedReason=${(_task as { pausedReason?: string }).pausedReason ?? "none"}`,
+      },
+      "stalePausedReviewThresholdMs",
+      "Stale paused review surfacing",
+      cycle,
+    );
   }
+
+  async surfaceInReviewStalled(cycle?: SurfacingCycle | null | Promise<SurfacingCycle | null>): Promise<number> {
+    const activeMergeTaskId = this.options.getActiveMergeTaskId?.() ?? null;
+    const executingTaskIds = this.options.getExecutingTaskIds?.() ?? new Set<string>();
+    return this.runSurfacing(
+      {
+        logPrefix: "In-review stalled surfaced",
+        role: "review",
+        /* Unlike the paused sweeps this one watches ACTIVE review work, so a
+           paused card is excluded rather than targeted. */
+        isEligible: (task, settings) =>
+          /*
+          FNXC:WorkflowRecoveryPolicy 2026-07-28-01:20 (PR #2487 review, P1):
+          `allowsAutoMergeProcessing` is one of the SIX SAFEGUARDS —
+          `autoMerge:false` is terminal-until-human. The migration dropped this
+          gate while still passing `autoMerge: true` to the signal below, so the
+          code asserted an eligibility it no longer checked and the sweep treated
+          auto-merge-disabled tasks (and manually-opened-PR tasks) as eligible.
+          The `autoMerge: true` argument is only sound BECAUSE this gate proves it.
+          */
+          allowsAutoMergeProcessing(task, settings) &&
+          task.paused !== true &&
+          task.id !== activeMergeTaskId &&
+          !executingTaskIds.has(task.id),
+        isEligibleAsync: async (task) => !(await this.isMergeLaneOwned(task.id)),
+        evaluate: (task, thresholdMs, now, activation, roleColumn) => {
+          const signal = getInReviewStalledSignal(task, {
+            now,
+            thresholdMs,
+            autoMerge: true,
+            activeMergeTaskId,
+            executingTaskIds,
+            reviewColumn: roleColumn,
+            ...activation,
+          });
+          return signal ? { ...signal, code: signal.code, ageMs: signal.quietMs } : undefined;
+        },
+        describe: (_task, signal, thresholdMs) =>
+          `quiet ${hours(signal.ageMs)}h beyond ${hours(thresholdMs)}h threshold; disposition options — nudge review, retry, archive, or create follow-up task. lastActivitySource=${(signal as { lastActivitySource?: string }).lastActivitySource}`,
+      },
+      "inReviewStalledThresholdMs",
+      "In-review stalled surfacing",
+      cycle,
+    );
+  }
+
 
   /**
    * Backward lifecycle move gated on triple proof (FN-5335).
