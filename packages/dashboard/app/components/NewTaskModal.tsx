@@ -48,6 +48,7 @@ interface NewTaskModalProps {
   onCreateTask: (input: NewTaskCreateInput) => Promise<Task>;
   addToast: (message: string, type?: ToastType) => void;
   initialDescription?: string;
+  initialTitle?: string;
   initialWorkflowId?: string | null;
   onPlanningMode?: (initialPlan: string, workflowId?: string | null) => void;
   onSubtaskBreakdown?: (description: string, workflowId?: string | null) => void;
@@ -323,7 +324,7 @@ function NewTaskGitHubReferencePicker({ isOpen, projectId, disabled = false, onS
   );
 }
 
-export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, addToast, initialDescription = "", initialWorkflowId, onPlanningMode, onSubtaskBreakdown }: NewTaskModalProps) {
+export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, addToast, initialDescription = "", initialTitle = "", initialWorkflowId, onPlanningMode, onSubtaskBreakdown }: NewTaskModalProps) {
   const { t } = useTranslation("app");
   const { confirm } = useConfirm();
   const viewportMode = useViewportMode();
@@ -338,6 +339,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
         ...(viewportHeight !== null ? { "--vv-height": `${viewportHeight}px` } : {}),
       } as React.CSSProperties)
     : {};
+  const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const githubGeneratedDescriptionRef = useRef("");
   const wasOpenRef = useRef(false);
@@ -446,7 +448,10 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
    */
   useEffect(() => {
     if (isOpen && !wasOpenRef.current) {
-      setDescription(initialDescription);
+      const seededDescription = initialDescription;
+      const seededTitle = initialTitle ?? "";
+      setTitle(seededTitle);
+      setDescription(seededDescription);
       /*
       FNXC:TaskWorkflowSelection 2026-07-14-14:22:
       A New Task dialog opened from a workflow board lane must inherit that viewed workflow atomically; global/sidebar opens omit this value and continue inheriting the project default (Coding). This prevents a task created while viewing Coding (Ideas) from silently landing in plain Coding.
@@ -454,7 +459,17 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
       setSelectedWorkflowId(initialWorkflowId);
     }
     wasOpenRef.current = isOpen;
-  }, [initialDescription, initialWorkflowId, isOpen]);
+  }, [initialDescription, initialTitle, initialWorkflowId, isOpen]);
+
+  /*
+  FNXC:NewTaskTitle 2026-07-29-00:00:
+  The title stays explicit even when the dialog is opened from a seeded description
+  (selection comments, inline expansion, imports). Keeping the fields independent
+  preserves required-title validation and prevents body text from being promoted.
+  */
+  const handleDescriptionChange = useCallback((value: string) => {
+    setDescription(value);
+  }, []);
 
   // Load agents for agent picker
   const loadAgents = useCallback(() => {
@@ -541,6 +556,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
   // Track dirty state
   useEffect(() => {
     const isDirty =
+      title.trim() !== "" ||
       description.trim() !== "" ||
       dependencies.length > 0 ||
       pendingImages.length > 0 ||
@@ -565,13 +581,14 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
       githubTrackingEnabled !== initialDefaultValues.githubTrackingEnabled ||
       githubRepoOverrideTrimmed !== "";
     setHasDirtyState(isDirty);
-  }, [description, dependencies, pendingImages, selectedWorkflowId, hasUserSelectedEnabledWorkflowSteps, executorModel, validatorModel, planningModel, thinkingLevel, plannerOversightLevel, selectedAgentId, reviewLevel, autoMerge, priority, nodeId, executionMode, branchMode, branch, baseBranch, githubTrackingEnabled, githubRepoOverrideTrimmed, initialDefaultValues]);
+  }, [title, description, dependencies, pendingImages, selectedWorkflowId, hasUserSelectedEnabledWorkflowSteps, executorModel, validatorModel, planningModel, thinkingLevel, plannerOversightLevel, selectedAgentId, reviewLevel, autoMerge, priority, nodeId, executionMode, branchMode, branch, baseBranch, githubTrackingEnabled, githubRepoOverrideTrimmed, initialDefaultValues]);
 
   const resetForm = useCallback(() => {
     // Clean up object URLs
     pendingImages.forEach((img) => URL.revokeObjectURL(img.previewUrl));
     // Reset form
     setPendingImages([]);
+    setTitle("");
     setDescription("");
     setDependencies([]);
     setExecutorModel("");
@@ -626,6 +643,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
   }, [onClose, resetForm]);
 
   const performCreate = useCallback(async (trimmedDesc: string, acknowledgedDuplicates?: string[]) => {
+    const trimmedTitle = title.trim();
     const executorSlashIdx = executorModel.indexOf("/");
     const validatorSlashIdx = validatorModel.indexOf("/");
     const planningSlashIdx = planningModel.indexOf("/");
@@ -635,7 +653,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
     Do not hard-code `column: "triage"` — the store resolves the landing column from the (materialized) workflowId below, so a manual-intake workflow (e.g. Coding (Ideas) → "ideas") parks the card for the operator instead of being auto-triaged.
     */
     const createInput: NewTaskCreateInput = {
-      title: undefined,
+      title: trimmedTitle,
       description: trimmedDesc,
       dependencies: dependencies.length ? dependencies : undefined,
       // U6/R3: forward the workflow selection only when the user changed it.
@@ -700,16 +718,17 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
     resetForm();
     addToast(t("newTaskModal.taskCreated", "Created {{taskId}}", { taskId: task.id }), "success");
     onClose();
-  }, [executorModel, validatorModel, planningModel, thinkingLevel, plannerOversightLevel, dependencies, selectedWorkflowId, shouldSubmitEnabledWorkflowSteps, enabledWorkflowSteps, selectedAgentId, presetMode, selectedPresetId, reviewLevel, autoMerge, priority, nodeId, executionMode, branchMode, isBranchNameRequired, branch, baseBranch, githubTrackingEnabled, githubRepoOverrideTrimmed, onCreateTask, pendingImages, resetForm, addToast, t, onClose, projectId]);
+  }, [title, executorModel, validatorModel, planningModel, thinkingLevel, plannerOversightLevel, dependencies, selectedWorkflowId, shouldSubmitEnabledWorkflowSteps, enabledWorkflowSteps, selectedAgentId, presetMode, selectedPresetId, reviewLevel, autoMerge, priority, nodeId, executionMode, branchMode, isBranchNameRequired, branch, baseBranch, githubTrackingEnabled, githubRepoOverrideTrimmed, onCreateTask, pendingImages, resetForm, addToast, t, onClose, projectId]);
 
   const handleSubmit = useCallback(async () => {
+    const trimmedTitle = title.trim();
     const trimmedDesc = description.trim();
-    if (!trimmedDesc || isSubmitting || githubRepoOverrideInvalid || hasInvalidBranchSelection) return;
+    if (!trimmedTitle || !trimmedDesc || isSubmitting || githubRepoOverrideInvalid || hasInvalidBranchSelection) return;
 
     setIsSubmitting(true);
     let keepSubmittingForDuplicateChoice = false;
     try {
-      const matches = await checkDuplicateTasks({ description: trimmedDesc }, projectId);
+      const matches = await checkDuplicateTasks({ title: trimmedTitle, description: trimmedDesc }, projectId);
       if (matches.length > 0) {
         setDuplicateMatches(matches);
         keepSubmittingForDuplicateChoice = true;
@@ -728,7 +747,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
         setIsSubmitting(false);
       }
     }
-  }, [description, isSubmitting, githubRepoOverrideInvalid, hasInvalidBranchSelection, projectId, addToast, t, performCreate]);
+  }, [title, description, isSubmitting, githubRepoOverrideInvalid, hasInvalidBranchSelection, projectId, addToast, t, performCreate]);
 
   const handleDuplicateOpen = useCallback((taskId: string) => {
     setDuplicateMatches(null);
@@ -740,9 +759,10 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
   }, [onClose, resetForm]);
 
   const handleDuplicateProceed = useCallback(async () => {
+    const trimmedTitle = title.trim();
     const trimmedDesc = description.trim();
     const matches = duplicateMatches;
-    if (!trimmedDesc || !matches || matches.length === 0) {
+    if (!trimmedTitle || !trimmedDesc || !matches || matches.length === 0) {
       setDuplicateMatches(null);
       setIsSubmitting(false);
       return;
@@ -757,7 +777,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
     } finally {
       setIsSubmitting(false);
     }
-  }, [description, duplicateMatches, performCreate, addToast, t]);
+  }, [title, description, duplicateMatches, performCreate, addToast, t]);
 
   const handleDuplicateCancel = useCallback(() => {
     setDuplicateMatches(null);
@@ -780,6 +800,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
     }
 
     githubGeneratedDescriptionRef.current = nextDescription;
+    setTitle((current) => (current.trim() === "" ? option.title : current));
     setDescription(nextDescription);
     return true;
   }, [confirm, description, t]);
@@ -1028,8 +1049,10 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
 
       <TaskForm
         mode="create"
+        title={title}
+        onTitleChange={setTitle}
         description={description}
-        onDescriptionChange={setDescription}
+        onDescriptionChange={handleDescriptionChange}
         dependencies={dependencies}
         onDependenciesChange={setDependencies}
         executorModel={executorModel}
@@ -1083,7 +1106,7 @@ export function NewTaskModal({ isOpen, onClose, projectId, tasks, onCreateTask, 
         onGithubRepoOverrideChange={setGithubRepoOverride}
         onCreateSubmit={handleSubmit}
         createSubmitLabel={isSubmitting ? t("newTaskModal.creating", "Creating...") : t("newTaskModal.createTask", "Create Task")}
-        createSubmitDisabled={!description.trim() || isSubmitting || githubRepoOverrideInvalid || hasInvalidBranchSelection}
+        createSubmitDisabled={!title.trim() || !description.trim() || isSubmitting || githubRepoOverrideInvalid || hasInvalidBranchSelection}
         renderBelowPrimary={quickFields}
         hideDependencies={true}
         autoExpandMoreOptionsOnSelection={false}

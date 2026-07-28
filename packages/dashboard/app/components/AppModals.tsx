@@ -478,6 +478,7 @@ export function AppModals({
           onCreateTask={handleModalCreateWithOnboardingTracking}
           addToast={addToast}
           projectId={projectId}
+          initialTitle={modalManager.newTaskInitialTitle ?? ""}
           initialDescription={modalManager.newTaskInitialDescription ?? ""}
           initialWorkflowId={modalManager.newTaskInitialWorkflowId}
           onPlanningMode={onPlanningMode}

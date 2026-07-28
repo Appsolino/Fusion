@@ -13,12 +13,13 @@ import {eq, sql} from "drizzle-orm";
 import type {Task, Column, ColumnId, HandoffToReviewOptions} from "../types.js";
 import {VALID_TRANSITIONS, COLUMNS} from "../types.js";
 import {serializeWorkflowIr} from "../workflow-ir.js";
+import {emitWorkflowLifecycleEvent} from "../workflow-events.js";
 import {resolveAllowedColumns, workflowHasColumn} from "../workflow-transitions.js";
 import {isBuiltinWorkflowId, getBuiltinWorkflow, resolveDefaultWorkflowIr, DEFAULT_WORKFLOW_ID} from "../builtin-workflows.js";
 import {parseWorkflowIr} from "../workflow-ir.js";
 import {findWorkflowColumn, resolveColumnPluginGates} from "../plugin-gate-verdict.js";
 import {getTraitRegistry, resolveColumnFlags} from "../trait-registry.js";
-import {resolveColumnCapacity, resolveWipBudgetColumns} from "../workflow-capacity.js";
+import {resolveColumnCapacity, resolveWipBudgetColumns, resolveCapacityPoolId} from "../workflow-capacity.js";
 import {
   type TransitionColumnFacts,
   evaluateCapacityRejection,
@@ -314,9 +315,19 @@ export async function moveTaskInternalImpl(store: TaskStore, id: string, toColum
     // capacity check is not a guard (U6 fills the enforcement; U4 leaves a
     // pass-through slot). An explicit option value wins; otherwise derive it.
     const bypassGuards = store.resolveWorkflowBypassGuards(moveSource, options);
-    const effectiveWorkflowIdForMove = useWorkflow
-      ? (await store.getTaskWorkflowSelectionAsync(id))?.workflowId ?? "builtin:coding"
-      : "builtin:coding";
+    /*
+    FNXC:WorkflowCapacity 2026-07-28-19:05 (pool-id sentinel fix):
+    ONE selection read, TWO derived ids, because they are two different things
+    that were previously conflated into one variable — and the conflation is the
+    defect. The capacity POOL key must match how the counter buckets rows
+    (`resolveCapacityPoolId`, shared); the WORKFLOW id is telemetry and must stay
+    a real workflow id, never the bucketing sentinel.
+    */
+    const workflowSelectionForMove = useWorkflow
+      ? await store.getTaskWorkflowSelectionAsync(id)
+      : undefined;
+    const effectiveWorkflowIdForMove = workflowSelectionForMove?.workflowId ?? DEFAULT_WORKFLOW_ID;
+    const capacityPoolIdForMove = resolveCapacityPoolId(workflowSelectionForMove?.workflowId);
     const workflowIr: WorkflowIr | undefined = useWorkflow
       ? await resolveTaskWorkflowIrForMove(store, id)
       : undefined;
@@ -931,7 +942,7 @@ export async function moveTaskInternalImpl(store: TaskStore, id: string, toColum
               store.countActiveInCapacitySlotAsync({
                 tx,
                 targetColumn: budgetColumn,
-                workflowId: effectiveWorkflowIdForMove,
+                workflowId: capacityPoolIdForMove,
                 countPending,
                 excludeTaskId: id,
               }),
@@ -1212,6 +1223,47 @@ export async function moveTaskInternalImpl(store: TaskStore, id: string, toColum
 
     if (fromColumn !== toColumn) {
       store.emit("task:moved", { task, from: fromColumn, to: toColumn, source: moveSource });
+      /*
+      FNXC:WorkflowEvents 2026-07-27-11:45 (U3 / R5, R6):
+      THE post-commit emit point for lifecycle transitions. Its position is the
+      contract, not a detail: everything above has committed (the row upsert,
+      the capacity reservation, the in-transaction outbox writes), so an emitted
+      `TaskTransitioned` implies a durable transition and a rolled-back
+      transaction emits nothing at all — the transaction throws out of the
+      `layer.transactionImmediate` block long before reaching here.
+
+      It sits beside the existing `task:moved` store event rather than replacing
+      it: `task:moved` carries the whole task object to in-process listeners
+      (triage's column-wake handler), which the ids-only rule forbids on the
+      bus. U7 migrates that listener onto the bus as a subscriber; until then
+      the two coexist and neither is authoritative — a lifecycle decision reads
+      the task row, never an event.
+
+      Fire-and-forget by construction: `emit` never throws and never awaits
+      subscribers, so no subscriber can slow, fail, or reorder a transition.
+      */
+      emitWorkflowLifecycleEvent({
+        type: "TaskTransitioned",
+        taskId: id,
+        at: movedAt,
+        from: fromColumn,
+        to: toColumn,
+        moveSource,
+        ...(internal.runContext?.runId ? { runId: internal.runContext.runId } : {}),
+        /*
+        FNXC:WorkflowEvents 2026-07-27-15:10 (U3, PR #2467 review):
+        OMIT rather than guess. `effectiveWorkflowIdForMove` reads the task's real
+        selection only when `useWorkflow` is true; otherwise it is hardcoded to
+        `builtin:coding`. That compat flag is off for effectively every real
+        project (see the note at the flag-OFF adjacency branch above), so
+        emitting it unconditionally would stamp `builtin:coding` onto moves of
+        tasks on a custom workflow — a wrong value baked into a brand-new wire
+        field, latent only because no subscriber reads it yet. An absent
+        `workflowId` means "not resolved here"; a subscriber that needs it reads
+        the selection itself.
+        */
+        ...(useWorkflow ? { workflowId: effectiveWorkflowIdForMove } : {}),
+      });
     }
     if (toColumn === "done") {
       await store.clearNearDuplicateReferencesToFailSoft(id, {

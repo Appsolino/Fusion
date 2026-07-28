@@ -865,6 +865,10 @@ export function TaskForm({
       )
     : availableDeps;
 
+  /*
+  FNXC:NewTask 2026-08-03-00:00:
+  Full-dialog task creation now exposes a dedicated title input so create flows can keep title and description independent while edit mode keeps the existing title editor.
+  */
   return (
     <div
       className="task-form"
@@ -873,13 +877,13 @@ export function TaskForm({
       onPaste={handlePaste}
     >
       <div className="task-form-primary-section">
-        {/* Title field (edit mode only) */}
-      {mode === "edit" && onTitleChange && (
+        {/* Title field (create and edit modes) */}
+        {onTitleChange && (
         <div className="form-group">
           <label htmlFor="task-form-title">{t("taskForm.titleLabel", "Title")}</label>
           <input
             ref={titleInputRef}
-            autoFocus
+            autoFocus={mode === "create"}
             id="task-form-title"
             type="text"
             className="modal-edit-input"
@@ -887,6 +891,9 @@ export function TaskForm({
             value={title || ""}
             onChange={(e) => onTitleChange(e.target.value)}
             disabled={disabled}
+            required={mode === "create"}
+            aria-required={mode === "create"}
+            data-testid="task-form-title"
           />
         </div>
       )}
@@ -923,7 +930,7 @@ export function TaskForm({
           )}
           <textarea
             ref={descTextareaRef}
-            autoFocus={mode === "create"}
+            autoFocus={mode === "edit"}
             id="task-form-description"
             value={description}
             onChange={handleDescriptionInput}

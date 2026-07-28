@@ -42,6 +42,7 @@ interface BoardProps {
   addToast: (message: string, type?: ToastType) => void;
   onQuickCreate?: (input: TaskCreateInput) => Promise<Task | void>;
   onNewTask: (workflowId?: string | null) => void;
+  onOpenNewTaskDialog?: (title: string, workflowId?: string | null) => void;
   autoMerge: boolean;
   /** Project merge strategy passed to Board-owned card context menus. */
   mergeStrategy?: string;
@@ -167,7 +168,7 @@ function BoardWorkflowSkeleton({ empty = false }: { empty?: boolean }) {
   );
 }
 
-export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, onMoveTask, onPauseTask, onUnpauseTask, onResetTask, onDuplicateTask, onMergeTask, onOpenDetail, onOpenRefine, onOpenGroupModal, addToast, onQuickCreate, onNewTask, autoMerge, mergeStrategy = "direct", onToggleAutoMerge, planAutoApproveEnabled, onTogglePlanAutoApprove, globalPaused, onUpdateTask, onRetryTask, onArchiveTask, onUnarchiveTask, onRevertTask, onDeleteTask, onArchiveAllDone, onLoadArchivedTasks, onLoadMoreArchivedTasks, archivedHasMore, archivedLoadingMore, searchQuery = "", availableModels, onPlanningMode, onSubtaskBreakdown, onOpenDetailWithTab, favoriteProviders, favoriteModels, onToggleFavorite, onToggleModelFavorite, taskStuckTimeoutMs, onOpenMission, staleHighFanoutBlockerAgeThresholdMs, lastFetchTimeMs, prAuthAvailable, onOpenWorkflowEditor, onCreateWorkflow, workflowColumnsEnabled, settingsLoaded, workflowControlsInHeader = false }: BoardProps) {
+export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, onMoveTask, onPauseTask, onUnpauseTask, onResetTask, onDuplicateTask, onMergeTask, onOpenDetail, onOpenRefine, onOpenGroupModal, addToast, onQuickCreate, onNewTask, onOpenNewTaskDialog, autoMerge, mergeStrategy = "direct", onToggleAutoMerge, planAutoApproveEnabled, onTogglePlanAutoApprove, globalPaused, onUpdateTask, onRetryTask, onArchiveTask, onUnarchiveTask, onRevertTask, onDeleteTask, onArchiveAllDone, onLoadArchivedTasks, onLoadMoreArchivedTasks, archivedHasMore, archivedLoadingMore, searchQuery = "", availableModels, onPlanningMode, onSubtaskBreakdown, onOpenDetailWithTab, favoriteProviders, favoriteModels, onToggleFavorite, onToggleModelFavorite, taskStuckTimeoutMs, onOpenMission, staleHighFanoutBlockerAgeThresholdMs, lastFetchTimeMs, prAuthAvailable, onOpenWorkflowEditor, onCreateWorkflow, workflowColumnsEnabled, settingsLoaded, workflowControlsInHeader = false }: BoardProps) {
   const [archivedCollapsed, setArchivedCollapsed] = useState(true);
   /*
   FNXC:DoneColumnSorting 2026-06-29-16:57:
@@ -635,6 +636,18 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
     onNewTask(selectedWorkflow?.id);
   }, [onNewTask, selectedWorkflow?.id]);
 
+  /*
+  FNXC:NewTaskCreationRouting 2026-08-03-01:10:
+  Board-owned quick-entry expansion must preserve the lane workflow when it hands a draft title to the full New Task dialog. Bind the current workflow id at the Board edge so the modal can seed title and workflow independently.
+  */
+  const handleSelectedWorkflowNewTaskDialog = useCallback((title: string) => {
+    onOpenNewTaskDialog?.(title, selectedWorkflow?.id);
+  }, [onOpenNewTaskDialog, selectedWorkflow?.id]);
+
+  const handleLegacyNewTaskDialog = useCallback((title: string) => {
+    onOpenNewTaskDialog?.(title);
+  }, [onOpenNewTaskDialog]);
+
   const workflowContextMenuColumnsByWorkflowId = useMemo(() => {
     const map = new Map<string, readonly TaskContextMenuColumnMetadata[]>();
     for (const workflow of boardWorkflows?.workflows ?? []) {
@@ -749,6 +762,13 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
 
   FNXC:WorkflowBoard 2026-06-29-23:54:
   Aggregate Board rendering separates active columns from archived columns after the deterministic union is built. This preserves the existing collapsed archived-column behavior while the main All workflows lane set stays limited to non-hidden, non-archived destinations.
+
+  FNXC:WorkflowResolvedColumns 2026-07-27-14:35 (U10 / R8):
+  The union is now built ONLY from the workflows the payload declares. It previously appended every id of the legacy `COLUMNS` enum with synthesised trait flags, which drew a phantom lane for any lifecycle column no workflow declares — the visible failure a removed column (U11 merging Todo into Planning) would ship. Those injected lanes also carried the raw column id as their label, so a lane named "in-progress" appeared beside properly named workflow lanes.
+
+  Ordering follows the workflows' own declaration order (default workflow first, then the remaining workflows in payload order) instead of the legacy enum's index. For the built-in workflows the two are identical — their IR declares columns in exactly the legacy order — so the default board is unchanged; for a renamed or reordered workflow the lanes now follow the IR rather than collapsing to an alphabetical tie-break.
+
+  Cards resting in a column NO workflow declares are still rendered: `aggregateTasksByColumn` re-homes them for display into the aggregate quick-create intake lane (see its safety net below). Dropping the injected lanes therefore removes phantom lanes without stranding a single card.
   */
   const aggregateBoardColumns = useMemo<AggregateBoardColumn[]>(() => {
     const byId = new Map<string, AggregateBoardColumn>();
@@ -770,23 +790,7 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
         }
       }
     }
-    for (const column of COLUMNS) {
-      if (!byId.has(column)) {
-        byId.set(column, {
-          id: column,
-          name: column,
-          flags: { archived: column === "archived", complete: column === "done", intake: column === "triage", countsTowardWip: column === "in-progress", mergeBlocker: column === "in-review" },
-          sourceWorkflowIds: [],
-        });
-      }
-    }
-    const order = new Map(COLUMNS.map((column, index) => [column, index]));
-    return [...byId.values()].sort((a, b) => {
-      const aOrder = order.get(a.id as ColumnType) ?? (a.flags.archived ? 10_000 : 1_000);
-      const bOrder = order.get(b.id as ColumnType) ?? (b.flags.archived ? 10_000 : 1_000);
-      if (aOrder !== bOrder) return aOrder - bOrder;
-      return a.name.localeCompare(b.name);
-    });
+    return [...byId.values()];
   }, [boardWorkflows]);
 
   const aggregateQuickCreateTarget = useMemo<AggregateQuickCreateTarget | null>(() => {
@@ -807,6 +811,10 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
   const handleAggregateWorkflowNewTask = useCallback(() => {
     onNewTask(aggregateQuickCreateTarget?.workflowId);
   }, [aggregateQuickCreateTarget?.workflowId, onNewTask]);
+
+  const handleAggregateWorkflowNewTaskDialog = useCallback((title: string) => {
+    onOpenNewTaskDialog?.(title, aggregateQuickCreateTarget?.workflowId);
+  }, [aggregateQuickCreateTarget?.workflowId, onOpenNewTaskDialog]);
 
   const aggregateVisibleBoardColumns = useMemo(
     () => aggregateBoardColumns.filter((column) => column.flags.archived !== true),
@@ -995,7 +1003,7 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
                   mergeStrategy={mergeStrategy}
                   // FNXC:PlanApproval 2026-07-07-00:00: FN-7653 — the plan auto-approve shortcut belongs only to the intake/planning column, never to hold (Todo-like) columns; the built-in Coding workflow's Todo column carries the hold trait and was wrongly receiving this prop pair.
                   {...((columnDef.flags.intake && !columnDef.flags.archived && !columnDef.flags.complete && !columnDef.flags.countsTowardWip && !columnDef.flags.mergeBlocker && !columnDef.flags.humanReview) ? { planAutoApproveEnabled, onTogglePlanAutoApprove } : {})}
-                  {...(isCreateColumn && aggregateQuickCreateTarget ? { workflowId: aggregateQuickCreateTarget.workflowId, workflowOptions, defaultWorkflowId: boardWorkflows?.defaultWorkflowId ?? null, onQuickCreate: handleAggregateWorkflowQuickCreate, onNewTask: handleAggregateWorkflowNewTask, onSubtaskBreakdown } : {})}
+                  {...(isCreateColumn && aggregateQuickCreateTarget ? { workflowId: aggregateQuickCreateTarget.workflowId, workflowOptions, defaultWorkflowId: boardWorkflows?.defaultWorkflowId ?? null, onQuickCreate: handleAggregateWorkflowQuickCreate, onNewTask: handleAggregateWorkflowNewTask, onOpenNewTaskDialog: handleAggregateWorkflowNewTaskDialog, onSubtaskBreakdown } : {})}
                   {...(columnDef.flags.mergeBlocker || columnDef.flags.humanReview ? { onToggleAutoMerge: handleToggleAutoMerge } : {})}
                   {...(columnDef.id === "done" ? { onArchiveAllDone } : {})}
                   {...(isDoneLikeColumn ? { doneSortMode, onDoneSortModeChange: setDoneSortMode } : {})}
@@ -1079,7 +1087,7 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
                 mergeStrategy={mergeStrategy}
                 // FNXC:PlanApproval 2026-07-07-00:00: FN-7653 — the plan auto-approve shortcut belongs only to the intake/planning column, never to hold (Todo-like) columns; the built-in Coding workflow's Todo column carries the hold trait and was wrongly receiving this prop pair.
                 {...((columnDef.flags.intake && !columnDef.flags.archived && !columnDef.flags.complete && !columnDef.flags.countsTowardWip && !columnDef.flags.mergeBlocker && !columnDef.flags.humanReview) ? { planAutoApproveEnabled, onTogglePlanAutoApprove } : {})}
-                {...(isCreateColumn ? { workflowOptions, defaultWorkflowId: selectedWorkflow.id, onQuickCreate: handleWorkflowQuickCreate, onNewTask: handleSelectedWorkflowNewTask, onSubtaskBreakdown } : {})}
+                {...(isCreateColumn ? { workflowOptions, defaultWorkflowId: selectedWorkflow.id, onQuickCreate: handleWorkflowQuickCreate, onNewTask: handleSelectedWorkflowNewTask, onOpenNewTaskDialog: handleSelectedWorkflowNewTaskDialog, onSubtaskBreakdown } : {})}
                 {...(columnDef.flags.mergeBlocker || columnDef.flags.humanReview ? { onToggleAutoMerge: handleToggleAutoMerge } : {})}
                 {...(columnDef.id === "done" ? { onArchiveAllDone } : {})}
                 {...(isWorkflowDoneLikeColumn ? { doneSortMode, onDoneSortModeChange: setDoneSortMode } : {})}
@@ -1195,7 +1203,7 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
             autoMerge={autoMerge}
             mergeStrategy={mergeStrategy}
             {...(col === "triage" ? { planAutoApproveEnabled, onTogglePlanAutoApprove } : {})}
-            {...(col === "triage" ? { onQuickCreate, onNewTask, onSubtaskBreakdown } : {})}
+            {...(col === "triage" ? { onQuickCreate, onNewTask, onOpenNewTaskDialog: handleLegacyNewTaskDialog, onSubtaskBreakdown } : {})}
             {...(col === "in-review" ? { onToggleAutoMerge: handleToggleAutoMerge } : {})}
             {...(col === "done" ? { onArchiveAllDone, doneSortMode, onDoneSortModeChange: setDoneSortMode } : {})}
             {...(col === "archived" ? { collapsed: archivedCollapsed, onToggleCollapse: handleToggleArchivedCollapse, archivedHasMore, archivedLoadingMore, onLoadMoreArchived: onLoadMoreArchivedTasks } : {})}

@@ -155,6 +155,20 @@ describe("useModalManager", () => {
     expect(result.current.newTaskInitialDescription).toBeNull();
   });
 
+  it("preserves the workflow id when opening the full new task dialog from a quick-entry title", () => {
+    const { result } = renderHook(() =>
+      useModalManager({ projectId: "proj_1", planningSessions: [] }),
+    );
+
+    act(() => {
+      result.current.openNewTaskWithTitle("Draft task", "WF-ideas");
+    });
+
+    expect(result.current.newTaskModalOpen).toBe(true);
+    expect(result.current.newTaskInitialTitle).toBe("Draft task");
+    expect(result.current.newTaskInitialWorkflowId).toBe("WF-ideas");
+  });
+
   it("handles planning open, resume, and close lifecycle without clearing quick-add drafts", () => {
     const projectId = "proj_1";
     const quickEntryKey = scopedKey("kb-quick-entry-text", projectId);

@@ -1198,8 +1198,17 @@ function AppInner() {
     handleTaskViewChange("command-center");
   }, [handleTaskViewChange]);
 
-  const openNewTaskWithNav = useCallback(() => {
-    modalManager.openNewTask();
+  /*
+  FNXC:NewTaskCreationRouting 2026-08-03-01:10:
+  Workflow-aware lane buttons still open the canonical New Task modal with a workflow id, and quick-entry expansion now forwards the lane workflow alongside the draft title so the modal preserves both seeds independently.
+  */
+  const openNewTaskWithNav = useCallback((workflowId?: string | null) => {
+    modalManager.openNewTask(workflowId);
+    pushNav({ type: "modal", close: modalManager.closeNewTask });
+  }, [modalManager, pushNav]);
+
+  const openNewTaskWithTitleWithNav = useCallback((title: string, workflowId?: string | null) => {
+    modalManager.openNewTaskWithTitle(title, workflowId);
     pushNav({ type: "modal", close: modalManager.closeNewTask });
   }, [modalManager, pushNav]);
 
@@ -1670,6 +1679,7 @@ function AppInner() {
     openGroupModalWithNav,
     handleBoardQuickCreate,
     openNewTaskWithNav,
+    openNewTaskDialogWithNav: openNewTaskWithTitleWithNav,
     subtaskBreakdownEnabled,
     openSubtaskBreakdownWithNav,
     toggleAutoMerge,

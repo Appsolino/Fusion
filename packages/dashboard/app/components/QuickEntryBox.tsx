@@ -8,7 +8,7 @@ import type { Task, Settings, TaskPriority, ResolvedWorkflowOptionalStep, Thinki
 import type { ModelInfo, Agent, CreateTaskInput, DuplicateMatch, BoardWorkflowDefinition, NodeInfo } from "../api";
 import { checkDuplicateTasks, fetchModels, fetchSettings, updateGlobalSettings, fetchAgents, uploadAttachment, fetchWorkflowOptionalSteps } from "../api";
 import { DuplicateWarningModal } from "./DuplicateWarningModal";
-import { Link, Paperclip, Brain, Lightbulb, ListTree, Sparkles, Save, ChevronDown, ChevronUp, ChevronRight, Bot, Server, Zap, Eye, EyeOff, Play } from "lucide-react";
+import { Link, Paperclip, Brain, Lightbulb, ListTree, Sparkles, Save, ChevronDown, ChevronUp, ChevronRight, Bot, Server, Zap, Eye, EyeOff, Play, Maximize2 } from "lucide-react";
 import { CustomModelDropdown } from "./CustomModelDropdown";
 import { LoadingSpinner } from "./LoadingSpinner";
 import { getScopedItem, removeScopedItem, setScopedItem } from "../utils/projectStorage";
@@ -109,6 +109,8 @@ interface QuickEntryBoxProps {
    */
   onToggleModelFavorite?: (modelId: string) => void;
   onOpenTask?: (id: string) => void;
+  /** Optional affordance to expand the current inline draft into the full New Task dialog. */
+  onOpenNewTaskDialog?: (title: string) => void;
 }
 
 function getModelSelectionValue(provider?: string, modelId?: string): string {
@@ -157,7 +159,7 @@ function hasMeaningfulNodeChoice(nodes: NodeInfo[]): boolean {
   return nodes.length > 1 || nodes.some((node) => node.type !== "local");
 }
 
-export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], availableModels, onSubtaskBreakdown, workflowId, workflowOptions, defaultWorkflowId, projectId, autoExpand = true, defaultExpanded = true, singleLine = false, favoriteProviders: parentFavoriteProviders, favoriteModels: parentFavoriteModels, onToggleFavorite: parentToggleFavorite, onToggleModelFavorite: parentToggleModelFavorite, onOpenTask }: QuickEntryBoxProps) {
+export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], availableModels, onSubtaskBreakdown, workflowId, workflowOptions, defaultWorkflowId, projectId, autoExpand = true, defaultExpanded = true, singleLine = false, favoriteProviders: parentFavoriteProviders, favoriteModels: parentFavoriteModels, onToggleFavorite: parentToggleFavorite, onToggleModelFavorite: parentToggleModelFavorite, onOpenTask, onOpenNewTaskDialog }: QuickEntryBoxProps) {
   const { t } = useTranslation("app");
   const [description, setDescription] = useState(() => {
     if (typeof window !== "undefined") {
@@ -2337,6 +2339,24 @@ export function QuickEntryBox({ onCreate, onMoveTask, addToast, tasks = [], avai
                 <Zap size={14} aria-hidden="true" />
               </button>
 
+              {/*
+              FNXC:QuickEntry 2026-08-03-00:00:
+              Inline quick entry can open the full New Task dialog with the current draft preserved as the title so operators can switch from fast capture to richer drafting without retyping.
+              */}
+              {onOpenNewTaskDialog && (
+                <button
+                  type="button"
+                  className="btn btn-icon btn-sm"
+                  onClick={() => onOpenNewTaskDialog(description.trim())}
+                  onMouseDown={(e) => e.preventDefault()}
+                  disabled={isSubmitting}
+                  data-testid="quick-entry-open-new-task"
+                  title={t("tasks.openFullNewTaskDialog", "Open full New Task dialog")}
+                  aria-label={t("tasks.openFullNewTaskDialog", "Open full New Task dialog")}
+                >
+                  <Maximize2 size={14} aria-hidden="true" />
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-task-create btn-sm"

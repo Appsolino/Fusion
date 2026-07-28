@@ -25,10 +25,11 @@ vi.mock("../../sse-bus", () => ({
 }));
 
 vi.mock("../Column", () => ({
-  Column: ({ column, tasks, onQuickCreate, workflowId, workflowMode }: {
+  Column: ({ column, tasks, onQuickCreate, onOpenNewTaskDialog, workflowId, workflowMode }: {
     column: string;
     tasks: Task[];
     onQuickCreate?: (input: TaskCreateInput) => Promise<Task | void>;
+    onOpenNewTaskDialog?: (title: string) => void;
     workflowId?: string;
     workflowMode?: boolean;
   }) => (
@@ -46,6 +47,15 @@ vi.mock("../Column", () => ({
           })}
         >
           Create in {column}
+        </button>
+      ) : null}
+      {onOpenNewTaskDialog ? (
+        <button
+          type="button"
+          data-testid={`open-task-dialog-${column}`}
+          onClick={() => onOpenNewTaskDialog(`Draft ${workflowId ?? "legacy"}`)}
+        >
+          Open dialog in {column}
         </button>
       ) : null}
     </section>
@@ -152,10 +162,11 @@ function selectWorkflow(workflowId: string) {
   fireEvent.click(screen.getByTestId(`workflow-switcher-option-${workflowId}`));
 }
 
-function BoardHarness({ createdTaskId = "FN-new", createReturnsTask = true, onCreateInput }: {
+function BoardHarness({ createdTaskId = "FN-new", createReturnsTask = true, onCreateInput, onOpenNewTaskDialog }: {
   createdTaskId?: string;
   createReturnsTask?: boolean;
   onCreateInput?: (input: TaskCreateInput) => void;
+  onOpenNewTaskDialog?: (title: string, workflowId?: string | null) => void;
 }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const onQuickCreate = vi.fn(async (input: TaskCreateInput) => {
@@ -181,6 +192,7 @@ function BoardHarness({ createdTaskId = "FN-new", createReturnsTask = true, onCr
       addToast={vi.fn()}
       onQuickCreate={onQuickCreate}
       onNewTask={vi.fn()}
+      onOpenNewTaskDialog={onOpenNewTaskDialog}
       autoMerge
       onToggleAutoMerge={vi.fn()}
       showWorktreeGrouping={false}
@@ -361,6 +373,21 @@ describe("workflow lane quick-create visibility", () => {
 
     expect(within(screen.getByTestId("column-intake")).queryByText("Created wf-custom")).toBeNull();
     expect(readWorkflowCache()?.taskWorkflowIds["FN-new"]).toBe(DEFAULT_WORKFLOW.id);
+  });
+
+  it("passes the selected workflow id when a quick-entry draft opens the full dialog", async () => {
+    const onOpenNewTaskDialog = vi.fn();
+    fetchBoardWorkflowsMock.mockResolvedValue(workflowPayload({}));
+
+    render(<BoardHarness onOpenNewTaskDialog={onOpenNewTaskDialog} />);
+    await screen.findByTestId("workflow-switcher");
+    selectWorkflow(CUSTOM_WORKFLOW.id);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("open-task-dialog-intake"));
+    });
+
+    expect(onOpenNewTaskDialog).toHaveBeenCalledWith("Draft wf-custom", CUSTOM_WORKFLOW.id);
   });
 });
 

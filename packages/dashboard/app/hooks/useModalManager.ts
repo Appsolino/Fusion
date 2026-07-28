@@ -45,6 +45,7 @@ interface UseModalManagerOptions {
 export interface ModalManager {
   // State
   newTaskModalOpen: boolean;
+  newTaskInitialTitle: string | null;
   newTaskInitialDescription: string | null;
   newTaskInitialWorkflowId: string | null | undefined;
   isPlanningOpen: boolean;
@@ -90,6 +91,7 @@ export interface ModalManager {
 
   // Handlers
   openNewTask: (workflowId?: string | null) => void;
+  openNewTaskWithTitle: (title: string, workflowId?: string | null) => void;
   openNewTaskWithDescription: (description: string) => void;
   closeNewTask: () => void;
 
@@ -195,6 +197,7 @@ export function useModalManager(options: UseModalManagerOptions): ModalManager {
   const { planningSessions } = options;
 
   const [newTaskModalOpen, setNewTaskModalOpen] = useState(false);
+  const [newTaskInitialTitle, setNewTaskInitialTitle] = useState<string | null>(null);
   const [newTaskInitialDescription, setNewTaskInitialDescription] = useState<string | null>(null);
   const [newTaskInitialWorkflowId, setNewTaskInitialWorkflowId] = useState<string | null | undefined>(undefined);
   const [isPlanningOpen, setIsPlanningOpen] = useState(false);
@@ -271,17 +274,30 @@ export function useModalManager(options: UseModalManagerOptions): ModalManager {
   );
 
   const openNewTask = useCallback((workflowId?: string | null) => {
+    setNewTaskInitialTitle(null);
+    setNewTaskInitialDescription(null);
+    setNewTaskInitialWorkflowId(workflowId);
+    setNewTaskModalOpen(true);
+  }, []);
+  /*
+  FNXC:NewTaskCreationRouting 2026-08-03-01:00:
+  Quick-entry expansion must preserve the board lane workflow when a draft title opens the full New Task dialog. Keep the title seed and the workflow seed independent so the modal can carry both without reusing description text as metadata.
+  */
+  const openNewTaskWithTitle = useCallback((title: string, workflowId?: string | null) => {
+    setNewTaskInitialTitle(title);
     setNewTaskInitialDescription(null);
     setNewTaskInitialWorkflowId(workflowId);
     setNewTaskModalOpen(true);
   }, []);
   const openNewTaskWithDescription = useCallback((description: string) => {
+    setNewTaskInitialTitle(null);
     setNewTaskInitialDescription(description);
     setNewTaskInitialWorkflowId(undefined);
     setNewTaskModalOpen(true);
   }, []);
   const closeNewTask = useCallback(() => {
     setNewTaskModalOpen(false);
+    setNewTaskInitialTitle(null);
     setNewTaskInitialDescription(null);
     setNewTaskInitialWorkflowId(undefined);
   }, []);
@@ -499,6 +515,7 @@ export function useModalManager(options: UseModalManagerOptions): ModalManager {
     setDetailTaskOrigin(null);
     setGroupModalGroupId(null);
     setNewTaskModalOpen(false);
+    setNewTaskInitialTitle(null);
     setNewTaskInitialDescription(null);
     setNewTaskInitialWorkflowId(undefined);
     setIsSubtaskOpen(false);
@@ -556,6 +573,7 @@ export function useModalManager(options: UseModalManagerOptions): ModalManager {
 
   return {
     newTaskModalOpen,
+    newTaskInitialTitle,
     newTaskInitialDescription,
     newTaskInitialWorkflowId,
     isPlanningOpen,
@@ -595,6 +613,7 @@ export function useModalManager(options: UseModalManagerOptions): ModalManager {
     modelOnboardingOpen,
     anyModalOpen,
     openNewTask,
+    openNewTaskWithTitle,
     openNewTaskWithDescription,
     closeNewTask,
     openPlanning,

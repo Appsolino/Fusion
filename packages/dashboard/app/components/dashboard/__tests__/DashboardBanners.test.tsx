@@ -119,6 +119,7 @@ function buildModalManager(overrides: Partial<ModalManager> = {}): ModalManager 
   const noop = vi.fn();
   return {
     newTaskModalOpen: false,
+    newTaskInitialTitle: null,
     newTaskInitialDescription: null,
     isPlanningOpen: false,
     planningInitialPlan: null,
@@ -156,6 +157,7 @@ function buildModalManager(overrides: Partial<ModalManager> = {}): ModalManager 
     modelOnboardingOpen: false,
     anyModalOpen: false,
     openNewTask: noop,
+    openNewTaskWithTitle: noop,
     openNewTaskWithDescription: noop,
     closeNewTask: noop,
     openPlanning: noop,

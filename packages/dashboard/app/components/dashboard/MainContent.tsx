@@ -129,6 +129,7 @@ export function MainContent({
   openGroupModalWithNav,
   handleBoardQuickCreate,
   openNewTaskWithNav,
+  openNewTaskDialogWithNav,
   subtaskBreakdownEnabled,
   openSubtaskBreakdownWithNav,
   toggleAutoMerge,
@@ -870,6 +871,7 @@ export function MainContent({
             addToast={addToast}
             onQuickCreate={handleBoardQuickCreate}
             onNewTask={openNewTaskWithNav}
+            onOpenNewTaskDialog={openNewTaskDialogWithNav}
             onPlanningMode={openPlanningWithInitialPlanWithNav}
             onSubtaskBreakdown={subtaskBreakdownEnabled ? openSubtaskBreakdownWithNav : undefined}
             autoMerge={autoMerge}
@@ -987,6 +989,7 @@ export function MainContent({
           addToast={addToast}
           onQuickCreate={handleBoardQuickCreate}
           onNewTask={openNewTaskWithNav}
+          onOpenNewTaskDialog={openNewTaskDialogWithNav}
           onPlanningMode={openPlanningWithInitialPlanWithNav}
           onSubtaskBreakdown={subtaskBreakdownEnabled ? openSubtaskBreakdownWithNav : undefined}
           autoMerge={autoMerge}
@@ -1053,6 +1056,7 @@ export function MainContent({
         addToast={addToast}
         globalPaused={globalPaused}
         onNewTask={openNewTaskWithNav}
+        onOpenNewTaskDialog={openNewTaskDialogWithNav}
         onQuickCreate={handleBoardQuickCreate}
         onPlanningMode={openPlanningWithInitialPlanWithNav}
         onSubtaskBreakdown={subtaskBreakdownEnabled ? openSubtaskBreakdownWithNav : undefined}

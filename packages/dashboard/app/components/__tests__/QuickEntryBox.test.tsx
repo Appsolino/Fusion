@@ -340,6 +340,7 @@ function renderQuickEntryBox(props = {}, { startExpanded = false } = {}) {
     availableModels: MOCK_MODELS,
     projectId: TEST_PROJECT_ID,
     onSubtaskBreakdown: vi.fn(),
+    onOpenNewTaskDialog: vi.fn(),
   };
   const result = render(<QuickEntryBox {...defaultProps} {...props} />);
   return { ...result, props: { ...defaultProps, ...props } };
@@ -437,6 +438,7 @@ const QUICK_ENTRY_ACTION_BUTTONS = [
   ["Session advisor", "quick-entry-session-advisor-toggle"],
   ["Priority", "quick-entry-priority-button"],
   ["Fast", "quick-entry-fast-toggle"],
+  ["Open full dialog", "quick-entry-open-new-task"],
   ["Save", "quick-entry-save"],
 ] as const;
 
@@ -446,6 +448,7 @@ const QUICK_ENTRY_PRIMARY_ICON_BUTTON_IDS = [
   "quick-entry-session-advisor-toggle",
   "quick-entry-priority-button",
   "quick-entry-fast-toggle",
+  "quick-entry-open-new-task",
 ] as const;
 
 const QUICK_ENTRY_PRIORITY_ICON_CLASS: Record<TaskPriority, string> = {
@@ -889,6 +892,7 @@ describe("QuickEntryBox", () => {
       ["Node", "quick-entry-node-button"],
       ["Agent", "quick-entry-agent-button"],
       ["Priority", "quick-entry-priority-button"],
+      ["Open full dialog", "quick-entry-open-new-task"],
     ] as const;
 
     const allActionButtons = QUICK_ENTRY_ACTION_BUTTONS;
@@ -940,10 +944,22 @@ describe("QuickEntryBox", () => {
       });
     });
 
+    it("opens the full New Task dialog with the draft title", () => {
+      const onOpenNewTaskDialog = vi.fn();
+      mockDesktopViewport();
+      renderQuickEntryBox({ onOpenNewTaskDialog });
+      expandQuickEntry();
+      fireEvent.change(screen.getByTestId("quick-entry-input"), { target: { value: "Draft task title" } });
+
+      fireEvent.click(screen.getByTestId("quick-entry-open-new-task"));
+
+      expect(onOpenNewTaskDialog).toHaveBeenCalledWith("Draft task title");
+    });
+
     /*
     FNXC:BoardComposer 2026-07-10-12:00:
-    The primary group ends the action row as [Attach, GitHub, Priority, Fast, Save]: Save is the LAST
-    control (right-aligned primary action) and Attach/GitHub/Priority/Fast sit immediately beside it
+    The primary group ends the action row as [Attach, GitHub, Priority, Fast, Open full dialog, Save]: Save is the LAST
+    control (right-aligned primary action) and Attach/GitHub/Priority/Fast/Open full dialog sit immediately beside it
     inside the same cluster.
     */
     it("ends the action row with the primary group: status controls beside Attach and Save last", () => {
@@ -951,17 +967,18 @@ describe("QuickEntryBox", () => {
       expandQuickEntry();
 
       const actionButtonTestIds = getActionButtonTestIdsInDomOrder();
-      expect(actionButtonTestIds.slice(-6)).toEqual([
+      expect(actionButtonTestIds.slice(-7)).toEqual([
         "quick-entry-attach",
         "quick-entry-github-toggle",
         "quick-entry-session-advisor-toggle",
         "quick-entry-priority-button",
         "quick-entry-fast-toggle",
+        "quick-entry-open-new-task",
         "quick-entry-save",
       ]);
 
       const primaryGroup = screen.getByTestId("quick-entry-primary-group");
-      for (const testId of ["quick-entry-attach", "quick-entry-github-toggle", "quick-entry-session-advisor-toggle", "quick-entry-priority-button", "quick-entry-fast-toggle", "quick-entry-save"]) {
+      for (const testId of ["quick-entry-attach", "quick-entry-github-toggle", "quick-entry-session-advisor-toggle", "quick-entry-priority-button", "quick-entry-fast-toggle", "quick-entry-open-new-task", "quick-entry-save"]) {
         expect(primaryGroup.contains(screen.getByTestId(testId))).toBe(true);
       }
       const optionsGroup = screen.getByTestId("quick-entry-options-group");
@@ -1334,6 +1351,9 @@ describe("QuickEntryBox", () => {
           break;
         case "subtask-button":
           expect(helpers.onSubtaskBreakdown).toHaveBeenCalledWith("Adjust options without keyboard");
+          break;
+        case "quick-entry-open-new-task":
+          expect(helpers.props.onOpenNewTaskDialog).toHaveBeenCalledWith("Adjust options without keyboard");
           break;
         case "quick-entry-save":
           await waitFor(() => {
