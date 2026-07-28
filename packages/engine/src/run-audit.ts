@@ -185,6 +185,7 @@ export type GitMutationType =
   | "merge:ai-local-sync"
   | "merge:ai-landed"
   | "merge:ai-deps-sync"
+  | "merge:contamination-gate"
   /**
    * Metadata shape:
    * ```ts

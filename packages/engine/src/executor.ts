@@ -17,6 +17,10 @@ import { getUnmetSchedulingDependencies } from "./scheduler.js";
 import { RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, DEFAULT_MAX_POST_REVIEW_FIXES, COMPLETION_SUMMARY_NODE_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel } from "@fusion/core";
 import { finalizeProvenAutoMergeTask } from "./auto-merge-finalization.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
+import {
+  assertTaskEnvironmentReady,
+  ENVIRONMENT_PREFLIGHT_PAUSE_PREFIX,
+} from "./task-environment-preflight.js";
 import { generateFeatureVideo, type GenerateFeatureVideoOptions } from "./review-artifacts/feature-video.js";
 import { moveTaskToReplanColumn, resolveReplanTargetColumn } from "./replan-target.js";
 import type { TaskStep, WorkflowIr, WorkflowFieldDefinition, WorkflowColumnAgent, EffectiveAgentInput, WorkflowWorkEngineDispatchResult, WorkflowWorkItem } from "@fusion/core";
@@ -180,6 +184,11 @@ import {
   rehomeOrphanOntoIntegration,
 } from "./merger-orphan-rehome.js";
 import { BranchAttributionError, filterFilesToOwnTaskCommits } from "./branch-attribution.js";
+import {
+  assertMergeContaminationClear,
+  MergeContaminationGateError,
+  BLOCKED_BRANCH_CONTAMINATION,
+} from "./merge-contamination-gate.js";
 import { resolveIntegrationBranch } from "./integration-branch.js";
 import { AgentLogger } from "./agent-logger.js";
 import { createLogger, executorLog, reviewerLog, formatError } from "./logger.js";
@@ -11593,6 +11602,64 @@ export class TaskExecutor {
 
     executorLog.log(`Starting ${task.id}: ${task.title || task.description.slice(0, 60)}`);
 
+    // Construct run context BEFORE environment preflight so logEntry uses the
+    // audit-backed path (durable against later updateTask races) and operators
+    // can correlate preflight with the execute run.
+    const syntheticRunId = generateSyntheticRunId("exec", task.id);
+    this.currentRunContexts.set(task.id, {
+      runId: syntheticRunId,
+      agentId: task.assignedAgentId ?? "executor",
+    });
+    const engineRunContext: EngineRunContext = {
+      runId: syntheticRunId,
+      agentId: task.assignedAgentId ?? "executor",
+      taskId: task.id,
+      phase: "execute",
+    };
+    const audit = createRunAuditor(this.store, engineRunContext);
+    const runCtx = this.getRunContextFor(task.id);
+
+    // Platform environment preflight: block before settings / agent / model / token use
+    // when the repository workspace fails fusion-doctor. Failures pause the task; they
+    // never start a model session. Skip only via FUSION_SKIP_TASK_ENVIRONMENT_PREFLIGHT=1.
+    await this.store.logEntry(task.id, "environment preflight starting", undefined, runCtx);
+    executorLog.log(`${task.id}: environment preflight starting`);
+    try {
+      const preflight = await assertTaskEnvironmentReady({ rootDir: this.rootDir, taskId: task.id });
+      if (!preflight.ok) {
+        const reason = `${ENVIRONMENT_PREFLIGHT_PAUSE_PREFIX} — ${preflight.summary}`;
+        executorLog.error(`${task.id}: ${reason}`);
+        await this.store.pauseTask(task.id, true, runCtx, { pausedReason: reason });
+        await this.store.updateTask(task.id, { error: reason }, runCtx);
+        const detail = preflight.output ? `\n${preflight.output.slice(0, 4000)}` : "";
+        await this.store.logEntry(task.id, `${reason}${detail}`, undefined, runCtx);
+        this.executing.delete(task.id);
+        executingTaskLock.release(task.id);
+        dropPreHeldExecutorSlot(task.id, this.options.semaphore);
+        return;
+      }
+      if (!preflight.skipped) {
+        executorLog.log(`${task.id}: environment preflight PASS — ${preflight.summary}`);
+        await this.store.logEntry(
+          task.id,
+          `environment preflight PASS — ${preflight.summary}`,
+          undefined,
+          runCtx,
+        );
+      }
+    } catch (preflightErr) {
+      const message = preflightErr instanceof Error ? preflightErr.message : String(preflightErr);
+      const reason = `${ENVIRONMENT_PREFLIGHT_PAUSE_PREFIX} — ${message}`;
+      executorLog.error(`${task.id}: ${reason}`);
+      await this.store.pauseTask(task.id, true, runCtx, { pausedReason: reason });
+      await this.store.updateTask(task.id, { error: reason }, runCtx);
+      await this.store.logEntry(task.id, reason, undefined, runCtx);
+      this.executing.delete(task.id);
+      executingTaskLock.release(task.id);
+      dropPreHeldExecutorSlot(task.id, this.options.semaphore);
+      return;
+    }
+
     // Fetch settings early — needed for worktree naming and later configuration.
     // Merge per-task effective workflow settings (U3, KTD-3) OVER the project/global
     // base so the ~20 flat `settings.<key>` read sites threaded from here (workflow
@@ -11610,25 +11677,6 @@ export class TaskExecutor {
 
     // Read execution mode to determine whether to skip review and workflow steps
     const executionMode = task.executionMode ?? "standard";
-
-    // Construct run context for mutation correlation
-    // Use a synthetic correlation ID: task ID + timestamp + random suffix
-    const syntheticRunId = generateSyntheticRunId("exec", task.id);
-    this.currentRunContexts.set(task.id, {
-      runId: syntheticRunId,
-      agentId: task.assignedAgentId ?? "executor",
-    });
-
-    // Build engine run context for audit instrumentation (FN-1404)
-    const engineRunContext: EngineRunContext = {
-      runId: syntheticRunId,
-      agentId: task.assignedAgentId ?? "executor",
-      taskId: task.id,
-      phase: "execute",
-    };
-
-    // Create run auditor for TaskStore-backed audit emission (no-ops if store doesn't support it)
-    const audit = createRunAuditor(this.store, engineRunContext);
 
     // Stale spec enforcement: check if PROMPT.md has aged beyond the configured threshold.
     // When enabled, stale tasks are moved back to triage with status "needs-replan"
@@ -17233,6 +17281,77 @@ ${scopeGuard}
         notes: diagnostic,
         failureValue: requiredArtifactMissingValue(["PROMPT.md"]),
       };
+    }
+
+    /*
+     * Platform merge hardening: before Code Review (and sibling implementation-review
+     * gates), refuse foreign / unattributed commits. Do not spend reviewer tokens.
+     * Park with BLOCKED_BRANCH_CONTAMINATION — this is not an implementation REVISE.
+     */
+    if (optionalGroupId === "code-review") {
+      const reviewWorktree = worktreePath || task.worktree;
+      const baseSha = typeof task.baseCommitSha === "string" ? task.baseCommitSha.trim() : "";
+      const branch = task.branch?.trim() || "";
+      if (!reviewWorktree || !baseSha || !branch) {
+        const message =
+          `${BLOCKED_BRANCH_CONTAMINATION}: Code Review refused for ${task.id} — missing `
+          + `worktree/baseCommitSha/branch provenance (worktree=${reviewWorktree ? "yes" : "no"} `
+          + `base=${baseSha ? baseSha.slice(0, 12) : "missing"} branch=${branch || "missing"}).`;
+        await this.store.logEntry(
+          task.id,
+          `[pre-merge] ${workflowStep.name} blocked: ${message}`,
+          undefined,
+          this.getRunContextFor(task.id),
+        );
+        await this.store.updateTask(task.id, {
+          paused: true,
+          pausedReason: message.slice(0, 500),
+          status: "failed",
+          error: message,
+        }).catch(() => undefined);
+        return {
+          success: false,
+          error: message,
+          output: message,
+          failureValue: "blocked-branch-contamination",
+        };
+      }
+      try {
+        await assertMergeContaminationClear({
+          repoDir: reviewWorktree,
+          taskId: task.id,
+          branch,
+          baseSha,
+        });
+        await this.store.logEntry(
+          task.id,
+          `[pre-merge] ${workflowStep.name} contamination gate PASS (base ${baseSha.slice(0, 12)})`,
+          undefined,
+          this.getRunContextFor(task.id),
+        );
+      } catch (gateErr: unknown) {
+        const message = gateErr instanceof MergeContaminationGateError
+          ? gateErr.message
+          : `${BLOCKED_BRANCH_CONTAMINATION}: ${gateErr instanceof Error ? gateErr.message : String(gateErr)}`;
+        await this.store.logEntry(
+          task.id,
+          `[pre-merge] ${workflowStep.name} blocked: ${message}`,
+          undefined,
+          this.getRunContextFor(task.id),
+        );
+        await this.store.updateTask(task.id, {
+          paused: true,
+          pausedReason: message.slice(0, 500),
+          status: "failed",
+          error: message,
+        }).catch(() => undefined);
+        return {
+          success: false,
+          error: message,
+          output: message,
+          failureValue: "blocked-branch-contamination",
+        };
+      }
     }
 
     if (isPlanReviewStep && requireExternalIntegrationEvidence) {

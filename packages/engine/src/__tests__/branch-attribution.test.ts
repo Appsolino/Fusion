@@ -10,8 +10,9 @@ describe("FN-5039 branch-attribution", () => {
   it("returns empty attribution for empty range", async () => {
     const execMock = vi
       .fn()
-      .mockResolvedValueOnce({ stdout: "" })
-      .mockResolvedValueOnce({ stdout: "" });
+      .mockResolvedValueOnce({ stdout: "" }) // name-only
+      .mockResolvedValueOnce({ stdout: "" }) // name-status
+      .mockResolvedValueOnce({ stdout: "" }); // log
 
     const result = await filterFilesToOwnTaskCommits({
       worktreePath: "/tmp/wt",
@@ -26,6 +27,8 @@ describe("FN-5039 branch-attribution", () => {
       ownCommitCount: 0,
       ownCommitShas: [],
       rawDiffFileCount: 0,
+      rawDiffFiles: [],
+      renamedPaths: [],
       commitAttributions: [],
     });
   });
@@ -39,6 +42,7 @@ describe("FN-5039 branch-attribution", () => {
     const execMock = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "a.ts\nb.ts\n" })
+      .mockResolvedValueOnce({ stdout: "" }) // name-status
       .mockResolvedValueOnce({ stdout: log })
       .mockResolvedValueOnce({ stdout: "a.ts\n" })
       .mockResolvedValueOnce({ stdout: "b.ts\na.ts\n" });
@@ -54,6 +58,7 @@ describe("FN-5039 branch-attribution", () => {
     expect(result.ownCommitCount).toBe(2);
     expect(result.foreignCommits).toEqual([]);
     expect(result.rawDiffFileCount).toBe(2);
+    expect(result.rawDiffFiles).toEqual(["a.ts", "b.ts"]);
   });
 
   it("treats foreign and untrailered commits as foreign", async () => {
@@ -66,6 +71,7 @@ describe("FN-5039 branch-attribution", () => {
     const execMock = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "task.ts\nforeign.ts\nunt.ts\n" })
+      .mockResolvedValueOnce({ stdout: "" })
       .mockResolvedValueOnce({ stdout: log })
       .mockResolvedValueOnce({ stdout: "task.ts\n" });
 
@@ -87,6 +93,7 @@ describe("FN-5039 branch-attribution", () => {
     const execMock = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "x.ts\n" })
+      .mockResolvedValueOnce({ stdout: "" })
       .mockResolvedValueOnce({ stdout: "\x00missing sha\x00body\x1e" });
 
     await expect(
@@ -112,6 +119,7 @@ describe("FN-5039 branch-attribution", () => {
     const execMock = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "a.ts\nb.ts\nc.ts\nd.ts\n" })
+      .mockResolvedValueOnce({ stdout: "" })
       .mockResolvedValueOnce({ stdout: log })
       .mockResolvedValueOnce({ stdout: "a.ts\n" })
       .mockResolvedValueOnce({ stdout: "b.ts\n" })
@@ -142,6 +150,7 @@ describe("FN-5039 branch-attribution", () => {
     const execMock = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "a.ts\nb.ts\nc.ts\n" })
+      .mockResolvedValueOnce({ stdout: "" })
       .mockResolvedValueOnce({ stdout: log })
       .mockResolvedValueOnce({ stdout: "a.ts\n" })
       .mockResolvedValueOnce({ stdout: "b.ts\n" })
@@ -156,6 +165,26 @@ describe("FN-5039 branch-attribution", () => {
 
     expect(result.ownCommitCount).toBe(3);
     expect(result.foreignCommits).toEqual([]);
+  });
+
+  it("records rename pairs from name-status", async () => {
+    const log = ["sha-own\x00feat(FN-5039): rename\x00body\nFusion-Task-Id: FN-5039\n\x1e"].join("");
+    const execMock = vi
+      .fn()
+      .mockResolvedValueOnce({ stdout: "new.ts\n" })
+      .mockResolvedValueOnce({ stdout: "R100\told.ts\tnew.ts\n" })
+      .mockResolvedValueOnce({ stdout: log })
+      .mockResolvedValueOnce({ stdout: "new.ts\n" });
+
+    const result = await filterFilesToOwnTaskCommits({
+      worktreePath: "/tmp/wt",
+      baseRef: "base",
+      taskId: "FN-5039",
+      execAsyncImpl: execMock as never,
+    });
+
+    expect(result.renamedPaths).toEqual([{ from: "old.ts", to: "new.ts" }]);
+    expect(result.rawDiffFiles).toEqual(["new.ts"]);
   });
 
   it("FN-5304: collectOwnTaskCommitsForRange counts only attributable commits", async () => {

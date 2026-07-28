@@ -89,6 +89,12 @@ import {
 import { resolveBranchGroupMergeRouting, type BranchGroupMergeRouting, type SyncGroupPrFn } from "./group-merge-coordinator.js";
 import { DEFAULT_COMMIT_AUTHOR_EMAIL, DEFAULT_COMMIT_AUTHOR_NAME } from "./worktree-hooks.js";
 import { installWorktreeDependencies } from "./merge-dependency-sync.js";
+import {
+  assertMergeContaminationClear,
+  MergeContaminationGateError,
+  BLOCKED_BRANCH_CONTAMINATION,
+  BLOCKED_ATTRIBUTION_MISMATCH,
+} from "./merge-contamination-gate.js";
 import { activeSessionRegistry } from "./active-session-registry.js";
 import { resolveMcpServersForStore } from "./mcp-resolution.js";
 /*
@@ -1264,6 +1270,105 @@ export async function runAiMerge(
   if (!(await gitOk(["rev-parse", "--verify", `refs/heads/${integrationBranch}`], projectRootDir))) {
     await audit.git({ type: "merge:ai-no-branch", target: integrationBranch, metadata: { taskId, kind: "integration-branch-missing" } });
     throw new Error(`AI merge for ${taskId}: target branch "${integrationBranch}" has no local ref (refs/heads/${integrationBranch}). Create or check out the branch locally before merging.`);
+  }
+
+  /*
+   * Platform merge hardening: fail closed on foreign commits / attribution mismatch
+   * BEFORE creating merge agents or a clean room (no model tokens, no dep install).
+   * Deterministic — must not be auto-retried as transient.
+   */
+  {
+    let contaminationBase = typeof task.baseCommitSha === "string" && task.baseCommitSha.trim()
+      ? task.baseCommitSha.trim()
+      : "";
+    if (!contaminationBase) {
+      contaminationBase = await git(
+        ["merge-base", `refs/heads/${integrationBranch}`, `refs/heads/${branch}`],
+        projectRootDir,
+      ).catch(() => "");
+    }
+    if (!contaminationBase) {
+      const msg =
+        `${BLOCKED_BRANCH_CONTAMINATION}: task ${taskId} has no recorded baseCommitSha and `
+        + `merge-base(${integrationBranch}, ${branch}) could not be resolved — refusing AI merge.`;
+      await log(msg);
+      await store.updateTask(taskId, { status: "failed", error: msg, paused: true, pausedReason: msg }).catch(() => undefined);
+      throw new MergeContaminationGateError({
+        ok: false,
+        code: BLOCKED_BRANCH_CONTAMINATION,
+        message: msg,
+        attributedFileCount: 0,
+        rawChangedFileCount: 0,
+        foreignCommitCount: 0,
+        unattributedCommitCount: 0,
+        foreignCommits: [],
+        attributedFiles: [],
+        recordedBaseSha: "",
+        attribution: { files: [], foreignCommits: [], ownCommitCount: 0, rawDiffFileCount: 0, rawDiffFiles: [], commitAttributions: [] },
+        report: { ownTrailed: 0, ownUntrailed: [], foreign: [], unattributed: [] },
+      });
+    }
+    try {
+      const gate = await assertMergeContaminationClear({
+        repoDir: projectRootDir,
+        taskId,
+        branch,
+        baseSha: contaminationBase,
+        integrationBranch,
+      });
+      await log(
+        `merge contamination gate PASS — attributedFiles=${gate.attributedFileCount} `
+        + `rawChangedFiles=${gate.rawChangedFileCount} foreignCommits=0`,
+      );
+      await audit.git({
+        type: "merge:contamination-gate",
+        target: branch,
+        metadata: {
+          taskId,
+          result: "pass",
+          baseSha: contaminationBase,
+          attributedFileCount: gate.attributedFileCount,
+          rawChangedFileCount: gate.rawChangedFileCount,
+        },
+      }).catch(() => undefined);
+    } catch (gateErr: unknown) {
+      if (gateErr instanceof MergeContaminationGateError) {
+        const msg = gateErr.message;
+        await log(msg);
+        await audit.git({
+          type: "merge:contamination-gate",
+          target: branch,
+          metadata: {
+            taskId,
+            result: "blocked",
+            code: gateErr.code,
+            baseSha: contaminationBase,
+            foreignCommitCount: gateErr.details.foreignCommitCount,
+            unattributedCommitCount: gateErr.details.unattributedCommitCount,
+            rawChangedFileCount: gateErr.details.rawChangedFileCount,
+            attributedFileCount: gateErr.details.attributedFileCount,
+          },
+        }).catch(() => undefined);
+        await store.updateTask(taskId, {
+          status: "failed",
+          error: msg,
+          paused: true,
+          pausedReason: msg.slice(0, 500),
+        }).catch(() => undefined);
+        throw gateErr;
+      }
+      const fallback =
+        `${BLOCKED_ATTRIBUTION_MISMATCH}: contamination gate evaluation failed for ${taskId}: `
+        + (gateErr instanceof Error ? gateErr.message : String(gateErr));
+      await log(fallback);
+      await store.updateTask(taskId, {
+        status: "failed",
+        error: fallback,
+        paused: true,
+        pausedReason: fallback.slice(0, 500),
+      }).catch(() => undefined);
+      throw new Error(fallback);
+    }
   }
 
   const maxPasses = Math.max(0, Math.trunc(settings.merger?.maxReviewPasses ?? 3));

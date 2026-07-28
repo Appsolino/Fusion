@@ -27,6 +27,14 @@ export interface AttributionResult {
   ownCommitCount: number;
   ownCommitShas?: string[];
   rawDiffFileCount: number;
+  /**
+   * Canonical repo-relative paths from `git diff --name-only base..HEAD`.
+   * Prefer this over {@link rawDiffFileCount} for set equality checks — equal
+   * counts can still hide disjoint path sets.
+   */
+  rawDiffFiles?: string[];
+  /** Rename pairs from `git diff --name-status` (status R*), when available. */
+  renamedPaths?: { from: string; to: string }[];
   commitAttributions: { sha: string; subject: string; source: AttributionSource; attributed: boolean; attributedTaskId: string | null }[];
 }
 
@@ -211,17 +219,48 @@ export async function filterFilesToOwnTaskCommits(opts: BranchAttributionOptions
   };
 
   const rawDiffOutput = await runGit(`git diff --name-only ${quoteShellArg(opts.baseRef)}..HEAD`);
-  const rawDiffFileCount = rawDiffOutput
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean).length;
+  const rawDiffFiles = [
+    ...new Set(
+      rawDiffOutput
+        .split("\n")
+        .map((line) => line.trim().replace(/\\/g, "/"))
+        .filter(Boolean),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+  const rawDiffFileCount = rawDiffFiles.length;
+
+  let renamedPaths: { from: string; to: string }[] = [];
+  try {
+    const nameStatus = await runGit(`git diff --name-status -M ${quoteShellArg(opts.baseRef)}..HEAD`);
+    for (const line of nameStatus.split("\n").map((l) => l.trim()).filter(Boolean)) {
+      // R100\told\tnew  (score optional digits after R)
+      const match = /^R\d*\t(.+)\t(.+)$/.exec(line);
+      if (match) {
+        renamedPaths.push({
+          from: match[1].replace(/\\/g, "/"),
+          to: match[2].replace(/\\/g, "/"),
+        });
+      }
+    }
+  } catch {
+    renamedPaths = [];
+  }
 
   const logOutput = await runGit(
     `git log --format=%H%x00%s%x00%B%x1e ${quoteShellArg(`${opts.baseRef}..HEAD`)}`,
   );
 
   if (!logOutput.trim()) {
-    return { files: [], foreignCommits: [], ownCommitCount: 0, ownCommitShas: [], rawDiffFileCount, commitAttributions: [] };
+    return {
+      files: [],
+      foreignCommits: [],
+      ownCommitCount: 0,
+      ownCommitShas: [],
+      rawDiffFileCount,
+      rawDiffFiles,
+      renamedPaths,
+      commitAttributions: [],
+    };
   }
 
   const fileSet = new Set<string>();
@@ -277,6 +316,8 @@ export async function filterFilesToOwnTaskCommits(opts: BranchAttributionOptions
     ownCommitCount: ownCommitShas.length,
     ownCommitShas,
     rawDiffFileCount,
+    rawDiffFiles,
+    renamedPaths,
     commitAttributions,
   };
 }
