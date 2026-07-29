@@ -1,7 +1,8 @@
 # Appsolino Fusion Server — MASTER PLAN (Governing Document)
 
-**Status:** Phase 0 decisions **APPROVED** (2026-07-29) — see `15-open-decisions.md`.
-**Implementation:** Phase 1 clean-baseline work authorised **only after** that approval record is committed and reviewed. No production activation. No Appsolino reliability re-land until Phase 1 exit gate.
+**Status:** Phase 1 **COMPLETE / ACCEPTED** (2026-07-29) — see `docs/appsolino/phase-1/candidate-b85a5d453/PHASE-1-RESULT.md` and `15-open-decisions.md`.
+**Implementation:** Phase 2 **blocked** until Phase 1 closure PR merges into `main`. No production activation. No Appsolino reliability re-land until Phase 2 is authorised after that merge. Production remains **DEGRADED / FROZEN**.
+**Accepted baseline:** upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + tested patch `a366fab379ca30322902d1bb4c040b8cd16262fb` → product integration `82feb14b732dcd31176338d024b09e68c1646808` (`0.74.0-beta.5`, Node `v22.23.1`, pnpm `10.33.0`).
 **Date:** 2026-07-29
 **Reliability contract:** Every task either completes successfully or reaches one durable, actionable terminal state without losing completed work, duplicating execution, corrupting another task, merging unrelated changes, or repeating the same deterministic failure indefinitely.
 
@@ -25,7 +26,7 @@ Rebuild Appsolino Fusion from a **clean upstream baseline**, operate it on a **d
 6. Do not preserve old tasks/worktrees/DB/logs; **do** preserve issue knowledge and regression tests.
 7. Production runs clean source-built releases — not permanent surgical overlays.
 8. Never install upstream directly into production.
-9. Phase 0 decisions recorded in `15-open-decisions.md`; Phase 1 only after that record is committed and reviewed.
+9. Phase 0 decisions recorded in `15-open-decisions.md`; Phase 1 baseline accepted (`docs/appsolino/phase-1/candidate-b85a5d453/`); Phase 2 only after closure PR merges.
 
 ---
 
@@ -153,7 +154,7 @@ Catalogue in `12-reliability-acceptance-and-chaos-tests.md`. P0 classes must be 
 
 ## 12. Phase 0 decisions (APPROVED)
 
-See `15-open-decisions.md` Phase 0 Decision Approval (2026-07-29). Exact baseline SHA is deferred to Phase 1 packaged-smoke evaluation. Dirty trees are reference-only. Release controller frozen. Managed Postgres. Human confirm for prod activate/migrate.
+See `15-open-decisions.md` Phase 0 Decision Approval (2026-07-29) and Phase 1 result. Accepted baseline: `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + `a366fab379…` / product `82feb14b7…`. Dirty trees are reference-only. Release controller frozen. Managed Postgres. Human confirm for prod activate/migrate. Phase 2 pending closure PR merge.
 
 ---
 

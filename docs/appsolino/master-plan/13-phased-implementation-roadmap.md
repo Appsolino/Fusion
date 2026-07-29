@@ -1,7 +1,7 @@
 # Phased Implementation Roadmap
 
 Last updated: 2026-07-29
-**Stop:** Phase 0 is **APPROVED** (see `15-open-decisions.md`). Phase 1 coding begins only after that approval record is **committed and reviewed**. Later phases remain gated by prior exit criteria. Production remains degraded/frozen until a coherent replacement.
+**Stop:** Phase 1 is **COMPLETE / ACCEPTED** (see `docs/appsolino/phase-1/candidate-b85a5d453/PHASE-1-RESULT.md`). Phase 2 remains **blocked** until the Phase 1 closure PR merges into `main`. Production remains degraded/frozen until a coherent replacement.
 
 ## Phase 0 — Strategic decisions
 - **Objective:** Lock fork model, topology, tools, reliability targets.
@@ -13,11 +13,14 @@ Last updated: 2026-07-29
 - **Upstream overlap:** monitor only
 
 ## Phase 1 — Clean upstream baseline
-- **Objective:** Prove **unchanged** upstream builds and packaged runtime on Host B (or isolated build env). **No Appsolino reliability changes.**
+- **Status:** **COMPLETE / ACCEPTED** 2026-07-29 — Candidate A-P1 (upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + packaging patch `a366fab379ca30322902d1bb4c040b8cd16262fb`; product integration `82feb14b732dcd31176338d024b09e68c1646808`). Evidence: `docs/appsolino/phase-1/candidate-b85a5d453/`.
+- **Objective:** Prove **unchanged** upstream builds and packaged runtime on Host B (or isolated build env). **No Appsolino reliability changes.** Minimal baseline packaging patch authorised only when unchanged upstream fails identity.
 - **Tasks:** Evaluate candidate upstream SHAs against packaged-smoke gate; pin winner; clean `appsolino/main` from pin; reproducible build env; unmodified package build; packaged `dist/bin.js` smoke (health, task list/show, activity feed, migration identity, service restart); separate staging DB; catalogue upstream failures.
 - **Dependencies:** Phase 0 approval record **committed and reviewed**.
 - **Forbidden in Phase 1:** re-land contamination gates, Phase 2 patch candidate, FUSI-007 product fix, workflow restructuring, multi-agent features.
 - **Risks:** Node image vs host mismatch — record in baseline record; newest upstream may fail smoke → pick earlier known-good or minimal build patch only.
+- **Accepted identity:** version `0.74.0-beta.5`; Node `v22.23.1`; pnpm `10.33.0`; complete packaged-runtime gate **PASS**.
+- **Closure gate:** Phase 2 authorised only after closure PR merges into `main`.
 - **Acceptance / exit gate:**
 
 ```text
@@ -39,9 +42,10 @@ Plus baseline record fields (repo, SHA, tag, lockfile hash, Node, pnpm, date, sm
 - **Upstream overlap:** yes — document only
 
 ## Phase 2 — Infrastructure foundation
+- **Status:** **NOT AUTHORISED** — blocked until Phase 1 closure PR merges into `main`.
 - **Objective:** Env A/B/C separation, provisioning, PG, backup, monitoring skeleton.
 - **Tasks:** Ansible+cloud-init; filesystem layout; sudo; bubblewrap; external PG; off-host backup; OTel/Prom skeleton.
-- **Dependencies:** Phase 0 topology/`OD-PG`.
+- **Dependencies:** Phase 1 closure PR merged; Phase 0 topology/`OD-PG`.
 - **Risks:** Co-locating stage+prod again.
 - **Acceptance:** Rebuild Host B from zero; staging unit healthy on isolated DB; backup dry-run; `sudo -n` OK.
 - **Rollback:** Destroy VMs; preserve artefacts elsewhere.
