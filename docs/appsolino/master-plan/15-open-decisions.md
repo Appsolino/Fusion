@@ -1,8 +1,8 @@
 # Open Decisions — Phase 0 Approval Record
 
 Last updated: 2026-07-29
-Status: **Phase 0 decisions APPROVED**; **Phase 1 COMPLETE / ACCEPTED** (closure PR pending merge).
-**Implementation authorisation:** Phase 2 remains **blocked** until the Phase 1 closure PR merges into `main`. No production activation is authorised. No Appsolino reliability re-land (contamination gates, Phase 2, FUSI-007, etc.) until that merge and Phase 2 authorisation.
+Status: **Phase 0 decisions APPROVED**; **Phase 1 COMPLETE**; **Phase 2 AUTHORISED / NOT STARTED**.
+**Implementation authorisation:** Phase 2 infrastructure foundation is authorised. No production activation is authorised. No Appsolino reliability re-land (contamination gates, FUSI-007, scheduler/executor/workflow restructuring, etc.) in Phase 2. Later phases remain gated until Phase 2 exit criteria.
 
 ---
 
@@ -15,7 +15,7 @@ Review of `fb284e9de…` / clean re-land on `origin/main` ancestry requested cha
 3. **Production wording:** health endpoint OK ≠ schema-compatible; remains degraded/frozen.
 4. **Preservation:** selective extraction of knowledge/tests/specs/hashes only — no full dirty-tree snapshot requirement (R-15).
 
-**Review approval:** Phase 0 corrected package reviewed; Phase 1 executed and accepted. Phase 1 closure PR pending review/merge before Phase 2.
+**Review approval:** Phase 0 corrected package reviewed; Phase 1 executed, accepted, and closed (PR #9 merged as `4c9e98cd…`). Phase 2 authorised / not started.
 
 ---
 
@@ -236,7 +236,7 @@ Database migration identity: PASS
 Service restart: PASS
 ```
 
-Phase 2 / Appsolino reliability re-land remains blocked until the Phase 1 closure PR merges into `main`.
+Phase 1 closure PR #9 is merged. Phase 2 infrastructure foundation is **AUTHORISED / NOT STARTED**. Appsolino reliability re-land (contamination gates, FUSI-007, etc.) remains **not** authorised in Phase 2.
 
 ---
 

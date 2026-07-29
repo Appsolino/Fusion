@@ -1,12 +1,12 @@
 # Phased Implementation Roadmap
 
 Last updated: 2026-07-29
-**Stop:** Phase 1 is **COMPLETE / ACCEPTED** (see `docs/appsolino/phase-1/candidate-b85a5d453/PHASE-1-RESULT.md`). Phase 2 remains **blocked** until the Phase 1 closure PR merges into `main`. Production remains degraded/frozen until a coherent replacement.
+**Stop:** Phase 1 is **COMPLETE** (see `docs/appsolino/phase-1/candidate-b85a5d453/PHASE-1-RESULT.md`; closure PR #9 merged as `4c9e98cd…`). Phase 2 is **AUTHORISED / NOT STARTED** (infrastructure foundation only). Later phases remain gated. Production remains degraded/frozen until a coherent replacement.
 
 ## Phase 0 — Strategic decisions
 - **Objective:** Lock fork model, topology, tools, reliability targets.
 - **Status:** **COMPLETE / APPROVED** 2026-07-29 — binding record in `15-open-decisions.md`.
-- **Remaining before Phase 1 coding:** commit + review that approval record.
+- **Remaining before Phase 1 coding:** Done — approval record committed/reviewed; Phase 1 closed.
 - **Acceptance:** Written Phase 0 Decision Approval present; production freeze posture documented.
 - **Rollback:** N/A (docs only).
 - **Complexity:** small
@@ -20,7 +20,7 @@ Last updated: 2026-07-29
 - **Forbidden in Phase 1:** re-land contamination gates, Phase 2 patch candidate, FUSI-007 product fix, workflow restructuring, multi-agent features.
 - **Risks:** Node image vs host mismatch — record in baseline record; newest upstream may fail smoke → pick earlier known-good or minimal build patch only.
 - **Accepted identity:** version `0.74.0-beta.5`; Node `v22.23.1`; pnpm `10.33.0`; complete packaged-runtime gate **PASS**.
-- **Closure gate:** Phase 2 authorised only after closure PR merges into `main`.
+- **Closure gate:** Satisfied — PR #9 merged with merge commit `4c9e98cd98afe296015e5ca0acfca2d747688386`; product `82feb14b…` and evidence `35cee591a…` preserved as ancestors of `main`.
 - **Acceptance / exit gate:**
 
 ```text
@@ -42,12 +42,13 @@ Plus baseline record fields (repo, SHA, tag, lockfile hash, Node, pnpm, date, sm
 - **Upstream overlap:** yes — document only
 
 ## Phase 2 — Infrastructure foundation
-- **Status:** **NOT AUTHORISED** — blocked until Phase 1 closure PR merges into `main`.
-- **Objective:** Env A/B/C separation, provisioning, PG, backup, monitoring skeleton.
-- **Tasks:** Ansible+cloud-init; filesystem layout; sudo; bubblewrap; external PG; off-host backup; OTel/Prom skeleton.
-- **Dependencies:** Phase 1 closure PR merged; Phase 0 topology/`OD-PG`.
+- **Status:** **AUTHORISED / NOT STARTED** (2026-07-29) — Phase 1 closure PR #9 merged; next controlled mission is Phase 2A (staging-host provisioning foundation only).
+- **Objective:** Env A/B/C separation, provisioning, PG, backup, monitoring skeleton on the development/staging host.
+- **Tasks:** Reproducible provisioning for the development/staging host; formal environment and filesystem separation; staging-only Fusion service configuration; isolated PostgreSQL; backup dry-run and restore proof; monitoring skeleton; `fusion.service → agent` privilege and bubblewrap acceptance tests (Ansible+cloud-init; filesystem layout; sudo; bubblewrap; external/local isolated PG; off-host backup dry-run; OTel/Prom skeleton).
+- **Dependencies:** Phase 1 closure PR merged (satisfied); Phase 0 topology/`OD-PG`.
+- **Forbidden in Phase 2:** production deployment/migration; modifying the old production server; FUSI-007; contamination or merge-reliability re-lands; scheduler/executor/workflow restructuring; production release activation.
 - **Risks:** Co-locating stage+prod again.
-- **Acceptance:** Rebuild Host B from zero; staging unit healthy on isolated DB; backup dry-run; `sudo -n` OK.
+- **Acceptance:** Rebuild Host B / staging foundation from zero; staging unit healthy on isolated DB; backup dry-run; `sudo -n` OK; ACC service→agent privilege/bubblewrap proofs.
 - **Rollback:** Destroy VMs; preserve artefacts elsewhere.
 - **Complexity:** large
 - **Upstream overlap:** low

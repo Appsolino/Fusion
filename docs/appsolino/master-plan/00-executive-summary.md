@@ -1,7 +1,7 @@
 # Appsolino Fusion Server Master Plan — Executive Summary
 
 Last updated: 2026-07-29
-Status: **Phase 1 COMPLETE / ACCEPTED** (closure PR pending review/merge). Phase 2 **not authorised** until closure PR merges. Production remains **DEGRADED / FROZEN**. No production activation. No Appsolino reliability re-land until Phase 2 is authorised after merge.
+Status: **Phase 1 COMPLETE**; Phase 2 **AUTHORISED / NOT STARTED**. Production remains **DEGRADED / FROZEN**. No production activation. No Appsolino reliability re-land (contamination/FUSI-007/etc.) in Phase 2 — Phase 2 is infrastructure foundation only.
 Evidence base: `docs/appsolino/reset/00–06`, Phase 1 evidence under `docs/appsolino/phase-1/candidate-b85a5d453/`, verified host/service state, Appsolino/dev source trees, upstream `Runfusion/Fusion` issues, runtime identity report at `/home/anas/fusion-reliability-hardening/docs/appsolino/runtime-identity-report-2026-07-28.md`
 
 ## Recommended target
@@ -39,18 +39,22 @@ Rebuild Appsolino Fusion as a **dedicated, destroyable Fusion server** running:
 
 DB **0036** / binary **0035**: available but **degraded and frozen** — no new/resumed tasks, no incompatible CLI opens, no migrations, no partial activations, no trusting long-lived dashboard health as compatibility proof.
 
-## Phase 1 closure status (2026-07-29)
+## Phase 1 closure status (COMPLETE — 2026-07-29)
 
 ```text
-Phase 1: COMPLETE / ACCEPTED
+Phase 0: COMPLETE
+Phase 1 technical gate: PASS
+Phase 1 closure: COMPLETE
 Upstream baseline: b85a5d4531df8fa749d77bf85ea4ab9ab960ce86
 Tested patch: a366fab379ca30322902d1bb4c040b8cd16262fb
 Appsolino product integration: 82feb14b732dcd31176338d024b09e68c1646808
+Closure merge: 4c9e98cd98afe296015e5ca0acfca2d747688386 (PR #9)
 Version: 0.74.0-beta.5
 Node: v22.23.1
 pnpm: 10.33.0
 Packaged-runtime gate: PASS
-Phase 2: PENDING review and merge of closure PR
+Phase 2: AUTHORISED / NOT STARTED
+Later phases: NOT AUTHORISED
 Production: DEGRADED / FROZEN (untouched)
 ```
 
@@ -88,4 +92,4 @@ Reliability here means **bounded failure**, not absence of failure:
 
 ## Governing document
 
-**`MASTER-PLAN.md`** is the governing project document. Phase 0 approvals are recorded in `15-open-decisions.md`. Phase 1 baseline is recorded in `docs/appsolino/phase-1/candidate-b85a5d453/PHASE-1-RESULT.md`. Phase 2 remains blocked until the Phase 1 closure PR merges into `main`.
+**`MASTER-PLAN.md`** is the governing project document. Phase 0 approvals are recorded in `15-open-decisions.md`. Phase 1 baseline is recorded in `docs/appsolino/phase-1/candidate-b85a5d453/PHASE-1-RESULT.md`. Phase 1 closure PR #9 is merged; Phase 2 infrastructure foundation is **authorised / not started**. Later phases remain gated.
