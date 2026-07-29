@@ -1,0 +1,33 @@
+# FNXC:Phase2A 2026-07-29-21:45:
+# Staging-only Fusion unit. Approved full-admin model: NoNewPrivileges=no, ProtectSystem=off.
+# Binds localhost only; uses packaged executable from staging current symlink.
+[Unit]
+Description=Appsolino Fusion staging service
+Documentation=file:///srv/appsolino-fusion/worktrees/phase-2a-staging-infrastructure-foundation/docs/appsolino/phase-2/05-staging-service.md
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User={{ fusion_user }}
+Group={{ fusion_group }}
+UMask=0027
+NoNewPrivileges=no
+ProtectSystem=off
+WorkingDirectory={{ staging_project }}
+Environment=HOME={{ staging_fusion_home }}
+Environment=FUSION_HOME={{ staging_fusion_home }}
+Environment=FUSION_SKIP_ONBOARDING=1
+EnvironmentFile=-{{ staging_env_file }}
+EnvironmentFile=-{{ staging_secrets_file }}
+ExecStart={{ staging_current }}/fn dashboard --host {{ staging_bind_host }} --port {{ staging_http_port }} --paused --no-auth --no-supervise
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fusion-staging
+
+[Install]
+WantedBy=multi-user.target
