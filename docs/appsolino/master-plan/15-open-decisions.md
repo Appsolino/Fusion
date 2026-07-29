@@ -1,8 +1,8 @@
 # Open Decisions — Phase 0 Approval Record
 
 Last updated: 2026-07-29
-Status: **Phase 0 decisions APPROVED** (operator direction recorded below).
-**Implementation authorisation:** Phase 1 clean-baseline work may begin only after this decision record is **committed and reviewed**. No production activation is authorised. No Appsolino reliability re-land (contamination gates, Phase 2, FUSI-007, etc.) until Phase 1 exit gate passes.
+Status: **Phase 0 decisions APPROVED**; **Phase 1 COMPLETE / ACCEPTED** (closure PR pending merge).
+**Implementation authorisation:** Phase 2 remains **blocked** until the Phase 1 closure PR merges into `main`. No production activation is authorised. No Appsolino reliability re-land (contamination gates, Phase 2, FUSI-007, etc.) until that merge and Phase 2 authorisation.
 
 ---
 
@@ -15,7 +15,7 @@ Review of `fb284e9de…` / clean re-land on `origin/main` ancestry requested cha
 3. **Production wording:** health endpoint OK ≠ schema-compatible; remains degraded/frozen.
 4. **Preservation:** selective extraction of knowledge/tests/specs/hashes only — no full dirty-tree snapshot requirement (R-15).
 
-**Review approval:** still pending until this corrected package is remotely reviewed. Phase 1 remains **NOT AUTHORISED**.
+**Review approval:** Phase 0 corrected package reviewed; Phase 1 executed and accepted. Phase 1 closure PR pending review/merge before Phase 2.
 
 ---
 
@@ -27,6 +27,8 @@ Date: 2026-07-29
 Approved direction: Select a pinned upstream commit only after unchanged
 packaged-runtime acceptance. Exact SHA will be selected during Phase 1 candidate
 evaluation.
+
+**Phase 1 outcome (ACCEPTED):** Candidate A (unchanged `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86`) failed only packaged version identity. Candidate A-P1 accepted: upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + minimal packaging patch `a366fab379ca30322902d1bb4c040b8cd16262fb` (product integration `82feb14b732dcd31176338d024b09e68c1646808`), version `0.74.0-beta.5`.
 
 Do **not** treat moving `upstream/main` as the baseline. Do **not** select a SHA merely because it is newest.
 
@@ -206,18 +208,18 @@ Until a coherent replacement release is activated:
 
 ---
 
-## Phase 1 programme (authorised only after this record is committed + reviewed)
+## Phase 1 programme — COMPLETE / ACCEPTED (2026-07-29)
 
-Deliverables:
+Deliverables completed for Candidate A-P1 (see `docs/appsolino/phase-1/candidate-b85a5d453/`):
 
-1. New clean Appsolino repository branch.
-2. Pinned upstream baseline (after packaged-smoke gate).
-3. Reproducible build environment.
-4. Unmodified upstream package build.
-5. Packaged `dist/bin.js` smoke suite.
-6. Separate staging database.
-7. Recorded upstream failures.
-8. **No** Appsolino reliability changes yet.
+1. Clean Appsolino integration branch `phase-1/close-b85a5d-baseline`.
+2. Pinned upstream baseline `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` with accepted minimal packaging patch `a366fab379ca30322902d1bb4c040b8cd16262fb`.
+3. Reproducible build environment (Node `v22.23.1`, pnpm `10.33.0`).
+4. Packaged executable build with embedded version identity `0.74.0-beta.5`.
+5. Packaged runtime smoke suite (complete gate PASS).
+6. Separate staging candidate databases (local Phase 1 only).
+7. Recorded upstream packaged version-identity failure and accepted patch.
+8. **No** Appsolino reliability changes included.
 
 ### Phase 1 exit gate
 
@@ -226,7 +228,7 @@ Clean install: PASS
 Source build: PASS
 CLI package: PASS
 Packaged dashboard start: PASS
-Health endpoint: PASS
+Health endpoint: PASS (0.74.0-beta.5)
 Task list: PASS
 Task show: PASS
 Activity feed: PASS
@@ -234,7 +236,7 @@ Database migration identity: PASS
 Service restart: PASS
 ```
 
-Only after this gate may Appsolino fixes be added.
+Phase 2 / Appsolino reliability re-land remains blocked until the Phase 1 closure PR merges into `main`.
 
 ---
 

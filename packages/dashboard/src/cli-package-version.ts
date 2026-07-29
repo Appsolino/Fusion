@@ -7,9 +7,44 @@ const DESKTOP_PACKAGE_NAME = "@fusion/desktop";
 const CLI_PACKAGE_NAMES = new Set([CLI_PACKAGE_NAME]);
 const DESKTOP_PACKAGE_NAMES = new Set([DESKTOP_PACKAGE_NAME]);
 
+/*
+FNXC:StandaloneExeVersionIdentity 2026-07-29:
+Must match packages/cli/src/version-identity.ts EMBEDDED_CLI_VERSION_ENV and the
+Bun --define injected by packages/cli/build.ts. Kept as a string literal here so
+@fusion/dashboard does not take a runtime dependency on the CLI package.
+*/
+const EMBEDDED_CLI_VERSION_ENV = "FUSION_EMBEDDED_CLI_VERSION";
+
 export interface CliPackageVersionInfo {
   packageJsonPath: string;
   version: string;
+}
+
+/**
+ * Compile-time identity for standalone Bun executables. When unset, source and
+ * npm layouts continue to discover `@runfusion/fusion`'s package.json.
+ *
+ * Bun `--define process.env.FUSION_EMBEDDED_CLI_VERSION=...` only rewrites a
+ * direct member expression. Dynamic `env[name]` lookups are NOT replaced, so
+ * the no-arg path must read `process.env.FUSION_EMBEDDED_CLI_VERSION` directly.
+ */
+export function readEmbeddedCliVersion(
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+): string | undefined {
+  if (env) {
+    const raw = env[EMBEDDED_CLI_VERSION_ENV];
+    if (typeof raw !== "string") {
+      return undefined;
+    }
+    const trimmed = raw.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  const embedded = process.env.FUSION_EMBEDDED_CLI_VERSION;
+  if (typeof embedded === "string" && embedded.trim().length > 0) {
+    return embedded.trim();
+  }
+  return undefined;
 }
 
 function readPackageVersion(pkgPath: string, packageNames: ReadonlySet<string>): CliPackageVersionInfo | null {
@@ -108,6 +143,10 @@ export function isUnresolvedCliPackageVersion(version: string): boolean {
 }
 
 export function getCliPackageVersion(importMetaUrl: string = import.meta.url): string {
+  const embedded = readEmbeddedCliVersion();
+  if (embedded) {
+    return embedded;
+  }
   const startDir = dirname(fileURLToPath(importMetaUrl));
   return resolveCliPackageVersionInfo(startDir)?.version ?? process.env.npm_package_version ?? "0.0.0";
 }
