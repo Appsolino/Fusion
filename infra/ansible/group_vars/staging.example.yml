@@ -1,0 +1,10 @@
+---
+# EXAMPLE ONLY — copy values into an untracked root-owned secrets file.
+# Do not commit real passwords or tokens.
+#
+# Suggested install path for real secrets:
+#   /etc/appsolino-fusion/staging/secrets.env  (root:fusion, mode 0640)
+#
+# staging_db_password: "REPLACE_WITH_SCRAM_PASSWORD"
+# off_host_backup_configured: false
+# off_host_backup_target: "s3://example-bucket/appsolino-fusion-staging"

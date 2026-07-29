@@ -1,0 +1,11 @@
+---
+- name: Run staging backup
+  hosts: staging
+  become: true
+  tasks:
+    - name: Backup
+      command: /usr/local/sbin/staging-backup.sh
+      register: bak
+      changed_when: "'PASS' in bak.stdout or bak.rc == 0"
+    - debug:
+        var: bak.stdout_lines
