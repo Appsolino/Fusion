@@ -1,0 +1,21 @@
+● fusion-staging.service - Appsolino Fusion staging service
+     Loaded: loaded (/etc/systemd/system/fusion-staging.service; enabled; preset: enabled)
+     Active: active (running) since Wed 2026-07-29 19:07:10 UTC; 4s ago
+       Docs: file:///srv/appsolino-fusion/worktrees/phase-2a-staging-infrastructure-foundation/docs/appsolino/phase-2/05-staging-service.md
+   Main PID: 53750 (fn)
+      Tasks: 12 (limit: 14307)
+     Memory: 155.7M (peak: 177.8M)
+        CPU: 2.665s
+     CGroup: /system.slice/fusion-staging.service
+             └─53750 /opt/appsolino-fusion/staging/current/fn dashboard --host 127.0.0.1 --port 4140 --paused --no-auth --no-supervise
+
+Jul 29 19:07:12 vmi3201923 fusion-staging[53750]:       at async boJ (/$bunfs/root/fn:26726:5980)
+Jul 29 19:07:12 vmi3201923 fusion-staging[53750]: [dashboard] [dashboard] diagnostics: uptime=0s rss=236MB heap=66MB/58MB external=22MB arrayBuffers=2KB handles=0 requests=0 db=unknown
+Jul 29 19:07:12 vmi3201923 fusion-staging[53750]: fnlvl=info
+Jul 29 19:07:12 vmi3201923 fusion-staging[53750]: [startup-factory] external backend resolved (DATABASE_URL set): postgresql://***:***@127.0.0.1:5432/fusion_staging
+Jul 29 19:07:12 vmi3201923 fusion-staging[53750]: fnlvl=info
+Jul 29 19:07:12 vmi3201923 fusion-staging[53750]: [postgres-connection] external backend resolved (DATABASE_URL set): postgresql://***:***@127.0.0.1:5432/fusion_staging
+Jul 29 19:07:14 vmi3201923 fusion-staging[53750]: fnlvl=info
+Jul 29 19:07:14 vmi3201923 fusion-staging[53750]: [startup-factory] startup phase backend.schemaBackend: 2389ms
+Jul 29 19:07:14 vmi3201923 fusion-staging[53750]: fnlvl=info
+Jul 29 19:07:14 vmi3201923 fusion-staging[53750]: [postgres-connection] external backend resolved (DATABASE_URL set): postgresql://***:***@127.0.0.1:5432/fusion_staging

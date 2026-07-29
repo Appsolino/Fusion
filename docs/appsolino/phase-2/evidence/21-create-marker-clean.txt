@@ -1,0 +1,48 @@
+fnlvl=warn
+[core-central-core] [central-core] Failed to persist local node offline during close warn: backendHandle is only available in backend mode (asyncLayer injected)
+      at backendHandle (/$bunfs/root/fn:3558:57041)
+      at getLocalNode (/$bunfs/root/fn:3558:58732)
+      at markLocalNodeOffline (/$bunfs/root/fn:3558:33516)
+      at close (/$bunfs/root/fn:3558:33076)
+      at BY (/$bunfs/root/fn:25748:6161)
+      at async CV2 (/$bunfs/root/fn:26151:2708)
+      at async U9 (/$bunfs/root/fn:26124:38790)
+      at async hd (/$bunfs/root/fn:26153:247)
+      at async jpJ (/$bunfs/root/fn:26153:2976)
+      at async boJ (/$bunfs/root/fn:26726:12709)
+fnlvl=info
+[startup-factory] external backend resolved (DATABASE_URL set): postgresql://***:***@127.0.0.1:5432/fusion_staging
+fnlvl=info
+[postgres-connection] external backend resolved (DATABASE_URL set): postgresql://***:***@127.0.0.1:5432/fusion_staging
+fnlvl=info
+[startup-factory] startup phase backend.schemaBackend: 228ms
+fnlvl=info
+[postgres-connection] external backend resolved (DATABASE_URL set): postgresql://***:***@127.0.0.1:5432/fusion_staging
+fnlvl=error
+[task-store] Legacy-adoption drained-marker infrastructure is unavailable; sweeping will continue {
+  phase: "init:legacy-adoption",
+  operation: "write",
+  sqlstate: "42883",
+  sqlstateClass: "42",
+  error: "Failed query: SELECT public.\"fusion_mark_legacy_adoption_drained\"()\nparams:  
+ function public.fusion_mark_legacy_adoption_drained() does not exist [SQLSTATE 42883]",
+  hint: "Apply schema baseline 0032+ and verify fusion_runtime has public schema USAGE, bookkeeping SELECT, and marker-helper EXECUTE.",
+fnlvl=info
+[startup-factory] startup phase backend.taskStore.construct: 188ms
+fnlvl=info
+[startup-factory] startup phase backend.factory.total: 530ms
+fnlvl=warn
+[core-central-core] [central-core] Failed to persist local node offline during close warn: backendHandle is only available in backend mode (asyncLayer injected)
+      at backendHandle (/$bunfs/root/fn:3558:57041)
+      at getLocalNode (/$bunfs/root/fn:3558:58732)
+      at markLocalNodeOffline (/$bunfs/root/fn:3558:33516)
+      at close (/$bunfs/root/fn:3558:33076)
+      at rT4 (/$bunfs/root/fn:3896:2271)
+[github-tracking] KB-002: skipped (tracking_disabled)
+  Project: project
+  
+ Created KB-002: Phase2A backup marker KB-001 
+ do not delete
+    Column: triage
+    Path:   .fusion/tasks/KB-002/
+EXIT:0
