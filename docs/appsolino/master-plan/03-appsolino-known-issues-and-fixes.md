@@ -17,14 +17,14 @@ Status values: `live` | `live-surgical` | `source-only` | `tested-source-only` |
 - **Symptom**: Worktree/dep install fails with read-only filesystem under `ProtectSystem=strict`.
 - **Impact**: Tasks fail after model spend or during prep; operators widen paths ad-hoc.
 - **Evidence**: Reset APP-ENV-002; `fusion.service.d/40-automation-rw.conf` documents `ReadWritePaths=/srv/software-factory`.
-- **Root cause**: proven — sandbox + incomplete writable paths.
+- **Root cause**: proven — sandbox + incomplete writable paths on the **current** surgical host.
 - **Origin**: Appsolino host config interacting with upstream worktree/pnpm behaviour.
 - **Modules**: systemd unit/drop-ins; worktree dep prep.
-- **Workaround**: Broad `ReadWritePaths` for platform root.
+- **Workaround (historical)**: Broad `ReadWritePaths` for platform root under `ProtectSystem=strict`.
 - **Source fix**: Host drop-in live; source `task-worktree-dependency-prep` / installer.
-- **Production**: live.
-- **Permanent control**: Explicit path contract in provisioning; private pnpm stores under writable roots; never compile on production.
-- **Regression**: Env acceptance — dep install in fresh worktree under production unit policy.
+- **Production**: live (surgical host still uses strict protect).
+- **Permanent control (approved rebuild)**: Target unit uses `ProtectSystem=off` and `NoNewPrivileges=no` for direct full-admin agents; ordinary tasks remain in bubblewrap; host-admin mode is explicit (see `06-provisioning-permissions-and-runtime.md`). Do not recreate the strict+NOPASSWD contradiction.
+- **Regression**: Env acceptance ACC-ENV-03–08 on the service→agent path.
 - **Priority**: P0
 - **Disposition**: adapt host contract into provisioning; verify upstream sandbox docs.
 

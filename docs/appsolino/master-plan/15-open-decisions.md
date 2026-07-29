@@ -6,6 +6,19 @@ Status: **Phase 0 decisions APPROVED** (operator direction recorded below).
 
 ---
 
+# Phase 0 technical review correction (2026-07-29)
+
+Review of `fb284e9de…` / clean re-land on `origin/main` ancestry requested changes. Corrections applied on branch `docs/phase-0-governance-v2`:
+
+1. **Full-admin service model:** `NoNewPrivileges=no`, `ProtectSystem=off`; removed incorrect claim that `NoNewPrivileges=yes` does not affect agent sudo. Ordinary tasks use bubblewrap; host-admin mode runs outside bubblewrap.
+2. **Acceptance tests:** ACC-ENV-03–08 require Fusion service→agent path proofs.
+3. **Production wording:** health endpoint OK ≠ schema-compatible; remains degraded/frozen.
+4. **Preservation:** selective extraction of knowledge/tests/specs/hashes only — no full dirty-tree snapshot requirement (R-15).
+
+**Review approval:** still pending until this corrected package is remotely reviewed. Phase 1 remains **NOT AUTHORISED**.
+
+---
+
 # Phase 0 Decision Approval
 
 Date: 2026-07-29
@@ -174,7 +187,7 @@ Until a coherent replacement release is activated:
 
 | Existing work | Clean-baseline treatment |
 | --- | --- |
-| Runtime write-path corrections | Recreate in Ansible/systemd provisioning |
+| Runtime write-path corrections | Recreate in Ansible/systemd provisioning using approved `NoNewPrivileges=no` / `ProtectSystem=off` unit — do not copy surgical `ProtectSystem=strict` |
 | Environment preflight V3 | Adapt and re-land with focused tests |
 | Worktree dependency preparation | Adapt after deciding the package-store design |
 | Phase 1 contamination gate | Reimplement or copy as a clean isolated module with tests |

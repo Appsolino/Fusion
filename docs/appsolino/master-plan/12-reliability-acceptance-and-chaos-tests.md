@@ -6,13 +6,19 @@ Pass = observed outcome matches Expected; artefacts retained.
 
 ## Environment
 
+Tests **must** exercise the real path `fusion.service → Fusion engine → agent child process`, not only an interactive SSH login as `fusion`. SSH-shell success is insufficient evidence.
+
 | ID | Test | Expected |
 | --- | --- | --- |
 | ACC-ENV-01 | Required paths writable under production unit policy | Dep install + worktree write succeed |
 | ACC-ENV-02 | Release paths immutable | Writes to `/opt/.../releases/<id>` fail after activate |
-| ACC-ENV-03 | `sudo -n true` as fusion | Exit 0; no prompt |
-| ACC-ENV-04 | Package installation via sudo | Non-interactive success (staging sandbox) |
-| ACC-ENV-05 | No unexpected root ownership in mutable paths | Detector clean |
+| ACC-ENV-03 | Fusion service launches an agent command that runs `sudo -n id -u` | Output `0`; no prompt |
+| ACC-ENV-04 | Fusion-launched agent performs an approved staging OS-package operation | Success |
+| ACC-ENV-05 | Fusion-launched agent writes an approved test file under `/etc/appsolino-fusion` | Success |
+| ACC-ENV-06 | Fusion-launched agent runs an approved systemd operation | Success |
+| ACC-ENV-07 | Ordinary task remains inside bubblewrap and cannot unintentionally modify host paths | Write rejected |
+| ACC-ENV-08 | Explicit host-admin mode exits bubblewrap and executes with sudo | Success and audit record |
+| ACC-ENV-09 | No unexpected root ownership in mutable paths | Detector clean |
 
 ## Build
 

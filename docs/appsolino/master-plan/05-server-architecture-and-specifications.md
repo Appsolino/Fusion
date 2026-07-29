@@ -212,22 +212,36 @@ Default umask: `0027`.
 | Unrelated prod DBs | None |
 | Off-host backups | Write-only / append-only credentials; **no delete** |
 
-## 6. Full-admin action classes
+## 6. Full-admin action classes and service model
 
-| Action | Class |
-| --- | --- |
-| Package install, ownership repair, cache repair, service restart | Autonomous |
-| Firewall changes | Autonomous + alert |
-| Systemd unit edits | Autonomous + alert + config backup |
-| Staging release activate / staging migrate | Autonomous after checks |
-| Production release activate / migrate | After automated validation; **human confirm if `OD-ACTIVATE-AUTH` requires** |
-| Backup policy / destination change | Human only; separate credentials |
-| Off-host backup delete | Impossible with Fusion credentials |
+Approved direct full-admin model on the dedicated disposable host requires production `fusion.service`:
+
+```ini
+User=fusion
+Group=fusion
+NoNewPrivileges=no
+ProtectSystem=off
+UMask=0027
+```
+
+`NoNewPrivileges=yes` and `ProtectSystem=strict` are **incompatible** with this model: agent children inherit `no_new_privs` (blocking sudo elevation despite `NOPASSWD`), and strict protect makes host paths read-only inside the service namespace.
+
+| Action | Class | Execution mode |
+| --- | --- | --- |
+| Package install, ownership repair, cache repair, service restart | Autonomous | Host-admin (outside bubblewrap) |
+| Firewall changes | Autonomous + alert | Host-admin |
+| Systemd unit edits | Autonomous + alert + config backup | Host-admin |
+| Staging release activate / staging migrate | Autonomous after checks | Host-admin |
+| Production release activate / migrate | After automated validation; **human confirm** (OD-ACTIVATION) | Host-admin |
+| Ordinary project/test/build commands | Task default | bubblewrap |
+| Backup policy / destination change | Human only; separate credentials | N/A |
+| Off-host backup delete | Impossible with Fusion credentials | N/A |
 
 ## 7. Compatibility notes
 
 - **Git worktrees:** first-class on host filesystem — primary reason to reject Docker-primary.
-- **Sudo:** NOPASSWD on Host P/B for `fusion` / build users as designed.
+- **Sudo:** NOPASSWD **and** `NoNewPrivileges=no` so Fusion-spawned agents can elevate; prove via ACC-ENV-03 on the service→agent path.
+- **Bubblewrap:** isolates ordinary tasks; host-admin mode is explicit and audited.
 - **Reproduce builds:** only on Host B from pinned SHA + lockfile hash.
 - **Migration safety:** external PG + exclusive lease + pre-backup.
-- **Maintenance:** Ansible provisioning + release controller; fewer one-off surgical scripts.
+- **Maintenance:** Ansible provisioning + release activator; fewer one-off surgical scripts.

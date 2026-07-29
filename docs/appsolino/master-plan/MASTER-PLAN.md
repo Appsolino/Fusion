@@ -42,7 +42,7 @@ Healthy dashboard ≠ compatible release. Until replacement: **no** new tasks, *
 
 ## 3. Current verified situation (facts)
 
-- Production healthy on surgical release `contam-gate-surgical-20260728T103231Z` (base `fc485b05…`), Phase 1 contamination gate live.
+- The dashboard health endpoint currently reports OK on the surgical release `contam-gate-surgical-20260728T103231Z` (base `fc485b05…`); this does **not** prove binary/schema compatibility. Phase 1 contamination gate is live surgically. Production remains **degraded and frozen** because DB schema **0036** exceeds binary schema ceiling **0035**.
 - Production DB is **embedded Postgres** under production HOME (not system PostgreSQL).
 - Release-controller `status.json` disagrees (`deployedSha=7ad5a33…`, `FAILED_NEEDS_OPERATOR`).
 - Runtime identity report: DB schema **0036** vs surgical binary **0035** — CLI opens fail; long-lived dashboard may still serve.
@@ -51,6 +51,7 @@ Healthy dashboard ≠ compatible release. Until replacement: **no** new tasks, *
 - FUSI-007 packaged fix on contaminated branch `4553fd05…`.
 - Upstream issues highly overlapping: #2476 stale bases, #1399 event wakeups, #2211 worktrees, #2181 budgets.
 - Current machine ~6 vCPU / 11 GiB / 96 GB — not a Tier 2 multi-agent+build host. Staging unit crash-loops (`CHDIR`); weekly DR drill failing on ownership.
+- Current live unit uses `ProtectSystem=strict` (historical); **approved rebuild** uses `NoNewPrivileges=no` and `ProtectSystem=off` so Fusion-spawned agents can use sudo (see `06-provisioning-permissions-and-runtime.md`).
 
 Evidence: `docs/appsolino/reset/*`, runtime identity report under `fusion-reliability-hardening`.
 
@@ -61,7 +62,7 @@ Evidence: `docs/appsolino/reset/*`, runtime identity report under `fusion-reliab
 | Layer | Choice |
 | --- | --- |
 | OS | Ubuntu 24.04 LTS |
-| Service | systemd Fusion user service |
+| Service | systemd Fusion; `NoNewPrivileges=no`; `ProtectSystem=off`; bubblewrap for ordinary tasks; host-admin mode outside bwrap |
 | Task isolation | bubblewrap |
 | DB (prod) | **Managed external PostgreSQL** (approved); separate staging DB same major/class |
 | Topology | **Host B** (16 vCPU / 64 GB / 500 GB) build+staging; **Host P** (8–16 vCPU / 32–64 GB / 500 GB) production |

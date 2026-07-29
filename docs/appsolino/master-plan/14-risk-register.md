@@ -18,7 +18,7 @@ Last updated: 2026-07-29
 | R-12 | Migration numbering clash on absorb | Medium | High | Migration policy; never renumber upstream | Medium | schema |
 | R-13 | `mergeActive` leaks block merges | Medium | Medium | Durable leases | Low after Phase 5 | project-engine |
 | R-14 | Stale planning bases (#2476) | High upstream | High | Base refresh control | Medium until fixed | worktree-acquisition |
-| R-15 | Lost dirty `fusion-development` work before preserve | Medium | High | Preservation before reset (reset docs) | Medium until snapshot | operator |
+| R-15 | Loss of reusable issue knowledge, focused tests, or fix specifications before selective extraction | Medium | High | Extract the required issue register, test cases, source-module hashes, and behavioural specifications; no full environment snapshot required | Medium until extraction complete | operator |
 | R-16 | Release-controller false state resumes bad deploy | Medium | High | Freeze controller until activator rewrite (`OD-CONTROLLER`) | Medium | fusion-update |
 | R-17 | Packaged tests still mocked critical paths | Medium | Medium | ACC packaged suite; mock budget | Medium | QA |
 | R-18 | Observability without actionability | Medium | Medium | Alert list mandatory; runbooks | Medium | ops |
@@ -30,6 +30,7 @@ Last updated: 2026-07-29
 | R-24 | Memory pressure on single host (`MemoryPeak` ~4.8 GiB + swap) | High on current box | Medium | Topology split; Tier RAM guidance; NODE_OPTIONS caps | Medium | infra |
 | R-25 | `appsolino/stable` far behind upstream (~90+ commits locally compared) | High | Medium | Absorb cadence via integration branches; do not jump stable straight to prod | Medium | fork |
 | R-26 | Verification command reconstruction differs executor vs merger | High | High | Phase 6 verification manifests with exact replay | Low after Phase 6 | executor / merger-ai |
+| R-27 | `NoNewPrivileges=yes` / `ProtectSystem=strict` copied into rebuild while requiring agent sudo | High if uncorrected | High | Approved unit: `NoNewPrivileges=no`, `ProtectSystem=off`; ACC-ENV-03–08 on service→agent path | Low after corrected provisioning | fusion.service |
 
 ## Residual risk statement
 
