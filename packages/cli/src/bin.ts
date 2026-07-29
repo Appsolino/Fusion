@@ -637,8 +637,18 @@ function parsePrCreateOptions(args: string[]) {
  * `bin.js`. Mirrors `packages/dashboard/src/cli-package-version.ts` but is
  * inlined here to avoid pulling the dashboard barrel into the bin's static
  * import graph (bin keeps app imports dynamic until env bootstrap is done).
+ *
+ * FNXC:StandaloneExeVersionIdentity 2026-07-29:
+ * Prefer the Bun compile-time embedded identity first. Inside `bun --compile`
+ * binaries, `import.meta.url` lives under `/$bunfs` so ancestor package.json
+ * discovery cannot find `@runfusion/fusion`.
  */
 function readOwnCliVersion(): string | undefined {
+  const embedded = process.env.FUSION_EMBEDDED_CLI_VERSION;
+  if (typeof embedded === "string" && embedded.trim().length > 0) {
+    return embedded.trim();
+  }
+
   let currentDir: string;
   try {
     currentDir = dirname(fileURLToPath(import.meta.url));
