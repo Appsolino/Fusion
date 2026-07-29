@@ -25,6 +25,7 @@ import { join, dirname } from "node:path";
 import { cpSync, mkdirSync, existsSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { loadCliReleaseVersionFromManifest } from "./src/version-identity.ts";
 
 const cliRoot = dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = join(cliRoot, "..", "..");
@@ -33,6 +34,15 @@ const dashboardClientSrc = join(workspaceRoot, "packages", "dashboard", "dist", 
 const dashboardClientDest = join(outDir, "client");
 const runtimeDir = join(outDir, "runtime");
 const entryPoint = join(cliRoot, "src", "bin.ts");
+const cliPackageJsonPath = join(cliRoot, "package.json");
+
+/*
+FNXC:StandaloneExeVersionIdentity 2026-07-29:
+Fail the executable package build when the CLI manifest version cannot be
+validated. Never emit a standalone binary that can only report unknown/0.0.0.
+*/
+const embeddedCliVersion = loadCliReleaseVersionFromManifest(cliPackageJsonPath);
+console.log(`Embedding CLI version identity: ${embeddedCliVersion}`);
 
 // ── Native module asset paths ─────────────────────────────────────────
 // Resolve the @homebridge/node-pty-prebuilt-multiarch install root dynamically.
@@ -516,6 +526,10 @@ function compileBinary(outFile: string, target: string, isCrossCompile: boolean)
       // and avoid shipping runtime references to react-devtools-core.
       "--define",
       "process.env.DEV='false'",
+      // Embed authoritative CLI version from packages/cli/package.json so
+      // standalone binaries do not depend on runtime package.json discovery.
+      "--define",
+      `process.env.FUSION_EMBEDDED_CLI_VERSION=${JSON.stringify(embeddedCliVersion)}`,
       // cpu-features: native .node binding from ssh2 (transitive via dockerode); ssh2 falls back to pure JS when unavailable
       "--external",
       "cpu-features",

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { getCliPackageVersion, resolveCliPackageVersionInfo } from "../cli-package-version.js";
+import { getCliPackageVersion, readEmbeddedCliVersion, resolveCliPackageVersionInfo } from "../cli-package-version.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -81,5 +81,46 @@ describe("cli-package-version", () => {
     const expectedVersion = JSON.parse(readFileSync(expectedCliPackageJson, "utf-8")).version;
 
     expect(getCliPackageVersion()).toBe(expectedVersion);
+  });
+
+  it("prefers the embedded compile-time identity over package-manifest discovery", () => {
+    const previous = process.env.FUSION_EMBEDDED_CLI_VERSION;
+    process.env.FUSION_EMBEDDED_CLI_VERSION = "0.74.0-beta.5";
+    try {
+      expect(readEmbeddedCliVersion()).toBe("0.74.0-beta.5");
+      expect(getCliPackageVersion(pathToFileURL(join(tmpdir(), "no-manifest", "server.js")).href)).toBe(
+        "0.74.0-beta.5",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FUSION_EMBEDDED_CLI_VERSION;
+      } else {
+        process.env.FUSION_EMBEDDED_CLI_VERSION = previous;
+      }
+    }
+  });
+
+  it("keeps source-mode resolution when no embedded identity is present", () => {
+    const previous = process.env.FUSION_EMBEDDED_CLI_VERSION;
+    const previousNpm = process.env.npm_package_version;
+    delete process.env.FUSION_EMBEDDED_CLI_VERSION;
+    delete process.env.npm_package_version;
+    try {
+      const expectedCliPackageJson = join(__dirname, "..", "..", "..", "cli", "package.json");
+      const expectedVersion = JSON.parse(readFileSync(expectedCliPackageJson, "utf-8")).version;
+      expect(readEmbeddedCliVersion()).toBeUndefined();
+      expect(getCliPackageVersion()).toBe(expectedVersion);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.FUSION_EMBEDDED_CLI_VERSION;
+      } else {
+        process.env.FUSION_EMBEDDED_CLI_VERSION = previous;
+      }
+      if (previousNpm === undefined) {
+        delete process.env.npm_package_version;
+      } else {
+        process.env.npm_package_version = previousNpm;
+      }
+    }
   });
 });
