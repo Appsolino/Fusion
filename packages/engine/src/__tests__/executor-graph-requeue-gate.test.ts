@@ -404,4 +404,105 @@ describe("executor graph execute self-requeue gate", () => {
     expect(store.handoffToReview).not.toHaveBeenCalled();
     expect(store.moveTask).not.toHaveBeenCalledWith(live.id, "in-review", expect.anything());
   });
+
+  /*
+  FNXC:V1A.1 2026-07-30-12:35:
+  Deterministic step-execute failures must park failed with the failure message/node retained and must not bounce todo for redispatch. Transient tool-failure retries remain a separate earlier classifier when consecutive tool_error evidence exists.
+  */
+  it("parks deterministic step-execute failures failed without moving to todo", async () => {
+    resetExecutorMocks();
+    const store = createMockStore();
+    const live = task({
+      id: "VARE-STEP-EXEC",
+      column: "in-progress",
+      steps: [
+        { name: "Preflight", status: "in-progress" },
+        { name: "Implement", status: "pending" },
+        { name: "Testing", status: "pending" },
+        { name: "Docs", status: "pending" },
+      ],
+    });
+    store.getTask.mockResolvedValue(live);
+    store.getSettings.mockResolvedValue({
+      autoMerge: true,
+      maxAutoMergeRetries: 3,
+      maxConcurrent: 2,
+      maxWorktrees: 4,
+      pollIntervalMs: 15000,
+      executorToolFailureRetryCount: 0,
+    });
+    const executor = new TaskExecutor(store, "/tmp/test");
+
+    await (executor as any).handleGraphFailure(live, {
+      disposition: "failed",
+      outcome: "failure",
+      visitedNodeIds: ["steps#0:step-execute"],
+      context: { "node:steps#0:step-execute:value": "failure" },
+    });
+
+    expect(store.updateTask).toHaveBeenCalledWith(
+      live.id,
+      expect.objectContaining({
+        status: "failed",
+        error: "Workflow graph terminated with failure at node 'steps#0:step-execute'",
+      }),
+      undefined,
+    );
+    expect(store.moveTask).not.toHaveBeenCalledWith(live.id, "todo", expect.anything());
+  });
+
+  it("parks a todo-column deterministic step-execute failure instead of benign-advance redispatch", async () => {
+    resetExecutorMocks();
+    const store = createMockStore();
+    const live = task({
+      id: "VARE-TODO-STORM",
+      column: "todo",
+      status: null,
+      error: null,
+      steps: [
+        { name: "Preflight", status: "in-progress" },
+        { name: "Implement", status: "pending" },
+        { name: "Testing", status: "pending" },
+        { name: "Docs", status: "pending" },
+      ],
+    });
+    store.getTask.mockResolvedValue(live);
+    store.getSettings.mockResolvedValue({
+      autoMerge: true,
+      maxConcurrent: 2,
+      maxWorktrees: 4,
+      pollIntervalMs: 15000,
+      executorToolFailureRetryCount: 0,
+    });
+    const executor = new TaskExecutor(store, "/tmp/test");
+
+    await (executor as any).handleGraphFailure(live, {
+      disposition: "failed",
+      outcome: "failure",
+      visitedNodeIds: ["steps#0:step-execute"],
+      context: { "node:steps#0:step-execute:value": "failure" },
+    });
+
+    expect(store.updateTask).toHaveBeenCalledWith(
+      live.id,
+      expect.objectContaining({
+        status: "failed",
+        error: "Workflow graph terminated with failure at node 'steps#0:step-execute'",
+      }),
+      undefined,
+    );
+    expect(store.moveTask).not.toHaveBeenCalled();
+    // Stable across repeated polls: second handle leaves the park in place.
+    store.updateTask.mockClear();
+    store.moveTask.mockClear();
+    live.status = "failed";
+    live.error = "Workflow graph terminated with failure at node 'steps#0:step-execute'";
+    await (executor as any).handleGraphFailure(live, {
+      disposition: "failed",
+      outcome: "failure",
+      visitedNodeIds: ["steps#0:step-execute"],
+      context: { "node:steps#0:step-execute:value": "failure" },
+    });
+    expect(store.moveTask).not.toHaveBeenCalled();
+  });
 });

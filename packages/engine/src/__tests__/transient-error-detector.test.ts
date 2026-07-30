@@ -18,6 +18,8 @@ import {
   isUnsupportedMessageRoleError,
   isNonContinuableSessionError,
   isNonPlanDefectPlanReviewFailure,
+  isDeterministicExecuteFailure,
+  isDeterministicStepExecuteGraphFailure,
   TRANSIENT_ERROR_PATTERNS,
 } from "../transient-error-detector.js";
 import { isUsageLimitError } from "../usage-limit-detector.js";
@@ -635,6 +637,31 @@ describe("Transient Error Detector", () => {
       // The detector must stay a pure re-export — a divergent copy would let the merge
       // classifier (which imports the leaf) and the executor drift apart again.
       expect(isTransientErrorViaLeaf).toBe(isTransientError);
+    });
+  });
+
+  /*
+  FNXC:V1A.1 2026-07-30-12:35:
+  Deterministic execute failures park once; transient provider/network errors must keep retry paths.
+  */
+  describe("isDeterministicExecuteFailure", () => {
+    it("matches step out-of-range and step-execute graph termination", () => {
+      expect(isDeterministicExecuteFailure("Step 4 out of range (task has 4 steps)")).toBe(true);
+      expect(isDeterministicExecuteFailure("Invalid step number: 4. This task has 4 step(s)")).toBe(true);
+      expect(isDeterministicExecuteFailure("Mock executor cannot update steps: task has 0 steps (valid indexes are empty)")).toBe(true);
+      expect(isDeterministicExecuteFailure("Workflow graph terminated with failure at node 'steps#0:step-execute'")).toBe(true);
+    });
+
+    it("does not classify transient provider errors as deterministic", () => {
+      expect(isDeterministicExecuteFailure("Connection refused")).toBe(false);
+      expect(isDeterministicExecuteFailure("upstream connect error")).toBe(false);
+    });
+
+    it("identifies step-execute graph nodes for parking", () => {
+      expect(isDeterministicStepExecuteGraphFailure("steps#0:step-execute")).toBe(true);
+      expect(isDeterministicStepExecuteGraphFailure("step-execute")).toBe(true);
+      expect(isDeterministicStepExecuteGraphFailure("parse")).toBe(false);
+      expect(isDeterministicStepExecuteGraphFailure("steps#0:step-execute", "Connection refused")).toBe(false);
     });
   });
 });

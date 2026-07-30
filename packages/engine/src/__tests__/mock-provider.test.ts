@@ -71,6 +71,7 @@ describe("MockAgentRuntime", () => {
     const runtime = new MockAgentRuntime();
     const { cwd, taskDir, taskId } = await createWorkspace();
     const toolCalls: string[] = [];
+    const updateArgs: Array<Record<string, unknown>> = [];
     const writeExecute = vi.fn(async (_id, args) => {
       await writeFile(String((args as { path: string }).path), String((args as { content: string }).content), "utf8");
       toolCalls.push("write");
@@ -78,6 +79,7 @@ describe("MockAgentRuntime", () => {
     });
     const updateExecute = vi.fn(async (_id, args) => {
       toolCalls.push("fn_task_update");
+      updateArgs.push(args as Record<string, unknown>);
       return { content: [{ type: "text", text: JSON.stringify(args) }], details: {} };
     });
     const taskShowExecute = vi.fn(async () => {
@@ -115,6 +117,11 @@ describe("MockAgentRuntime", () => {
 
     if (sessionPurpose === "executor") {
       expect(taskShowExecute).toHaveBeenCalledTimes(1);
+      // FNXC:V1A.1 2026-07-30-12:35: 0-based indexes only; skip already-done step 1.
+      expect(updateArgs).toEqual([
+        { step: 0, status: "done" },
+        { step: 2, status: "done" },
+      ]);
     }
     if (sessionPurpose === "triage") {
       const promptText = await readFile(join(taskDir, "PROMPT.md"), "utf8");
@@ -149,7 +156,70 @@ describe("MockAgentRuntime", () => {
     clearMockScript({ sessionPurpose: "executor", taskId });
     updateExecute.mockClear();
     await runtime.promptWithFallback(session, "default");
-    expect(updateExecute).toHaveBeenCalledWith(expect.any(String), { step: 1, status: "done" }, undefined, undefined, expect.anything());
+    expect(updateExecute).toHaveBeenCalledWith(expect.any(String), { step: 0, status: "done" }, undefined, undefined, expect.anything());
+  });
+
+  /*
+  FNXC:V1A.1 2026-07-30-12:35:
+  Bound mock step updates to valid 0..N-1 indexes. Never call with index === steps.length.
+  */
+  it("updates only valid 0-based indexes for one-step and four-step tasks", async () => {
+    const runtime = new MockAgentRuntime();
+
+    async function runWithSteps(taskId: string, steps: Array<{ status: string }>) {
+      const { cwd } = await createWorkspace(taskId);
+      const updateExecute = vi.fn(async () => ({ content: [], details: {} }));
+      const taskShowExecute = vi.fn(async () => ({ steps }));
+      const { session } = await runtime.createSession({
+        cwd,
+        systemPrompt: "system",
+        runtimeContext: { sessionPurpose: "executor" },
+        customTools: [
+          createTool("fn_task_show", taskShowExecute),
+          createTool("fn_task_update", updateExecute),
+        ],
+        taskId,
+      });
+      await runtime.promptWithFallback(session, "run");
+      return updateExecute.mock.calls.map(([, args]) => args as { step: number; status: string });
+    }
+
+    expect(await runWithSteps("FN-ONE", [{ status: "todo" }])).toEqual([{ step: 0, status: "done" }]);
+
+    const four = await runWithSteps("FN-FOUR", [
+      { status: "todo" },
+      { status: "todo" },
+      { status: "todo" },
+      { status: "todo" },
+    ]);
+    expect(four).toEqual([
+      { step: 0, status: "done" },
+      { step: 1, status: "done" },
+      { step: 2, status: "done" },
+      { step: 3, status: "done" },
+    ]);
+    expect(four.every((call) => call.step < 4)).toBe(true);
+  });
+
+  it("fails closed for zero-step tasks without calling fn_task_update", async () => {
+    const runtime = new MockAgentRuntime();
+    const { cwd, taskId, taskDir } = await createWorkspace("FN-ZERO");
+    await writeFile(join(taskDir, "task.json"), JSON.stringify({ id: taskId, steps: [] }), "utf8");
+    const updateExecute = vi.fn();
+    const taskShowExecute = vi.fn(async () => ({ steps: [] }));
+    const { session } = await runtime.createSession({
+      cwd,
+      systemPrompt: "system",
+      runtimeContext: { sessionPurpose: "executor" },
+      customTools: [
+        createTool("fn_task_show", taskShowExecute),
+        createTool("fn_task_update", updateExecute),
+      ],
+      taskId,
+    });
+
+    await expect(runtime.promptWithFallback(session, "run")).rejects.toThrow(/task has 0 steps/i);
+    expect(updateExecute).not.toHaveBeenCalled();
   });
 
   it("treats graph-owned executor step sessions as successful without lifecycle tools", async () => {
