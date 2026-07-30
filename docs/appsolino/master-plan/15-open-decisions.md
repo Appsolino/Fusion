@@ -1,259 +1,121 @@
-# Open Decisions — Phase 0 Approval Record
+# Open Decisions — Approval Record
 
-Last updated: 2026-07-30
-Status: **Phase 0 APPROVED**; **Phase 1 COMPLETE**; **Phase 2A PARTIAL / MERGED** (PR #10). Staging usable. Operating model: `docs/appsolino/OPERATING-MODEL.md`.
-**Implementation authorisation:** Staging foundation may be used. No production activation. Off-host production backup, clean rebuild, and engine-child admin proofs remain pre-production / pre-autonomous-admin gates. No Appsolino reliability re-land in Phase 2. Later phases remain gated.
+Last updated: 2026-07-30  
+**Process authority:** `docs/appsolino/OPERATING-MODEL.md`
+
+Status:
+```text
+Phase 0: APPROVED (historical)
+Phase 1: COMPLETE
+Phase 2A: PARTIAL / MERGED / USABLE
+Active authorisation: Phase V1 — One-day production launch
+Former Phases 3–8: Future Improvements (not authorised as v1 blockers)
+Legacy production: DEGRADED / FROZEN
+```
 
 ---
 
-# Phase 0 technical review correction (2026-07-29)
+# Personal Project v1 amendment (2026-07-30) — BINDING FOR ACTIVE WORK
+
+This amendment **redefines finished** and **supersedes**, for Personal Project v1 launch only, earlier Phase 0 choices that made dedicated Host P, managed external PostgreSQL, full observability, seven-day soak, and Phases 3–8 into launch prerequisites.
+
+## OD-V1-FINISHED
+**Finished** means: accepted package deployed; fresh isolated production database; basic task create/read/update works; backup and restore proven; rebuild instructions in Git; no old data migration.
+
+It does **not** mean the former multi-phase reliability programme is complete.
+
+## OD-V1-TOPOLOGY
+**Approved for v1:** Host D may run build, staging, and **initial production** with separate production identities:
+
+```text
+Service:       fusion-production.service
+Database/role: fusion_production
+Config:        /etc/appsolino-fusion/production/
+State:         /srv/appsolino-fusion/production/
+Releases:      /opt/appsolino-fusion/production/releases/
+```
+
+Dedicated Host P remains an optional Future Improvement. If a separate production host is already ready, the same process may be used there. Procuring a new host during the one-day window is avoidable risk.
+
+**Supersedes for v1 launch:** OD-TOPOLOGY requirement that Host P exist before production.
+
+## OD-V1-POSTGRES
+**Approved for v1:** Local PostgreSQL on the launch host with isolated `fusion_production` role/database (localhost, SCRAM, secrets outside Git). Managed external PostgreSQL is a Future Improvement.
+
+**Supersedes for v1 launch:** OD-POSTGRES as a launch blocker.
+
+## OD-V1-CONTROLS
+Mandatory for v1: known package/version; separate production DB/state; previous release preserved; backup before risky changes; restore proof; infra/recovery in Git. Secrets outside Git. Legacy degraded production untouched until replacement smoke passes.
+
+## OD-V1-SCOPE
+**Authorised:** Phase V1 one-day production launch only (see `13-phased-implementation-roadmap.md`).  
+**Not authorised as v1 work:** product behaviour changes; upstream sync; old data migration; Future Improvements backlog items; expanding into ACC/soak/observability programmes.
+
+## OD-V1-VALIDATION
+Phase V1 uses focused Level C production-candidate checks listed in the roadmap. Full ACC catalogues, clean Ubuntu rebuild during launch, seven-day soak, and autonomous host-admin proofs are **not** v1 requirements.
+
+---
+
+# Phase 0 technical review correction (2026-07-29) — historical
 
 Review of `fb284e9de…` / clean re-land on `origin/main` ancestry requested changes. Corrections applied on branch `docs/phase-0-governance-v2`:
 
-1. **Full-admin service model:** `NoNewPrivileges=no`, `ProtectSystem=off`; removed incorrect claim that `NoNewPrivileges=yes` does not affect agent sudo. Ordinary tasks use bubblewrap; host-admin mode runs outside bubblewrap.
-2. **Acceptance tests:** ACC-ENV-03–08 require Fusion service→agent path proofs.
-3. **Production wording:** health endpoint OK ≠ schema-compatible; remains degraded/frozen.
-4. **Preservation:** selective extraction of knowledge/tests/specs/hashes only — no full dirty-tree snapshot requirement (R-15).
+1. Full-admin service model: `NoNewPrivileges=no`, `ProtectSystem=off`. Ordinary tasks use bubblewrap; host-admin mode outside bubblewrap.  
+2. ACC-ENV-03–08 originally required Fusion service→agent path proofs (engine-child path remains a Future / pre-autonomous-admin gate).  
+3. Health endpoint OK ≠ schema-compatible; legacy production remains degraded/frozen.  
+4. Preservation: selective extraction only — no full dirty-tree snapshot requirement (R-15).
 
-**Review approval:** Phase 0 corrected package reviewed; Phase 1 closed (PR #9 / `4c9e98cd…`). Phase 2A merged PARTIAL (PR #10 / `6caca1ec…`) after review corrections. Personal-project operating model adopted 2026-07-30.
+**Later:** Phase 1 closed (PR #9 / `4c9e98cd…`). Phase 2A merged PARTIAL (PR #10 / `6caca1ec…`). Operating model adopted. **v1 amendment above now governs active completion work.**
 
 ---
 
-# Phase 0 Decision Approval
+# Phase 0 Decision Approval (2026-07-29) — historical record
 
-Date: 2026-07-29
+Date: 2026-07-29  
+Retain for provenance. Where this conflicts with **OD-V1-***, the v1 amendment wins for launch.
 
 ## OD-BASELINE
-Approved direction: Select a pinned upstream commit only after unchanged
-packaged-runtime acceptance. Exact SHA will be selected during Phase 1 candidate
-evaluation.
+Pinned upstream after packaged-runtime acceptance. Phase 1 accepted: `b85a5d453…` + `a366fab379…` / product `82feb14b7…`, version `0.74.0-beta.5`. Do not treat moving `upstream/main` as the baseline.
 
-**Phase 1 outcome (ACCEPTED):** Candidate A (unchanged `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86`) failed only packaged version identity. Candidate A-P1 accepted: upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + minimal packaging patch `a366fab379ca30322902d1bb4c040b8cd16262fb` (product integration `82feb14b732dcd31176338d024b09e68c1646808`), version `0.74.0-beta.5`.
-
-Do **not** treat moving `upstream/main` as the baseline. Do **not** select a SHA merely because it is newest.
-
-### Baseline selection gate (unchanged upstream)
-
-```text
-clean clone
-→ frozen dependency install
-→ complete source build
-→ complete CLI package
-→ packaged dist/bin.js start
-→ dashboard health
-→ task list
-→ task show
-→ activity feed
-→ migration identity check
-```
-
-If a candidate fails: choose an earlier known-good upstream commit, **or** apply a separate minimal baseline build patch (not Appsolino reliability work).
-
-### Baseline record fields (required when selected)
-
-```text
-Upstream repository
-Upstream commit SHA
-Upstream version/tag
-Lockfile hash
-Node version
-pnpm version
-Date selected
-Packaged-smoke result
-```
-
-## OD-TOPOLOGY
-Approved: Two hosts initially:
-- Host B: combined build and staging
-- Host P: dedicated production
-
-Split build vs staging later only if measurements justify it.
-
-### Approved initial specifications
-
-**Host B — Build and staging**
-
-```text
-Ubuntu Server 24.04 LTS
-16 vCPU
-64 GB RAM
-500 GB NVMe
-16–32 GB swap
-```
-
-Responsibilities: upstream clones; Appsolino product source; dependency installation; full builds; packaged-runtime tests; staging Fusion service; staging PostgreSQL (or separate managed staging DB); migration rehearsals; chaos testing; release artefact creation.
-
-**Host P — Production**
-
-```text
-Ubuntu Server 24.04 LTS
-8–16 vCPU
-32–64 GB RAM
-500 GB NVMe
-16 GB swap
-```
-
-Responsibilities: immutable packaged releases only; production Fusion service; task worktrees; bubblewrap execution; monitoring; backup agent; **no** source compilation; **no** experimental dependency installation against the deployed release.
+## OD-TOPOLOGY (historical)
+Originally: Host B (build+staging) + Host P (production), large sizing. **For v1 launch, see OD-V1-TOPOLOGY.**
 
 ## OD-IDENTITY
-Approved:
-- release manifest is authoritative for release identity;
-- PostgreSQL migration history is authoritative for schema;
-- active symlink and activation record must match the release manifest.
-
-Controller/status JSON is subordinate and must never disagree with the activated manifest after cutover.
+Release identity and PostgreSQL migration history remain authoritative for what is running. Keep identities simple for v1 (immutable release dir + symlink + recorded hashes); full manifest/controller frameworks are Future Improvements.
 
 ## OD-DIRTY-TREES
-Approved: Existing dirty source trees (`fusion-development`, `fusion-appsolino`) are reference-only and will **not** become the new baseline or `appsolino/main`.
+Dirty trees remain reference-only — not `appsolino/main`.
 
-They remain reference sources for: known issue behaviour; source modules; tests; expected error codes; documentation. Extract fixes, tests, and design knowledge **selectively**.
-
-Alias of prior IDs: `OD-DEV-TREE`, `OD-MANAGED-DIRTY` — both closed by this decision.
-
-## OD-FUSI-007
-Approved: Reimplement the four-file `CentralCore.close` fix and tests on the clean baseline. Do not cherry-pick the contaminated task branch.
-
-(Contaminated branch may be archived as evidence only.)
-
-## OD-PHASE-2
-Approved: Re-land Phase 2 from documented invariants, source modules and tests, not from contaminated branch history.
+## OD-FUSI-007 / OD-PHASE-2 (historical)
+Re-land from clean baseline / invariants — not contaminated history. **Not part of Phase V1.** Future Improvements.
 
 ## OD-RELEASE-CONTROLLER
-Approved: Freeze the existing release controller. Replace or reactivate only after the new release system passes staging acceptance.
+Freeze existing release controller. Do not resume against production. Full replacement activator is Future Improvements; v1 uses simple immutable install + human-operated start.
 
-Do **not** resume the current controller against production.
-
-## OD-POSTGRES
-Approved: Managed external PostgreSQL for production, with a separate production-equivalent staging database (same major version and configuration class).
-
-Current embedded Postgres on the live host is a temporary degraded bridge only — not the target.
+## OD-POSTGRES (historical)
+Managed external PostgreSQL was the Phase 0 target. **For v1 launch, see OD-V1-POSTGRES.**
 
 ## OD-ACTIVATION
-Approved: Production activation and migrations require explicit human confirmation during the initial reliability programme.
-
-Reconsider autonomous production activation only after several successful releases **and** restore drills. Staging may remain more autonomous under gates.
-
-## Implementation authorisation
-Phase 1 clean-baseline work may begin only after this decision record is committed and reviewed. No production activation is authorised.
-
-**Next mission after commit/review:** Phase 1 only — clean-baseline establishment and **unchanged** upstream packaged-runtime testing. Do **not** yet re-land Phase 1 contamination gate, Phase 2, FUSI-007, or other Appsolino fixes.
-
----
-
-## Approved source model
-
-```text
-upstream/main
-    Exact mirror of Runfusion/Fusion
-
-appsolino/main
-    Clean Appsolino product source
-
-integration/upstream-<version>-<date>
-    Temporary upstream adoption branch
-
-release/<appsolino-version>
-    Exact immutable release source
-
-hotfix/<issue>
-    Emergency fixes that must later return through appsolino/main
-```
+Production activation requires explicit human confirmation. Staging may be more autonomous under gates. Unchanged for v1.
 
 ---
 
 ## Production posture until replacement (mandatory)
 
-Reported live split:
-
 ```text
-Database schema: 0036
-Production surgical binary: 0035
+Legacy DB schema: 0036
+Legacy surgical binary ceiling: 0035
 ```
 
-A healthy dashboard response does **not** prove production compatibility.
-
-Until a coherent replacement release is activated:
-
-- do **not** create new tasks;
-- do **not** resume paused tasks;
-- do **not** run CLI commands that attempt to open the incompatible database;
-- do **not** run migrations;
-- do **not** activate another partial build;
-- do **not** rely on the long-lived dashboard process as evidence that the release is safe.
-
-**Classification:** production is **available but degraded and frozen**.
+Available but **degraded and frozen**. No new/resumed tasks on the incompatible pair; no CLI opens that write against the split; no migrations on the legacy system; no trusting long-lived dashboard health as compatibility proof. **Do not migrate old damaged data into Personal Project v1.**
 
 ---
 
-## How existing fixes should be handled (approved)
-
-| Existing work | Clean-baseline treatment |
-| --- | --- |
-| Runtime write-path corrections | Recreate in Ansible/systemd provisioning using approved `NoNewPrivileges=no` / `ProtectSystem=off` unit — do not copy surgical `ProtectSystem=strict` |
-| Environment preflight V3 | Adapt and re-land with focused tests |
-| Worktree dependency preparation | Adapt after deciding the package-store design |
-| Phase 1 contamination gate | Reimplement or copy as a clean isolated module with tests |
-| Canonical path-set comparison | Reuse algorithm and tests |
-| Pre-token Code Review gate | Re-land |
-| Pre-token AI merge gate | Re-land |
-| Phase 2 patch-only candidate | Re-land from module behaviour and tests |
-| Automatic contaminated-branch recovery | Re-land after patch-only candidate |
-| Execution-specific branches | Re-land |
-| Deterministic disposition | Re-land after durable execution-state design is approved |
-| Retry UI/API lock | Re-land with the disposition contract |
-| Release/schema gate | Reimplement as part of the release foundation |
-| Activation tooling | Redesign around the final immutable release layout |
-| FUSI-007 four-file fix | Reimplement and prove through packaged runtime |
-| Surgical production bundle | Retire after the clean release passes acceptance |
-
----
-
-## Phase 1 programme — COMPLETE / ACCEPTED (2026-07-29)
-
-Deliverables completed for Candidate A-P1 (see `docs/appsolino/phase-1/candidate-b85a5d453/`):
-
-1. Clean Appsolino integration branch `phase-1/close-b85a5d-baseline`.
-2. Pinned upstream baseline `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` with accepted minimal packaging patch `a366fab379ca30322902d1bb4c040b8cd16262fb`.
-3. Reproducible build environment (Node `v22.23.1`, pnpm `10.33.0`).
-4. Packaged executable build with embedded version identity `0.74.0-beta.5`.
-5. Packaged runtime smoke suite (complete gate PASS).
-6. Separate staging candidate databases (local Phase 1 only).
-7. Recorded upstream packaged version-identity failure and accepted patch.
-8. **No** Appsolino reliability changes included.
-
-### Phase 1 exit gate
+## Implementation authorisation (current)
 
 ```text
-Clean install: PASS
-Source build: PASS
-CLI package: PASS
-Packaged dashboard start: PASS
-Health endpoint: PASS (0.74.0-beta.5)
-Task list: PASS
-Task show: PASS
-Activity feed: PASS
-Database migration identity: PASS
-Service restart: PASS
+Authorised: Phase V1 one-day production launch (docs locked; implementation is a separate mission)
+Not authorised: automatic start of Phase V1 from this docs commit
+Not authorised: Future Improvements as launch blockers
+Not authorised: product code / infra code changes in this docs mission
 ```
-
-Phase 1 closure PR #9 is merged. Phase 2 infrastructure foundation is **AUTHORISED / NOT STARTED**. Appsolino reliability re-land (contamination gates, FUSI-007, etc.) remains **not** authorised in Phase 2.
-
----
-
-## Historical options (superseded by approval above)
-
-Prior option lists for OD-BASELINE through OD-ACTIVATE-AUTH are retained in git history of earlier draft versions of this file and in `01-strategic-questions-and-decisions.md` for audit trail. They are no longer open.
-
-## Resolved during planning (non-OD)
-
-| Item | Resolution |
-| --- | --- |
-| Missing `runtime-identity-report-2026-07-28.md` | Found at `/home/anas/fusion-reliability-hardening/docs/appsolino/runtime-identity-report-2026-07-28.md` |
-| Temporal/Restate now? | Deferred; not selected for Phases 0–7 |
-| Restrict sudo on dedicated host? | Do not restrict |
-
-## Still missing artefact
-
-| Item | Status |
-| --- | --- |
-| `activate-fusion-release.sh` | Not found; likely superseded by `fusion-release` v2 — confirm during Phase 3 design |

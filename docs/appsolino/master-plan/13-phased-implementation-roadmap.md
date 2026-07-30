@@ -1,131 +1,129 @@
 # Phased Implementation Roadmap
 
-Last updated: 2026-07-30
-**Stop:** Phase 1 **COMPLETE** (PR #9 / `4c9e98cd…`). Phase 2A **PARTIAL / MERGED** (PR #10 / `6caca1ec…`) — staging foundation usable; missing proofs deferred to pre-production. See `docs/appsolino/OPERATING-MODEL.md`. Later phases remain gated. Production remains degraded/frozen.
+Last updated: 2026-07-30  
+**Process authority:** `docs/appsolino/OPERATING-MODEL.md`
 
-## Phase 0 — Strategic decisions
-- **Objective:** Lock fork model, topology, tools, reliability targets.
-- **Status:** **COMPLETE / APPROVED** 2026-07-29 — binding record in `15-open-decisions.md`.
-- **Remaining before Phase 1 coding:** Done — approval record committed/reviewed; Phase 1 closed.
-- **Acceptance:** Written Phase 0 Decision Approval present; production freeze posture documented.
-- **Rollback:** N/A (docs only).
-- **Complexity:** small
-- **Upstream overlap:** monitor only
+**Stop rule:** Only **Phase V1** is active. Former Phases 3–8 are **Future Improvements** and must not reopen the Personal Project v1 completion gate. Legacy production remains **DEGRADED / FROZEN** until replacement smoke passes.
 
-## Phase 1 — Clean upstream baseline
-- **Status:** **COMPLETE / ACCEPTED** 2026-07-29 — Candidate A-P1 (upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + packaging patch `a366fab379ca30322902d1bb4c040b8cd16262fb`; product integration `82feb14b732dcd31176338d024b09e68c1646808`). Evidence: `docs/appsolino/phase-1/candidate-b85a5d453/`.
-- **Objective:** Prove **unchanged** upstream builds and packaged runtime on Host B (or isolated build env). **No Appsolino reliability changes.** Minimal baseline packaging patch authorised only when unchanged upstream fails identity.
-- **Tasks:** Evaluate candidate upstream SHAs against packaged-smoke gate; pin winner; clean `appsolino/main` from pin; reproducible build env; unmodified package build; packaged `dist/bin.js` smoke (health, task list/show, activity feed, migration identity, service restart); separate staging DB; catalogue upstream failures.
-- **Dependencies:** Phase 0 approval record **committed and reviewed**.
-- **Forbidden in Phase 1:** re-land contamination gates, Phase 2 patch candidate, FUSI-007 product fix, workflow restructuring, multi-agent features.
-- **Risks:** Node image vs host mismatch — record in baseline record; newest upstream may fail smoke → pick earlier known-good or minimal build patch only.
-- **Accepted identity:** version `0.74.0-beta.5`; Node `v22.23.1`; pnpm `10.33.0`; complete packaged-runtime gate **PASS**.
-- **Closure gate:** Satisfied — PR #9 merged with merge commit `4c9e98cd98afe296015e5ca0acfca2d747688386`; product `82feb14b…` and evidence `35cee591a…` preserved as ancestors of `main`.
-- **Acceptance / exit gate:**
+---
 
-```text
-Clean install: PASS
-Source build: PASS
-CLI package: PASS
-Packaged dashboard start: PASS
-Health endpoint: PASS
-Task list: PASS
-Task show: PASS
-Activity feed: PASS
-Database migration identity: PASS
-Service restart: PASS
-```
+## Completed
 
-Plus baseline record fields (repo, SHA, tag, lockfile hash, Node, pnpm, date, smoke result).
-- **Rollback:** Delete build trees only; production remains frozen surgical pin.
-- **Complexity:** medium
-- **Upstream overlap:** yes — document only
+### Phase 0 — Strategic decisions
+- **Status:** COMPLETE / APPROVED (2026-07-29). Record: `15-open-decisions.md`.
 
-## Phase 2 — Infrastructure foundation
-- **Status:** Phase 2A **PARTIAL / MERGED** 2026-07-30 (PR #10 → `6caca1ec66e8428493982e29241e47df0857be00`; corrected head `409fafcff…`). Staging on Host D is usable. Evidence: `docs/appsolino/phase-2/`.
-- **Objective:** Env A/B/C separation, provisioning, PG, backup, monitoring skeleton on the development/staging host.
-- **Done in 2A:** Ansible/cloud-init provisioning; filesystem separation; staging systemd service; isolated `fusion_staging` PG + SCRAM; local backup/restore; monitoring textfile; SYSTEMD_SERVICE_CONTEXT ACC-ENV-03..08; immutable release install.
-- **Deferred (pre-production / as needed):** off-host production data backup; one clean rebuild drill; real `fusion-staging → engine → child` admin path (only if autonomous host-admin enabled). These do **not** block ordinary staging use or daily development (see `OPERATING-MODEL.md`).
-- **Forbidden in Phase 2:** production deployment/migration; modifying the old production server; FUSI-007; contamination or merge-reliability re-lands; scheduler/executor/workflow restructuring; production release activation.
-- **Next useful work (optional):** `check:fast` / `check:integration` / `check:release` wrappers; path-based test selection; cached installs; upstream-sync procedure — speed optimisation, not more compliance theatre.
-- **Complexity:** large (2A landed; remaining items smaller and release-gated)
-- **Upstream overlap:** low
+### Phase 1 — Accepted package
+- **Status:** COMPLETE / ACCEPTED (2026-07-29). Baseline `0.74.0-beta.5` (upstream `b85a5d453…` + product `82feb14b7…`). Closure PR #9 → `4c9e98cd…`. Evidence: `docs/appsolino/phase-1/candidate-b85a5d453/`.
 
-## Phase 3 — Release integrity
-- **Objective:** Manifest, schema gate, packaged tests, atomic activation, migration policy.
-- **Tasks:** Implement/adapt `release-schema-consistency`; activator; packaged FUSI-007 proofs; staging migrate drills.
-- **Dependencies:** Phases 1–2.
-- **Risks:** Live 0035/0036 split — production cutover must use coherent ≥0036 release.
-- **Acceptance:** ACC-REL-* pass on staging; identity disagreement impossible under activator.
-- **Rollback:** Previous schema-compatible artefact.
-- **Complexity:** large
-- **Upstream overlap:** medium (schema-applier)
+### Phase 2A — Staging foundation
+- **Status:** COMPLETE ENOUGH / USABLE (2026-07-30). PR #10 → `6caca1ec…`. Staging on Host D works. Evidence: `docs/appsolino/phase-2/`. Remaining NOT PROVEN items (off-host backup, clean rebuild, engine-child admin) are capability gates — not blockers for Phase V1 launch scope beyond the six hard controls.
 
-## Phase 4 — Git safety
-- **Objective:** Execution branches, provenance, contamination gate, patch-only candidate, reconstruction.
-- **Tasks:** Re-land Phase 1–3 Appsolino modules cleanly; contribute prep; retire surgical overlay after promote.
-- **Dependencies:** Phase 3 (trusted package path).
-- **Risks:** Conflict with upstream worktree changes (#2476/#2211).
-- **Acceptance:** ACC-GIT-* ; surgical release retired.
-- **Rollback:** Re-activate prior packaged release (not surgical if avoidable).
-- **Complexity:** large
-- **Upstream overlap:** high
+---
 
-## Phase 5 — Workflow reliability
-- **Objective:** Durable execution record; one lifecycle authority; leases; checkpoints; deterministic retries.
-- **Tasks:** Narrow self-healing; durable merge leases replacing `mergeActive` authority; disposition wired everywhere; Retry lock.
-- **Dependencies:** Phase 4.
-- **Risks:** Large executor/scheduler conflicts.
-- **Acceptance:** ACC-EXE-* ACC-REC-*; no deterministic loop in soak.
-- **Rollback:** Feature flags off; prior release.
-- **Complexity:** programme-level
-- **Upstream overlap:** very high — sync often
+## Active phase
 
-## Phase 6 — Verification integrity
-- **Objective:** Manifest recording, exact replay, process cancellation, production-shaped tests.
-- **Dependencies:** Phase 5.
-- **Acceptance:** ACC-VER-*.
-- **Complexity:** medium–large
-- **Upstream overlap:** medium (#2180)
+### Phase V1 — Personal Project v1 — One-day production launch
+- **Status:** **NOT STARTED** (authorised as the sole active completion phase).  
+- **Objective:** Deploy usable production on the simplified topology; prove backup/restore; leave recovery instructions in Git; declare Personal Project v1 complete.  
+- **Product behaviour:** Do not change Fusion product behaviour. Do not pull upstream. Do not migrate old damaged data.
 
-## Phase 7 — Provider and operational resilience
-- **Objective:** Gateway/failover, cost budgets, event-driven wakeups, full observability/alerts.
-- **Dependencies:** Phase 5–6; track upstream #1399/#2181.
-- **Acceptance:** ACC-PRV-*; ACC-OPS-* backup/restore; ops view live.
-- **Complexity:** large
-- **Upstream overlap:** high on wakeups/budgets
+#### Tasks
 
-## Phase 8 — Controlled multi-agent scale
-- **Objective:** Task DAG, parallel ownership, patch integration, concurrency benchmarks.
-- **Dependencies:** Phases 4–7 green on Tier sizing.
-- **Acceptance:** Tier 2 soak without fingerprint storms; worktree GC stable.
-- **Complexity:** programme-level
-- **Upstream overlap:** #2186 symbol locking
+1. Review current `main`.  
+2. Do not pull upstream.  
+3. Do not change product behaviour.  
+4. Build the accepted package once using the existing cache.  
+5. Create isolated production configuration and database.  
+6. Install the immutable package.  
+7. Start production service privately.  
+8. Run focused production smoke tests.  
+9. Create and restore one production backup.  
+10. Record release identity and recovery instructions.  
+11. Declare Personal Project v1 complete.
 
-## Sequencing diagram
+#### Initial topology
+
+Host D may run build + staging + production with separate production identities:
 
 ```text
-0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
-         ↘ monitoring skeleton early
+fusion-production.service
+fusion_production (role + database)
+/etc/appsolino-fusion/production/
+/srv/appsolino-fusion/production/
+/opt/appsolino-fusion/production/releases/
 ```
 
-## Global stop conditions
+#### One-day schedule (indicative)
 
-- Open decision unresolved that blocks topology or baseline
-- Upstream mid-rewrite of coordinator making Appsolino leases wasteful → pause Phase 5, escalate
-- External orchestration tool selected → stop native Phase 5 redesign until revisited
-- Packaged runtime still red → **do not** expand Git/workflow scope on surgical pins
-
-## Phase gates (measurable)
-
-| Gate | Metric |
+| Time | Work |
 | --- | --- |
-| G0 | Phase 0 Decision Approval committed + reviewed |
-| G1 | Upstream pin packaged smoke (Phase 1 exit gate) |
-| G2 | Rebuild + backup dry-run |
-| G3 | ACC-REL 100% |
-| G4 | ACC-GIT 100% + surgical retired |
-| G5 | ACC-EXE/REC 100% on staging soak ≥7 days |
-| G6 | ACC-VER 100% |
-| G7 | ACC-PRV/OPS 100% |
-| G8 | Tier-N concurrency report signed |
+| 08:30–09:00 | Lock scope (this plan) |
+| 09:00–10:00 | Production paths, DB identity, secrets, systemd unit |
+| 10:00–12:00 | Build once from current `main`; hash package |
+| 12:00–13:00 | Install and start production service |
+| 13:00–14:00 | Health, version, task, restart smoke |
+| 14:00–15:00 | Backup and temporary restore proof |
+| 15:00–16:00 | Recovery instructions, release record, final review |
+| 16:00–17:00 | Buffer for one blocking defect |
+
+**Excluded from the one-day clock:** buying/waiting for a new server; DNS wait; migrating old damaged data; upstream sync; new product features; unrelated repairs; long soak.
+
+#### Focused acceptance (Level C production-candidate)
+
+```text
+git diff --check
+relevant configuration syntax
+current main is clean
+package build succeeds
+package version = 0.74.0-beta.5
+executable hash recorded
+production DB identity correct
+service active
+listener correct
+health version correct
+create/read/update one task
+restart preserves task
+backup succeeds
+temporary restore succeeds
+previous release remains available
+```
+
+**Not required:** all repository tests; all ACC classes; clean Ubuntu rebuild during launch; seven-day soak; upstream merge; staging reconstruction; full observability; autonomous agent root path.
+
+#### Forbidden during V1
+
+- Changing product behaviour / workflows / reliability modules  
+- Pulling or merging upstream  
+- Migrating old production tasks/DB  
+- Touching the legacy degraded production system except to leave it frozen  
+- Expanding into Future Improvements as launch blockers  
+
+---
+
+## Future Improvements (optional backlog)
+
+Former Phases 3–8 and related programme work. **None reopen the v1 gate.**
+
+| Backlog item | Former phase (reference) |
+| --- | --- |
+| Automated release controller / schema lease framework | Phase 3 |
+| Contamination gates / patch reconstruction / Git-safety programme | Phase 4 |
+| Durable execution leases / scheduler redesign | Phase 5 |
+| Full verification integrity programme | Phase 6 |
+| Provider failover gateway; cost budgets; event wakeups | Phase 7 |
+| Full observability (OTel, Prometheus, Grafana, Loki, Sentry) | Phase 7 |
+| Multi-agent DAG / concurrency scaling | Phase 8 |
+| Seven-day soak / complete chaos catalogue | Phase 5+ |
+| Managed external PostgreSQL | Phase 0 OD-POSTGRES (superseded for v1) |
+| Dedicated high-capacity Host B / Host P | Phase 0 OD-TOPOLOGY (superseded for v1) |
+| Autonomous host-admin execution | ACC engine-child path |
+| Upstream refresh (manual/monthly) | Operating model |
+
+---
+
+## Sequencing
+
+```text
+0 → 1 → 2A → V1 (Personal Project v1 complete)
+                ↘ Future Improvements (optional, anytime later)
+```

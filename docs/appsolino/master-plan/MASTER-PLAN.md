@@ -1,196 +1,161 @@
 # Appsolino Fusion Server — MASTER PLAN (Governing Document)
 
-**Status:** Phase 1 **COMPLETE**. Phase 2A **PARTIAL / MERGED** (PR #10 → `6caca1ec…`) — staging foundation usable. **Process authority:** `docs/appsolino/OPERATING-MODEL.md` (how work is performed). Master plan defines architecture/production boundaries only — not an enterprise compliance programme.
-**Implementation:** Host D staging infrastructure landed. Off-host production backup, clean rebuild, and real engine-child admin path remain **NOT PROVEN** and are required before production / autonomous admin — not before ordinary staging use. No production activation. No Appsolino reliability re-land in Phase 2. Later phases **NOT AUTHORISED**. Production remains **DEGRADED / FROZEN**.
-**Accepted baseline:** upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + tested patch `a366fab379ca30322902d1bb4c040b8cd16262fb` → product integration `82feb14b732dcd31176338d024b09e68c1646808` (`0.74.0-beta.5`, Node `v22.23.1`, pnpm `10.33.0`). Phase 1 closure: `4c9e98cd…` (PR #9). Phase 2A merge: `6caca1ec66e8428493982e29241e47df0857be00` (PR #10).
-**Date:** 2026-07-30
-**Reliability contract:** Every task either completes successfully or reaches one durable, actionable terminal state without losing completed work, duplicating execution, corrupting another task, merging unrelated changes, or repeating the same deterministic failure indefinitely.
+**Process authority:** `docs/appsolino/OPERATING-MODEL.md` (how work is performed).  
+**This document:** architecture, production boundaries, and the **Personal Project v1** completion definition — not an enterprise multi-phase reliability programme.
 
-This document consolidates `docs/appsolino/master-plan/00`–`15`. Detailed evidence and matrices live in those files; this file is the governing summary.
+**Status (2026-07-30):**
+```text
+Phase 0: COMPLETE
+Phase 1: COMPLETE (0.74.0-beta.5)
+Phase 2A: PARTIAL / MERGED / USABLE (PR #10 → 6caca1ec…)
+Active phase: Phase V1 — One-day production launch (NOT STARTED)
+Former Phases 3–8: Future Improvements backlog (not v1 blockers)
+Production (legacy): DEGRADED / FROZEN — untouched until replacement smoke passes
+```
 
----
-
-## 1. Purpose
-
-Rebuild Appsolino Fusion from a **clean upstream baseline**, operate it on a **dedicated destroyable server**, and run **immutable packaged releases** with recoverability under a **full-admin trust model** inside the host and **narrow credentials** outside it.
-
----
-
-## 2. Non-negotiables (accepted)
-
-1. Dedicated Fusion server; no unrelated production apps.
-2. Host may be destroyed and rebuilt.
-3. `fusion ALL=(ALL) NOPASSWD: ALL` — no interactive sudo blocking.
-4. Daily DB backups off-host; append-only / non-deletable by Fusion credentials.
-5. Active source and release branches pushed to GitHub.
-6. Do not preserve old tasks/worktrees/DB/logs; **do** preserve issue knowledge and regression tests.
-7. Production runs clean source-built releases — not permanent surgical overlays.
-8. Never install upstream directly into production.
-9. Phase 0 decisions in `15-open-decisions.md`; Phase 1 closed (PR #9); Phase 2A staging foundation merged PARTIAL (PR #10); personal-project operating model in `OPERATING-MODEL.md`; later phases gated; production frozen.
+**Accepted baseline:** upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + patch `a366fab379…` → product `82feb14b7…` (`0.74.0-beta.5`). Closure PR #9 `4c9e98cd…`. Phase 2A PR #10 `6caca1ec…`.
 
 ---
 
-## 2b. Production posture until replacement (approved)
+## 1. Definition of “finished” (Personal Project v1)
+
+**Finished means:**
+
+> A usable Appsolino Fusion v1 is deployed, its irreplaceable data can be backed up and restored, the server can be rebuilt from Git, and normal development can continue.
+
+**Finished does not mean:** every future reliability, scaling, observability, or autonomous-agent feature is implemented.
+
+### Personal Project v1 — definition of done
+
+1. Accepted Fusion `0.74.0-beta.5` package built once.  
+2. That exact tested package deployed.  
+3. Fresh production database created (no old task/damaged DB migration).  
+4. Separate production service, state, config, and database identities.  
+5. Service starts, restarts, and reports expected version.  
+6. A task can be created, read, and updated.  
+7. Database backup created and restored into a temporary database.  
+8. Source, infrastructure, and recovery instructions in GitHub.  
+9. Previous degraded production system untouched until replacement works.  
+10. Result labelled **Personal Project v1 complete**.
+
+---
+
+## 2. Hard requirements for v1 (six controls)
+
+| Requirement | Why |
+| --- | --- |
+| Known package and version | Know what is running |
+| Separate production DB/state | Avoid staging contamination |
+| Previous release preserved | Permit rollback |
+| Backup before risky changes | Protect data |
+| Restore proof | Confirm backup is usable |
+| Infrastructure and recovery in Git | Rebuild after server loss |
+
+Secrets stay outside Git. Old production remains frozen until replacement smoke passes.
+
+---
+
+## 3. Initial v1 topology
+
+```text
+One server (Host D initially)
+├── build workspace
+├── staging service + staging database
+├── production service + production database
+└── local temporary backups
+
+GitHub
+├── source
+├── Ansible/configuration
+├── deployment scripts
+└── recovery instructions
+
+Off-host storage
+└── production database backup only
+```
+
+**Initial production choice:** Host D may run build, staging, and initial production with **separate identities**:
+
+```text
+Service:       fusion-production.service
+Database:      fusion_production
+Role:          fusion_production
+Configuration: /etc/appsolino-fusion/production/
+State:         /srv/appsolino-fusion/production/
+Releases:      /opt/appsolino-fusion/production/releases/
+```
+
+A dedicated Host P and managed external PostgreSQL are **optional future improvements**, not launch blockers. If a separate production host is already provisioned and accessible, the same process may run there; procuring a new host during the one-day window is avoidable risk.
+
+---
+
+## 4. Active roadmap
+
+| Item | Status |
+| --- | --- |
+| Phase 0 — Decisions | COMPLETE |
+| Phase 1 — Accepted package | COMPLETE |
+| Phase 2A — Staging foundation | COMPLETE ENOUGH / USABLE |
+| **Phase V1 — One-day production launch** | **Active / NOT STARTED** |
+| Former Phases 3–8 | Future Improvements (optional) |
+
+Detail: `13-phased-implementation-roadmap.md`. Approvals/amendments: `15-open-decisions.md`.
+
+---
+
+## 5. Phase V1 focused acceptance (Level C production-candidate)
+
+Required:
+
+```text
+git diff --check
+relevant configuration syntax
+current main is clean
+package build succeeds
+package version = 0.74.0-beta.5
+executable hash recorded
+production DB identity correct
+service active
+listener correct
+health version correct
+create/read/update one task
+restart preserves task
+backup succeeds
+temporary restore succeeds
+previous release remains available
+```
+
+Not required for v1: all repository tests; all ACC classes; clean Ubuntu rebuild during launch; seven-day soak; upstream merge; staging reconstruction; full observability; autonomous agent root path.
+
+---
+
+## 6. Production posture (legacy, until replacement)
 
 ```text
 Database schema: 0036
 Production surgical binary: 0035
 ```
 
-Healthy dashboard ≠ compatible release. Until replacement: **no** new tasks, **no** resume paused tasks, **no** CLI opens against the incompatible DB, **no** migrations, **no** partial activations, **no** trusting the long-lived dashboard as safety proof. Production is **available but degraded and frozen**.
+Degraded/frozen surgical host remains untouched. Health OK ≠ schema-compatible. No migration of old damaged data into v1.
 
 ---
 
-## 3. Current verified situation (facts)
+## 7. Explicit non-claims
 
-- The dashboard health endpoint currently reports OK on the surgical release `contam-gate-surgical-20260728T103231Z` (base `fc485b05…`); this does **not** prove binary/schema compatibility. Phase 1 contamination gate is live surgically. Production remains **degraded and frozen** because DB schema **0036** exceeds binary schema ceiling **0035**.
-- Production DB is **embedded Postgres** under production HOME (not system PostgreSQL).
-- Release-controller `status.json` disagrees (`deployedSha=7ad5a33…`, `FAILED_NEEDS_OPERATOR`).
-- Runtime identity report: DB schema **0036** vs surgical binary **0035** — CLI opens fail; long-lived dashboard may still serve.
-- Three source layers: mirrored `main`, `appsolino/stable` durable patches, surgical/`fusion-development` hardening (CONTAM modules not on stable tip).
-- Phase 2 / recovery / disposition / schema-consistency / Retry lock: **source-only** in `fusion-development` (often uncommitted).
-- FUSI-007 packaged fix on contaminated branch `4553fd05…`.
-- Upstream issues highly overlapping: #2476 stale bases, #1399 event wakeups, #2211 worktrees, #2181 budgets.
-- Current machine ~6 vCPU / 11 GiB / 96 GB — not a Tier 2 multi-agent+build host. Staging unit crash-loops (`CHDIR`); weekly DR drill failing on ownership.
-- Current live unit uses `ProtectSystem=strict` (historical); **approved rebuild** uses `NoNewPrivileges=no` and `ProtectSystem=off` so Fusion-spawned agents can use sudo (see `06-provisioning-permissions-and-runtime.md`).
-
-Evidence: `docs/appsolino/reset/*`, runtime identity report under `fusion-reliability-hardening`.
+- Not zero failures.  
+- Not a multi-week reliability programme as a v1 gate.  
+- Source tests ≠ packaged proof.  
+- Future Improvements backlog does not reopen the v1 completion gate.
 
 ---
 
-## 4. Target architecture
+## 8. Document index
 
-| Layer | Choice |
+| Doc | Role |
 | --- | --- |
-| OS | Ubuntu 24.04 LTS |
-| Service | systemd Fusion; `NoNewPrivileges=no`; `ProtectSystem=off`; bubblewrap for ordinary tasks; host-admin mode outside bwrap |
-| Task isolation | bubblewrap |
-| DB (prod) | **Managed external PostgreSQL** (approved); separate staging DB same major/class |
-| Topology | **Host B** (16 vCPU / 64 GB / 500 GB) build+staging; **Host P** (8–16 vCPU / 32–64 GB / 500 GB) production |
-| Releases | `/opt/appsolino-fusion/releases/<id>` + `current`; manifest authoritative |
-| State | `/srv/appsolino-fusion/...` |
-| Fork | `upstream/main` mirror → `appsolino/main` (clean; not dirty trees) → integration → `release/*` |
-| Orchestration | Harden native coordinator (not Temporal/Restate in Phases 0–7) |
-| Observability | OTel + Prometheus + Grafana + Loki + Sentry |
-| Providers | Keep plugins; wrap gateway in Phase 7 |
-| Prod activate | Human confirmation required initially (OD-ACTIVATION) |
-
----
-
-## 5. Reliability architecture (target)
-
-One workflow coordinator; disposable workers; durable execution records (`taskId`+`executionId`+generation); fenced stage leases; immutable checkpoints; task-owned patches; replayable verification manifests; typed bounded recovery; atomic releases.
-
-Git truth: **recorded base + task-owned patch**. Branch format: `fusion/<task-id>/<execution-id>`. No AI review/merge tokens before deterministic Git preflight.
-
-Retries require budget, fingerprint, generation, changed condition, backoff, terminal disposition.
-
----
-
-## 6. Release law
-
-```text
-pin → test → package → packaged-runtime proof → stage → migrate test → approve
-→ pause claims → pre-backup → migrate under lease → atomic activate → readiness → resume
-```
-
-Readiness fails on schema/identity/manifest disagreement. Rollback only to schema-compatible artefacts.
-
----
-
-## 7. Fork law
-
-```text
-upstream/main (mirror)
-appsolino/main (product)
-integration/upstream-<ver>-<date>
-release/<appsolino-version>
-hotfix/<issue>
-```
-
-Absorb via integration branches; never renumber upstream migrations; retire local patches when upstream supersedes; protect main/release from force-push.
-
----
-
-## 8. Full-admin vs external boundary
-
-Inside host: agents may install packages, manage systemd, firewall, Docker/bwrap, repairs, staging activates.
-Production activate/migrate: automated gates; human confirm until `OD-ACTIVATE-AUTH` says otherwise.
-Outside: no unrelated servers/repos/cloud/registrar/DBs; backups not deletable by Fusion creds.
-
----
-
-## 9. Issue programme (condensed)
-
-Must permanently control: EROFS/writable paths; ownership; pnpm stores; preflight; no prod builds; identity authorities; schema gates; packaged runtime proof; surgical retirement; contamination; attribution sets; patch-only merge; execution branches; stale bases; lifecycle authority; deterministic disposition; Retry lock; merge leases; verification manifests; provider failover; ops view + alerts; backup restore drills.
-
-Full register: `03-appsolino-known-issues-and-fixes.md`.
-
----
-
-## 10. Phases and gates
-
-| Phase | Gate |
-| --- | --- |
-| 0 Decisions | `OD-*` approved |
-| 1 Clean baseline | Packaged smoke on pin |
-| 2 Infra | Rebuild + backup dry-run |
-| 3 Release integrity | ACC-REL 100% |
-| 4 Git safety | ACC-GIT 100%; surgical retired |
-| 5 Workflow | ACC-EXE/REC; soak |
-| 6 Verification | ACC-VER |
-| 7 Providers/ops | ACC-PRV/OPS |
-| 8 Scale | Tier concurrency report |
-
-Stop if packaged runtime red, or if an external workflow engine is selected mid-flight, or if upstream coordinator rewrite invalidates lease work.
-
----
-
-## 11. Acceptance
-
-Catalogue in `12-reliability-acceptance-and-chaos-tests.md`. P0 classes must be green before production promote of the clean baseline.
-
----
-
-## 12. Phase 0 decisions (APPROVED)
-
-See `15-open-decisions.md` Phase 0 Decision Approval (2026-07-29) and Phase 1 result. Accepted baseline: `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + `a366fab379…` / product `82feb14b7…` (closure merge `4c9e98cd…`). Dirty trees are reference-only. Release controller frozen. Managed Postgres. Human confirm for prod activate/migrate. Phase 2 AUTHORISED / NOT STARTED (infrastructure foundation only).
-
----
-
-## 13. Explicit non-claims
-
-- Not zero failures.
-- Sizing is Appsolino ops guidance, not Fusion official requirements.
-- Source tests ≠ packaged proof.
-- Focused unit tests ≠ production soak.
-
----
-
-## 14. Document index
-
-| Doc | Content |
-| --- | --- |
-| `00-executive-summary.md` | Target, decisions, risks |
-| `01-strategic-questions-and-decisions.md` | Q&A matrix |
-| `02-upstream-issue-and-roadmap-audit.md` | Upstream overlap |
-| `03-appsolino-known-issues-and-fixes.md` | Issue taxonomy |
-| `04-fork-and-upstream-update-strategy.md` | Fork/absorb |
-| `05-server-architecture-and-specifications.md` | Topology/sizing/FS |
-| `06-provisioning-permissions-and-runtime.md` | Ansible/sudo/systemd |
-| `07-backup-disaster-recovery-and-rebuild.md` | DR |
-| `08-component-keep-wrap-replace-matrix.md` | Tool decisions |
-| `09-target-reliability-architecture.md` | Lifecycle/Git/verify |
-| `10-release-build-migration-and-deployment.md` | Release law |
-| `11-observability-and-operations.md` | Metrics/alerts |
-| `12-reliability-acceptance-and-chaos-tests.md` | ACC catalogue |
-| `13-phased-implementation-roadmap.md` | Phases |
-| `14-risk-register.md` | Risks |
-| `15-open-decisions.md` | User approvals |
-| `MASTER-PLAN.md` | This governing summary |
-
----
-
-## 15. Planning integrity statement
-
-This master plan was produced **read-only** with respect to Fusion runtime: no build, deployment, migration, service restart, task-state change, or production modification was performed as part of authoring these documents. Documentation files under `docs/appsolino/master-plan/` were created only.
+| `OPERATING-MODEL.md` | Process authority |
+| `MASTER-PLAN.md` | This architecture / v1 completion summary |
+| `00-executive-summary.md` | Target and status |
+| `13-phased-implementation-roadmap.md` | Active Phase V1 + Future backlog |
+| `15-open-decisions.md` | Approvals; v1 topology amendment |
+| `01`–`12`, `14` | Historical detail / reference (not active launch blockers) |
