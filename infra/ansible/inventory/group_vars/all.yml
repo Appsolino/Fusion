@@ -44,3 +44,7 @@ postgres_staging_restore_db: fusion_staging_restore_test
 
 monitoring_textfile_dir: /var/lib/node_exporter/textfile_collector
 acceptance_dir: /etc/appsolino-fusion/staging/acceptance
+
+expected_highest_migration: "0036"
+expected_package_version: "0.74.0-beta.5"
+

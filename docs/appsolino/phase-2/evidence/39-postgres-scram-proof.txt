@@ -1,0 +1,12 @@
+password_encryption=scram-sha-256
+fusion_staging_verifier_prefix=SCRAM-SHA-256
+pg_hba_host_127_scram_lines=1
+pg_hba_host_scram_sanitised:
+host all all 127.0.0.1/32 scram-sha-256
+host all all ::1/128 scram-sha-256
+host replication all 127.0.0.1/32 scram-sha-256
+host replication all ::1/128 scram-sha-256
+pg_hba_local_peer_sanitised:
+local all postgres peer
+local all all peer
+local replication all peer

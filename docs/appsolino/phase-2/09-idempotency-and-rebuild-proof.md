@@ -1,21 +1,15 @@
 # Idempotency and rebuild proof
 
-## Ansible on Host D
+## Ansible on Host D (post-correction)
+
+Authoritative variables: `infra/ansible/inventory/group_vars/` only (duplicate `group_vars/` trees removed).
 
 | Run | Result |
 |-----|--------|
-| First `provision-staging.yml` | **PASS** (`changed` > 0; see `evidence/02-provision-first-run.log`) |
-| Second run | **PASS** with `changed=0` (`evidence/03-provision-second-run.log`) |
-
-Playbooks are modular/idempotent under `infra/ansible/`.
+| Syntax check | **PASS** |
+| First provision after corrections | **PASS** (`changed=6`) |
+| Second run | **PASS** (`changed=0`) |
 
 ## Clean rebuild from Ubuntu 24.04
 
-No disposable validation target (VM / container / snapshot / approved disposable VPS) was available for this mission.
-
-| Item | Status |
-|------|--------|
-| Idempotency on configured Host D | **PASS** |
-| Clean rebuild from bare Ubuntu 24.04 | **NOT PROVEN** |
-
-Do **not** claim full Phase 2 completion until clean-rebuild proof exists on an approved disposable target. Cloud-init bootstrap (`infra/cloud-init/staging-bootstrap.yaml`) is committed for that later proof.
+**NOT PROVEN** — no disposable validation target in this mission.

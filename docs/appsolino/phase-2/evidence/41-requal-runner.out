@@ -1,0 +1,34 @@
+SYNTAX_EXIT:0
+FIRST_EXIT:0
+33:ok: [host-d] => changed=false 
+52:ok: [host-d] => changed=false 
+89:ok: [host-d] => (item={'changed': False, 'stat': {'exists': False}, 'invocation': {'module_args': {'path': '/opt/appsolino-fusion/production', 'follow': False, 'get_checksum': True, 'get_mime': True, 'get_attributes': True, 'checksum_algorithm': 'sha1'}}, 'failed': False, 'item': '/opt/appsolino-fusion/production', 'ansible_loop_var': 'item'}) => changed=false 
+107:ok: [host-d] => (item={'changed': False, 'stat': {'exists': False}, 'invocation': {'module_args': {'path': '/etc/appsolino-fusion/production', 'follow': False, 'get_checksum': True, 'get_mime': True, 'get_attributes': True, 'checksum_algorithm': 'sha1'}}, 'failed': False, 'item': '/etc/appsolino-fusion/production', 'ansible_loop_var': 'item'}) => changed=false 
+125:ok: [host-d] => (item={'changed': False, 'stat': {'exists': False}, 'invocation': {'module_args': {'path': '/srv/appsolino-fusion/production', 'follow': False, 'get_checksum': True, 'get_mime': True, 'get_attributes': True, 'checksum_algorithm': 'sha1'}}, 'failed': False, 'item': '/srv/appsolino-fusion/production', 'ansible_loop_var': 'item'}) => changed=false 
+148:ok: [host-d] => changed=false 
+161:ok: [host-d] => changed=false 
+183:ok: [host-d] => changed=false 
+273:PLAY RECAP *********************************************************************
+274:host-d                     : ok=61   changed=6    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+SECOND_EXIT:0
+33:ok: [host-d] => changed=false 
+52:ok: [host-d] => changed=false 
+89:ok: [host-d] => (item={'changed': False, 'stat': {'exists': False}, 'invocation': {'module_args': {'path': '/opt/appsolino-fusion/production', 'follow': False, 'get_checksum': True, 'get_mime': True, 'get_attributes': True, 'checksum_algorithm': 'sha1'}}, 'failed': False, 'item': '/opt/appsolino-fusion/production', 'ansible_loop_var': 'item'}) => changed=false 
+107:ok: [host-d] => (item={'changed': False, 'stat': {'exists': False}, 'invocation': {'module_args': {'path': '/etc/appsolino-fusion/production', 'follow': False, 'get_checksum': True, 'get_mime': True, 'get_attributes': True, 'checksum_algorithm': 'sha1'}}, 'failed': False, 'item': '/etc/appsolino-fusion/production', 'ansible_loop_var': 'item'}) => changed=false 
+125:ok: [host-d] => (item={'changed': False, 'stat': {'exists': False}, 'invocation': {'module_args': {'path': '/srv/appsolino-fusion/production', 'follow': False, 'get_checksum': True, 'get_mime': True, 'get_attributes': True, 'checksum_algorithm': 'sha1'}}, 'failed': False, 'item': '/srv/appsolino-fusion/production', 'ansible_loop_var': 'item'}) => changed=false 
+148:ok: [host-d] => changed=false 
+161:ok: [host-d] => changed=false 
+183:ok: [host-d] => changed=false 
+270:PLAY RECAP *********************************************************************
+271:host-d                     : ok=60   changed=0    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+BACKUP_EXIT:0
+total 1452
+drwxr-x--- 3 root   fusion   4096 Jul 30 04:39 .
+drwxr-x--- 7 fusion fusion   4096 Jul 29 18:54 ..
+-rw------- 1 root   fusion 488063 Jul 29 19:12 fusion_staging_20260729T191237Z.dump
+-rw------- 1 root   fusion 488063 Jul 29 19:13 fusion_staging_20260729T191356Z.dump
+-rw------- 1 root   fusion 488070 Jul 30 04:39 fusion_staging_20260730T043949Z.dump
+drwxr-x--- 2 root   fusion   4096 Jul 30 04:39 meta
+RESTORE_EXIT:0
+CONFLICT_SCRIPT_EXIT:0
+RUNNER_EXIT:0

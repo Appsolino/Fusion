@@ -1,22 +1,13 @@
 #!/usr/bin/env bash
 # FNXC:Phase2A 2026-07-29-21:45:
-# Allow-listed ACC-ENV-03..08 harness intended to run from systemd service context
-# (fusion-staging-acceptance.service / run as fusion with same NoNewPrivileges=no).
+# Allow-listed ACC-ENV-03..08 harness for SYSTEMD_SERVICE_CONTEXT (fusion-staging-acceptance-run.service).
+# FNXC:Phase2A 2026-07-30-08:00: Explicitly NOT the Fusion engine → task/agent child path.
 set -euo pipefail
 OUT=/srv/appsolino-fusion/staging/state/acceptance-result.json
 ACC_DIR=/etc/appsolino-fusion/staging/acceptance
 CORR_ID="phase2a-acc-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 mkdir -p "$ACC_DIR" "$(dirname "$OUT")"
 declare -A R
-
-run() {
-  local id="$1"; shift
-  if "$@" >/tmp/"$id".out 2>/tmp/"$id".err; then
-    R["$id"]=PASS
-  else
-    R["$id"]=FAIL
-  fi
-}
 
 # ACC-ENV-03: sudo -n id -u == 0
 if out="$(sudo -n id -u 2>/tmp/acc03.err)"; then
@@ -40,7 +31,7 @@ else
   R[ACC-ENV-05]=FAIL
 fi
 
-# ACC-ENV-06: restart dedicated harmless probe unit
+# ACC-ENV-06: start dedicated harmless probe unit (not SSH/PG/Fusion)
 if sudo -n systemctl start fusion-staging-acceptance-probe.service >/tmp/acc06.out 2>/tmp/acc06.err; then
   R[ACC-ENV-06]=PASS
 else
@@ -53,7 +44,6 @@ if bwrap --die-with-parent --unshare-all --share-net \
   --bind /srv/appsolino-fusion/staging/workspaces /srv/appsolino-fusion/staging/workspaces \
   bash -c "echo denied > /etc/appsolino-fusion/staging/acceptance/should-fail-$CORR_ID.txt" \
   >/tmp/acc07.out 2>/tmp/acc07.err; then
-  # If write somehow succeeded, fail the test
   if [[ -f /etc/appsolino-fusion/staging/acceptance/should-fail-$CORR_ID.txt ]]; then
     sudo -n rm -f "/etc/appsolino-fusion/staging/acceptance/should-fail-$CORR_ID.txt"
     R[ACC-ENV-07]=FAIL
@@ -61,7 +51,6 @@ if bwrap --die-with-parent --unshare-all --share-net \
     R[ACC-ENV-07]=PASS
   fi
 else
-  # Expected: denied / failed
   R[ACC-ENV-07]=PASS
 fi
 
@@ -76,15 +65,11 @@ else
   R[ACC-ENV-08]=FAIL
 fi
 
-python3 - "$OUT" <<'PY'
-import json, os, sys
-# reconstruct from env files written below
-PY
-
-# Emit JSON
 {
   echo "{"
   echo "  \"correlation_id\": \"$CORR_ID\","
+  echo "  \"path_class\": \"SYSTEMD_SERVICE_CONTEXT\","
+  echo "  \"fusion_engine_child_path\": \"NOT PROVEN\","
   echo "  \"uid\": \"$(id -u)\","
   echo "  \"sudo_uid\": \"$(sudo -n id -u 2>/dev/null || echo fail)\","
   echo "  \"results\": {"
@@ -99,7 +84,6 @@ PY
   echo "}"
 } | tee "$OUT"
 
-# Overall
 for k in ACC-ENV-03 ACC-ENV-04 ACC-ENV-05 ACC-ENV-06 ACC-ENV-07 ACC-ENV-08; do
   [[ "${R[$k]}" == PASS ]] || exit 1
 done

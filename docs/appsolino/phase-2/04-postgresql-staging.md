@@ -6,17 +6,18 @@
 |------|--------|
 | Role | `fusion_staging` |
 | Database | `fusion_staging` |
-| Restore-test DB | `fusion_staging_restore_test` (created only during restore proof; destroyed after) |
-| Listen | localhost only (`127.0.0.1`) |
-| Auth | SCRAM-SHA-256; password in `/etc/appsolino-fusion/staging/secrets.env` (root:fusion 0640; untracked) |
+| Listen | localhost only |
+| Auth | SCRAM-SHA-256 enforced |
 | Version | PostgreSQL 16.14 |
-| Encoding / locale | UTF8 / `en_US.UTF-8` (host default) |
-| Owner | `fusion_staging` |
-| Highest applied migration | `0036` via `public.fusion_schema_migrations` (service first-boot; not hand-stamped) |
-| Production names | none created |
+| Highest migration | `0036` |
 
-Phase 1 evidence DBs (`fusion_phase1_*`) remain on Host D for prior mission evidence and are not used by staging.
+## SCRAM enforcement (corrected)
 
-## Evidence
+Provisioning now:
 
-- `evidence/20-pg-*.txt`, `evidence/20-mig-high.txt`, `evidence/04-postgresql-*.txt` (if present)
+- sets `password_encryption=scram-sha-256`
+- ensures `pg_hba.conf` localhost TCP host rules use `scram-sha-256`
+- retains `local … peer` for postgres administration
+- verifies `fusion_staging` role verifier prefix `SCRAM-SHA-256` without exposing the secret
+
+Evidence: `evidence/39-postgres-scram-proof.txt`.

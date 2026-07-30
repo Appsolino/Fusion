@@ -1,0 +1,11 @@
+{
+  "results": {
+    "bad_version": "PASS",
+    "inactive_service": "PASS",
+    "database_failure": "PASS",
+    "migration_mismatch": "PASS"
+  },
+  "pass_count": 4,
+  "fail_count": 0,
+  "result": "PASS"
+}

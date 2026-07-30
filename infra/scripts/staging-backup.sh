@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# FNXC:Phase2A 2026-07-29-22:15: Local staging pg_dump as postgres (RLS-safe) with metadata; fail-closed off-host upload.
+# FNXC:Phase2A 2026-07-30-07:40: Local staging pg_dump as postgres (RLS-safe) with metadata; fail-closed off-host upload.
+# FNXC:Phase2A 2026-07-30-07:40: dump_path and source_main_sha are distinct variables — never reuse the dump path name for git output.
 set -euo pipefail
 SECRETS=/etc/appsolino-fusion/staging/secrets.env
 BACKUPS=/srv/appsolino-fusion/staging/backups
@@ -33,17 +34,19 @@ if [[ -z "$STAGING_DB_PASSWORD" ]]; then
 fi
 
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
-out="$BACKUPS/fusion_staging_${ts}.dump"
-meta="$META_DIR/fusion_staging_${ts}.json"
+dump_path="$BACKUPS/fusion_staging_${ts}.dump"
+meta_path="$META_DIR/fusion_staging_${ts}.json"
 TMP_DUMP="/tmp/fusion_staging_backup_${ts}.dump"
 
-main_sha="unknown"
-git config --global --add safe.directory /srv/appsolino-fusion/worktrees/phase-2a-staging-infrastructure-foundation >/dev/null 2>&1 || true
-if out="$(git -C /srv/appsolino-fusion/worktrees/phase-2a-staging-infrastructure-foundation rev-parse HEAD 2>/dev/null)"; then
-  main_sha="$out"
-elif [[ -f /opt/appsolino-fusion/staging/current/RELEASE_IDENTITY ]]; then
-  # shellcheck disable=SC1090
-  main_sha="$(grep -E '^MAIN_SHA=' /opt/appsolino-fusion/staging/current/RELEASE_IDENTITY | cut -d= -f2- || echo unknown)"
+# Prefer RELEASE_IDENTITY; fall back to repository HEAD without touching dump_path.
+source_main_sha="unknown"
+if [[ -f "$CURRENT/RELEASE_IDENTITY" ]]; then
+  source_main_sha="$(grep -E '^MAIN_SHA=' "$CURRENT/RELEASE_IDENTITY" | head -1 | cut -d= -f2- || true)"
+  [[ -n "$source_main_sha" ]] || source_main_sha="unknown"
+fi
+if [[ "$source_main_sha" == "unknown" ]]; then
+  git_sha="$(git -C /srv/appsolino-fusion/worktrees/phase-2a-staging-infrastructure-foundation rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$git_sha" ]] && source_main_sha="$git_sha"
 fi
 
 exe_sha="unknown"
@@ -65,28 +68,27 @@ unset PGPASSWORD
 
 # FNXC:Phase2A 2026-07-29-22:15: Dump as postgres superuser so FORCE RLS tables are included; never put password on argv.
 sudo -n -u postgres pg_dump -d fusion_staging --format=custom --file="$TMP_DUMP"
-install -m 0600 -o root -g fusion "$TMP_DUMP" "$out"
+install -m 0600 -o root -g fusion "$TMP_DUMP" "$dump_path"
 rm -f "$TMP_DUMP"
 TMP_DUMP=""
-backup_sha="$(sha256sum "$out" | awk '{print $1}')"
+backup_sha="$(sha256sum "$dump_path" | awk '{print $1}')"
 
 python3 -c "import json; json.dump({
   'timestamp': '''$ts''',
   'database': 'fusion_staging',
   'postgresql_version': '''$pg_ver''',
-  'source_main_sha': '''$main_sha''',
+  'source_main_sha': '''$source_main_sha''',
   'release_id': '''$release_id''',
   'executable_sha256': '''$exe_sha''',
   'migration_set_sha256': '''$mig_hash''',
   'highest_migration': '''$highest_mig''',
   'backup_sha256': '''$backup_sha''',
-  'backup_file': '''$out''',
+  'backup_file': '''$dump_path''',
   'result': 'PASS',
-}, open('''$meta''','w'), indent=2); print(open('''$meta''').read())"
-chmod 0640 "$meta"
+}, open('''$meta_path''','w'), indent=2); print(open('''$meta_path''').read())"
+chmod 0640 "$meta_path"
 
 ls -1t "$BACKUPS"/fusion_staging_*.dump 2>/dev/null | tail -n +15 | xargs -r rm -f || true
-# Drop incomplete manual test dumps
 rm -f "$BACKUPS"/test.dump "$BACKUPS"/fusion_staging_manual.dump || true
 
 if [[ ! -f "$OFF_HOST_CONF" ]]; then
@@ -100,7 +102,7 @@ if [[ "${OFF_HOST_BACKUP_CONFIGURED:-false}" != "true" || -z "${OFF_HOST_BACKUP_
   exit 0
 fi
 if [[ -x /usr/local/sbin/staging-offhost-upload.sh ]]; then
-  /usr/local/sbin/staging-offhost-upload.sh "$out" "$OFF_HOST_BACKUP_TARGET"
+  /usr/local/sbin/staging-offhost-upload.sh "$dump_path" "$OFF_HOST_BACKUP_TARGET"
 else
   echo "OFF_HOST_TARGET_NOT_CONFIGURED: upload helper missing"
   exit 0

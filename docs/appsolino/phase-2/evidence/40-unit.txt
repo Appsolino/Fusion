@@ -1,3 +1,4 @@
+# /etc/systemd/system/fusion-staging.service
 # FNXC:Phase2A 2026-07-29-21:45:
 # Staging-only Fusion unit. Approved full-admin model: NoNewPrivileges=no, ProtectSystem=off.
 # FNXC:Phase2A 2026-07-30-07:55: secrets.env is mandatory (no EnvironmentFile=- optional form).
@@ -10,19 +11,19 @@ Wants=postgresql.service
 
 [Service]
 Type=simple
-User={{ fusion_user }}
-Group={{ fusion_group }}
+User=fusion
+Group=fusion
 UMask=0027
 NoNewPrivileges=no
 ProtectSystem=off
-WorkingDirectory={{ staging_project }}
-Environment=HOME={{ staging_fusion_home }}
-Environment=FUSION_HOME={{ staging_fusion_home }}
+WorkingDirectory=/srv/appsolino-fusion/staging/workspaces/project
+Environment=HOME=/srv/appsolino-fusion/staging/state/fusion-home
+Environment=FUSION_HOME=/srv/appsolino-fusion/staging/state/fusion-home
 Environment=FUSION_SKIP_ONBOARDING=1
-EnvironmentFile={{ staging_env_file }}
-EnvironmentFile={{ staging_secrets_file }}
+EnvironmentFile=/etc/appsolino-fusion/staging/fusion.env
+EnvironmentFile=/etc/appsolino-fusion/staging/secrets.env
 ExecStartPre=/usr/local/sbin/staging-prestart-validate.sh
-ExecStart={{ staging_current }}/fn dashboard --host {{ staging_bind_host }} --port {{ staging_http_port }} --paused --no-auth --no-supervise
+ExecStart=/opt/appsolino-fusion/staging/current/fn dashboard --host 127.0.0.1 --port 4140 --paused --no-auth --no-supervise
 Restart=on-failure
 RestartSec=5
 StartLimitBurst=5

@@ -1,0 +1,22 @@
+{
+  "timestamp": "20260730T043949Z",
+  "database": "fusion_staging",
+  "postgresql_version": "16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)",
+  "source_main_sha": "040b61e8873e77eeae04816a2dce9cccdde7f88c",
+  "release_id": "phase2a-0.74.0-beta.5-040b61e8873e",
+  "executable_sha256": "54e2cd933281ca523e57303c578c4e14b60cd5914006fac8c9145703a39a0c48",
+  "migration_set_sha256": "846da68e7c82f3acd9e8cfd847b4fd49a4e14251571e8063f0ed66e90282a570",
+  "highest_migration": "0036",
+  "backup_sha256": "489c6b5f6af5d542c6754ee419f39d0e2ee4534c489544729e836d11c9da461e",
+  "backup_file": "/srv/appsolino-fusion/staging/backups/fusion_staging_20260730T043949Z.dump",
+  "result": "PASS"
+}
+OFF_HOST_TARGET_NOT_CONFIGURED
+BACKUP_EXIT:0
+total 1452
+drwxr-x--- 3 root   fusion   4096 Jul 30 04:39 .
+drwxr-x--- 7 fusion fusion   4096 Jul 29 18:54 ..
+-rw------- 1 root   fusion 488063 Jul 29 19:12 fusion_staging_20260729T191237Z.dump
+-rw------- 1 root   fusion 488063 Jul 29 19:13 fusion_staging_20260729T191356Z.dump
+-rw------- 1 root   fusion 488070 Jul 30 04:39 fusion_staging_20260730T043949Z.dump
+drwxr-x--- 2 root   fusion   4096 Jul 30 04:39 meta

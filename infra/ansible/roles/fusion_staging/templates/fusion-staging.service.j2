@@ -1,9 +1,10 @@
 # FNXC:Phase2A 2026-07-29-21:45:
 # Staging-only Fusion unit. Approved full-admin model: NoNewPrivileges=no, ProtectSystem=off.
-# Binds localhost only; uses packaged executable from staging current symlink.
+# FNXC:Phase2A 2026-07-30-07:55: secrets.env is mandatory (no EnvironmentFile=- optional form).
+# FNXC:Phase2A 2026-07-30-07:55: ExecStartPre validates localhost fusion_staging DATABASE_URL identity.
 [Unit]
 Description=Appsolino Fusion staging service
-Documentation=file:///srv/appsolino-fusion/worktrees/phase-2a-staging-infrastructure-foundation/docs/appsolino/phase-2/05-staging-service.md
+Documentation=https://github.com/Appsolino/Fusion/blob/HEAD/docs/appsolino/phase-2/05-staging-service.md
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -18,8 +19,9 @@ WorkingDirectory={{ staging_project }}
 Environment=HOME={{ staging_fusion_home }}
 Environment=FUSION_HOME={{ staging_fusion_home }}
 Environment=FUSION_SKIP_ONBOARDING=1
-EnvironmentFile=-{{ staging_env_file }}
-EnvironmentFile=-{{ staging_secrets_file }}
+EnvironmentFile={{ staging_env_file }}
+EnvironmentFile={{ staging_secrets_file }}
+ExecStartPre=/usr/local/sbin/staging-prestart-validate.sh
 ExecStart={{ staging_current }}/fn dashboard --host {{ staging_bind_host }} --port {{ staging_http_port }} --paused --no-auth --no-supervise
 Restart=on-failure
 RestartSec=5

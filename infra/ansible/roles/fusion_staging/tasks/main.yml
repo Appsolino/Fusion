@@ -1,6 +1,7 @@
 ---
 # FNXC:Phase2A 2026-07-29-21:45:
 # Staging env files + systemd units. Package install via install-staging-release.sh.
+# FNXC:Phase2A 2026-07-30-08:00: Install prestart validator + acceptance-run unit; keep probe as ACC-ENV-06 target only.
 
 - name: Reject production env markers
   shell: |
@@ -36,7 +37,7 @@
     set -euo pipefail
     SRC="{{ playbook_dir }}/../../scripts"
     changed=0
-    for s in staging-health-check.sh staging-backup.sh staging-restore-test.sh verify-host-separation.sh verify-service-admin-path.sh verify-bubblewrap-path.sh run-staging-acceptance.sh install-staging-release.sh; do
+    for s in staging-health-check.sh staging-health-negative-tests.sh staging-backup.sh staging-restore-test.sh staging-prestart-validate.sh verify-host-separation.sh verify-service-admin-path.sh verify-bubblewrap-path.sh run-staging-acceptance.sh install-staging-release.sh; do
       if [ ! -f "/usr/local/sbin/$s" ] || ! cmp -s "$SRC/$s" "/usr/local/sbin/$s"; then
         install -m 0755 -o root -g root "$SRC/$s" "/usr/local/sbin/$s"
         changed=1
@@ -74,6 +75,13 @@
   template:
     src: fusion-staging-acceptance-probe.service.j2
     dest: /etc/systemd/system/fusion-staging-acceptance-probe.service
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Render acceptance-run harness unit
+  template:
+    src: fusion-staging-acceptance-run.service.j2
+    dest: /etc/systemd/system/fusion-staging-acceptance-run.service
     mode: "0644"
   notify: Reload systemd
 

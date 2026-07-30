@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# FNXC:Phase2A 2026-07-29-21:45: Install packaged fn into immutable staging release dir + current symlink.
-# FNXC:Phase2A 2026-07-29-22:25: Write RELEASE_IDENTITY before freezing the release tree read-only.
+# FNXC:Phase2A 2026-07-30-07:55: Install packaged fn into immutable staging release dir + current symlink.
+# FNXC:Phase2A 2026-07-30-07:55: Never rm -rf an existing named release; stage then rename; fail closed on identity mismatch; idempotent no-op on match.
 set -euo pipefail
 SRC_DIST="${1:-}"
 MAIN_SHA="${2:-}"
@@ -12,6 +12,7 @@ fi
 short="${MAIN_SHA:0:12}"
 rel="phase2a-${VERSION}-${short}"
 dest="/opt/appsolino-fusion/staging/releases/${rel}"
+stage="${dest}.staging.$$"
 if [[ ! -x "$SRC_DIST/fn" ]]; then
   echo "missing $SRC_DIST/fn" >&2
   exit 1
@@ -21,43 +22,87 @@ if [[ "$ver" != "$VERSION" ]]; then
   echo "version mismatch: got '$ver' expected '$VERSION'" >&2
   exit 1
 fi
+src_sha="$(sha256sum "$SRC_DIST/fn" | awk '{print $1}')"
 
-rm -rf "$dest"
-mkdir -p "$dest"
-cp -a "$SRC_DIST/fn" "$dest/fn"
-[[ -d "$SRC_DIST/client" ]] && cp -a "$SRC_DIST/client" "$dest/client"
-[[ -d "$SRC_DIST/migrations" ]] && cp -a "$SRC_DIST/migrations" "$dest/migrations"
-[[ -d "$SRC_DIST/runtime" ]] && cp -a "$SRC_DIST/runtime" "$dest/runtime"
+ensure_current_symlink() {
+  ln -sfn "$dest" /opt/appsolino-fusion/staging/current
+  chown -h root:fusion /opt/appsolino-fusion/staging/current
+  {
+    echo "release_id=$rel"
+    echo "path=$dest"
+    echo "version=$VERSION"
+    echo "executable_sha256=$src_sha"
+    echo "main_sha=$MAIN_SHA"
+    echo "installed_utc=$(date -u --iso-8601=seconds)"
+  } | tee /srv/appsolino-fusion/staging/state/release-identity.txt >/dev/null
+  chmod 0640 /srv/appsolino-fusion/staging/state/release-identity.txt
+  chown root:fusion /srv/appsolino-fusion/staging/state/release-identity.txt
+}
 
-sha="$(sha256sum "$dest/fn" | awk '{print $1}')"
+if [[ -e "$dest" ]]; then
+  if [[ ! -d "$dest" ]]; then
+    echo "IMMUTABLE_CONFLICT: $dest exists and is not a directory" >&2
+    exit 2
+  fi
+  existing_sha="missing"
+  existing_main="missing"
+  existing_ver="missing"
+  if [[ -x "$dest/fn" ]]; then
+    existing_sha="$(sha256sum "$dest/fn" | awk '{print $1}')"
+  fi
+  if [[ -f "$dest/RELEASE_IDENTITY" ]]; then
+    existing_main="$(grep -E '^MAIN_SHA=' "$dest/RELEASE_IDENTITY" | head -1 | cut -d= -f2- || echo missing)"
+    existing_ver="$(grep -E '^VERSION=' "$dest/RELEASE_IDENTITY" | head -1 | cut -d= -f2- || echo missing)"
+  fi
+  if [[ "$existing_sha" == "$src_sha" && "$existing_main" == "$MAIN_SHA" && "$existing_ver" == "$VERSION" ]]; then
+    ensure_current_symlink
+    echo "IDEMPOTENT_NOOP $rel"
+    exit 0
+  fi
+  echo "IMMUTABLE_CONFLICT: $dest exists with different identity (existing_sha=$existing_sha src_sha=$src_sha existing_main=$existing_main main=$MAIN_SHA)" >&2
+  exit 2
+fi
+
+cleanup_stage() {
+  [[ -d "$stage" ]] && rm -rf "$stage" || true
+}
+trap cleanup_stage EXIT
+
+mkdir -p "$stage"
+cp -a "$SRC_DIST/fn" "$stage/fn"
+[[ -d "$SRC_DIST/client" ]] && cp -a "$SRC_DIST/client" "$stage/client"
+[[ -d "$SRC_DIST/migrations" ]] && cp -a "$SRC_DIST/migrations" "$stage/migrations"
+[[ -d "$SRC_DIST/runtime" ]] && cp -a "$SRC_DIST/runtime" "$stage/runtime"
+
+stage_sha="$(sha256sum "$stage/fn" | awk '{print $1}')"
+if [[ "$stage_sha" != "$src_sha" ]]; then
+  echo "staged executable hash mismatch" >&2
+  exit 1
+fi
+if [[ "$("$stage/fn" --version 2>/dev/null | head -1 | tr -d '\r')" != "$VERSION" ]]; then
+  echo "staged version mismatch" >&2
+  exit 1
+fi
+
 {
   echo "MAIN_SHA=$MAIN_SHA"
   echo "VERSION=$ver"
-  echo "EXE_SHA256=$sha"
+  echo "EXE_SHA256=$stage_sha"
   echo "release_id=$rel"
   echo "path=$dest"
   echo "installed_utc=$(date -u --iso-8601=seconds)"
-} > "$dest/RELEASE_IDENTITY"
+} > "$stage/RELEASE_IDENTITY"
 
-chown -R root:fusion "$dest"
-find "$dest" -type d -exec chmod 0755 {} \;
-find "$dest" -type f -exec chmod 0644 {} \;
-chmod 0755 "$dest/fn"
-find "$dest" -type f -name '*.node' -exec chmod 0644 {} \; 2>/dev/null || true
-chmod -R a-w "$dest" || true
-chmod 0755 "$dest/fn"
+chown -R root:fusion "$stage"
+find "$stage" -type d -exec chmod 0755 {} \;
+find "$stage" -type f -exec chmod 0644 {} \;
+chmod 0755 "$stage/fn"
+find "$stage" -type f -name '*.node' -exec chmod 0644 {} \; 2>/dev/null || true
+chmod -R a-w "$stage" || true
+chmod 0755 "$stage/fn"
 
-ln -sfn "$dest" /opt/appsolino-fusion/staging/current
-chown -h root:fusion /opt/appsolino-fusion/staging/current
-
-{
-  echo "release_id=$rel"
-  echo "path=$dest"
-  echo "version=$ver"
-  echo "executable_sha256=$sha"
-  echo "main_sha=$MAIN_SHA"
-  echo "installed_utc=$(date -u --iso-8601=seconds)"
-} | tee /srv/appsolino-fusion/staging/state/release-identity.txt
-chmod 0640 /srv/appsolino-fusion/staging/state/release-identity.txt
-chown root:fusion /srv/appsolino-fusion/staging/state/release-identity.txt
+# Atomic publish: rename staged tree into the immutable release name (dest must not exist).
+mv "$stage" "$dest"
+trap - EXIT
+ensure_current_symlink
 echo "INSTALLED $rel"

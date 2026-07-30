@@ -1,33 +1,28 @@
 # Backup and restore proof
 
-## Local backup
+## Local backup (final committed script)
 
 - Tool: `/usr/local/sbin/staging-backup.sh`
-- Method: `pg_dump --format=custom` as `postgres` superuser (required because FORCE RLS blocks owner dumps of some tables)
-- Output: `/srv/appsolino-fusion/staging/backups/fusion_staging_<UTC>.dump` mode `0600`
-- Metadata JSON under `.../backups/meta/` including PostgreSQL version, release id, executable SHA-256, migration-set SHA-256, backup SHA-256
-- Marker tasks created through Fusion CLI in staging project: descriptions containing `Phase2A backup marker` (`KB-001`, `KB-002`)
+- Variables: `dump_path` (under `/srv/appsolino-fusion/staging/backups/`) and `source_main_sha` are distinct — Git/RELEASE_IDENTITY resolution must never overwrite the dump pathname.
+- Method: `pg_dump --format=custom` as `postgres` (FORCE RLS safe)
+- Metadata JSON references the exact `dump_path`
+- Source SHA preferred from `RELEASE_IDENTITY`
 
-Example local proof dump:
+Post-correction proof dump:
 
-- File: `fusion_staging_20260729T191356Z.dump`
-- Backup SHA-256: `e9d5148e792b3fc86df0ec4fd9c257773fd21260fbab72f331e52ececafe86a0`
+- File: `/srv/appsolino-fusion/staging/backups/fusion_staging_20260730T043949Z.dump`
+- Backup SHA-256: `489c6b5f6af5d542c6754ee419f39d0e2ee4534c489544729e836d11c9da461e`
+- `source_main_sha`: `040b61e8873e77eeae04816a2dce9cccdde7f88c`
 - Highest migration: `0036`
-- Result: **PASS**
+- Result: **PASS** (`evidence/36-backup.log`)
 
 ## Restore test
 
-- Tool: `/usr/local/sbin/staging-restore-test.sh`
-- Restored into `fusion_staging_restore_test`, verified migration identity `0036` and marker count match (2), then destroyed restore DB
-- Result: **PASS** (`evidence/16-restore-result.json`)
+- Restored into `fusion_staging_restore_test`
+- Marker count 2 / migration `0036` match
+- Restore DB destroyed afterward (`evidence/37-dbs-after.txt` shows no restore-test DB)
+- Result: **PASS**
 
 ## Off-host backup
 
-- Provider-neutral interface + `off-host-backup.env.example` installed
-- No approved external target configured
-- Script reports: **`OFF_HOST_TARGET_NOT_CONFIGURED`**
-- Status: **NOT PROVEN** (Phase 2 completion blocker; acceptable for Phase 2A PARTIAL)
-
-## Evidence
-
-`evidence/15-backup.log`, `evidence/16-restore-test.log`, `evidence/16-restore-result.json`
+- **NOT PROVEN** — `OFF_HOST_TARGET_NOT_CONFIGURED`
