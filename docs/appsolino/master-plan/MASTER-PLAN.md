@@ -1,6 +1,6 @@
 # Appsolino Fusion Server — MASTER PLAN (Governing Document)
 
-**Status:** Phase 1 **COMPLETE**. Phase 2A **PARTIAL / MERGED** (PR #10 → `6caca1ec…`) — staging foundation usable. Operating model: `docs/appsolino/OPERATING-MODEL.md` (fast daily validation; expensive checks release/pre-production only).
+**Status:** Phase 1 **COMPLETE**. Phase 2A **PARTIAL / MERGED** (PR #10 → `6caca1ec…`) — staging foundation usable. **Process authority:** `docs/appsolino/OPERATING-MODEL.md` (how work is performed). Master plan defines architecture/production boundaries only — not an enterprise compliance programme.
 **Implementation:** Host D staging infrastructure landed. Off-host production backup, clean rebuild, and real engine-child admin path remain **NOT PROVEN** and are required before production / autonomous admin — not before ordinary staging use. No production activation. No Appsolino reliability re-land in Phase 2. Later phases **NOT AUTHORISED**. Production remains **DEGRADED / FROZEN**.
 **Accepted baseline:** upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + tested patch `a366fab379ca30322902d1bb4c040b8cd16262fb` → product integration `82feb14b732dcd31176338d024b09e68c1646808` (`0.74.0-beta.5`, Node `v22.23.1`, pnpm `10.33.0`). Phase 1 closure: `4c9e98cd…` (PR #9). Phase 2A merge: `6caca1ec66e8428493982e29241e47df0857be00` (PR #10).
 **Date:** 2026-07-30
