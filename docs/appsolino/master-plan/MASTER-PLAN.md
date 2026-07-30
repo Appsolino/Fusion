@@ -1,6 +1,6 @@
 # Appsolino Fusion Server — MASTER PLAN (Governing Document)
 
-**Process authority:** `docs/appsolino/OPERATING-MODEL.md` (how work is performed).  
+**Process authority:** `docs/appsolino/OPERATING-MODEL.md` (how work is performed).
 **This document:** architecture, production boundaries, and the **Personal Project v1** completion definition — not an enterprise multi-phase reliability programme.
 
 **Status (2026-07-30):**
@@ -27,15 +27,15 @@ Production (legacy): DEGRADED / FROZEN — untouched until replacement smoke pas
 
 ### Personal Project v1 — definition of done
 
-1. Accepted Fusion `0.74.0-beta.5` package built once.  
-2. That exact tested package deployed.  
-3. Fresh production database created (no old task/damaged DB migration).  
-4. Separate production service, state, config, and database identities.  
-5. Service starts, restarts, and reports expected version.  
-6. A task can be created, read, and updated.  
-7. Database backup created and restored into a temporary database.  
-8. Source, infrastructure, and recovery instructions in GitHub.  
-9. Previous degraded production system untouched until replacement works.  
+1. Accepted Fusion `0.74.0-beta.5` package built once.
+2. That exact tested package deployed.
+3. Fresh production database created (no old task/damaged DB migration).
+4. Separate production service, state, config, and database identities.
+5. Service starts, restarts, and reports expected version.
+6. A task can be created, read, and updated.
+7. Database backup created and restored into a temporary database.
+8. Source, infrastructure, and recovery instructions in GitHub.
+9. Previous degraded production system untouched until replacement works.
 10. Result labelled **Personal Project v1 complete**.
 
 ---
@@ -142,9 +142,9 @@ Degraded/frozen surgical host remains untouched. Health OK ≠ schema-compatible
 
 ## 7. Explicit non-claims
 
-- Not zero failures.  
-- Not a multi-week reliability programme as a v1 gate.  
-- Source tests ≠ packaged proof.  
+- Not zero failures.
+- Not a multi-week reliability programme as a v1 gate.
+- Source tests ≠ packaged proof.
 - Future Improvements backlog does not reopen the v1 completion gate.
 
 ---

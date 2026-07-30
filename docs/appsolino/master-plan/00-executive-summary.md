@@ -1,7 +1,7 @@
 # Appsolino Fusion Server Master Plan — Executive Summary
 
-Last updated: 2026-07-30  
-**Process authority:** `docs/appsolino/OPERATING-MODEL.md`  
+Last updated: 2026-07-30
+**Process authority:** `docs/appsolino/OPERATING-MODEL.md`
 **Architecture / v1 completion:** this master-plan set
 
 Status:
@@ -22,13 +22,13 @@ Legacy production: DEGRADED / FROZEN (untouched until replacement smoke passes)
 
 ## Personal Project v1 — done when
 
-1. Accepted package `0.74.0-beta.5` built once and that exact artefact deployed.  
-2. Fresh isolated production database (no old Fusion task/DB migration).  
-3. Separate production service/state/config/DB identities.  
-4. Start/restart + expected version; create/read/update one task.  
-5. Backup + temporary restore proof.  
-6. Source, infra, and recovery instructions in GitHub.  
-7. Previous degraded production untouched until replacement works.  
+1. Accepted package `0.74.0-beta.5` built once and that exact artefact deployed.
+2. Fresh isolated production database (no old Fusion task/DB migration).
+3. Separate production service/state/config/DB identities.
+4. Start/restart + expected version; create/read/update one task.
+5. Backup + temporary restore proof.
+6. Source, infra, and recovery instructions in GitHub.
+7. Previous degraded production untouched until replacement works.
 8. Labelled **Personal Project v1 complete**.
 
 ## Initial topology (v1)
@@ -65,7 +65,7 @@ DB **0036** / surgical binary **0035**: degraded and frozen. Do not migrate old 
 
 ## Governing documents
 
-- Process: `docs/appsolino/OPERATING-MODEL.md`  
-- Summary: `MASTER-PLAN.md`  
-- Roadmap: `13-phased-implementation-roadmap.md`  
+- Process: `docs/appsolino/OPERATING-MODEL.md`
+- Summary: `MASTER-PLAN.md`
+- Roadmap: `13-phased-implementation-roadmap.md`
 - Decisions: `15-open-decisions.md` (includes v1 topology amendment)

@@ -1,6 +1,6 @@
 # Phased Implementation Roadmap
 
-Last updated: 2026-07-30  
+Last updated: 2026-07-30
 **Process authority:** `docs/appsolino/OPERATING-MODEL.md`
 
 **Stop rule:** Only **Phase V1** is active. Former Phases 3–8 are **Future Improvements** and must not reopen the Personal Project v1 completion gate. Legacy production remains **DEGRADED / FROZEN** until replacement smoke passes.
@@ -23,22 +23,22 @@ Last updated: 2026-07-30
 ## Active phase
 
 ### Phase V1 — Personal Project v1 — One-day production launch
-- **Status:** **NOT STARTED** (authorised as the sole active completion phase).  
-- **Objective:** Deploy usable production on the simplified topology; prove backup/restore; leave recovery instructions in Git; declare Personal Project v1 complete.  
+- **Status:** **NOT STARTED** (authorised as the sole active completion phase).
+- **Objective:** Deploy usable production on the simplified topology; prove backup/restore; leave recovery instructions in Git; declare Personal Project v1 complete.
 - **Product behaviour:** Do not change Fusion product behaviour. Do not pull upstream. Do not migrate old damaged data.
 
 #### Tasks
 
-1. Review current `main`.  
-2. Do not pull upstream.  
-3. Do not change product behaviour.  
-4. Build the accepted package once using the existing cache.  
-5. Create isolated production configuration and database.  
-6. Install the immutable package.  
-7. Start production service privately.  
-8. Run focused production smoke tests.  
-9. Create and restore one production backup.  
-10. Record release identity and recovery instructions.  
+1. Review current `main`.
+2. Do not pull upstream.
+3. Do not change product behaviour.
+4. Build the accepted package once using the existing cache.
+5. Create isolated production configuration and database.
+6. Install the immutable package.
+7. Start production service privately.
+8. Run focused production smoke tests.
+9. Create and restore one production backup.
+10. Record release identity and recovery instructions.
 11. Declare Personal Project v1 complete.
 
 #### Initial topology
@@ -92,11 +92,11 @@ previous release remains available
 
 #### Forbidden during V1
 
-- Changing product behaviour / workflows / reliability modules  
-- Pulling or merging upstream  
-- Migrating old production tasks/DB  
-- Touching the legacy degraded production system except to leave it frozen  
-- Expanding into Future Improvements as launch blockers  
+- Changing product behaviour / workflows / reliability modules
+- Pulling or merging upstream
+- Migrating old production tasks/DB
+- Touching the legacy degraded production system except to leave it frozen
+- Expanding into Future Improvements as launch blockers
 
 ---
 

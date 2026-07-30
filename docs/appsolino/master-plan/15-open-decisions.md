@@ -1,6 +1,6 @@
 # Open Decisions — Approval Record
 
-Last updated: 2026-07-30  
+Last updated: 2026-07-30
 **Process authority:** `docs/appsolino/OPERATING-MODEL.md`
 
 Status:
@@ -48,7 +48,7 @@ Dedicated Host P remains an optional Future Improvement. If a separate productio
 Mandatory for v1: known package/version; separate production DB/state; previous release preserved; backup before risky changes; restore proof; infra/recovery in Git. Secrets outside Git. Legacy degraded production untouched until replacement smoke passes.
 
 ## OD-V1-SCOPE
-**Authorised:** Phase V1 one-day production launch only (see `13-phased-implementation-roadmap.md`).  
+**Authorised:** Phase V1 one-day production launch only (see `13-phased-implementation-roadmap.md`).
 **Not authorised as v1 work:** product behaviour changes; upstream sync; old data migration; Future Improvements backlog items; expanding into ACC/soak/observability programmes.
 
 ## OD-V1-VALIDATION
@@ -60,9 +60,9 @@ Phase V1 uses focused Level C production-candidate checks listed in the roadmap.
 
 Review of `fb284e9de…` / clean re-land on `origin/main` ancestry requested changes. Corrections applied on branch `docs/phase-0-governance-v2`:
 
-1. Full-admin service model: `NoNewPrivileges=no`, `ProtectSystem=off`. Ordinary tasks use bubblewrap; host-admin mode outside bubblewrap.  
-2. ACC-ENV-03–08 originally required Fusion service→agent path proofs (engine-child path remains a Future / pre-autonomous-admin gate).  
-3. Health endpoint OK ≠ schema-compatible; legacy production remains degraded/frozen.  
+1. Full-admin service model: `NoNewPrivileges=no`, `ProtectSystem=off`. Ordinary tasks use bubblewrap; host-admin mode outside bubblewrap.
+2. ACC-ENV-03–08 originally required Fusion service→agent path proofs (engine-child path remains a Future / pre-autonomous-admin gate).
+3. Health endpoint OK ≠ schema-compatible; legacy production remains degraded/frozen.
 4. Preservation: selective extraction only — no full dirty-tree snapshot requirement (R-15).
 
 **Later:** Phase 1 closed (PR #9 / `4c9e98cd…`). Phase 2A merged PARTIAL (PR #10 / `6caca1ec…`). Operating model adopted. **v1 amendment above now governs active completion work.**
@@ -71,7 +71,7 @@ Review of `fb284e9de…` / clean re-land on `origin/main` ancestry requested cha
 
 # Phase 0 Decision Approval (2026-07-29) — historical record
 
-Date: 2026-07-29  
+Date: 2026-07-29
 Retain for provenance. Where this conflicts with **OD-V1-***, the v1 amendment wins for launch.
 
 ## OD-BASELINE
