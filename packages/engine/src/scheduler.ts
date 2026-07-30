@@ -2266,7 +2266,7 @@ export class Scheduler {
               SYMBOL_LOCK_LEASE_MS,
             );
             if (!lockResult.acquired) {
-              dropPreHeldExecutorSlot(task.id, sem);
+              if (dropPreHeldExecutorSlot(task.id)) sem?.release();
               if (reservedScope) {
                 activeScopes.delete(task.id);
                 activeScopeColumns.delete(task.id);
@@ -2306,7 +2306,7 @@ export class Scheduler {
               reservedWorktreeSlots = Math.max(0, reservedWorktreeSlots - 1);
               reservedConcurrentSlots = Math.max(0, reservedConcurrentSlots - 1);
               dispatchPrepByTaskId.delete(task.id);
-              dropPreHeldExecutorSlot(task.id, sem);
+              if (dropPreHeldExecutorSlot(task.id)) sem?.release();
               if (acquiredSymbols) {
                 void this.store.releaseSymbolLocks(acquiredSymbols, task.id);
               }
