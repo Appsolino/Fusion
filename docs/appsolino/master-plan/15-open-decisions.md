@@ -1,8 +1,8 @@
 # Open Decisions — Phase 0 Approval Record
 
-Last updated: 2026-07-29
-Status: **Phase 0 decisions APPROVED**; **Phase 1 COMPLETE**; **Phase 2 AUTHORISED / NOT STARTED**.
-**Implementation authorisation:** Phase 2 infrastructure foundation is authorised. No production activation is authorised. No Appsolino reliability re-land (contamination gates, FUSI-007, scheduler/executor/workflow restructuring, etc.) in Phase 2. Later phases remain gated until Phase 2 exit criteria.
+Last updated: 2026-07-30
+Status: **Phase 0 APPROVED**; **Phase 1 COMPLETE**; **Phase 2A PARTIAL / MERGED** (PR #10). Staging usable. Operating model: `docs/appsolino/OPERATING-MODEL.md`.
+**Implementation authorisation:** Staging foundation may be used. No production activation. Off-host production backup, clean rebuild, and engine-child admin proofs remain pre-production / pre-autonomous-admin gates. No Appsolino reliability re-land in Phase 2. Later phases remain gated.
 
 ---
 
@@ -15,7 +15,7 @@ Review of `fb284e9de…` / clean re-land on `origin/main` ancestry requested cha
 3. **Production wording:** health endpoint OK ≠ schema-compatible; remains degraded/frozen.
 4. **Preservation:** selective extraction of knowledge/tests/specs/hashes only — no full dirty-tree snapshot requirement (R-15).
 
-**Review approval:** Phase 0 corrected package reviewed; Phase 1 executed, accepted, and closed (PR #9 merged as `4c9e98cd…`). Phase 2 authorised / not started.
+**Review approval:** Phase 0 corrected package reviewed; Phase 1 closed (PR #9 / `4c9e98cd…`). Phase 2A merged PARTIAL (PR #10 / `6caca1ec…`) after review corrections. Personal-project operating model adopted 2026-07-30.
 
 ---
 

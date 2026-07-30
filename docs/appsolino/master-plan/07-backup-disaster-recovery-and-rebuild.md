@@ -1,6 +1,10 @@
 # Backup, Disaster Recovery, and Rebuild
 
-Last updated: 2026-07-29
+Last updated: 2026-07-30
+
+Governing personal-project policy: `docs/appsolino/OPERATING-MODEL.md`.
+Back up irreplaceable production data; regenerate caches, staging state, and rebuildable artefacts.
+Off-host backup and clean rebuild are **pre-production** proofs, not per-feature gates.
 
 ## Objectives (proposed)
 

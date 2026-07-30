@@ -1,7 +1,7 @@
 # Appsolino Fusion Server Master Plan — Executive Summary
 
-Last updated: 2026-07-29
-Status: **Phase 1 COMPLETE**; Phase 2 **AUTHORISED / NOT STARTED**. Production remains **DEGRADED / FROZEN**. No production activation. No Appsolino reliability re-land (contamination/FUSI-007/etc.) in Phase 2 — Phase 2 is infrastructure foundation only.
+Last updated: 2026-07-30
+Status: **Phase 1 COMPLETE**; Phase 2A **PARTIAL / MERGED** (PR #10) — staging usable. Operating model: `docs/appsolino/OPERATING-MODEL.md`. Production remains **DEGRADED / FROZEN**. No production activation. No Appsolino reliability re-land in Phase 2.
 Evidence base: `docs/appsolino/reset/00–06`, Phase 1 evidence under `docs/appsolino/phase-1/candidate-b85a5d453/`, verified host/service state, Appsolino/dev source trees, upstream `Runfusion/Fusion` issues, runtime identity report at `/home/anas/fusion-reliability-hardening/docs/appsolino/runtime-identity-report-2026-07-28.md`
 
 ## Recommended target
@@ -53,9 +53,12 @@ Version: 0.74.0-beta.5
 Node: v22.23.1
 pnpm: 10.33.0
 Packaged-runtime gate: PASS
-Phase 2: AUTHORISED / NOT STARTED
+Phase 2A: PARTIAL / MERGED (PR #10 → 6caca1ec…)
+Staging foundation: USABLE
+Off-host backup / clean rebuild / engine-child admin: NOT PROVEN (pre-production / pre-autonomous-admin)
 Later phases: NOT AUTHORISED
 Production: DEGRADED / FROZEN (untouched)
+Operating model: docs/appsolino/OPERATING-MODEL.md
 ```
 
 

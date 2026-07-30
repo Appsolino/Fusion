@@ -2,7 +2,9 @@
 
 **Decision: `PHASE_2A_PARTIAL`**
 
-Date: 2026-07-30 (correction requalification)  
+**Merge:** PR #10 merged 2026-07-30 as `6caca1ec66e8428493982e29241e47df0857be00` (corrected head `409fafcff8ee02a2f7137adc192319c69e9cd6e7`). Staging foundation is **usable**. Remaining NOT PROVEN items are pre-production / pre-autonomous-admin gates per `docs/appsolino/OPERATING-MODEL.md` — they do not block ordinary staging or daily development.
+
+Date: 2026-07-30 (correction requalification + merge)  
 Starting `origin/main`: `040b61e8873e77eeae04816a2dce9cccdde7f88c`  
 Branch: `phase-2a/staging-infrastructure-foundation`  
 Host: Host D `vmi3201923` / `37.60.253.164`  

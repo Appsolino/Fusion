@@ -1,7 +1,7 @@
 # Phased Implementation Roadmap
 
-Last updated: 2026-07-29
-**Stop:** Phase 1 is **COMPLETE** (see `docs/appsolino/phase-1/candidate-b85a5d453/PHASE-1-RESULT.md`; closure PR #9 merged as `4c9e98cd…`). Phase 2 is **AUTHORISED / NOT STARTED** (infrastructure foundation only). Later phases remain gated. Production remains degraded/frozen until a coherent replacement.
+Last updated: 2026-07-30
+**Stop:** Phase 1 **COMPLETE** (PR #9 / `4c9e98cd…`). Phase 2A **PARTIAL / MERGED** (PR #10 / `6caca1ec…`) — staging foundation usable; missing proofs deferred to pre-production. See `docs/appsolino/OPERATING-MODEL.md`. Later phases remain gated. Production remains degraded/frozen.
 
 ## Phase 0 — Strategic decisions
 - **Objective:** Lock fork model, topology, tools, reliability targets.
@@ -42,15 +42,13 @@ Plus baseline record fields (repo, SHA, tag, lockfile hash, Node, pnpm, date, sm
 - **Upstream overlap:** yes — document only
 
 ## Phase 2 — Infrastructure foundation
-- **Status:** **AUTHORISED / NOT STARTED** (2026-07-29) — Phase 1 closure PR #9 merged; next controlled mission is Phase 2A (staging-host provisioning foundation only).
+- **Status:** Phase 2A **PARTIAL / MERGED** 2026-07-30 (PR #10 → `6caca1ec66e8428493982e29241e47df0857be00`; corrected head `409fafcff…`). Staging on Host D is usable. Evidence: `docs/appsolino/phase-2/`.
 - **Objective:** Env A/B/C separation, provisioning, PG, backup, monitoring skeleton on the development/staging host.
-- **Tasks:** Reproducible provisioning for the development/staging host; formal environment and filesystem separation; staging-only Fusion service configuration; isolated PostgreSQL; backup dry-run and restore proof; monitoring skeleton; `fusion.service → agent` privilege and bubblewrap acceptance tests (Ansible+cloud-init; filesystem layout; sudo; bubblewrap; external/local isolated PG; off-host backup dry-run; OTel/Prom skeleton).
-- **Dependencies:** Phase 1 closure PR merged (satisfied); Phase 0 topology/`OD-PG`.
+- **Done in 2A:** Ansible/cloud-init provisioning; filesystem separation; staging systemd service; isolated `fusion_staging` PG + SCRAM; local backup/restore; monitoring textfile; SYSTEMD_SERVICE_CONTEXT ACC-ENV-03..08; immutable release install.
+- **Deferred (pre-production / as needed):** off-host production data backup; one clean rebuild drill; real `fusion-staging → engine → child` admin path (only if autonomous host-admin enabled). These do **not** block ordinary staging use or daily development (see `OPERATING-MODEL.md`).
 - **Forbidden in Phase 2:** production deployment/migration; modifying the old production server; FUSI-007; contamination or merge-reliability re-lands; scheduler/executor/workflow restructuring; production release activation.
-- **Risks:** Co-locating stage+prod again.
-- **Acceptance:** Rebuild Host B / staging foundation from zero; staging unit healthy on isolated DB; backup dry-run; `sudo -n` OK; ACC service→agent privilege/bubblewrap proofs.
-- **Rollback:** Destroy VMs; preserve artefacts elsewhere.
-- **Complexity:** large
+- **Next useful work (optional):** `check:fast` / `check:integration` / `check:release` wrappers; path-based test selection; cached installs; upstream-sync procedure — speed optimisation, not more compliance theatre.
+- **Complexity:** large (2A landed; remaining items smaller and release-gated)
 - **Upstream overlap:** low
 
 ## Phase 3 — Release integrity
