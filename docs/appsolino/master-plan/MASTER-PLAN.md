@@ -9,9 +9,10 @@ Phase 0: COMPLETE
 Phase 1: COMPLETE (0.74.0-beta.5)
 Phase 2A: PARTIAL / MERGED / USABLE (PR #10 → 6caca1ec…)
 V1A: COMPLETE (PR #11 → 45ab25100…)
-V1B: READY / NOT STARTED
+V1A.1: FAIL — Host D stability gate (see docs/appsolino/v1/V1A-DEV-STABILITY.md)
+V1B: DEFERRED BY OWNER (pending successful Host D dev usage + explicit approval)
 Host D: development / build / staging ONLY — production prohibited
-Host P: production VPS (planned — SSH target required before V1B)
+Host P: not reserved / not accessed
 Former Phases 3–8: Future Improvements (not v1 blockers)
 Legacy production: DEGRADED / FROZEN — untouched until replacement smoke passes
 ```
@@ -113,7 +114,8 @@ Executable SHA-256 on Host P must match the Host D candidate. Host P performs **
 | Phase 1 — Accepted package | COMPLETE |
 | Phase 2A — Staging foundation | COMPLETE ENOUGH / USABLE |
 | **Phase V1A** — Build/validate candidate on Host D | **COMPLETE** (PR #11) |
-| **Phase V1B** — Deploy exact artifact to Host P | **READY / NOT STARTED** |
+| **Phase V1A.1** — Extended Host D stability | **FAIL** (record: `docs/appsolino/v1/V1A-DEV-STABILITY.md`) |
+| **Phase V1B** — Deploy exact artifact to Host P | **DEFERRED BY OWNER** |
 | Former Phases 3–8 | Future Improvements (optional) |
 
 Detail: `13-phased-implementation-roadmap.md`. Approvals: `15-open-decisions.md`.

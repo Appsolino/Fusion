@@ -3,7 +3,7 @@
 Last updated: 2026-07-30
 **Process authority:** `docs/appsolino/OPERATING-MODEL.md`
 
-**Stop rule:** Active next work is **Phase V1B** only when explicitly started with a Host P target. Host D is development/build/staging only — **production on Host D is prohibited**. Former Phases 3–8 are Future Improvements. Legacy production remains **DEGRADED / FROZEN**.
+**Stop rule:** Active next work is **narrow Host D defect corrections** from V1A.1, then re-run affected V1A.1 checks. **V1B is deferred by owner** until Host D works reliably and production is explicitly authorised. Host D is development/build/staging only — **production on Host D is prohibited**. Former Phases 3–8 are Future Improvements. Legacy production remains **DEGRADED / FROZEN**.
 
 ---
 
@@ -52,7 +52,13 @@ Executable SHA-256 on Host P must match Host D. Production credentials/data exis
 
 - **Status:** **COMPLETE** (2026-07-30). PR #11 → `45ab25100…`. Record: `docs/appsolino/v1/V1A-CANDIDATE.md`. Release `v1a-0.74.0-beta.5-f54d53082`.
 - **Objective:** Build once from current `main`, validate on staging, freeze immutable candidate.
-- **Forbidden:** upstream pull; product behaviour changes; creating any production paths/DB/service on Host D; old-data migration. Do **not** rebuild this frozen candidate.
+- **Forbidden:** upstream pull; product behaviour changes; creating any production paths/DB/service on Host D; old-data migration. Do **not** rebuild this frozen candidate unless a real defect requires a new candidate.
+
+### Phase V1A.1 — Extended Host D stability / real workflow validation
+
+- **Status:** **FAIL** (2026-07-30). Record: `docs/appsolino/v1/V1A-DEV-STABILITY.md`.
+- **Objective:** Prove Fusion service → coordinator → agent/child → repository path under realistic disposable tasks before spending on Host P.
+- **Outcome:** Real path proven under `testMode`/mock; execute fails with step-index error and redispatch loop; immutable install stripped runtime execute bits (restart hang). Narrow correction missions required; do not start V1B.
 
 #### Procedure
 
@@ -99,9 +105,9 @@ Do **not** rebuild this package on Host P.
 
 ### Phase V1B — Deploy exact artifact to Host P
 
-- **Status:** **READY / NOT STARTED** (awaiting Host P SSH target / Cursor host name)
+- **Status:** **DEFERRED BY OWNER** (not next; Host P not reserved)
 - **Objective:** Install the Host D candidate on Host P; production smoke; first backup/restore; declare v1 complete.
-- **Prerequisite:** Host P accessible and ready. Transfer exact frozen archive only. Host P performs **no** source builds.
+- **Prerequisite:** Successful Host D development stability (V1A.1 or successor) and explicit owner authorisation. Transfer exact frozen archive only. Host P performs **no** source builds.
 
 #### Procedure
 

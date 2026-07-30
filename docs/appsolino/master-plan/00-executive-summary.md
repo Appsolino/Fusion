@@ -10,9 +10,10 @@ Phase 0: COMPLETE
 Phase 1: COMPLETE (0.74.0-beta.5)
 Phase 2A: PARTIAL / MERGED / USABLE
 V1A: COMPLETE (PR #11 → 45ab25100…)
-V1B: READY / NOT STARTED
+V1A.1: FAIL (Host D stability — see V1A-DEV-STABILITY.md)
+V1B: DEFERRED BY OWNER
 Host D: development / build / staging ONLY — production prohibited
-Host P: production VPS (planned — SSH target required before V1B)
+Host P: not reserved / not accessed
 Former Phases 3–8: Future Improvements (optional)
 Legacy production: DEGRADED / FROZEN
 ```
@@ -61,10 +62,11 @@ Phase 2A: PR #10 → 6caca1ec…
 
 ## Active work
 
-1. **V1A** — COMPLETE. Candidate `v1a-0.74.0-beta.5-f54d53082` frozen on Host D (see `docs/appsolino/v1/V1A-CANDIDATE.md`).
-2. **V1B** — READY / NOT STARTED. Deploy the exact frozen archive to Host P after the Host P SSH target is provided.
+1. **V1A** — COMPLETE. Candidate `v1a-0.74.0-beta.5-f54d53082` frozen on Host D.
+2. **V1A.1** — FAIL. Real Fusion path proven; execute/mock step defect and install runtime-bit defect block development-ready. See `docs/appsolino/v1/V1A-DEV-STABILITY.md`.
+3. **V1B** — DEFERRED BY OWNER. Do not reserve or access Host P until Host D is reliable and the owner explicitly authorises production.
 
-Focused Level C checks only. Do not rebuild the candidate.
+Do not rebuild the candidate unless a corrected package is intentionally cut after defect fixes.
 
 ## What is not a v1 blocker
 
