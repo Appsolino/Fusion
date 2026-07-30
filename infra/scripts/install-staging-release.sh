@@ -2,6 +2,7 @@
 # FNXC:Phase2A 2026-07-30-07:55: Install packaged fn into immutable staging release dir + current symlink.
 # FNXC:Phase2A 2026-07-30-07:55: Never rm -rf an existing named release; stage then rename; fail closed on identity mismatch; idempotent no-op on match.
 # FNXC:V1A 2026-07-30-08:55: Optional third arg sets the immutable release ID so V1A can freeze v1a-0.74.0-beta.5-<short> without inventing a second layout or deleting prior phase2a releases.
+# FNXC:V1A 2026-07-30-09:24: Validate RELEASE_ID_OVERRIDE as a single safe basename before joining privileged /opt/.../releases/${rel}; reject path separators, "..", whitespace, control chars, and leading-dot IDs so a malformed override cannot escape the release directory.
 set -euo pipefail
 SRC_DIST="${1:-}"
 MAIN_SHA="${2:-}"
@@ -13,6 +14,11 @@ if [[ -z "$SRC_DIST" || -z "$MAIN_SHA" ]]; then
 fi
 short="${MAIN_SHA:0:12}"
 if [[ -n "$RELEASE_ID_OVERRIDE" ]]; then
+  if [[ ! "$RELEASE_ID_OVERRIDE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] ||
+     [[ "$RELEASE_ID_OVERRIDE" == *".."* ]]; then
+    echo "INVALID_RELEASE_ID: $RELEASE_ID_OVERRIDE" >&2
+    exit 1
+  fi
   rel="$RELEASE_ID_OVERRIDE"
 else
   rel="phase2a-${VERSION}-${short}"
