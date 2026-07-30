@@ -8,9 +8,11 @@
 Phase 0: COMPLETE
 Phase 1: COMPLETE (0.74.0-beta.5)
 Phase 2A: PARTIAL / MERGED / USABLE (PR #10 → 6caca1ec…)
-Active phase: Phase V1 — One-day production launch (NOT STARTED)
-Former Phases 3–8: Future Improvements backlog (not v1 blockers)
-Production (legacy): DEGRADED / FROZEN — untouched until replacement smoke passes
+Active: Phase V1 (V1A then V1B) — NOT STARTED
+Host D: development / build / staging ONLY — production prohibited
+Host P: production VPS (planned)
+Former Phases 3–8: Future Improvements (not v1 blockers)
+Legacy production: DEGRADED / FROZEN — untouched until replacement smoke passes
 ```
 
 **Accepted baseline:** upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + patch `a366fab379…` → product `82feb14b7…` (`0.74.0-beta.5`). Closure PR #9 `4c9e98cd…`. Phase 2A PR #10 `6caca1ec…`.
@@ -21,19 +23,19 @@ Production (legacy): DEGRADED / FROZEN — untouched until replacement smoke pas
 
 **Finished means:**
 
-> A usable Appsolino Fusion v1 is deployed, its irreplaceable data can be backed up and restored, the server can be rebuilt from Git, and normal development can continue.
+> A usable Appsolino Fusion v1 is deployed on Host P, its irreplaceable data can be backed up and restored, the server can be rebuilt from Git, and normal development continues on Host D.
 
 **Finished does not mean:** every future reliability, scaling, observability, or autonomous-agent feature is implemented.
 
 ### Personal Project v1 — definition of done
 
-1. Accepted Fusion `0.74.0-beta.5` package built once.
-2. That exact tested package deployed.
-3. Fresh production database created (no old task/damaged DB migration).
-4. Separate production service, state, config, and database identities.
-5. Service starts, restarts, and reports expected version.
-6. A task can be created, read, and updated.
-7. Database backup created and restored into a temporary database.
+1. Accepted Fusion `0.74.0-beta.5` package built **once on Host D**.
+2. That exact artefact validated on Host D staging and frozen (version + SHA-256).
+3. Exact same artefact installed on **Host P** (hash match; no rebuild on Host P).
+4. Fresh production database on Host P only (no old task/damaged DB migration).
+5. Production service/state/config/DB identities exist **only on Host P**.
+6. Production starts, restarts, reports expected version; create/read/update one task.
+7. Production backup created and restored into a temporary database on Host P.
 8. Source, infrastructure, and recovery instructions in GitHub.
 9. Previous degraded production system untouched until replacement works.
 10. Result labelled **Personal Project v1 complete**.
@@ -45,24 +47,35 @@ Production (legacy): DEGRADED / FROZEN — untouched until replacement smoke pas
 | Requirement | Why |
 | --- | --- |
 | Known package and version | Know what is running |
-| Separate production DB/state | Avoid staging contamination |
+| Separate production DB/state on Host P | Avoid staging/dev contamination |
 | Previous release preserved | Permit rollback |
 | Backup before risky changes | Protect data |
 | Restore proof | Confirm backup is usable |
 | Infrastructure and recovery in Git | Rebuild after server loss |
 
-Secrets stay outside Git. Old production remains frozen until replacement smoke passes.
+Secrets stay outside Git. Production credentials and data exist **only on Host P**. Old production remains frozen until replacement smoke passes.
 
 ---
 
-## 3. Initial v1 topology
+## 3. Correct topology (binding)
 
 ```text
-One server (Host D initially)
-├── build workspace
-├── staging service + staging database
-├── production service + production database
-└── local temporary backups
+Host D — Development VPS
+├── source and Git worktrees
+├── dependency cache
+├── builds
+├── staging service
+├── staging PostgreSQL
+├── integration tests
+└── production-candidate package creation
+
+Host P — Production VPS
+├── no source builds
+├── production service
+├── production PostgreSQL
+├── immutable production releases
+├── production state
+└── production backups
 
 GitHub
 ├── source
@@ -74,7 +87,9 @@ Off-host storage
 └── production database backup only
 ```
 
-**Initial production choice:** Host D may run build, staging, and initial production with **separate identities**:
+**Host D must not** host `fusion-production.service`, `fusion_production` DB/role, or `/etc|srv|opt/.../production/` paths.
+
+**Host P production identities only:**
 
 ```text
 Service:       fusion-production.service
@@ -85,7 +100,7 @@ State:         /srv/appsolino-fusion/production/
 Releases:      /opt/appsolino-fusion/production/releases/
 ```
 
-A dedicated Host P and managed external PostgreSQL are **optional future improvements**, not launch blockers. If a separate production host is already provisioned and accessible, the same process may run there; procuring a new host during the one-day window is avoidable risk.
+Executable SHA-256 on Host P must match the Host D candidate. Host P performs **no** source builds. Managed external PostgreSQL and larger host sizing remain Future Improvements — not required to redefine this topology.
 
 ---
 
@@ -96,36 +111,47 @@ A dedicated Host P and managed external PostgreSQL are **optional future improve
 | Phase 0 — Decisions | COMPLETE |
 | Phase 1 — Accepted package | COMPLETE |
 | Phase 2A — Staging foundation | COMPLETE ENOUGH / USABLE |
-| **Phase V1 — One-day production launch** | **Active / NOT STARTED** |
+| **Phase V1A** — Build/validate candidate on Host D | **Next / NOT STARTED** |
+| **Phase V1B** — Deploy exact artifact to Host P | After V1A passes |
 | Former Phases 3–8 | Future Improvements (optional) |
 
-Detail: `13-phased-implementation-roadmap.md`. Approvals/amendments: `15-open-decisions.md`.
+Detail: `13-phased-implementation-roadmap.md`. Approvals: `15-open-decisions.md`.
 
 ---
 
-## 5. Phase V1 focused acceptance (Level C production-candidate)
+## 5. Phase V1 acceptance (focused Level C)
 
-Required:
+### V1A — Host D (required before V1B)
 
 ```text
-git diff --check
-relevant configuration syntax
-current main is clean
+git tree clean; no upstream pull
 package build succeeds
-package version = 0.74.0-beta.5
-executable hash recorded
-production DB identity correct
-service active
-listener correct
-health version correct
-create/read/update one task
-restart preserves task
-backup succeeds
-temporary restore succeeds
-previous release remains available
+executable version = 0.74.0-beta.5
+executable SHA-256 recorded
+staging health + DB healthy
+create/read/update one test task
+restart preserves the task
+staging backup + temporary restore
+migration-set SHA-256 recorded
+release identity frozen (immutable candidate)
+no production paths/DB/service on Host D
 ```
 
-Not required for v1: all repository tests; all ACC classes; clean Ubuntu rebuild during launch; seven-day soak; upstream merge; staging reconstruction; full observability; autonomous agent root path.
+### V1B — Host P (after V1A)
+
+```text
+secure copy of exact artifact
+SHA-256 matches Host D candidate
+install under immutable production release path
+production DB identity correct (fusion_production only)
+service active; listener correct; health version correct
+create/read/update one task; restart preserves task
+first production backup + temporary restore; destroy restore DB
+previous release remains available
+production credentials/data only on Host P
+```
+
+Not required for v1: all repository tests; all ACC classes; clean Ubuntu rebuild during launch; seven-day soak; upstream merge; full observability; autonomous agent root path.
 
 ---
 
@@ -146,6 +172,7 @@ Degraded/frozen surgical host remains untouched. Health OK ≠ schema-compatible
 - Not a multi-week reliability programme as a v1 gate.
 - Source tests ≠ packaged proof.
 - Future Improvements backlog does not reopen the v1 completion gate.
+- Host D is never a production host under this plan.
 
 ---
 
@@ -156,6 +183,6 @@ Degraded/frozen surgical host remains untouched. Health OK ≠ schema-compatible
 | `OPERATING-MODEL.md` | Process authority |
 | `MASTER-PLAN.md` | This architecture / v1 completion summary |
 | `00-executive-summary.md` | Target and status |
-| `13-phased-implementation-roadmap.md` | Active Phase V1 + Future backlog |
-| `15-open-decisions.md` | Approvals; v1 topology amendment |
+| `13-phased-implementation-roadmap.md` | V1A → V1B + Future backlog |
+| `15-open-decisions.md` | Approvals; topology amendment |
 | `01`–`12`, `14` | Historical detail / reference (not active launch blockers) |

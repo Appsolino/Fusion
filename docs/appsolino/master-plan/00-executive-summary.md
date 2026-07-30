@@ -9,37 +9,44 @@ Status:
 Phase 0: COMPLETE
 Phase 1: COMPLETE (0.74.0-beta.5)
 Phase 2A: PARTIAL / MERGED / USABLE
-Active: Phase V1 — One-day production launch (NOT STARTED)
+Active: Phase V1A then V1B (NOT STARTED)
+Host D: development / build / staging ONLY — production prohibited
+Host P: production VPS (planned)
 Former Phases 3–8: Future Improvements (optional)
-Legacy production: DEGRADED / FROZEN (untouched until replacement smoke passes)
+Legacy production: DEGRADED / FROZEN
 ```
 
 ## Definition of finished
 
-**Finished** = usable Appsolino Fusion v1 deployed; irreplaceable data backed up and restore-proven; server rebuildable from Git; normal development can continue.
+**Finished** = usable Fusion v1 on **Host P**; irreplaceable data backed up and restore-proven; rebuildable from Git; normal development continues on **Host D**.
 
 **Not finished-by** = every future reliability, scaling, observability, or autonomous-agent feature.
 
 ## Personal Project v1 — done when
 
-1. Accepted package `0.74.0-beta.5` built once and that exact artefact deployed.
-2. Fresh isolated production database (no old Fusion task/DB migration).
-3. Separate production service/state/config/DB identities.
-4. Start/restart + expected version; create/read/update one task.
-5. Backup + temporary restore proof.
-6. Source, infra, and recovery instructions in GitHub.
-7. Previous degraded production untouched until replacement works.
-8. Labelled **Personal Project v1 complete**.
+1. Package `0.74.0-beta.5` built **once on Host D**, validated on staging, frozen (version + SHA-256).
+2. Exact same artefact transferred to Host P (hash match; **no rebuild** on Host P).
+3. Fresh production database on Host P only (no old data migration).
+4. Production service/state/config/DB identities **only on Host P**.
+5. Start/restart + expected version; create/read/update one task on Host P.
+6. Production backup + temporary restore proof on Host P.
+7. Source, infra, and recovery instructions in GitHub.
+8. Legacy degraded production untouched until replacement works.
+9. Labelled **Personal Project v1 complete**.
 
-## Initial topology (v1)
+## Topology (binding)
 
-One host (Host D initially): build + staging + production with **separate** production identities (`fusion-production.service`, `fusion_production` DB/role, `/etc|srv|opt/.../production/`). GitHub holds source/infra/recovery. Off-host storage holds **production database backups only**.
+```text
+Host D — Development VPS: source, cache, builds, staging, candidate packages
+Host P — Production VPS: no builds; production service/DB/state/releases/backups
+```
 
-Dedicated Host P, managed external PostgreSQL, full observability, release controllers, and multi-agent scaling are **Future Improvements** — not v1 blockers.
+Host D must **not** create production service, production DB, or production state paths.
+Host P executable SHA-256 must match the Host D candidate.
 
 ## Six hard controls
 
-Known package/version · separate production DB/state · previous release preserved · backup before risky changes · restore proof · infra/recovery in Git. Secrets outside Git.
+Known package/version · separate production DB/state on Host P · previous release preserved · backup before risky changes · restore proof · infra/recovery in Git. Secrets outside Git; production credentials only on Host P.
 
 ## Accepted baseline
 
@@ -53,19 +60,22 @@ Phase 2A: PR #10 → 6caca1ec…
 
 ## Active work
 
-**Phase V1 — One-day production launch** (see `13-phased-implementation-roadmap.md`). Focused Level C smoke only — not the former ACC catalogue or seven-day soak.
+1. **V1A** — build and validate production candidate on Host D (next).
+2. **V1B** — deploy that exact artifact to Host P (after V1A).
+
+Focused Level C checks only. One-day clock requires Host P already accessible.
 
 ## What is not a v1 blocker
 
-Managed external PostgreSQL · separate high-capacity Host B/P · automated release controller · schema lease/activation framework · contamination/patch reconstruction programme · durable execution leases / scheduler redesign · seven-day soak · provider failover · Prometheus/Grafana/Loki/Sentry · multi-agent DAG scaling · autonomous host-admin · complete chaos catalogue · upstream sync during launch.
+Managed external PostgreSQL · larger dedicated sizing · automated release controller · reliability re-lands · full observability · seven-day soak · provider failover · multi-agent scaling · autonomous host-admin · upstream sync during launch.
 
 ## Legacy production freeze
 
-DB **0036** / surgical binary **0035**: degraded and frozen. Do not migrate old damaged data into v1. Do not treat long-lived dashboard health as compatibility proof.
+DB **0036** / surgical binary **0035**: degraded and frozen. Do not migrate old damaged data into v1.
 
 ## Governing documents
 
 - Process: `docs/appsolino/OPERATING-MODEL.md`
 - Summary: `MASTER-PLAN.md`
 - Roadmap: `13-phased-implementation-roadmap.md`
-- Decisions: `15-open-decisions.md` (includes v1 topology amendment)
+- Decisions: `15-open-decisions.md`

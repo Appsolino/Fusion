@@ -3,7 +3,7 @@
 Last updated: 2026-07-30
 **Process authority:** `docs/appsolino/OPERATING-MODEL.md`
 
-**Stop rule:** Only **Phase V1** is active. Former Phases 3–8 are **Future Improvements** and must not reopen the Personal Project v1 completion gate. Legacy production remains **DEGRADED / FROZEN** until replacement smoke passes.
+**Stop rule:** Active work is **Phase V1A → V1B** only. Host D is development/build/staging only — **production on Host D is prohibited**. Former Phases 3–8 are Future Improvements. Legacy production remains **DEGRADED / FROZEN**.
 
 ---
 
@@ -13,90 +13,151 @@ Last updated: 2026-07-30
 - **Status:** COMPLETE / APPROVED (2026-07-29). Record: `15-open-decisions.md`.
 
 ### Phase 1 — Accepted package
-- **Status:** COMPLETE / ACCEPTED (2026-07-29). Baseline `0.74.0-beta.5` (upstream `b85a5d453…` + product `82feb14b7…`). Closure PR #9 → `4c9e98cd…`. Evidence: `docs/appsolino/phase-1/candidate-b85a5d453/`.
+- **Status:** COMPLETE / ACCEPTED (2026-07-29). Baseline `0.74.0-beta.5`. Closure PR #9 → `4c9e98cd…`.
 
 ### Phase 2A — Staging foundation
-- **Status:** COMPLETE ENOUGH / USABLE (2026-07-30). PR #10 → `6caca1ec…`. Staging on Host D works. Evidence: `docs/appsolino/phase-2/`. Remaining NOT PROVEN items (off-host backup, clean rebuild, engine-child admin) are capability gates — not blockers for Phase V1 launch scope beyond the six hard controls.
+- **Status:** COMPLETE ENOUGH / USABLE (2026-07-30). PR #10 → `6caca1ec…`. Staging on Host D works.
 
 ---
 
-## Active phase
+## Active phase: Phase V1 (two ordered stages)
 
-### Phase V1 — Personal Project v1 — One-day production launch
-- **Status:** **NOT STARTED** (authorised as the sole active completion phase).
-- **Objective:** Deploy usable production on the simplified topology; prove backup/restore; leave recovery instructions in Git; declare Personal Project v1 complete.
-- **Product behaviour:** Do not change Fusion product behaviour. Do not pull upstream. Do not migrate old damaged data.
-
-#### Tasks
-
-1. Review current `main`.
-2. Do not pull upstream.
-3. Do not change product behaviour.
-4. Build the accepted package once using the existing cache.
-5. Create isolated production configuration and database.
-6. Install the immutable package.
-7. Start production service privately.
-8. Run focused production smoke tests.
-9. Create and restore one production backup.
-10. Record release identity and recovery instructions.
-11. Declare Personal Project v1 complete.
-
-#### Initial topology
-
-Host D may run build + staging + production with separate production identities:
+### Topology (binding)
 
 ```text
-fusion-production.service
-fusion_production (role + database)
-/etc/appsolino-fusion/production/
-/srv/appsolino-fusion/production/
-/opt/appsolino-fusion/production/releases/
+Host D — Development VPS
+├── source and Git worktrees
+├── dependency cache
+├── builds
+├── staging service + staging PostgreSQL
+├── integration tests
+└── production-candidate package creation
+    (NO production service / DB / state)
+
+Host P — Production VPS
+├── no source builds
+├── fusion-production.service
+├── fusion_production role + database
+├── /etc/appsolino-fusion/production/
+├── /srv/appsolino-fusion/production/
+├── /opt/appsolino-fusion/production/releases/
+└── production backups
 ```
 
-#### One-day schedule (indicative)
+Executable SHA-256 on Host P must match Host D. Production credentials/data exist only on Host P.
+
+---
+
+### Phase V1A — Build and validate production candidate on Host D
+
+- **Status:** **Next / NOT STARTED**
+- **Objective:** Build once from current `main`, validate on staging, freeze immutable candidate.
+- **Forbidden:** upstream pull; product behaviour changes; creating any production paths/DB/service on Host D; old-data migration.
+
+#### Procedure
+
+```text
+Current Appsolino main
+  → Build package once on Host D
+  → Record version and SHA-256
+  → Install exact package into staging
+  → Focused staging tests
+  → Declare package a production candidate (freeze identity)
+```
+
+#### V1A acceptance
+
+```text
+Git tree clean; no upstream pull
+package build succeeds
+executable reports 0.74.0-beta.5
+executable SHA-256 recorded
+staging health succeeds; staging DB healthy
+create/read/update one test task
+restart preserves the task
+backup and temporary restore work
+migration-set SHA-256 recorded
+release identity frozen
+no production identities on Host D
+```
+
+#### Freeze record (immutable candidate)
+
+```text
+Release ID
+Git commit
+Version
+Executable SHA-256
+Migration-set SHA-256
+Build date
+Staging validation result
+```
+
+Do **not** rebuild this package on Host P.
+
+---
+
+### Phase V1B — Deploy exact artifact to Host P
+
+- **Status:** After V1A passes / NOT STARTED
+- **Objective:** Install the Host D candidate on Host P; production smoke; first backup/restore; declare v1 complete.
+- **Prerequisite:** Host P accessible and ready. Host P performs **no** source builds.
+
+#### Procedure
+
+```text
+Validated artifact from Host D
+  → Secure copy to Host P
+  → Verify SHA-256 matches
+  → Install under immutable production release path
+  → Create production database and configuration
+  → Start production privately
+  → Smoke + backup/restore
+```
+
+#### V1B acceptance
+
+```text
+SHA-256 matches Host D candidate
+production DB identity = fusion_production
+service active; listener correct; health version correct
+create/read/update one task; restart preserves task
+first production backup succeeds
+temporary restore succeeds; restore DB destroyed
+previous release remains available
+production credentials/data only on Host P
+legacy production still frozen
+```
+
+#### Declare
+
+After V1B passes: **Personal Project v1 complete**.
+
+---
+
+### One-day schedule (indicative; requires Host P ready)
 
 | Time | Work |
 | --- | --- |
-| 08:30–09:00 | Lock scope (this plan) |
-| 09:00–10:00 | Production paths, DB identity, secrets, systemd unit |
-| 10:00–12:00 | Build once from current `main`; hash package |
-| 12:00–13:00 | Install and start production service |
-| 13:00–14:00 | Health, version, task, restart smoke |
-| 14:00–15:00 | Backup and temporary restore proof |
-| 15:00–16:00 | Recovery instructions, release record, final review |
-| 16:00–17:00 | Buffer for one blocking defect |
+| 08:30–09:00 | Topology locked; inspect Host D |
+| 09:00–11:00 | V1A: build production candidate on Host D |
+| 11:00–12:30 | V1A: staging task, restart, backup/restore |
+| 12:30–13:00 | V1A: freeze artifact and release identity |
+| 13:00–14:00 | V1B: prepare production identities on Host P |
+| 14:00–15:00 | V1B: transfer and install exact artifact |
+| 15:00–16:00 | V1B: production smoke and backup/restore |
+| 16:00–17:00 | Recovery record and buffer |
 
-**Excluded from the one-day clock:** buying/waiting for a new server; DNS wait; migrating old damaged data; upstream sync; new product features; unrelated repairs; long soak.
-
-#### Focused acceptance (Level C production-candidate)
-
-```text
-git diff --check
-relevant configuration syntax
-current main is clean
-package build succeeds
-package version = 0.74.0-beta.5
-executable hash recorded
-production DB identity correct
-service active
-listener correct
-health version correct
-create/read/update one task
-restart preserves task
-backup succeeds
-temporary restore succeeds
-previous release remains available
-```
-
-**Not required:** all repository tests; all ACC classes; clean Ubuntu rebuild during launch; seven-day soak; upstream merge; staging reconstruction; full observability; autonomous agent root path.
+**Excluded from the clock:** buying/waiting for Host P; DNS wait; old-data migration; upstream sync; new features; unrelated repairs; long soak.
 
 #### Forbidden during V1
 
-- Changing product behaviour / workflows / reliability modules
-- Pulling or merging upstream
+- Production service/DB/state on Host D
+- Rebuilding the candidate on Host P
+- Product behaviour / workflow changes
+- Upstream pull/merge
 - Migrating old production tasks/DB
-- Touching the legacy degraded production system except to leave it frozen
-- Expanding into Future Improvements as launch blockers
+- Expanding Future Improvements as launch blockers
 
 ---
 
@@ -104,26 +165,24 @@ previous release remains available
 
 Former Phases 3–8 and related programme work. **None reopen the v1 gate.**
 
-| Backlog item | Former phase (reference) |
+| Backlog item | Notes |
 | --- | --- |
-| Automated release controller / schema lease framework | Phase 3 |
-| Contamination gates / patch reconstruction / Git-safety programme | Phase 4 |
-| Durable execution leases / scheduler redesign | Phase 5 |
-| Full verification integrity programme | Phase 6 |
-| Provider failover gateway; cost budgets; event wakeups | Phase 7 |
-| Full observability (OTel, Prometheus, Grafana, Loki, Sentry) | Phase 7 |
-| Multi-agent DAG / concurrency scaling | Phase 8 |
-| Seven-day soak / complete chaos catalogue | Phase 5+ |
-| Managed external PostgreSQL | Phase 0 OD-POSTGRES (superseded for v1) |
-| Dedicated high-capacity Host B / Host P | Phase 0 OD-TOPOLOGY (superseded for v1) |
-| Autonomous host-admin execution | ACC engine-child path |
-| Upstream refresh (manual/monthly) | Operating model |
+| Managed external PostgreSQL | Optional later |
+| Larger dedicated Host B/P sizing | Optional later |
+| Automated release controller | Former Phase 3 |
+| Contamination / Git-safety programme | Former Phase 4 |
+| Durable execution / scheduler redesign | Former Phase 5 |
+| Full verification programme | Former Phase 6 |
+| Provider failover; full observability stack | Former Phase 7 |
+| Multi-agent scaling; seven-day soak | Former Phase 8+ |
+| Autonomous host-admin | Engine-child path |
+| Upstream refresh | Operating model (manual/monthly) |
 
 ---
 
 ## Sequencing
 
 ```text
-0 → 1 → 2A → V1 (Personal Project v1 complete)
-                ↘ Future Improvements (optional, anytime later)
+0 → 1 → 2A → V1A (Host D candidate) → V1B (Host P deploy) → Personal Project v1 complete
+                              ↘ Future Improvements (optional)
 ```

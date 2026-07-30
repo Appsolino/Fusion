@@ -8,8 +8,10 @@ Status:
 Phase 0: APPROVED (historical)
 Phase 1: COMPLETE
 Phase 2A: PARTIAL / MERGED / USABLE
-Active authorisation: Phase V1 — One-day production launch
-Former Phases 3–8: Future Improvements (not authorised as v1 blockers)
+Active: Phase V1A then V1B (NOT STARTED)
+Host D production: PROHIBITED
+Host P production: PLANNED
+Former Phases 3–8: Future Improvements
 Legacy production: DEGRADED / FROZEN
 ```
 
@@ -17,86 +19,98 @@ Legacy production: DEGRADED / FROZEN
 
 # Personal Project v1 amendment (2026-07-30) — BINDING FOR ACTIVE WORK
 
-This amendment **redefines finished** and **supersedes**, for Personal Project v1 launch only, earlier Phase 0 choices that made dedicated Host P, managed external PostgreSQL, full observability, seven-day soak, and Phases 3–8 into launch prerequisites.
+This amendment redefines finished and the launch topology. Where earlier text allowed Host D to host production, **this correction wins**.
 
 ## OD-V1-FINISHED
-**Finished** means: accepted package deployed; fresh isolated production database; basic task create/read/update works; backup and restore proven; rebuild instructions in Git; no old data migration.
+**Finished** means: accepted package built and validated on Host D; exact artifact deployed on Host P; fresh isolated production database on Host P; basic task create/read/update works; backup and restore proven; rebuild instructions in Git; no old data migration.
 
 It does **not** mean the former multi-phase reliability programme is complete.
 
-## OD-V1-TOPOLOGY
-**Approved for v1:** Host D may run build, staging, and **initial production** with separate production identities:
+## OD-V1-TOPOLOGY (corrected)
+**Approved:**
 
 ```text
-Service:       fusion-production.service
-Database/role: fusion_production
-Config:        /etc/appsolino-fusion/production/
-State:         /srv/appsolino-fusion/production/
-Releases:      /opt/appsolino-fusion/production/releases/
+Host D — development / build / staging only
+Host P — production only
 ```
 
-Dedicated Host P remains an optional Future Improvement. If a separate production host is already ready, the same process may be used there. Procuring a new host during the one-day window is avoidable risk.
+Host D **must not** host `fusion-production.service`, `fusion_production` database/role, or `/etc|srv|opt/appsolino-fusion/production/` paths.
 
-**Supersedes for v1 launch:** OD-TOPOLOGY requirement that Host P exist before production.
+Host P holds production identities only:
+
+```text
+fusion-production.service
+fusion_production (role + database)
+/etc/appsolino-fusion/production/
+/srv/appsolino-fusion/production/
+/opt/appsolino-fusion/production/releases/
+```
+
+Host P performs **no** source builds. Executable SHA-256 on Host P must match the Host D candidate. Production credentials and data exist only on Host P.
+
+**Supersedes:** any earlier OD-V1 wording that Host D may run initial production.
+
+## OD-V1-STAGES
+**Approved ordered stages:**
+
+1. **V1A** — Build and validate production candidate on Host D; freeze release identity.
+2. **V1B** — Transfer exact artifact to Host P; install; smoke; backup/restore; declare v1 complete.
+
+V1B does not start until V1A passes. One-day end-to-end completion requires Host P already accessible.
 
 ## OD-V1-POSTGRES
-**Approved for v1:** Local PostgreSQL on the launch host with isolated `fusion_production` role/database (localhost, SCRAM, secrets outside Git). Managed external PostgreSQL is a Future Improvement.
-
-**Supersedes for v1 launch:** OD-POSTGRES as a launch blocker.
+**Approved for v1 production:** PostgreSQL on **Host P** with isolated `fusion_production` role/database (localhost, SCRAM, secrets outside Git). Staging DB remains on Host D as `fusion_staging` only. Managed external PostgreSQL is a Future Improvement.
 
 ## OD-V1-CONTROLS
-Mandatory for v1: known package/version; separate production DB/state; previous release preserved; backup before risky changes; restore proof; infra/recovery in Git. Secrets outside Git. Legacy degraded production untouched until replacement smoke passes.
+Mandatory: known package/version; separate production DB/state on Host P; previous release preserved; backup before risky changes; restore proof; infra/recovery in Git. Secrets outside Git. Legacy degraded production untouched until replacement smoke passes.
 
 ## OD-V1-SCOPE
-**Authorised:** Phase V1 one-day production launch only (see `13-phased-implementation-roadmap.md`).
-**Not authorised as v1 work:** product behaviour changes; upstream sync; old data migration; Future Improvements backlog items; expanding into ACC/soak/observability programmes.
+**Authorised:** Phase V1A then V1B only.
+**Not authorised as v1 work:** production on Host D; product behaviour changes; upstream sync; old data migration; Future Improvements as launch blockers; starting implementation from a docs-only commit.
 
 ## OD-V1-VALIDATION
-Phase V1 uses focused Level C production-candidate checks listed in the roadmap. Full ACC catalogues, clean Ubuntu rebuild during launch, seven-day soak, and autonomous host-admin proofs are **not** v1 requirements.
+Focused Level C checks per stage in `13-phased-implementation-roadmap.md`. Full ACC catalogues, clean Ubuntu rebuild during launch, seven-day soak, and autonomous host-admin proofs are **not** v1 requirements.
 
 ---
 
 # Phase 0 technical review correction (2026-07-29) — historical
 
-Review of `fb284e9de…` / clean re-land on `origin/main` ancestry requested changes. Corrections applied on branch `docs/phase-0-governance-v2`:
-
-1. Full-admin service model: `NoNewPrivileges=no`, `ProtectSystem=off`. Ordinary tasks use bubblewrap; host-admin mode outside bubblewrap.
-2. ACC-ENV-03–08 originally required Fusion service→agent path proofs (engine-child path remains a Future / pre-autonomous-admin gate).
+1. Full-admin service model: `NoNewPrivileges=no`, `ProtectSystem=off`. Ordinary tasks use bubblewrap; host-admin outside bubblewrap.
+2. ACC-ENV-03–08 originally required Fusion service→agent path proofs (engine-child path remains Future / pre-autonomous-admin).
 3. Health endpoint OK ≠ schema-compatible; legacy production remains degraded/frozen.
 4. Preservation: selective extraction only — no full dirty-tree snapshot requirement (R-15).
 
-**Later:** Phase 1 closed (PR #9 / `4c9e98cd…`). Phase 2A merged PARTIAL (PR #10 / `6caca1ec…`). Operating model adopted. **v1 amendment above now governs active completion work.**
+**Later:** Phase 1 closed (PR #9). Phase 2A merged PARTIAL (PR #10). Operating model adopted. **Corrected OD-V1-TOPOLOGY above governs active work.**
 
 ---
 
 # Phase 0 Decision Approval (2026-07-29) — historical record
 
-Date: 2026-07-29
-Retain for provenance. Where this conflicts with **OD-V1-***, the v1 amendment wins for launch.
+Retain for provenance. Where this conflicts with **OD-V1-***, the v1 amendment (as corrected) wins for launch.
 
 ## OD-BASELINE
-Pinned upstream after packaged-runtime acceptance. Phase 1 accepted: `b85a5d453…` + `a366fab379…` / product `82feb14b7…`, version `0.74.0-beta.5`. Do not treat moving `upstream/main` as the baseline.
+Pinned upstream after packaged-runtime acceptance. Accepted: `0.74.0-beta.5` (`b85a5d453…` + `82feb14b7…`).
 
 ## OD-TOPOLOGY (historical)
-Originally: Host B (build+staging) + Host P (production), large sizing. **For v1 launch, see OD-V1-TOPOLOGY.**
+Originally large Host B + Host P sizing. **Active launch topology:** Host D = build/staging; Host P = production (see OD-V1-TOPOLOGY).
 
 ## OD-IDENTITY
-Release identity and PostgreSQL migration history remain authoritative for what is running. Keep identities simple for v1 (immutable release dir + symlink + recorded hashes); full manifest/controller frameworks are Future Improvements.
+Release identity and PostgreSQL migration history remain authoritative. Keep v1 simple: immutable release dir + symlink + recorded hashes.
 
 ## OD-DIRTY-TREES
 Dirty trees remain reference-only — not `appsolino/main`.
 
 ## OD-FUSI-007 / OD-PHASE-2 (historical)
-Re-land from clean baseline / invariants — not contaminated history. **Not part of Phase V1.** Future Improvements.
+Not part of Phase V1. Future Improvements.
 
 ## OD-RELEASE-CONTROLLER
-Freeze existing release controller. Do not resume against production. Full replacement activator is Future Improvements; v1 uses simple immutable install + human-operated start.
+Freeze existing release controller. Do not resume against production. V1 uses build-once on Host D and install-exact on Host P.
 
 ## OD-POSTGRES (historical)
-Managed external PostgreSQL was the Phase 0 target. **For v1 launch, see OD-V1-POSTGRES.**
+Managed external PostgreSQL was Phase 0 target. **V1 production DB is on Host P locally** (OD-V1-POSTGRES). Managed external remains Future Improvement.
 
 ## OD-ACTIVATION
-Production activation requires explicit human confirmation. Staging may be more autonomous under gates. Unchanged for v1.
+Production activation requires explicit human confirmation. Unchanged.
 
 ---
 
@@ -107,15 +121,15 @@ Legacy DB schema: 0036
 Legacy surgical binary ceiling: 0035
 ```
 
-Available but **degraded and frozen**. No new/resumed tasks on the incompatible pair; no CLI opens that write against the split; no migrations on the legacy system; no trusting long-lived dashboard health as compatibility proof. **Do not migrate old damaged data into Personal Project v1.**
+Degraded and frozen. Do not migrate old damaged data into Personal Project v1.
 
 ---
 
 ## Implementation authorisation (current)
 
 ```text
-Authorised: Phase V1 one-day production launch (docs locked; implementation is a separate mission)
-Not authorised: automatic start of Phase V1 from this docs commit
-Not authorised: Future Improvements as launch blockers
-Not authorised: product code / infra code changes in this docs mission
+Authorised next: Phase V1A (Host D build/validate) when explicitly started
+Then: Phase V1B (Host P deploy) after V1A passes and Host P is ready
+Not authorised: production identities on Host D
+Not authorised: automatic start of V1A/V1B from this docs commit
 ```
