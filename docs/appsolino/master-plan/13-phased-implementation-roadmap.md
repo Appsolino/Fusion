@@ -3,7 +3,7 @@
 Last updated: 2026-07-30
 **Process authority:** `docs/appsolino/OPERATING-MODEL.md`
 
-**Stop rule:** Active next work is **narrow Host D defect corrections** from V1A.1, then re-run affected V1A.1 checks. **V1B is deferred by owner** until Host D works reliably and production is explicitly authorised. Host D is development/build/staging only — **production on Host D is prohibited**. Former Phases 3–8 are Future Improvements. Legacy production remains **DEGRADED / FROZEN**.
+**Stop rule:** V1A.2 corrected Host D retest is **PASS WITH OBSERVATIONS**. **V1B remains deferred by owner** until production is explicitly authorised. Host D is development/build/staging only — **production on Host D is prohibited**. Former Phases 3–8 are Future Improvements. Legacy production remains **DEGRADED / FROZEN**.
 
 ---
 
@@ -56,9 +56,15 @@ Executable SHA-256 on Host P must match Host D. Production credentials/data exis
 
 ### Phase V1A.1 — Extended Host D stability / real workflow validation
 
-- **Status:** **FAIL** (2026-07-30). Record: `docs/appsolino/v1/V1A-DEV-STABILITY.md`.
+- **Status:** **FAIL / historical** (2026-07-30). Record: `docs/appsolino/v1/V1A-DEV-STABILITY.md` (original section).
 - **Objective:** Prove Fusion service → coordinator → agent/child → repository path under realistic disposable tasks before spending on Host P.
-- **Outcome:** Real path proven under `testMode`/mock; execute fails with step-index error and redispatch loop; immutable install stripped runtime execute bits (restart hang). Narrow correction missions required; do not start V1B.
+- **Outcome:** Real path proven under `testMode`/mock; execute fails with step-index error and redispatch loop; immutable install stripped runtime execute bits (restart hang). Corrections A/B required.
+
+### Phase V1A.2 — Corrected Host D stability retest
+
+- **Status:** **PASS WITH OBSERVATIONS** (2026-07-30). Record: `docs/appsolino/v1/V1A-DEV-STABILITY.md` (V1A.2 section). Candidate `v1a2-0.74.0-beta.5-3bc46bffe` after PR #12 + PR #13.
+- **Objective:** Merge Corrections A/B, build one corrected candidate, rerun affected Host D stability checks.
+- **Outcome:** Mock tasks complete without step-index/redispatch defects; concurrency isolated; restart preserves done tasks; runtime execute bits preserved. Observations: mock does not materialize descriptive file writes; immutable-helper chmod EPERM noise is non-blocking. **V1B remains DEFERRED BY OWNER.**
 
 #### Procedure
 

@@ -121,3 +121,122 @@ Do **not** rebuild the frozen candidate unless a corrected package is intentiona
 - LEGACY_PRODUCTION_TOUCHED: NO
 - CANDIDATE_REBUILT: NO
 - V1B_STARTED: NO
+
+---
+
+# V1A.2 — Corrected Host D stability retest
+
+Last updated: 2026-07-30
+
+result: **PASS WITH OBSERVATIONS**
+
+date (UTC): 2026-07-30
+hostname: `vmi3201923` (Host D)
+
+## Merges
+
+- PR #12 Correction A merge: `0b9d17857bfecc71d1f0a86e4b7fe7abb9b7513d`
+- PR #13 Correction B merge: `3bc46bffe5fd217206f2f993753445f645374431`
+- Corrected source SHA (main after #13): `3bc46bffe5fd217206f2f993753445f645374431`
+
+## Corrected candidate
+
+- release ID: `v1a2-0.74.0-beta.5-3bc46bffe`
+- version: `0.74.0-beta.5`
+- executable SHA-256: `4d58e8a1205a0334e6506427bc588a2ac6e76f2aa01b852610b93dedee0d2829`
+- archive SHA-256: `7d86831a11a2bdde0cd3d2facdbffb76e97bc79c5ab36e74d2307cec57143524`
+- migration-set SHA-256: `846da68e7c82f3acd9e8cfd847b4fd49a4e14251571e8063f0ed66e90282a570`
+- build timestamp (UTC): `2026-07-30T17:21:50+00:00`
+- toolchain: Node `v22.23.1`, pnpm `10.33.0`, Bun `1.3.14`
+- artefact path: `/srv/appsolino-fusion/build/v1a/v1a2-0.74.0-beta.5-3bc46bffe`
+- staging release: `/opt/appsolino-fusion/staging/releases/v1a2-0.74.0-beta.5-3bc46bffe`
+
+### Old candidate preserved
+
+- release: `v1a-0.74.0-beta.5-f54d53082`
+- executable SHA-256 unchanged: `5f33e09a2a004318b015e341dd37c88b841c3eea572e53f89658d51529b7ce4a`
+- OLD_CANDIDATE_MUTATED: NO
+
+## Install / permission result
+
+- Installer: Correction A `install-staging-release.sh` (immutable, execute-bit preserving).
+- Executable inventory packaged ↔ installed: MATCH.
+- `initdb` / `postgres` helpers remain executable after install and restart.
+- No writable bits retained under the V1A.2 release tree.
+- Atomic `current` switch to `v1a2-0.74.0-beta.5-3bc46bffe`.
+- Observation: embedded-postgres startup logs `EPERM` when attempting `chmod` on immutable release helpers; init still succeeds and health reaches `ok` (no EACCES / no prolonged 503).
+
+## Service validation
+
+- `fusion-staging.service` active; health `ok` / `0.74.0-beta.5` within a short readiness window.
+- Listener: `127.0.0.1:4140` only.
+- Staging DB identity for migrations check: `fusion_staging` highest migration `0036`.
+- `testMode` enabled for mock execution (embedded Postgres under FUSION_HOME).
+
+## Focused successful tasks (mock / testMode)
+
+Disposable repos (no remotes):
+
+- `/srv/appsolino-fusion/staging/disposables/v1a2-repo-a` @ `562dcc056edd7833467855611c80b9a989ea02e3`
+- `/srv/appsolino-fusion/staging/disposables/v1a2-repo-b` @ `562dcc056edd7833467855611c80b9a989ea02e3`
+
+Projects: `proj_57da27e6a4ea47f3` (VA2), `proj_58ee53e365b345f6` (VB2).
+
+| Scenario | Task ID | Terminal | Worktree (during run) | Attempts | Notes |
+| --- | --- | --- | --- | --- | --- |
+| A read | VA2-001 | done | crisp-wren | 1 | no Step-out-of-range; no redispatch |
+| B write | VA2-002 | done | lemon-badger | 1 | lifecycle PASS; mock did not materialize `v1a2-created.txt` (no-op merge) |
+| C modify | VA2-003 | done | keen-lotus | 1 | lifecycle PASS; `notes.txt` unchanged on disk (mock no-op) |
+
+Blocking V1A.1 defects absent: zero `Step N out of range`; no todo↔in-progress storm; single worktree per task.
+
+## Concurrency
+
+| Task | Project | Terminal | Branch |
+| --- | --- | --- | --- |
+| VA2-004 | repo-a | done | fusion/va2-004 |
+| VB2-001 | repo-b | done | fusion/vb2-001 |
+
+Distinct task IDs, branches, and worktrees (`lemon-frost`, `quiet-lark`). Service remained healthy. No cross-repo contamination observed.
+
+## Deterministic-failure parking
+
+- Live mock path no longer emits the old out-of-range execute failure (Correction B).
+- Automated evidence on corrected source: `mock-provider`, `transient-error-detector`, `executor-graph-requeue-gate` — **122 tests passed**; `executor-tool-failure-retry` — **9 tests passed** (established tool-failure retry path retained).
+- Artificial on-disk status injection did not stick through the live TaskStore (task continued and completed); not treated as a product park proof.
+- Scheduler observation: successful tasks remain single-attempt; no redispatch loops in the mission log window (`out_of_range=0`).
+
+## Restart persistence
+
+- Pre-restart: VA2-001…005 and VB2-001 all `done`.
+- Restart: health `ok` quickly; runtime helpers still executable; no EACCES.
+- Post-restart: all prior tasks still `done`; no new worktrees for old tasks; no redispatch.
+- Post-restart smoke VA2-006 → `done` once.
+
+## Resource / log summary
+
+| | Approx |
+| --- | --- |
+| Mem available after | ~3.7 Gi |
+| Swap used | ~2.3 Gi |
+| Disk `/` | 21% |
+| Failed systemd units | none |
+| Listener | `127.0.0.1:4140` |
+| Duplicate executions | NONE |
+| Contamination | NONE |
+
+Log observations: `EPERM` chmod on immutable helpers (non-blocking); no `Step N out of range`; no runtime EACCES; no prolonged starting/holding after Correction A install.
+
+## Final decision
+
+**PASS WITH OBSERVATIONS**
+
+Blocking Correction A/B behaviours fixed on Host D staging with corrected candidate `v1a2-0.74.0-beta.5-3bc46bffe`. Observations: built-in mock executor completes lifecycle without applying descriptive file writes; immutable-release `chmod` EPERM noise during embedded init.
+
+## Explicit statements
+
+- HOST_P_ACCESSED: NO
+- PRODUCTION_IDENTITIES_ON_HOST_D: ABSENT
+- LEGACY_PRODUCTION_TOUCHED: NO
+- OLD_CANDIDATE_MUTATED: NO
+- V1B_STARTED: NO
