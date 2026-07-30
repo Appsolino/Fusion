@@ -141,21 +141,85 @@ if (compare) {
   What must NEVER happen is the other direction: a site the REGEX found and the parser missed means
   the parser has a hole, and then its number cannot be the bar. That is the failure this checks.
   */
-  const text = summarizeText(censusFilesText(files));
+  /*
+  FNXC:LifecycleColumnCensus 2026-07-30-11:30:
+  COMPARE SITES, NOT BUCKET TOTALS. This check used to compare the per-bucket counts and fail when
+  the regex's `column` total exceeded the parser's. That conflates the two things it most needs to
+  tell apart:
+
+    - the parser MISSED a site entirely            -> a real blind spot, the failure worth having;
+    - the parser saw it and classified it better   -> role, status, or deliberate instead of column.
+
+  The second is the parser's entire reason for existing, so the old form fired MORE the better the
+  parser got. It had been failing on `main` while reporting "the parser has a blind spot; its count
+  cannot be the bar" — and that message was false. MEASURED at the time of this change: 13 sites
+  diverged, and all 13 were seen by the parser (4 deliberate, 5 role, 4 status). Zero were missed.
+
+  The check now fails only on a site the regex found and the parser did not, which is what the note
+  above it always said the contract was.
+  */
+  const textFindings = censusFilesText(files);
+  const text = summarizeText(textFindings);
   console.log(`\n  text classifier:  ${JSON.stringify(text.totals)}`);
   console.log(`  AST classifier:   ${JSON.stringify(summary.totals)}`);
-  const regressions = ["column", "role", "status", "deliberate"].filter(
-    (kind) => text.totals[kind] > summary.totals[kind],
-  );
-if (regressions.length > 0) {
+
+  /*
+  FNXC:LifecycleColumnCensus 2026-07-30-13:05 (PR #2682 review — greptile):
+  A SITE KEY CAN REPEAT ON ONE LINE, so this counts occurrences instead of testing set membership.
+  `from === "todo" || to === "todo"` yields TWO findings sharing file:line:columnId; keyed by a Set,
+  one parser match would satisfy both regex findings and hide a genuine miss of the other. Receiver
+  is deliberately NOT part of the key — `c === "todo" || c === "todo"` would collapse again — so the
+  comparison is per-key COUNTS, which cannot be fooled by either shape.
+  */
+  const siteKey = (f) => `${f.file}:${f.line}:${f.columnId}`;
+  const astByKey = new Map();
+  for (const f of findings) {
+    const list = astByKey.get(siteKey(f)) ?? [];
+    list.push(f);
+    astByKey.set(siteKey(f), list);
+  }
+  const textByKey = new Map();
+  for (const f of textFindings) {
+    const list = textByKey.get(siteKey(f)) ?? [];
+    list.push(f);
+    textByKey.set(siteKey(f), list);
+  }
+
+  const missed = [];
+  for (const [key, list] of textByKey) {
+    const shortfall = list.length - (astByKey.get(key)?.length ?? 0);
+    for (let i = 0; i < shortfall; i += 1) missed.push(list[i]);
+  }
+
+  if (missed.length > 0) {
     console.error(
-      `\nlifecycle-column-census --compare: the regex found MORE than the parser for ${regressions.join(", ")}.\n` +
-      "The parser has a blind spot; its count cannot be the bar until this is closed.",
+      `\nlifecycle-column-census --compare: the regex found ${missed.length} site(s) the parser did not.\n` +
+      "The parser has a blind spot; its count cannot be the bar until this is closed.\n" +
+      missed.slice(0, 10).map((f) => `  ${f.file}:${f.line} (${f.columnId})`).join("\n"),
     );
     process.exit(1);
   }
-  const extra = summary.totals.column - text.totals.column;
-  console.log(`  parser is a superset (+${extra} column guards the regex cannot see).`);
+
+  /* Reclassifications are expected and are the parser's value-add, so they are reported, not failed. */
+  const byKind = {};
+  let reclassifiedCount = 0;
+  for (const [key, list] of textByKey) {
+    /* Pair occurrences positionally within a key; equal counts are guaranteed by the miss check above. */
+    const astList = astByKey.get(key) ?? [];
+    list.forEach((f, i) => {
+      const kind = astList[i]?.kind;
+      if (f.kind === "column" && kind !== undefined && kind !== "column") {
+        byKind[kind] = (byKind[kind] ?? 0) + 1;
+        reclassifiedCount += 1;
+      }
+    });
+  }
+  let parserOnly = 0;
+  for (const [key, list] of astByKey) parserOnly += Math.max(0, list.length - (textByKey.get(key)?.length ?? 0));
+  console.log(`  parser sees every site the regex does (+${parserOnly} sites the regex cannot see).`);
+  if (reclassifiedCount > 0) {
+    console.log(`  ${reclassifiedCount} the regex calls a column guard, the parser classifies as ${JSON.stringify(byKind)}.`);
+  }
 }
 
 if (!strict) process.exit(0);
