@@ -33,11 +33,13 @@ PR → Appsolino main           ← intentional; validated; may rewrite history 
 
 ## Workflow
 
-Source: `.github/workflows/upstream-shadow.yml`
+Canonical Actions path: `.github/workflows/upstream-shadow.yml`
 
-- Schedule: daily cron.
-- Fetches `https://github.com/Runfusion/Fusion.git` `main`.
-- Force-pushes that exact tip to Appsolino branch `upstream-shadow`.
+Until a `workflow`-scoped GitHub credential can push that path, the identical YAML lives in-tree at `docs/appsolino/upstream/upstream-shadow.workflow.yml` for review. Promote by copying to the canonical path (do not change job behaviour).
+
+- Schedule: daily cron + `workflow_dispatch`.
+- Fetches `https://github.com/Runfusion/Fusion.git` `main` (no pnpm / no build).
+- Force-pushes that exact tip to Appsolino branch `upstream-shadow` only.
 - Writes a job summary with upstream SHA and ahead/behind vs Appsolino `main`.
 
 ## How to use the shadow tip
