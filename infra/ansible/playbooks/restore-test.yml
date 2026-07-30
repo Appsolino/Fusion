@@ -1,0 +1,11 @@
+---
+- name: Restore-test staging backup
+  hosts: staging
+  become: true
+  tasks:
+    - name: Restore test
+      command: /usr/local/sbin/staging-restore-test.sh
+      register: rst
+      changed_when: false
+    - debug:
+        var: rst.stdout_lines

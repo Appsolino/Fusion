@@ -1,0 +1,1 @@
+{"status":"ok","version":"0.74.0-beta.5","uptime":5,"engine":{"available":true},"database":{"healthy":true,"corruptionDetected":false,"corruptionErrors":[],"lastCheckedAt":"2026-07-29T19:07:15.894Z","isRunning":false},"taskIdIntegrity":{"status":"ok","checkedAt":"2026-07-29T19:07:15.904Z","anomalies":[],"recommendedAction":null}}

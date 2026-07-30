@@ -1,0 +1,7 @@
+release_id=phase2a-0.74.0-beta.5-040b61e8873e
+path=/opt/appsolino-fusion/staging/releases/phase2a-0.74.0-beta.5-040b61e8873e
+version=0.74.0-beta.5
+executable_sha256=54e2cd933281ca523e57303c578c4e14b60cd5914006fac8c9145703a39a0c48
+main_sha=040b61e8873e77eeae04816a2dce9cccdde7f88c
+installed_utc=2026-07-29T19:07:08+00:00
+INSTALLED phase2a-0.74.0-beta.5-040b61e8873e

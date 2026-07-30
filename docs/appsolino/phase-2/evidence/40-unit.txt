@@ -1,0 +1,36 @@
+# /etc/systemd/system/fusion-staging.service
+# FNXC:Phase2A 2026-07-29-21:45:
+# Staging-only Fusion unit. Approved full-admin model: NoNewPrivileges=no, ProtectSystem=off.
+# FNXC:Phase2A 2026-07-30-07:55: secrets.env is mandatory (no EnvironmentFile=- optional form).
+# FNXC:Phase2A 2026-07-30-07:55: ExecStartPre validates localhost fusion_staging DATABASE_URL identity.
+[Unit]
+Description=Appsolino Fusion staging service
+Documentation=https://github.com/Appsolino/Fusion/blob/HEAD/docs/appsolino/phase-2/05-staging-service.md
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=fusion
+Group=fusion
+UMask=0027
+NoNewPrivileges=no
+ProtectSystem=off
+WorkingDirectory=/srv/appsolino-fusion/staging/workspaces/project
+Environment=HOME=/srv/appsolino-fusion/staging/state/fusion-home
+Environment=FUSION_HOME=/srv/appsolino-fusion/staging/state/fusion-home
+Environment=FUSION_SKIP_ONBOARDING=1
+EnvironmentFile=/etc/appsolino-fusion/staging/fusion.env
+EnvironmentFile=/etc/appsolino-fusion/staging/secrets.env
+ExecStartPre=/usr/local/sbin/staging-prestart-validate.sh
+ExecStart=/opt/appsolino-fusion/staging/current/fn dashboard --host 127.0.0.1 --port 4140 --paused --no-auth --no-supervise
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fusion-staging
+
+[Install]
+WantedBy=multi-user.target

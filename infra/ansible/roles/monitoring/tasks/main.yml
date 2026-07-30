@@ -1,0 +1,17 @@
+---
+# FNXC:Phase2A 2026-07-29-21:45: Textfile collector directory only (no full Prometheus stack).
+- name: Ensure textfile collector directory
+  file:
+    path: "{{ monitoring_textfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure staging state directory for health JSON
+  file:
+    path: /srv/appsolino-fusion/staging/state
+    state: directory
+    owner: "{{ fusion_user }}"
+    group: "{{ fusion_group }}"
+    mode: "0750"

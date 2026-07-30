@@ -1,0 +1,27 @@
+○ fusion-staging-acceptance-run.service - Appsolino Fusion staging acceptance harness (service context)
+     Loaded: loaded (/etc/systemd/system/fusion-staging-acceptance-run.service; static)
+     Active: inactive (dead)
+
+Jul 29 19:07:55 vmi3201923 run-staging-acceptance.sh[54265]:     "ACC-ENV-05": "PASS",
+Jul 29 19:07:55 vmi3201923 run-staging-acceptance.sh[54265]:     "ACC-ENV-06": "PASS",
+Jul 29 19:07:55 vmi3201923 run-staging-acceptance.sh[54265]:     "ACC-ENV-07": "PASS",
+Jul 29 19:07:55 vmi3201923 run-staging-acceptance.sh[54265]:     "ACC-ENV-08": "PASS"
+Jul 29 19:07:55 vmi3201923 run-staging-acceptance.sh[54265]:   }
+Jul 29 19:07:55 vmi3201923 run-staging-acceptance.sh[54265]: }
+Jul 29 19:07:55 vmi3201923 run-staging-acceptance.sh[54217]: ACCEPTANCE_PASS
+Jul 29 19:07:55 vmi3201923 systemd[1]: fusion-staging-acceptance-run.service: Deactivated successfully.
+Jul 29 19:07:55 vmi3201923 systemd[1]: Finished fusion-staging-acceptance-run.service - Appsolino Fusion staging acceptance harness (service context).
+Jul 29 19:07:55 vmi3201923 systemd[1]: fusion-staging-acceptance-run.service: Consumed 1.170s CPU time.
+{
+  "correlation_id": "phase2a-acc-20260729T190754Z-54217",
+  "uid": "1001",
+  "sudo_uid": "0",
+  "results": {
+    "ACC-ENV-03": "PASS",
+    "ACC-ENV-04": "PASS",
+    "ACC-ENV-05": "PASS",
+    "ACC-ENV-06": "PASS",
+    "ACC-ENV-07": "PASS",
+    "ACC-ENV-08": "PASS"
+  }
+}

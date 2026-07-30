@@ -1,0 +1,12 @@
+OK /srv/appsolino-fusion/build
+OK /srv/appsolino-fusion/cache/pnpm
+OK /opt/appsolino-fusion/staging/releases
+OK /etc/appsolino-fusion/staging
+OK /srv/appsolino-fusion/staging/state
+OK /srv/appsolino-fusion/staging/workspaces
+OK /srv/appsolino-fusion/staging/worktrees
+OK /srv/appsolino-fusion/staging/logs
+OK /srv/appsolino-fusion/staging/backups
+OK /run/appsolino-fusion/staging
+HOST_SEPARATION_PASS
+EXIT:0

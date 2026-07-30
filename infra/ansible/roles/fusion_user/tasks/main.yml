@@ -1,0 +1,38 @@
+---
+# FNXC:Phase2A 2026-07-29-21:45: fusion service identity + NOPASSWD sudo validation.
+- name: Ensure fusion group
+  group:
+    name: "{{ fusion_group }}"
+    state: present
+
+- name: Ensure fusion user
+  user:
+    name: "{{ fusion_user }}"
+    group: "{{ fusion_group }}"
+    groups: sudo
+    append: true
+    shell: /bin/bash
+    create_home: true
+    home: "/home/{{ fusion_user }}"
+
+- name: Install NOPASSWD sudoers for fusion
+  copy:
+    dest: /etc/sudoers.d/fusion
+    mode: "0440"
+    owner: root
+    group: root
+    validate: "visudo -cf %s"
+    content: |
+      # FNXC:Phase2A 2026-07-29-21:45: Approved full-admin model for dedicated Fusion host.
+      {{ fusion_user }} ALL=(ALL) NOPASSWD: ALL
+
+- name: Validate passwordless sudo as fusion
+  become: false
+  command: sudo -n -u {{ fusion_user }} sudo -n id -u
+  register: fusion_sudo_probe
+  changed_when: false
+
+- name: Assert sudo returns 0
+  assert:
+    that:
+      - fusion_sudo_probe.stdout | trim == "0"

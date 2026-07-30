@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Fusion staging health check every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Unit=fusion-staging-health.service
+
+[Install]
+WantedBy=timers.target

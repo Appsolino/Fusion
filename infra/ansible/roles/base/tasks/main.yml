@@ -1,0 +1,83 @@
+---
+# FNXC:Phase2A 2026-07-29-21:45: Base OS packages, timezone, chrony, ufw, swap, sysctl, logrotate.
+- name: Set timezone via timedatectl
+  command: timedatectl set-timezone {{ appsolino_timezone }}
+  changed_when: false
+
+- name: Install base packages
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - git
+      - jq
+      - chrony
+      - ufw
+      - bubblewrap
+      - build-essential
+      - python3
+      - python3-venv
+      - logrotate
+      - acl
+      - sqlite3
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure chrony enabled
+  service:
+    name: chrony
+    state: started
+    enabled: true
+
+- name: Configure UFW defaults
+  ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+
+- name: Allow SSH
+  ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+
+- name: Enable UFW
+  ufw:
+    state: enabled
+
+- name: Set AppArmor unprivileged userns compatibility for bubblewrap
+  sysctl:
+    name: kernel.apparmor_restrict_unprivileged_userns
+    value: "{{ apparmor_restrict_unprivileged_userns }}"
+    state: present
+    sysctl_set: true
+    reload: true
+
+- name: Ensure swapfile exists
+  stat:
+    path: /swapfile
+  register: swapfile_stat
+
+- name: Assert swap present (do not recreate on Host D)
+  assert:
+    that:
+      - swapfile_stat.stat.exists
+    fail_msg: "Expected /swapfile from Host D prep; not recreating in Phase 2A"
+
+- name: Install logrotate fragment for staging logs
+  copy:
+    dest: /etc/logrotate.d/appsolino-fusion-staging
+    mode: "0644"
+    content: |
+      {{ staging_logs }}/*.log {
+        weekly
+        rotate 8
+        missingok
+        notifempty
+        compress
+        delaycompress
+        copytruncate
+      }

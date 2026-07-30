@@ -1,0 +1,115 @@
+---
+# FNXC:Phase2A 2026-07-29-21:45:
+# Staging env files + systemd units. Package install via install-staging-release.sh.
+# FNXC:Phase2A 2026-07-30-08:00: Install prestart validator + acceptance-run unit; keep probe as ACC-ENV-06 target only.
+
+- name: Reject production env markers
+  shell: |
+    set -euo pipefail
+    for f in "{{ staging_env_file }}" "{{ staging_secrets_file }}"; do
+      [ -f "$f" ] || continue
+      if grep -Eiq 'production|/opt/appsolino-fusion/production|fusion_prod' "$f"; then
+        echo "PRODUCTION_MARKER in $f" >&2
+        exit 2
+      fi
+    done
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install staging fusion.env
+  copy:
+    dest: "{{ staging_env_file }}"
+    owner: root
+    group: "{{ fusion_group }}"
+    mode: "0640"
+    content: |
+      # FNXC:Phase2A 2026-07-29-21:45: Non-secret staging runtime identity
+      ENVIRONMENT=staging
+      PORT={{ staging_http_port }}
+      HOST={{ staging_bind_host }}
+      FUSION_HOME={{ staging_fusion_home }}
+      HOME={{ staging_fusion_home }}
+      FUSION_SKIP_ONBOARDING=1
+
+- name: Install operational scripts from repo
+  shell: |
+    set -euo pipefail
+    SRC="{{ playbook_dir }}/../../scripts"
+    changed=0
+    for s in staging-health-check.sh staging-health-negative-tests.sh staging-backup.sh staging-restore-test.sh staging-prestart-validate.sh verify-host-separation.sh verify-service-admin-path.sh verify-bubblewrap-path.sh run-staging-acceptance.sh install-staging-release.sh; do
+      if [ ! -f "/usr/local/sbin/$s" ] || ! cmp -s "$SRC/$s" "/usr/local/sbin/$s"; then
+        install -m 0755 -o root -g root "$SRC/$s" "/usr/local/sbin/$s"
+        changed=1
+      fi
+    done
+    exit $changed
+  args:
+    executable: /bin/bash
+  register: script_install
+  changed_when: script_install.rc == 1
+  failed_when: script_install.rc > 1
+
+- name: Render fusion-staging.service
+  template:
+    src: fusion-staging.service.j2
+    dest: /etc/systemd/system/fusion-staging.service
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Render fusion-staging-health.service
+  template:
+    src: fusion-staging-health.service.j2
+    dest: /etc/systemd/system/fusion-staging-health.service
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Render fusion-staging-health.timer
+  template:
+    src: fusion-staging-health.timer.j2
+    dest: /etc/systemd/system/fusion-staging-health.timer
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Render acceptance probe unit
+  template:
+    src: fusion-staging-acceptance-probe.service.j2
+    dest: /etc/systemd/system/fusion-staging-acceptance-probe.service
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Render acceptance-run harness unit
+  template:
+    src: fusion-staging-acceptance-run.service.j2
+    dest: /etc/systemd/system/fusion-staging-acceptance-run.service
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Flush handlers for unit install
+  meta: flush_handlers
+
+- name: Enable acceptance probe unit file
+  systemd:
+    name: fusion-staging-acceptance-probe.service
+    enabled: true
+    daemon_reload: true
+
+- name: Enable health timer
+  systemd:
+    name: fusion-staging-health.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Check staging current executable
+  stat:
+    path: "{{ staging_current }}/fn"
+  register: staging_fn
+
+- name: Enable fusion-staging when package present
+  systemd:
+    name: fusion-staging.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: staging_fn.stat.exists | default(false)

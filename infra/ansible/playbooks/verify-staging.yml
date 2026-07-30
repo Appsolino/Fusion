@@ -1,0 +1,18 @@
+---
+- name: Verify staging foundation
+  hosts: staging
+  become: true
+  tasks:
+    - name: Host separation
+      command: /usr/local/sbin/verify-host-separation.sh
+      changed_when: false
+    - name: Bubblewrap probes
+      command: /usr/local/sbin/verify-bubblewrap-path.sh
+      changed_when: false
+    - name: UFW status
+      command: ufw status verbose
+      register: ufw
+      changed_when: false
+    - name: Show UFW
+      debug:
+        var: ufw.stdout_lines

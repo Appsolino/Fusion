@@ -1,0 +1,9 @@
+MainPID=53880
+ExecStart={ path=/opt/appsolino-fusion/staging/current/fn ; argv[]=/opt/appsolino-fusion/staging/current/fn dashboard --host 127.0.0.1 --port 4140 --paused --no-auth --no-supervise ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+EnvironmentFiles=/etc/appsolino-fusion/staging/fusion.env (ignore_errors=yes)
+EnvironmentFiles=/etc/appsolino-fusion/staging/secrets.env (ignore_errors=yes)
+User=fusion
+Group=fusion
+ActiveState=active
+SubState=running
+FragmentPath=/etc/systemd/system/fusion-staging.service
