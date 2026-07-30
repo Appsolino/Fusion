@@ -72,12 +72,20 @@ describe("the LIVE implementation primitive announces the exit", () => {
     expect(completed[0]).not.toHaveProperty("exit");
   });
 
-  it("returns the unchanged routing outcome — announcing must not reroute", async () => {
-    const { primitives, ctx } = harness({ taskDone: false, modifiedFiles: [], exit: "review-handoff-pending-review" });
+  it("routes the pending-review ending, and leaves every other ending's value alone", async () => {
+    /*
+    This pin was "announcing must not reroute" while exits were reporting-only. The pending-review
+    ending is now a ROUTED outcome, so the row changed deliberately — declared here rather than
+    discovered. Every other ending keeps `implementation-incomplete`, which is what proves the
+    move is narrow.
+    */
+    const moved = await (harness({ taskDone: false, modifiedFiles: [], exit: "review-handoff-pending-review" })
+      .primitives.runCodingSession({ run: {}, node: { node: { id: "execute", kind: "prompt" }, context: {} } } as never, TASK, { worktreePath: "/tmp/wt", branchName: "b" } as never));
+    expect(moved).toMatchObject({ outcome: "failure", value: "review-pending" });
 
-    const result = await primitives.runCodingSession(ctx, TASK, { worktreePath: "/tmp/wt", branchName: "b" } as never);
-
-    expect(result).toMatchObject({ outcome: "failure", value: "implementation-incomplete" });
+    const unmoved = await (harness({ taskDone: false, modifiedFiles: [], exit: "review-handoff-paused-after-completion" })
+      .primitives.runCodingSession({ run: {}, node: { node: { id: "execute", kind: "prompt" }, context: {} } } as never, TASK, { worktreePath: "/tmp/wt", branchName: "b" } as never));
+    expect(unmoved).toMatchObject({ outcome: "failure", value: "implementation-incomplete" });
   });
 
   /*
@@ -131,5 +139,82 @@ describe("the LIVE implementation primitive announces the exit", () => {
     /* The assertion that matters: no seam function ran, for any seam name. */
     expect(calls.filter((c) => c.startsWith("seam:"))).toEqual([]);
     expect(calls.some((c) => c.startsWith("prim:"))).toBe(true);
+  });
+});
+
+/*
+FNXC:WorkflowExecutionOwnership 2026-07-29-20:20 (U8 / R4, R12, PR #2590 review — greptile):
+The compat path for user-authored graphs, and the shape that proved the first version of it could
+not fire. `graphFailureValue` reads only the LAST visited node's value; a custom graph may route
+its generic `failure` edge THROUGH another node, whose value then becomes terminal. The
+pending-review ending is still recorded in the run context, so that is where it is read from.
+
+Without this the card falls to the terminal park — `status: failed` on work that was only WAITING
+for a reviewer, which is exactly the merge-queue deadlock the inline handoff existed to prevent.
+*/
+describe("compat park for graphs that do not route review-pending", () => {
+  beforeEach(() => { resetExecutorMocks(); resetWorkflowEventBusForTesting(); });
+  afterEach(() => resetWorkflowEventBusForTesting());
+
+  function failureRun(overrides: Record<string, unknown>) {
+    return {
+      disposition: "failed" as const,
+      outcome: "failure" as const,
+      visitedNodeIds: ["execute", "cleanup"],
+      context: overrides,
+    };
+  }
+
+  function parkHarness() {
+    const store = createMockStore();
+    const live = { id: "FN-COMPAT", column: "in-progress", status: null, error: null, steps: [], log: [], paused: false, userPaused: false } as unknown as TaskDetail;
+    store.getTask.mockResolvedValue(live);
+    store.handoffToReview = vi.fn().mockImplementation(async (id: string) => store.moveTask(id, "in-review"));
+    return { store, live, executor: new TaskExecutor(store, "/tmp/test") };
+  }
+
+  it("parks in review when the walk ended on a node that recorded no verdict of its own", async () => {
+    /* The compat shape: the generic failure edge passes through a node that reports nothing, so
+       the run's last word is still the implementation node's `review-pending`. */
+    const { store, live, executor } = parkHarness();
+
+    await (executor as never as { handleGraphFailure: (t: unknown, r: unknown) => Promise<void> })
+      .handleGraphFailure(live, failureRun({ "node:execute:value": "review-pending" }));
+
+    expect(store.handoffToReview).toHaveBeenCalledWith("FN-COMPAT", expect.anything());
+    expect(store.updateTask).not.toHaveBeenCalledWith(
+      "FN-COMPAT",
+      expect.objectContaining({ status: "failed" }),
+      expect.anything(),
+    );
+  });
+
+  it("does NOT park when a LATER node reported its own failure (stale value must not mask it)", async () => {
+    /*
+    FNXC PR #2590 review (greptile, 2nd): the run context is shared for the whole walk, so a graph
+    that continues past a pending-review node and then dies downstream still carries the earlier
+    value. Parking on that would hide a real failure behind a wait — the opposite over-reach from
+    the first finding, and worse, because the operator sees a card waiting for a reviewer who has
+    nothing to review.
+    */
+    const { store, live, executor } = parkHarness();
+
+    await (executor as never as { handleGraphFailure: (t: unknown, r: unknown) => Promise<void> })
+      .handleGraphFailure(live, failureRun({
+        "node:execute:value": "review-pending",
+        "node:cleanup:value": "verification-failed",
+      }));
+
+    expect(store.handoffToReview).not.toHaveBeenCalled();
+  });
+
+  it("does NOT park for an ordinary failure with no pending-review value anywhere", async () => {
+    /* The guard must stay narrow — a genuine execute failure still belongs to the terminal sink. */
+    const { store, live, executor } = parkHarness();
+
+    await (executor as never as { handleGraphFailure: (t: unknown, r: unknown) => Promise<void> })
+      .handleGraphFailure(live, failureRun({ "node:execute:value": "implementation-incomplete" }));
+
+    expect(store.handoffToReview).not.toHaveBeenCalled();
   });
 });
