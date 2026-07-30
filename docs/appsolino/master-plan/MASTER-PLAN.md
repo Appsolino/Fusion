@@ -8,14 +8,15 @@
 Phase 0: COMPLETE
 Phase 1: COMPLETE (0.74.0-beta.5)
 Phase 2A: PARTIAL / MERGED / USABLE (PR #10 → 6caca1ec…)
-Active: Phase V1 (V1A then V1B) — NOT STARTED
+V1A: COMPLETE (PR #11 → 45ab25100…)
+V1B: READY / NOT STARTED
 Host D: development / build / staging ONLY — production prohibited
-Host P: production VPS (planned)
+Host P: production VPS (planned — SSH target required before V1B)
 Former Phases 3–8: Future Improvements (not v1 blockers)
 Legacy production: DEGRADED / FROZEN — untouched until replacement smoke passes
 ```
 
-**Accepted baseline:** upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + patch `a366fab379…` → product `82feb14b7…` (`0.74.0-beta.5`). Closure PR #9 `4c9e98cd…`. Phase 2A PR #10 `6caca1ec…`.
+**Accepted baseline:** upstream `b85a5d4531df8fa749d77bf85ea4ab9ab960ce86` + patch `a366fab379…` → product `82feb14b7…` (`0.74.0-beta.5`). Closure PR #9 `4c9e98cd…`. Phase 2A PR #10 `6caca1ec…`. V1A PR #11 `45ab25100…` — candidate `v1a-0.74.0-beta.5-f54d53082`.
 
 ---
 
@@ -111,8 +112,8 @@ Executable SHA-256 on Host P must match the Host D candidate. Host P performs **
 | Phase 0 — Decisions | COMPLETE |
 | Phase 1 — Accepted package | COMPLETE |
 | Phase 2A — Staging foundation | COMPLETE ENOUGH / USABLE |
-| **Phase V1A** — Build/validate candidate on Host D | **Next / NOT STARTED** |
-| **Phase V1B** — Deploy exact artifact to Host P | After V1A passes |
+| **Phase V1A** — Build/validate candidate on Host D | **COMPLETE** (PR #11) |
+| **Phase V1B** — Deploy exact artifact to Host P | **READY / NOT STARTED** |
 | Former Phases 3–8 | Future Improvements (optional) |
 
 Detail: `13-phased-implementation-roadmap.md`. Approvals: `15-open-decisions.md`.

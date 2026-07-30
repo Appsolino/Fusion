@@ -8,9 +8,10 @@ Status:
 Phase 0: APPROVED (historical)
 Phase 1: COMPLETE
 Phase 2A: PARTIAL / MERGED / USABLE
-Active: Phase V1A then V1B (NOT STARTED)
+V1A: COMPLETE (PR #11 → 45ab25100…)
+V1B: READY / NOT STARTED
 Host D production: PROHIBITED
-Host P production: PLANNED
+Host P production: PLANNED (SSH target required before V1B)
 Former Phases 3–8: Future Improvements
 Legacy production: DEGRADED / FROZEN
 ```
@@ -128,8 +129,9 @@ Degraded and frozen. Do not migrate old damaged data into Personal Project v1.
 ## Implementation authorisation (current)
 
 ```text
-Authorised next: Phase V1A (Host D build/validate) when explicitly started
-Then: Phase V1B (Host P deploy) after V1A passes and Host P is ready
+V1A: COMPLETE — candidate frozen; do not rebuild
+Authorised next: Phase V1B (Host P deploy) when Host P SSH target is provided and V1B is explicitly started
 Not authorised: production identities on Host D
-Not authorised: automatic start of V1A/V1B from this docs commit
+Not authorised: automatic start of V1B from this docs commit
+Not authorised: Host P access until the V1B mission is issued
 ```

@@ -9,9 +9,10 @@ Status:
 Phase 0: COMPLETE
 Phase 1: COMPLETE (0.74.0-beta.5)
 Phase 2A: PARTIAL / MERGED / USABLE
-Active: Phase V1A then V1B (NOT STARTED)
+V1A: COMPLETE (PR #11 → 45ab25100…)
+V1B: READY / NOT STARTED
 Host D: development / build / staging ONLY — production prohibited
-Host P: production VPS (planned)
+Host P: production VPS (planned — SSH target required before V1B)
 Former Phases 3–8: Future Improvements (optional)
 Legacy production: DEGRADED / FROZEN
 ```
@@ -60,10 +61,10 @@ Phase 2A: PR #10 → 6caca1ec…
 
 ## Active work
 
-1. **V1A** — build and validate production candidate on Host D (next).
-2. **V1B** — deploy that exact artifact to Host P (after V1A).
+1. **V1A** — COMPLETE. Candidate `v1a-0.74.0-beta.5-f54d53082` frozen on Host D (see `docs/appsolino/v1/V1A-CANDIDATE.md`).
+2. **V1B** — READY / NOT STARTED. Deploy the exact frozen archive to Host P after the Host P SSH target is provided.
 
-Focused Level C checks only. One-day clock requires Host P already accessible.
+Focused Level C checks only. Do not rebuild the candidate.
 
 ## What is not a v1 blocker
 

@@ -3,6 +3,8 @@
 Last updated: 2026-07-30
 
 result: PASS
+status: COMPLETE (PR #11 merged `45ab251001b75c701de501f1d96b8d6a34f5bd7b`)
+V1B: READY / NOT STARTED
 
 ## Identity
 
@@ -41,4 +43,5 @@ Notes:
 - HOST_D_PRODUCTION_IDENTITIES: ABSENT
 - HOST_P_ACCESSED: NO
 - LEGACY_PRODUCTION_TOUCHED: NO
-- V1B_AUTHORISED: NO
+- V1B_STARTED: NO
+- V1B: READY / NOT STARTED (requires Host P SSH target before mission)

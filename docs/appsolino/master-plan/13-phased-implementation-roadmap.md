@@ -50,9 +50,9 @@ Executable SHA-256 on Host P must match Host D. Production credentials/data exis
 
 ### Phase V1A — Build and validate production candidate on Host D
 
-- **Status:** **Next / NOT STARTED**
+- **Status:** **COMPLETE** (2026-07-30). PR #11 → `45ab25100…`. Record: `docs/appsolino/v1/V1A-CANDIDATE.md`. Release `v1a-0.74.0-beta.5-f54d53082`.
 - **Objective:** Build once from current `main`, validate on staging, freeze immutable candidate.
-- **Forbidden:** upstream pull; product behaviour changes; creating any production paths/DB/service on Host D; old-data migration.
+- **Forbidden:** upstream pull; product behaviour changes; creating any production paths/DB/service on Host D; old-data migration. Do **not** rebuild this frozen candidate.
 
 #### Procedure
 
@@ -99,9 +99,9 @@ Do **not** rebuild this package on Host P.
 
 ### Phase V1B — Deploy exact artifact to Host P
 
-- **Status:** After V1A passes / NOT STARTED
+- **Status:** **READY / NOT STARTED** (awaiting Host P SSH target / Cursor host name)
 - **Objective:** Install the Host D candidate on Host P; production smoke; first backup/restore; declare v1 complete.
-- **Prerequisite:** Host P accessible and ready. Host P performs **no** source builds.
+- **Prerequisite:** Host P accessible and ready. Transfer exact frozen archive only. Host P performs **no** source builds.
 
 #### Procedure
 
