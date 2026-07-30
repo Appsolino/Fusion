@@ -240,3 +240,98 @@ Blocking Correction A/B behaviours fixed on Host D staging with corrected candid
 - LEGACY_PRODUCTION_TOUCHED: NO
 - OLD_CANDIDATE_MUTATED: NO
 - V1B_STARTED: NO
+
+---
+
+# V1A.3 — Host D real-provider execution proof
+
+Last updated: 2026-07-30
+
+result: **BLOCKED**
+
+date (UTC): 2026-07-30
+hostname: `vmi3201923` (Host D)
+
+## Candidate (unchanged — no rebuild)
+
+- release ID: `v1a2-0.74.0-beta.5-3bc46bffe`
+- executable SHA-256: `4d58e8a1205a0334e6506427bc588a2ac6e76f2aa01b852610b93dedee0d2829` (MATCH)
+- staging path: `/opt/appsolino-fusion/staging/releases/v1a2-0.74.0-beta.5-3bc46bffe`
+- `current` symlink: active → same release
+- CANDIDATE_REBUILT: NO
+
+## Preflight
+
+| Check | Result |
+| --- | --- |
+| Primary `main` clean / ff to tip | YES (`3d0eefb69325706c921e819dce7bbbe45acd1374` after PR #15/#16) |
+| Release active | YES |
+| Exe SHA match | YES |
+| Health | `ok` / `0.74.0-beta.5` |
+| Listener | `127.0.0.1:4140` only |
+| Engine before config inspection | PAUSED (`enginePaused=true`; service `--paused`; DB `isRunning=false`) |
+| Old tasks eligible for redispatch | NONE (proj A: 6×`done`; proj B: 1×`done`) |
+
+## Provider inventory (secrets redacted)
+
+| Item | Observation |
+| --- | --- |
+| Global `testMode` | `true` (forces mock/scripted for all AI lanes) |
+| `enginePaused` | `true` |
+| Configured execution provider/model | Not runnable as real provider while `testMode=true`; no non-mock provider/model pair selected for live execution |
+| Credential source | `/etc/appsolino-fusion/staging/secrets.env` keys: `DATABASE_URL`, `STAGING_DB_PASSWORD` only — **no AI provider keys** |
+| Agent auth store | `FUSION_HOME/.fusion/agent/auth.json` = empty object `{}` |
+| Automatic fallback enabled | `executorModelEscalationEnabled=false`; `customProviders=[]` |
+| Actual runtime if task started under current settings | Would be **mock** (forbidden for V1A.3) |
+
+**Gate:** Real provider cannot be run without silently using mock. Per mission rules → **BLOCKED** (did not create/run a task; did not disable `testMode` to fake a pass).
+
+## Disposable repo prepared (no execution)
+
+- Path: `/srv/appsolino-fusion/staging/disposables/v1a3-real-provider`
+- Baseline commit: `0477dcde8ad7efe73883bbcb360b8db857761952`
+- Files: `README.md`, `notes.txt`
+- Remotes: none
+- Owner: `fusion`
+- Project registration / task creation: **NOT DONE** (blocked at provider gate)
+
+## Execution evidence
+
+| Field | Value |
+| --- | --- |
+| Task ID | N/A (not created) |
+| Run ID | N/A |
+| Selected vs actual provider/model | N/A — no real-provider session |
+| Worktree / branch | N/A |
+| Attempts | 0 |
+| Terminal state | N/A |
+| Git diff | N/A |
+| Process evidence | N/A |
+| Service restart after terminal | NOT REQUIRED (no run) |
+
+## Blocking reason
+
+Host D staging has **no real AI provider credentials** and `testMode=true`. V1A.1 already recorded that production AI credentials are absent on Host D. V1A.3 requires one real-provider execution with no testMode/mock; proceeding would violate the anti-mock rule or the no-Host-P / no-production-credentials constraint.
+
+Operator unblock path (out of scope for this mission): provision a **non-production** real-provider credential into staging secret store, set `testMode=false`, keep engine paused until inspection, then re-run V1A.3 on the same candidate without rebuild.
+
+## Related Host D ops (same mission window)
+
+- PR #15 timing rule: MERGED (`d7b97d82f…`)
+- PR #16 upstream shadow docs/YAML-in-docs: MERGED (`3d0eefb69…`)
+- Workflow activation to `.github/workflows/upstream-shadow.yml`: **BLOCKED** — OAuth token scopes `gist,read:org,repo` lack `workflow`; `gh auth refresh -s workflow` device flow not completed; deploy keys disabled on Appsolino/Fusion; no PAT with workflow scope found. Local activation commit exists only on worktree `ops-upstream-shadow-monitor` (`42fdd6a62`) and was not pushed. `gh workflow run upstream-shadow.yml` → HTTP 404. `upstream-shadow` branch ABSENT. Appsolino `main` unchanged by any shadow job.
+- `a.anas.bz`: homepage HTTP 200 with basic auth; unauth 401; plaintext credential file shredded after smoke; `/etc/nginx/.htpasswd-fusion-dev` preserved. Operator must store password in password manager (agent cannot access PM).
+
+## Final decision
+
+**BLOCKED**
+
+No real-provider proof attempted. Candidate unchanged. No mock laundering.
+
+## Explicit statements
+
+- HOST_P_ACCESSED: NO
+- PRODUCTION_IDENTITIES_ON_HOST_D: ABSENT
+- LEGACY_PRODUCTION_TOUCHED: NO
+- UPSTREAM_MERGED: NO
+- V1B_STARTED: NO
