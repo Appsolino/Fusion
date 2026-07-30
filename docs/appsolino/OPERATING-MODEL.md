@@ -109,15 +109,37 @@ b85a5d4531df8fa749d77bf85ea4ab9ab960ce86
 
 Synchronise intentionally — approximately monthly, or when there is a needed feature, bug fix, or security fix. **Not** before every task.
 
+### Automated shadow monitoring (observation only)
+
+GitHub Actions workflow `.github/workflows/upstream-shadow.yml` runs **daily** and:
+
+- fetches `https://github.com/Runfusion/Fusion.git` `main`;
+- force-pushes that exact tip to Appsolino branch `upstream-shadow`;
+- records upstream SHA and ahead/behind vs Appsolino `main` in the job summary.
+
+Hard limits for the shadow job:
+
+- **Must not** merge into Appsolino `main`.
+- **Must not** overwrite `main`.
+- **Must not** run `pnpm` install/build or full product CI.
+
+Details: `docs/appsolino/upstream/UPSTREAM-MONITORING.md`.
+
+### Controlled sync PR (intentional)
+
+When a sync is justified, open a human-controlled branch and PR — never promote `upstream-shadow` itself:
+
 ```text
 Appsolino main
-  → dedicated upstream-sync branch
+  → sync/upstream-YYYY-MM-DD
   → fetch/merge upstream once
-  → resolve conflicts once
+  → resolve conflicts once (including migrations / Appsolino-only surfaces)
   → integration tests
   → packaged staging smoke
-  → merge
+  → merge via PR
 ```
+
+Keep intentional sync. **Never** auto-overwrite `main` from monitoring or from an unreviewed upstream tip.
 
 `git rerere` remains enabled. Keep Appsolino-specific changes small, isolated, well named, and covered by focused tests.
 
@@ -242,7 +264,7 @@ Phase 1: COMPLETE
 Phase 2A: PARTIAL / MERGED
 Staging foundation: USABLE
 Daily development: FAST TARGETED VALIDATION
-Upstream sync: MANUAL / SCHEDULED
+Upstream sync: MANUAL / SCHEDULED (shadow monitor automated; main never auto-overwritten)
 Off-host backup: REQUIRED BEFORE PRODUCTION
 Clean rebuild: REQUIRED ONCE BEFORE PRODUCTION
 Engine-child admin proof: REQUIRED BEFORE AUTONOMOUS HOST-ADMIN

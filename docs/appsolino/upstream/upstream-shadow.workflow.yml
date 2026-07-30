@@ -1,0 +1,73 @@
+# FNXC:AppsolinoUpstream 2026-07-30-21:26:
+# Daily mirror of Runfusion/Fusion main onto Appsolino branch `upstream-shadow` only.
+# Must never merge into Appsolino main, install deps, or run pnpm build.
+# Intentional sync remains a human-controlled sync/upstream-YYYY-MM-DD PR (see docs/appsolino/upstream/UPSTREAM-MONITORING.md).
+
+name: Upstream Shadow Monitor
+
+on:
+  schedule:
+    # Daily ~06:15 UTC — observational only; not a sync trigger.
+    - cron: "15 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-shadow-monitor
+  cancel-in-progress: true
+
+jobs:
+  shadow:
+    name: Mirror upstream tip to upstream-shadow
+    runs-on: ubuntu-latest
+    # Sparse/minimal checkout of Appsolino tip only so we have git + gh credentials.
+    # No pnpm, no build, no full product tree needed.
+    steps:
+      - name: Checkout Appsolino (minimal)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            .github
+          sparse-checkout-cone-mode: true
+
+      - name: Fetch upstream main and force-push shadow branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          UPSTREAM_URL="https://github.com/Runfusion/Fusion.git"
+          SHADOW_BRANCH="upstream-shadow"
+          APPSOLINO_MAIN_REF="origin/main"
+
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream main
+          git fetch --no-tags origin main
+
+          UPSTREAM_SHA="$(git rev-parse upstream/main)"
+          APPSOLINO_SHA="$(git rev-parse "$APPSOLINO_MAIN_REF")"
+          MERGE_BASE="$(git merge-base "$APPSOLINO_MAIN_REF" upstream/main)"
+          AHEAD="$(git rev-list --count upstream/main.."$APPSOLINO_MAIN_REF")"
+          BEHIND="$(git rev-list --count "$APPSOLINO_MAIN_REF"..upstream/main)"
+
+          # Exact tip mirror onto upstream-shadow (force). Never update main.
+          git push --force origin "upstream/main:refs/heads/${SHADOW_BRANCH}"
+
+          {
+            echo "## Upstream shadow monitor"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Upstream tip (Runfusion/Fusion main) | \`${UPSTREAM_SHA}\` |"
+            echo "| Appsolino main | \`${APPSOLINO_SHA}\` |"
+            echo "| Merge-base | \`${MERGE_BASE}\` |"
+            echo "| Appsolino ahead of upstream | ${AHEAD} |"
+            echo "| Appsolino behind upstream | ${BEHIND} |"
+            echo "| Shadow branch | \`${SHADOW_BRANCH}\` (force-updated to upstream tip) |"
+            echo
+            echo "This job does **not** merge into \`main\` and does **not** run \`pnpm\` / build."
+            echo "Controlled sync remains a manual \`sync/upstream-YYYY-MM-DD\` PR."
+          } >> "$GITHUB_STEP_SUMMARY"
