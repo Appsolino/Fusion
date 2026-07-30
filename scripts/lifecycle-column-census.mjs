@@ -88,6 +88,8 @@ const json = process.argv.includes("--json");
 const strict = process.argv.includes("--strict");
 const compare = process.argv.includes("--compare");
 const updateBaseline = process.argv.includes("--update-baseline");
+/* `--exact` keeps hard failure on a DROP, for the end state where the count is pinned. */
+const exact = process.argv.includes("--exact");
 
 if (json) {
   console.log(JSON.stringify({ scannedFiles: files.length, ...summary, byFile: summary.byFile }, null, 2));
@@ -362,7 +364,7 @@ The flag is an explicit operator action, so it re-records unconditionally and PR
 under `ACCEPTED RISES`. Silently swallowing a rise is the real danger; refusing to let anyone re-record is
 the same danger one step later, wearing a red check nobody trusts.
 */
-if (updateBaseline) {
+function writeBaseline() {
   writeFileSync(
     BASELINE_PATH,
     `${JSON.stringify({
@@ -376,6 +378,10 @@ if (updateBaseline) {
       queryByFile: Object.fromEntries(summary.queryByFile),
     }, null, 2)}\n`,
   );
+}
+
+if (updateBaseline) {
+  writeBaseline();
   if (regressions.length > 0) {
     console.log("\n  ACCEPTED RISES (a merge or a conversion added guards here — convert them or they stay in the bar):");
     for (const r of regressions) {
@@ -410,16 +416,88 @@ it. The `!deliberateTracked && updateBaseline` condition went with it: the uncon
 legacy-shape migration too.
 */
 if (stale.length > 0) {
-  console.error("\nlifecycle-column-census --strict: baseline is STALE — it allows more than the tree has\n");
-  for (const s of stale) {
-    console.error(`  ${s.file}: allows ${s.allowed}, tree has ${s.count}`);
+  /*
+  FNXC:LifecycleColumnCensus 2026-08-01-02-30 (coordinator item 2 — the ratchet must FOLLOW THE COUNT DOWN):
+  A DROP TIGHTENS THE BASELINE INSTEAD OF FAILING. The old behaviour failed hard, and the reasoning was sound
+  in isolation — a stale allowance is a hole, since those guards can return up to the old count while the
+  check stays green. What it missed is that the drop is almost never the author's to fix: eleven files dropped
+  during one merge wave, none of those PRs re-recorded, and none of their authors did anything wrong. Measured
+  three separate times since CI began gating this (`columnRoles.ts` 0->1, then `executor.ts` twice).
+
+  A PERMANENTLY-RED GATE IS A BIGGER HOLE THAN A STALE ALLOWANCE, because it gets ignored and then nothing is
+  guarded at all. So the ceiling now follows the count down automatically and says so, while the RISE check —
+  the actual purpose, "no new guards" — still fails hard and untouched.
+
+  THE RESIDUAL, named rather than glossed: in CI the write is discarded with the runner, so the committed
+  baseline stays stale until someone commits a tightened one. The exposure is bounded (regrowth only up to the
+  old count) and printed on every run, and it is strictly smaller than the exposure from a check people route
+  around. `--exact` keeps hard failure for the end state, when the count is meant to be pinned and any
+  divergence is a real event.
+  */
+  /*
+  FNXC:LifecycleColumnCensus 2026-07-30-12:10 (PR #2679 review — greptile P1):
+  A TOUCHED FILE MUST BE RE-RECORDED; AN UNTOUCHED ONE IS AUTO-TIGHTENED.
+
+  The residual named below is real: in CI the tightening write is discarded with the runner, so the
+  committed allowance stays stale and a later change can regrow guards up to it while the gate is
+  green. Naming that is not closing it.
+
+  This closes it where the regrowth would have to happen. Regrowing a guard means EDITING the file,
+  so requiring an exact baseline only for files the change TOUCHES makes the hole unreachable — while
+  the case this PR exists for stays green, because those authors did not touch the files that dropped
+  (eleven files dropped in one merge wave; none of those authors did anything wrong).
+
+  Falls back to the lenient path when no base ref resolves, so a detached or shallow checkout
+  degrades to the previous behaviour rather than failing closed on a git detail.
+  */
+  let touched = new Set();
+  /*
+  The touched set is overridable for the same reason BASELINE_PATH is: otherwise this branch can only
+  be tested against whatever the CURRENT branch happens to have changed, so the test's outcome would
+  depend on the diff of the PR running it. Production never sets it.
+  */
+  if (process.env.FUSION_CENSUS_TOUCHED_PATHS !== undefined) {
+    touched = new Set(process.env.FUSION_CENSUS_TOUCHED_PATHS.split(",").map((f) => f.trim()).filter(Boolean));
+  } else {
+    try {
+      const base = process.env.GITHUB_BASE_REF ? `origin/${process.env.GITHUB_BASE_REF}` : "origin/main";
+      touched = new Set(
+        execSync(`git diff --name-only ${base}...HEAD`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+          .split("\n").map((f) => f.trim()).filter(Boolean),
+      );
+    } catch {
+      /* No usable base ref — leave `touched` empty so every entry takes the lenient path. */
+    }
   }
-  console.error(
-    "\nA stale allowance is a hole: those guards can be reintroduced later and this check stays\n" +
-    "green. Re-record the baseline in the SAME PR that lowered the count:\n\n" +
-    "  node scripts/lifecycle-column-census.mjs --strict --update-baseline\n",
+
+  const staleTouched = stale.filter((entry) => touched.has(entry.file));
+  if (staleTouched.length > 0) {
+    console.error(
+      "\nlifecycle-column-census --strict: this change TOUCHES files whose guard count dropped, so the\n"
+      + "baseline must be re-recorded in this change — otherwise the allowance stays open for regrowth.\n",
+    );
+    for (const entry of staleTouched) {
+      console.error(`  ${entry.file}: allows ${entry.allowed}, tree has ${entry.count}`);
+    }
+    console.error("\nRe-record it:\n\n  node scripts/lifecycle-column-census.mjs --strict --update-baseline\n");
+    process.exit(1);
+  }
+
+  const lines = stale.map((entry) => `  ${entry.file}: allows ${entry.allowed}, tree has ${entry.count}`);
+  if (exact) {
+    console.error("\nlifecycle-column-census --strict --exact: baseline is STALE — it allows more than the tree has\n");
+    for (const line of lines) console.error(line);
+    console.error("\nRe-record it:\n\n  node scripts/lifecycle-column-census.mjs --strict --update-baseline\n");
+    process.exit(1);
+  }
+  writeBaseline();
+  console.log("\nlifecycle-column-census --strict: baseline TIGHTENED — the tree has fewer guards than it allowed\n");
+  for (const line of lines) console.log(line);
+  console.log(
+    "\nThe baseline file has been rewritten downward. COMMIT IT so the allowance cannot be regrown into;\n"
+    + "in CI this write is discarded with the runner, which is why the gate is green and not silent.\n",
   );
-  process.exit(1);
+  process.exit(0);
 }
 
 console.log("\nlifecycle-column-census --strict: every file matches its baseline exactly.");
