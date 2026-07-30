@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 # FNXC:Phase2A 2026-07-30-07:55: Install packaged fn into immutable staging release dir + current symlink.
 # FNXC:Phase2A 2026-07-30-07:55: Never rm -rf an existing named release; stage then rename; fail closed on identity mismatch; idempotent no-op on match.
+# FNXC:V1A 2026-07-30-08:55: Optional third arg sets the immutable release ID so V1A can freeze v1a-0.74.0-beta.5-<short> without inventing a second layout or deleting prior phase2a releases.
 set -euo pipefail
 SRC_DIST="${1:-}"
 MAIN_SHA="${2:-}"
+RELEASE_ID_OVERRIDE="${3:-}"
 VERSION="0.74.0-beta.5"
 if [[ -z "$SRC_DIST" || -z "$MAIN_SHA" ]]; then
-  echo "usage: $0 <packages/cli/dist> <main-sha>" >&2
+  echo "usage: $0 <packages/cli/dist> <main-sha> [release-id]" >&2
   exit 1
 fi
 short="${MAIN_SHA:0:12}"
-rel="phase2a-${VERSION}-${short}"
+if [[ -n "$RELEASE_ID_OVERRIDE" ]]; then
+  rel="$RELEASE_ID_OVERRIDE"
+else
+  rel="phase2a-${VERSION}-${short}"
+fi
 dest="/opt/appsolino-fusion/staging/releases/${rel}"
 stage="${dest}.staging.$$"
 if [[ ! -x "$SRC_DIST/fn" ]]; then
