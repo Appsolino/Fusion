@@ -3,7 +3,7 @@
 Last updated: 2026-07-30
 **Process authority:** `docs/appsolino/OPERATING-MODEL.md`
 
-**Stop rule:** Active work is **Phase V1A → V1B** only. Host D is development/build/staging only — **production on Host D is prohibited**. Former Phases 3–8 are Future Improvements. Legacy production remains **DEGRADED / FROZEN**.
+**Stop rule:** Active next work is **Phase V1B** only when explicitly started with a Host P target. Host D is development/build/staging only — **production on Host D is prohibited**. Former Phases 3–8 are Future Improvements. Legacy production remains **DEGRADED / FROZEN**.
 
 ---
 
