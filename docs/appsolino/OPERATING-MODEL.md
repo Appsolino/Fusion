@@ -226,6 +226,10 @@ Before implementation:
 8. Treat NOT PROVEN as blocking only the capability that depends on that proof.
 9. Stop when the authorised scope is complete.
 10. Do not begin the next phase automatically.
+11. Record the actual UTC start time before the first implementation action.
+12. Record the UTC stop time after final validation.
+13. Calculate and report actual wall-clock duration.
+14. Never infer missing timing values.
 ```
 
 ---
