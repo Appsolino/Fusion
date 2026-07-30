@@ -4890,6 +4890,62 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
     }
   });
 
+  /**
+   * FNXC:TaskStateReconciliation 2026-07-29-11:40:
+   * Checklist repair must use the live project-scoped store, map missing tasks to 404, reject out-of-range indices, and report 409 when lifecycle ordering rejects the requested transition instead of returning a false-success 200.
+   */
+  router.patch("/tasks/:id/steps/:stepIndex", async (req, res) => {
+    try {
+      const { store: scopedStore } = await getProjectContext(req);
+      const stepIndex = Number(req.params.stepIndex);
+      const validStatuses = ["pending", "in-progress", "done", "skipped"] as const;
+      const status = req.body?.status;
+
+      if (!Number.isInteger(stepIndex) || stepIndex < 0) {
+        throw badRequest("stepIndex must be a non-negative integer");
+      }
+      if (!validStatuses.includes(status)) {
+        throw badRequest(`status must be one of: ${validStatuses.join(", ")}`);
+      }
+
+      const task = await scopedStore.getTask(req.params.id);
+      if (stepIndex >= (task.steps?.length ?? 0)) {
+        throw badRequest(`stepIndex ${stepIndex} is out of range`);
+      }
+
+      const updated = await scopedStore.updateStep(req.params.id, stepIndex, status);
+      if (updated.steps?.[stepIndex]?.status !== status) {
+        throw conflict(`Step ${stepIndex} transition to ${status} was rejected`);
+      }
+      res.json(updated);
+    } catch (err: unknown) {
+      rethrowTaskApiError(err, req.params.id);
+    }
+  });
+
+  /**
+   * FNXC:TaskStateReconciliation 2026-07-29-11:40:
+   * Wedge resolution is compare-and-set against the episode the operator observed. A concurrent replacement episode must remain active rather than being cleared by a stale request from another dashboard process.
+   */
+  router.post("/tasks/:id/wedge/resolve", async (req, res) => {
+    try {
+      const { store: scopedStore } = await getProjectContext(req);
+      const { id } = req.params;
+      const episodeId = req.body?.episodeId;
+      if (typeof episodeId !== "string" || episodeId.length === 0) {
+        throw badRequest("episodeId must be a non-empty string");
+      }
+
+      const result = await scopedStore.resolveTaskWedgeNotificationEpisode(id, episodeId);
+      if (!result.resolved) {
+        throw conflict(`Wedge episode ${episodeId} is no longer active`);
+      }
+      res.json(result.task);
+    } catch (err: unknown) {
+      rethrowTaskApiError(err, req.params.id);
+    }
+  });
+
   // Update task
   router.patch("/tasks/:id", async (req, res) => {
     try {
