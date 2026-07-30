@@ -279,6 +279,39 @@ export function isNonContinuableSessionError(errorMessage: string): boolean {
   return NON_CONTINUABLE_SESSION_PATTERN.test(errorMessage) || CODEX_TRANSCRIPT_DESYNC_NON_CONTINUABLE_PATTERN.test(errorMessage);
 }
 
+/*
+FNXC:V1A.1 2026-07-30-12:35:
+Deterministic execute / step-execute failures must park once (status=failed) instead of clearing markers and bouncing todo↔in-progress. Covers the mock off-by-one "Step N out of range" class and the resulting workflow graph termination at step-execute. Transient/provider patterns stay on existing retry paths via isTransientError / tool-failure retry — this predicate must not match those.
+*/
+const DETERMINISTIC_EXECUTE_FAILURE_PATTERNS: RegExp[] = [
+  /Step\s+\d+\s+out of range\s*\(task has\s+\d+\s+steps?\)/i,
+  /Invalid step number:/i,
+  /Mock executor cannot update steps:\s*task has 0 steps/i,
+  /Workflow graph terminated with failure at node '[^']*step-execute'/i,
+];
+
+export function isDeterministicExecuteFailure(errorMessage: string): boolean {
+  if (!errorMessage || typeof errorMessage !== "string") {
+    return false;
+  }
+  if (isTransientError(errorMessage)) {
+    return false;
+  }
+  return DETERMINISTIC_EXECUTE_FAILURE_PATTERNS.some((pattern) => pattern.test(errorMessage));
+}
+
+export function isDeterministicStepExecuteGraphFailure(failedNode: string | undefined, failureMessage?: string): boolean {
+  const node = failedNode ?? "";
+  const isStepExecuteNode = node === "step-execute" || node.endsWith(":step-execute");
+  if (!isStepExecuteNode) {
+    return false;
+  }
+  if (failureMessage && isTransientError(failureMessage)) {
+    return false;
+  }
+  return true;
+}
+
 const OPERATOR_ACTIONABLE_AGENT_ERROR_PATTERNS: RegExp[] = [
   /invalid api key/i,
   /authentication failed/i,

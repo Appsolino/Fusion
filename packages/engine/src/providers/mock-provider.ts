@@ -224,9 +224,16 @@ const DEFAULT_SCRIPTS: Record<MockSessionPurpose, MockScript> = {
       if (steps.length === 0) {
         steps = await loadTaskSteps(ctx.options);
       }
+      /*
+      FNXC:V1A.1 2026-07-30-12:35:
+      fn_task_update.step is 0-based (FN-6607). The prior `index + 1` script updated indexes 1..N for an N-step task, so a 4-step task attempted Step 4 (out of range) and terminated step-execute. Bound updates to 0..N-1 only; zero-step tasks fail closed with no update call.
+      */
+      if (steps.length === 0) {
+        throw new Error("Mock executor cannot update steps: task has 0 steps (valid indexes are empty)");
+      }
       for (const [index, step] of steps.entries()) {
         if (step.status !== "done" && step.status !== "skipped") {
-          await ctx.invokeTool("fn_task_update", { step: index + 1, status: "done" });
+          await ctx.invokeTool("fn_task_update", { step: index, status: "done" });
         }
       }
       ctx.options.onText?.("Mock executor completed scripted step updates.");

@@ -188,7 +188,7 @@ import { AgentLogger } from "./agent-logger.js";
 import { createLogger, executorLog, reviewerLog, formatError } from "./logger.js";
 import { TokenCapDetector } from "./token-cap-detector.js";
 import { isUsageLimitError, checkSessionError, type UsageLimitPauser } from "./usage-limit-detector.js";
-import { isNonContinuableSessionError, isNonPlanDefectPlanReviewFailure, isSessionContentionError, isTransientError, isSilentTransientError } from "./transient-error-detector.js";
+import { isNonContinuableSessionError, isNonPlanDefectPlanReviewFailure, isSessionContentionError, isTransientError, isSilentTransientError, isDeterministicExecuteFailure, isDeterministicStepExecuteGraphFailure } from "./transient-error-detector.js";
 import { withRateLimitRetry } from "./rate-limit-retry.js";
 import {
   detectExternalIntegrationEvidenceGaps,
@@ -10966,6 +10966,24 @@ export class TaskExecutor {
       the exact silent-loss this conversion exists to remove — require a KNOWN wip column before
       taking the benign shortcut.
       */
+      /*
+      FNXC:V1A.1 2026-07-30-12:35:
+      A prior step-session path could bounce a deterministic step-execute failure to todo (status cleared) before this sink ran. Do not treat that as a benign advance — park failed so the scheduler cannot redispatch.
+      */
+      if (
+        isDeterministicStepExecuteGraphFailure(failedNode, failureValue)
+        && live.column === "todo"
+        && !live.paused
+        && !live.userPaused
+        && !live.deletedAt
+      ) {
+        const message = `Workflow graph terminated with failure at node '${failedNode ?? "unknown"}'`;
+        executorLog.warn(`${task.id}: ${message} — parking failed after deterministic step-execute failure (refusing todo redispatch)`);
+        await this.store.logEntry(task.id, message, undefined, this.getRunContextFor(task.id));
+        await this.store.updateTask(task.id, { error: message, status: "failed" }, this.getRunContextFor(task.id));
+        await this.persistTokenUsage(task.id);
+        return;
+      }
       if (wipColumn !== undefined && live.column !== wipColumn) {
         const benignMessage = `Workflow graph run ended after task already advanced to '${live.column}' — no further action needed`;
         executorLog.log(`${task.id}: ${benignMessage}`);
@@ -11212,6 +11230,13 @@ export class TaskExecutor {
      * preserving step progress. Generic graph failures that remain in-progress
      * are left failed in-place by the caller; they must never be handed to review.
      */
+    /*
+    FNXC:V1A.1 2026-07-30-12:35:
+    Deterministic step-execute failures that already sit in todo must not be "resumed" (status/error cleared) — that is the redispatch storm. in-review→todo incomplete recovery (FN-7228) remains available for review-column rows.
+    */
+    if (isDeterministicStepExecuteGraphFailure(failedNode, failureValue) && live.column === "todo") {
+      return false;
+    }
     if (live.deletedAt) return false;
     if (live.paused || live.userPaused === true) return false;
     if (live.column === "done" || live.column === "archived") return false;
@@ -12598,6 +12623,17 @@ export class TaskExecutor {
           } else {
             const failedSteps = results.filter(r => !r.success);
             const errorSummary = failedSteps.map(r => `Step ${r.stepIndex}: ${r.error || "unknown error"}`).join("; ");
+            /*
+            FNXC:V1A.1 2026-07-30-12:35:
+            Deterministic step failures (e.g. Step N out of range) must park failed in-place. The prior clear+moveTask(todo) path created a redispatch storm under testMode.
+            */
+            if (isDeterministicExecuteFailure(errorSummary)) {
+              await this.store.updateTask(task.id, { status: "failed", error: errorSummary });
+              await this.store.logEntry(task.id, `Step-session deterministic failure — parked failed: ${errorSummary}`, undefined, this.getRunContextFor(task.id));
+              executorLog.log(`✗ ${task.id} step-session deterministic failure → parked failed: ${errorSummary}`);
+              this.options.onError?.(task, new Error(errorSummary));
+              return;
+            }
             await this.store.updateTask(task.id, { status: null, error: null });
             await this.store.logEntry(task.id, `Step-session failed — requeued for execution resume: ${errorSummary}`, undefined, this.getRunContextFor(task.id));
             this.markGraphExecuteSelfRequeued(task.id);
@@ -12706,6 +12742,18 @@ export class TaskExecutor {
               await this.persistTaskTokenUsage(task.id, accumulatedStepTokenUsage);
             }
             if (await this.handleNonContinuableSessionError(task, false, errorMessage)) {
+              return;
+            }
+            /*
+            FNXC:V1A.1 2026-07-30-12:35:
+            Non-transient step-session errors previously always cleared status and moved to todo. Deterministic execute failures (out-of-range step index, mock zero-step, step-execute graph terminate) must park failed once; transient/provider retries remain on the isTransientError branch above.
+            */
+            if (isDeterministicExecuteFailure(errorMessage)) {
+              executorLog.error(`✗ ${task.id} step-session deterministic failure:`, errorDetail);
+              await this.store.logEntry(task.id, `Step-session deterministic failure — parked failed: ${errorMessage}`, errorStack ?? errorDetail, this.getRunContextFor(task.id));
+              await this.store.updateTask(task.id, { status: "failed", error: errorMessage });
+              executorLog.log(`✗ ${task.id} step-session deterministic failure → parked failed`);
+              this.options.onError?.(task, err instanceof Error ? err : new Error(errorMessage));
               return;
             }
             executorLog.error(`✗ ${task.id} step-session execution failed:`, errorDetail);
