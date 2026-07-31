@@ -36,8 +36,9 @@
 
 ## Current blockers
 
-1. **ISS-UI-001** — Settings search autofill. Permanent fix before AUTO-1. Issue #23.
-2. **AUTO-1…AUTO-3** — not implemented.
+1. **ISS-UI-001** — Settings search autofill. Permanent source fix in progress / pending deployed normal-browser acceptance. Issue #23.
+2. **ISS-GIT-007** — Auto-merge assumes `main` while disposable default was `master` (KB-003). Recorded; fix before AUTO-1. Do not fix inside ISS-UI-001.
+3. **AUTO-1…AUTO-3** — not implemented.
 
 ## Milestone board
 

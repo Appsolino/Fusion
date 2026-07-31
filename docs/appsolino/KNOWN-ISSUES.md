@@ -36,14 +36,14 @@ Use Chrome Guest or Edge InPrivate with extensions disabled.
 
 ### Root cause
 
-UNRESOLVED — likely browser/password-manager classification of the search input as an identity field. Must be proven in source and browser testing.
+Proven in source (2026-07-31): the Settings filter (`type="search"`) had no `name`, no `autoComplete`, and no Chromium-resistant lock. Browsers/password managers classified it as an identity field beside Authentication credential inputs and injected the saved account email into React filter state. Clearing re-triggered autofill, so every section disappeared.
 
 ### Permanent correction
 
-- Correct input/form autocomplete semantics.
-- Prevent browser and password-manager identity autofill.
-- Preserve normal settings filtering.
-- Validate Chrome and Edge saved-profile behavior.
+- Search-specific `id`/`name` (`settings-filter`), `type="search"`, form `autocomplete="off"`, `autoCapitalize`/`autoCorrect`/`spellCheck` off.
+- Chromium mitigation scoped only to this filter: read-only until focus; re-lock on clear/empty blur.
+- Do not disable autocomplete on real Authentication credential fields.
+- Validate Chrome and Edge saved-profile behavior on the deployed Host D release before marking FIXED.
 
 ### Required regression tests
 
@@ -59,6 +59,53 @@ UNRESOLVED — likely browser/password-manager classification of the search inpu
 | Release/SHA | Result | Evidence |
 | --- | --- | --- |
 | Not fixed yet | — | — |
+
+---
+
+## ISS-GIT-007 — Merge path assumes `main` instead of repository default branch
+
+Status: OPEN
+Severity: High (blocks AUTO-1 auto-merge reliability)
+Component: Engine / task-merge / default-branch resolution
+First observed: 2026-07-31 (G1 `KB-003` on disposable `v1a3-real-provider`)
+Last observed: 2026-07-31
+Affected release: `g13b-0.74.0-beta.5-cadf34dd4`
+GitHub issue: (record only; fix before AUTO-1 — do not implement inside ISS-UI-001)
+
+### Failure fingerprint
+
+- Repository default branch is `master`.
+- Auto-merge / merge expectation targets `main`.
+- Auto-merge fails; physical edits already succeeded on the task branch.
+- Recovery required manual fast-forward of the agent commit onto `master` (KB-003: `173793d`).
+
+### Impact
+
+G1 physical proof still PASSed (Cursor execution and edits succeeded), but automatic task merging cannot be trusted for AUTO-1 while the merge path ignores the repository default branch.
+
+### Temporary workaround
+
+Manual fast-forward / merge onto the repository default branch when auto-merge fails for this mismatch.
+
+### Root cause
+
+Merge path assumes `main` rather than resolving the repository’s actual default branch (observed `master` on the disposable proof repo). Recorded in PR #27 / CURRENT-STATE G1 merge note.
+
+### Permanent correction
+
+Resolve and merge into the repository default branch (or configured integration branch), not a hard-coded `main`. Add regression coverage for non-`main` defaults. **Do not fix inside ISS-UI-001.**
+
+### Required regression tests
+
+- Disposable / fixture repo whose default branch is `master` completes auto-merge onto `master`.
+- Repo whose default is `main` is unchanged.
+- Missing `main` with default `master` must not fail solely because `main` is absent.
+
+### Fix history
+
+| Release/SHA | Result | Evidence |
+| --- | --- | --- |
+| Not fixed yet | OPEN | KB-003 manual FF onto `master`; PR #27 |
 
 ---
 
