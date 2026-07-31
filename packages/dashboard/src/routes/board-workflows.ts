@@ -19,7 +19,7 @@ const severityAuditLog = createLogger("dashboard-board-workflows");
  */
 
 import {
-  BUILTIN_CODING_WORKFLOW_IR,
+  resolveDefaultWorkflowIr,
   getBuiltinWorkflow,
   isBuiltinWorkflowId,
   parseWorkflowIr,
@@ -31,6 +31,7 @@ import {
   type TraitFlags,
   type WorkflowIr,
   type WorkflowIrV2,
+  type WorkflowIrColumn,
   type WorkflowFieldDefinition,
 } from "@fusion/core";
 
@@ -133,6 +134,26 @@ function displayColumnName(id: string, name: string, canonicalizeLifecycle: bool
   return isUninformative ? canonical : trimmed;
 }
 
+/*
+FNXC:WorkflowResolvedColumns 2026-07-29-00:00 (U12 — R8):
+`manualIntake` — an intake column that does NOT auto-triage, i.e. one where cards wait
+for an operator to promote them (Coding (Ideas)'s "Ideas" lane).
+
+It exists because the distinction is trait CONFIG (`intake` with `autoTriage: false`),
+not a trait flag, so it was invisible to every client. The dashboard approximated it as
+`intake && column !== "triage"` — a hardcoded id doing the work of a missing fact. That
+approximation inverts under U11: the merged Planning column keeps id `todo` and `triage`
+is deleted, so `column !== "triage"` becomes vacuously TRUE and a "Start" action would
+appear on every planning card. Surfacing the real fact is the fix; renaming the
+comparison would not have been.
+*/
+function isManualIntakeColumn(col: WorkflowIrColumn): boolean {
+  const flags = resolveColumnFlags(col);
+  if (flags.intake !== true) return false;
+  const intakeTrait = (col.traits ?? []).find((trait) => trait.trait === "intake");
+  return (intakeTrait?.config as { autoTriage?: boolean } | undefined)?.autoTriage === false;
+}
+
 function describeColumns(ir: WorkflowIr, canonicalizeLifecycle = false): BoardWorkflowColumn[] {
   const v2 = toV2(ir);
   if (!v2) return [];
@@ -140,7 +161,7 @@ function describeColumns(ir: WorkflowIr, canonicalizeLifecycle = false): BoardWo
     id: col.id,
     name: displayColumnName(col.id, col.name, canonicalizeLifecycle),
     ...(col.description ? { description: col.description } : {}),
-    flags: resolveColumnFlags(col),
+    flags: { ...resolveColumnFlags(col), ...(isManualIntakeColumn(col) ? { manualIntake: true } : {}) },
     moveTargets: resolveAllowedColumns(ir, col.id),
   }));
 }
@@ -169,7 +190,15 @@ async function describeWorkflow(
   }
   // Custom workflow: fetch the definition once and derive both IR and name from
   // it (previously getWorkflowDefinition was called twice per workflow).
-  let ir: WorkflowIr = BUILTIN_CODING_WORKFLOW_IR;
+  /*
+  FNXC:WorkflowBuiltins 2026-07-31-23:59:
+  THE CATALOG DEFAULT, NOT THE LEGACY IR. This is the placeholder a CUSTOM workflow's description
+  falls back to when `getWorkflowDefinition` returns nothing or throws.
+  `BUILTIN_CODING_WORKFLOW_IR` is `builtin:legacy-coding`, which declares a `triage` column the
+  default board does not have — so a workflow that failed to load was described with a phantom lane.
+  That is the #3178 symptom (TUI board rendering `triage`) reached through the dashboard route.
+  */
+  let ir: WorkflowIr = resolveDefaultWorkflowIr();
   let name = ir.name;
   let icon: string | undefined;
   try {

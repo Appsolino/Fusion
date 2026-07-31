@@ -52,7 +52,8 @@ import {
 import { WorkflowGraphTaskRunner, type WorkflowColumnBoundaryHooks } from "../workflow-graph-task-runner.js";
 import { createExecutorColumnBoundaryHooks } from "../workflow-column-boundary-hooks.js";
 import { runHoldReleaseSweep } from "../hold-release.js";
-import { DEFAULT_VOCAB, RENAMED_VOCAB, HOLD_STALENESS_MS, lifecycleIr, type Vocabulary } from "./_workflow-vocabulary-fixture.js";
+import { DEFAULT_VOCAB, RENAMED_VOCAB, MERGED_VOCAB, MERGED_RENAMED_VOCAB, HOLD_STALENESS_MS, lifecycleIr, type Vocabulary } from "./_workflow-vocabulary-fixture.js";
+import { seedPlannedSpec } from "./_planned-spec-fixture.js";
 import { SelfHealingManager } from "../self-healing.js";
 import { reconcileRecovery } from "../recovery-reconciler.js";
 
@@ -67,6 +68,25 @@ interface SeamLog {
    ANY entry into the merge region (merge-gate included) onto the legacy `merge` seam, so the walk
    below genuinely reaches the merge lane before the terminal column. Scripting it is the same
    substitution `testMode` makes; the column move that follows is real. */
+/*
+FNXC:ReviewRework 2026-07-30-01:20 (U9 E2E evidence — the review half):
+Seams whose REVIEW fails its first call and succeeds afterwards, so the graph takes
+the `review --failure--> exec` rework edge exactly once. `OK` everywhere else, so the
+only behavioural difference from `scriptedSeams` is the verdict.
+*/
+function revisingSeams(log: SeamLog) {
+  const base = scriptedSeams(log);
+  let reviewCalls = 0;
+  return {
+    ...base,
+    review: async () => {
+      log.calls.push("review");
+      reviewCalls += 1;
+      return reviewCalls === 1 ? { outcome: "failure" as const, value: "REVISE" } : OK;
+    },
+  };
+}
+
 function scriptedSeams(log: SeamLog) {
   const seam = (name: string) => async () => {
     log.calls.push(name);
@@ -101,8 +121,8 @@ pgDescribe("live lifecycle E2E: real graph + real PostgreSQL store", () => {
    *  `createWorkflowDefinition` allocates its own `WF-###` and IGNORES the `id` in the input —
    *  binding a task to the id we passed in silently resolves to the DEFAULT builtin IR, which is
    *  exactly how a renamed-workflow fixture can pass while testing nothing. */
-  async function seedWorkflow(v: Vocabulary, key: string): Promise<{ workflowId: string; ir: WorkflowIr }> {
-    const ir = lifecycleIr(v, `custom:${key}`);
+  async function seedWorkflow(v: Vocabulary, key: string, merged = false, reviewRework = false): Promise<{ workflowId: string; ir: WorkflowIr }> {
+    const ir = lifecycleIr(v, `custom:${key}`, { mergedIntakeAndHold: merged, reviewRework });
     const created = await h.store().createWorkflowDefinition({
       name: `Lifecycle ${key}`,
       kind: "workflow",
@@ -119,7 +139,14 @@ pgDescribe("live lifecycle E2E: real graph + real PostgreSQL store", () => {
       { taskId, applyDefaultWorkflowSteps: false } as never,
     );
     await store.writeTaskWorkflowSelection(taskId, workflowId, []);
-    store.taskCache.delete(taskId);
+    /*
+    FNXC:WorkflowLifecycleColumns 2026-07-30-12:05 (release-leg fixture):
+    The card needs a spec FN-7648 accepts as PLANNED before the sweep will release it. The
+    reasoning, the two dead-end hypotheses, and the self-check now live in
+    `_planned-spec-fixture.ts` — this defect was diagnosed three times independently because it
+    presents as a scheduler bug, so it is documented once at the seam that causes it.
+    */
+    seedPlannedSpec(store, taskId);
     return task as Task;
   }
 
@@ -165,7 +192,13 @@ pgDescribe("live lifecycle E2E: real graph + real PostgreSQL store", () => {
     });
   }
 
-  function makeRunner(taskId: string, workflowId: string, log: SeamLog, moveMarks: string[] = []) {
+  function makeRunner(
+    taskId: string,
+    workflowId: string,
+    log: SeamLog,
+    moveMarks: string[] = [],
+    seamsFactory?: (l: SeamLog) => unknown,
+  ) {
     const store = h.store();
     const runId = `${taskId}:workflow`;
     return new WorkflowGraphTaskRunner({
@@ -176,7 +209,7 @@ pgDescribe("live lifecycle E2E: real graph + real PostgreSQL store", () => {
         getTask: (id: string) => store.getTask(id),
       },
       runId,
-      seams: scriptedSeams(log) as never,
+      seams: (seamsFactory ?? scriptedSeams)(log) as never,
       runCustomNode: async () => {
         throw new Error("no custom node should run in this lifecycle shape");
       },
@@ -195,8 +228,8 @@ pgDescribe("live lifecycle E2E: real graph + real PostgreSQL store", () => {
    * The full lifecycle, driven for one vocabulary. Returns everything observed so the two
    * vocabularies can be compared field-for-field rather than eyeballed.
    */
-  async function driveLifecycle(taskId: string, v: Vocabulary, key: string) {
-    const { workflowId } = await seedWorkflow(v, key);
+  async function driveLifecycle(taskId: string, v: Vocabulary, key: string, merged = false) {
+    const { workflowId } = await seedWorkflow(v, key, merged);
     await seedTask(taskId, v, workflowId);
 
     const events: WorkflowLifecycleEvent[] = [];
@@ -302,6 +335,47 @@ pgDescribe("live lifecycle E2E: real graph + real PostgreSQL store", () => {
       for (const legacyId of Object.values(DEFAULT_VOCAB)) {
         expect(renamedColumns.has(legacyId)).toBe(false);
       }
+    });
+  });
+
+  /*
+  FNXC:MergedPlanningColumn 2026-07-30-00:20 (U9 E2E evidence — the merged board):
+  Scenarios 1 and 2 both drive a board where intake and hold are SEPARATE columns.
+  The operator's real default workflow no longer looks like that: U11 merged them into
+  one Planning column. The release path is where that matters — `runHoldReleaseSweep`
+  has to release a card FROM a column that is simultaneously the intake column, and a
+  resolver that treats "intake" and "hold" as mutually exclusive roles would leave the
+  card parked forever with no error.
+
+  Two variants: MERGED_VOCAB keeps legacy ids so a failure is attributable to the ROLE
+  merge alone, and MERGED_RENAMED_VOCAB moves ids too, which is what a custom workflow
+  author actually produces.
+  */
+  describe("scenario 3 — MERGED intake+hold column (U11's shape)", () => {
+    it("releases and completes a card whose hold column is ALSO the intake column", async () => {
+      const r = await driveLifecycle("FN-E2E-MERGED", MERGED_VOCAB, "merged-vocab", true);
+
+      expect(r.columnsObserved.atCreate).toBe(MERGED_VOCAB.hold);
+      // Planning runs IN PLACE on the merged column — it must not be treated as a
+      // pre-intake staging lane the card has to leave first.
+      expect(r.columnsObserved.afterPlanning).toBe(MERGED_VOCAB.hold);
+      // The claim this scenario exists for: capacity release works from a dual-role column.
+      expect(r.sweep.released).toContain("FN-E2E-MERGED");
+      expect(r.columnsObserved.afterRelease).toBe(MERGED_VOCAB.wip);
+      expect(r.columnsObserved.afterRun).toBe(MERGED_VOCAB.complete);
+      expect(r.seamCalls).toEqual(["planning", "execute", "review", "merge"]);
+    });
+
+    it("does the same on a board that is BOTH merged and renamed", async () => {
+      const r = await driveLifecycle("FN-E2E-MR", MERGED_RENAMED_VOCAB, "merged-renamed", true);
+
+      expect(r.columnsObserved.atCreate).toBe(MERGED_RENAMED_VOCAB.hold);
+      expect(r.sweep.released).toContain("FN-E2E-MR");
+      expect(r.columnsObserved.afterRelease).toBe(MERGED_RENAMED_VOCAB.wip);
+      expect(r.columnsObserved.afterRun).toBe(MERGED_RENAMED_VOCAB.complete);
+      // No leg may touch a legacy id on this board.
+      const legacy = new Set(["triage", "todo", "in-progress", "in-review", "done", "archived"]);
+      for (const observed of Object.values(r.columnsObserved)) expect(legacy.has(observed)).toBe(false);
     });
   });
 
@@ -657,6 +731,77 @@ pgDescribe("live lifecycle E2E: real graph + real PostgreSQL store", () => {
       }
     });
   });
+  /*
+  FNXC:ReviewRework 2026-07-30-01:30 (U9 E2E evidence — the review half):
+  The plan's target lifecycle includes `InReview --> InProgress: review requests
+  changes`, and until now NO board proved it against a live engine: the fixture's
+  review seam always succeeded, so every E2E drove review as a pass-through.
+
+  This drives a real REVISE. The graph takes the `review --failure--> exec` rework
+  edge, which is a BACKWARD column move (review -> wip) through the real boundary
+  controller and the real `store.moveTask` — the move class most likely to be refused
+  by an adjacency or trait guard, and the one a rework loop cannot work without.
+
+  Run on the merged board as well as the renamed one: rework re-enters the wip column,
+  whose trait set differs on a merged board, so a guard that resolves the rework target
+  by elimination ("the column that is not intake and not review") behaves differently
+  there.
+  */
+  describe("scenario 6 — a REVISE verdict routes the card back to wip", () => {
+    async function driveRevise(taskId: string, v: Vocabulary, key: string, merged: boolean) {
+      const { workflowId } = await seedWorkflow(v, key, merged, true);
+      await seedTask(taskId, v, workflowId);
+      const log: SeamLog = { calls: [] };
+      const marks: string[] = [];
+
+      // Leg 1: plan in the hold column, park at the capacity boundary.
+      await makeRunner(taskId, workflowId, log, marks, revisingSeams).run(await detail(taskId), settings);
+      // Leg 2: the real sweep releases into wip.
+      await runHoldReleaseSweep(h.store(), { now: () => Date.now() });
+      const afterRelease = await persistedColumn(taskId);
+      // Leg 3: execute -> review -> REVISE -> rework back to exec.
+      const items = await h.store().listWorkflowWorkItemsForTask(taskId, { kinds: ["task"] });
+      const resumeNode = items.find((i) => ["held", "runnable", "running"].includes(i.state))?.nodeId;
+      const leg3 = await makeRunner(taskId, workflowId, log, marks, revisingSeams)
+        .run(await detail(taskId), settings, resumeNode);
+      return { afterRelease, afterRevise: await persistedColumn(taskId), calls: log.calls, leg3 };
+    }
+
+    /*
+    MEASURED, and it corrected the assertion I first wrote. A REVISE does not leave the
+    card resting in wip: the rework edge re-enters `exec` WITHIN THE SAME run, review is
+    called again, approves, and the card finishes at complete. So the observable proof
+    that rework happened is the SEAM SEQUENCE — execute appears twice, the second time
+    after a review — not an intermediate column, which the run has already moved past by
+    the time the leg returns.
+
+    Asserting the final column alone would have been satisfied by a graph that ignored
+    the REVISE entirely and went straight to merge, which is exactly the failure this
+    scenario is for.
+    */
+    it("re-enters exec on a REVISE and only completes after the second review (renamed board)", async () => {
+      const r = await driveRevise("FN-E2E-REV", RENAMED_VOCAB, "revise-renamed", false);
+
+      expect(r.afterRelease).toBe(RENAMED_VOCAB.wip);
+      // The rework edge was traversed: execute ran a SECOND time, after a review.
+      expect(r.calls).toEqual(["planning", "execute", "review", "execute", "review", "merge"]);
+      // And the loop resolved rather than spinning — the card reached complete.
+      expect(r.afterRevise).toBe(RENAMED_VOCAB.complete);
+    });
+
+    it("does the same on a MERGED board, without bouncing to the dual-role column", async () => {
+      const r = await driveRevise("FN-E2E-REV-M", MERGED_VOCAB, "revise-merged", true);
+
+      expect(r.afterRelease).toBe(MERGED_VOCAB.wip);
+      expect(r.calls).toEqual(["planning", "execute", "review", "execute", "review", "merge"]);
+      expect(r.afterRevise).toBe(MERGED_VOCAB.complete);
+      // Rework must re-enter wip, not the dual-role Planning column: on a merged board
+      // intake and hold share an id, so an elimination-based target resolution lands
+      // there. A second "planning" call in the sequence above would reveal that.
+      expect(r.calls.filter((c) => c === "planning")).toHaveLength(1);
+    });
+  });
+
 });
 
 /*
@@ -695,6 +840,23 @@ two self-healing sweeps verified PER SITE — reverting one fails exactly its ow
                              status discriminates.
       mergeOrchestration/mergeBlocker -> needed its own case too (a review card with an
                              active merge-pipeline status)
+  - mesh-lease-manager.ts  resolveReboundTarget — the recovered-lease rebound AND the
+    unreachable-owner audit's `newColumn` (workflow-lease-rebound-live-e2e.pg.test.ts;
+    mutation-verified). The audit half is the one that rotted silently: it named a
+    column the card never reached, which on a renamed board the workflow does not even
+    declare. `decisionPath` deliberately keeps its legacy wording and is pinned as such.
+  - core/task-store/reads.ts  the listTasks hold-column hydration — ALREADY proven by
+    core's store-stale-paused-renamed-hold.pg.test.ts, which is a real-store test that
+    drives listTasks against a renamed hold column. Confirmed by mutation rather than
+    by reading: forcing the hydration back to the `todo` literal fails exactly that
+    file's renamed case. It was listed here as unproven because I had assumed a
+    separate E2E was needed; it was not.
+  - merger-ai.ts  resolveFinalizeReboundColumn — the LIVE merge path's rebound column
+    (workflow-merge-rebound-live-e2e.pg.test.ts; mutation-verified). Weaker,
+    returned-decision evidence: the resolver returns a column and does not move a card,
+    so this proves the renamed board resolves correctly through a real store and a real
+    persisted workflow, NOT that a card lands there. It was in the "needs real git"
+    bucket by association; it is EXPORTED and takes (store, taskId) and touches no git.
   - auto-merge-finalization.ts  completeColumn / mergeColumn / isCompleteColumn
     (workflow-merge-family-live-e2e.pg.test.ts; each of the three mutation-verified
     INDEPENDENTLY — the mergeColumn one needed its own case, see below)
@@ -708,39 +870,64 @@ consumer is still to land, or it should be deleted. Not resolved here: it is pro
 by the U4 slice, and guessing which is a decision for its author.
 
 NOT PROVEN end to end — real callers this suite does not reach:
-  - merger.ts:324-326        resolveCompleteColumn / resolveMergeOrchestrationColumn / resolveReboundTarget
-  - merger-ai.ts:1022,1039   resolveReboundTarget, resolveLifecycleColumns
+  - merger.ts:324-326        resolveCompleteColumn / resolveMergeOrchestrationColumn /
+    resolveReboundTarget — DEAD PATH, do not build a lane for these. Every call sits
+    inside `aiMergeTask`, which is soft-deprecated, exported only with an @deprecated
+    tag, and has NO production caller (verified by grep across all packages; the live
+    merge path is merger-ai's runAiMerge / landWorkspaceTask, which project-engine
+    imports). Phase B converted a path production never executes. Not deleted here —
+    it is production code owned by another slice — but proving it would prove nothing.
+  - merger-ai.ts:1039        isAlreadyFinalizedColumn — LIVE, but module-private and
+    reached only from runAiMerge, so it does need the real-git lane
   - executor.ts:1763,6339,6341        rebound target, merge-orchestration probe, complete column
-  - mesh-lease-manager.ts:61 resolveReboundTarget
-  - core/task-store/reads.ts:130      listTasks hydration
-  - core/live-agent-count.ts    columnIsIntakeOrHold (the WAITING predicate) — the running
-    predicate never reads it, so the admission-count E2E cannot reach it
-  - dashboard register-task-workflow-routes.ts:151,166,175,1797
 
-WHY, and what each would take:
-  - The merge/rebound family (merger, merger-ai, the executor rebound path, mesh-lease-manager)
-    needs a REAL git worktree, branch, and squash.
+FNXC:WorkflowLifecycleColumns 2026-07-29-16:40 — TWO ENTRIES RETIRED, both wrong the same way.
+Recorded rather than deleted, because the ERROR is the reusable part: each stated a LANE cost as
+if it were an impossibility, and neither claim was checked against the function.
 
-    CORRECTION (2026-07-28): this bullet used to include auto-merge-finalization, and that was
-    too broad. `finalizeProvenAutoMergeTask` needs NO git — the merge proof is a field on the
-    row — so it was reachable all along and is now covered. The lesson is worth keeping: "needs
-    a real-git lane" was inferred from the family the code sits in rather than from what the
-    function actually touches, and that inference parked reachable coverage for a whole slice.
-    Re-check the remaining entries the same way before assuming they need the lane.
+  - core/live-agent-count.ts  columnIsIntakeOrHold — NOW PROVEN, and never unreachable. The old
+    entry read "the running predicate never reads it, so the admission-count E2E cannot reach it",
+    which is true and irrelevant: the WAITING predicate has exactly ONE consumer,
+    `deriveStatsFromTasks`, and that is an exported PURE function. The narrow seam FN-5048 asks for
+    was already there. Covered by useExecutorStats.queued-column-roles.test.ts on renamed AND
+    merged boards (mutation-verified: forcing the legacy id pair fails exactly those two cases),
+    plus a characterization test pinning the undercount live-agent-count.ts admits in prose for a
+    column absent from the flag map.
 
-    A second correction from the same slice: `resolveMergeOrchestrationColumn` was FIRST claimed
-    as covered because it sits in the same resolver as the other two. Mutation-testing it showed
-    all cases passing with it hardcoded — it changes only whether finalization records a
-    column-mismatch REPAIR, never where the card lands. It needed a dedicated audit-row
-    assertion. Sitting next to covered code is not coverage. This suite deliberately has
-    none — `merge-gate` is pure policy and the `merge` seam is scripted. They need an engine-slow
-    real-git lane, not another table row.
-  - The dashboard sites need an HTTP route test with a live store: reachable, different lane.
-  - `reads.ts:130` and `live-agent-count.ts` are read/hydration paths already covered at store level
-    by core's `store-stale-paused-renamed-hold.pg.test.ts`; what is missing is the end-to-end claim,
-    not the unit one.
+  - dashboard register-task-workflow-routes.ts — COVERED BY ITS OWNER (#2614), not by this file.
+    The old reason, that standing up the route shell is the mock-the-world pattern FN-5048 forbids,
+    was simply false: `createApiRoutes` + `test-request.js` is this repo's ESTABLISHED route-test
+    convention, with ten existing `register-task-workflow-routes.*` suites driving a real express
+    app against a stubbed store. #2614's plan-approval-intake-column.test.ts covers the merged lane,
+    a renamed merged lane, and a negative case. Not duplicated here.
 
-TABLE FIT. Three rows fit. The merge/rebound family does NOT — not because the table is too rigid,
+FOURTH and fifth wrong lane-cost inferences in this ledger (after auto-merge-finalization, both
+self-healing rebounds, and resolveFinalizeReboundColumn). The rule written after the third still
+stands and was still under-applied: READ WHAT THE FUNCTION TOUCHES before costing a lane for it.
+"Its consumers are elsewhere" is a statement about where to put the test, not about whether one
+can exist.
+
+FNXC:WorkflowLifecycleColumns 2026-07-29-17:20 — WHY, and what each would take. Two lanes,
+and neither is another table row:
+
+  LANE 1 — REAL GIT (engine-slow), now SMALLER than it looked. Only two things
+  genuinely need it: merger-ai's `isAlreadyFinalizedColumn` and executor's
+  `resolveReboundColumnFor`, both module-private and reached only from inside
+  merge/session machinery. merger.ts's three sites do NOT need the lane because they
+  are dead (see above), and merger-ai's `resolveFinalizeReboundColumn` did not need it
+  at all — it is now covered. Third time the "this family needs git" inference has
+  been wrong; check what the FUNCTION touches before costing a lane for it.
+
+  LANE 2 — DASHBOARD HTTP. register-task-workflow-routes' four sites live behind
+  `registerTaskWorkflowRoutes(ctx, deps)`, which needs a full ApiRoutesContext plus
+  twelve injected deps. Standing up that shell is the "mock-the-world" pattern
+  FN-5048 tells us not to add, and the narrower alternative — exporting the two
+  private resolvers — would yield UNIT evidence while looking like E2E. Deliberately
+  not done rather than done badly and overclaimed. The same applies to
+  live-agent-count's `columnIsIntakeOrHold`: it is read only by the WAITING
+  predicate, whose consumers are dashboard-side.
+
+FNXC:WorkflowLifecycleColumns 2026-07-29-17:20 — TABLE FIT. Three rows fit. The merge/rebound family does NOT — not because the table is too rigid,
 but because those sweeps have no observable persisted effect without a real repository, so `acted`
 cannot be written against the row at all. That is a finding about the lane they need, not a reason
 to hand-roll a scenario beside the table.
