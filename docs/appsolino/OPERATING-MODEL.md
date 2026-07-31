@@ -17,7 +17,7 @@ A recurring manual command sequence is an **automation gap**. Do not design norm
 
 Target pipeline: detect upstream → one integration branch (`merge --no-ff`) → risk classify → affected tests → package → safe auto-merge or one sensitive approval → automated Host D immutable release → health/smoke → rollback on failure.
 
-Interim: read-only upstream monitor (no branch updates). **AUTO-1** prepares `automation/upstream-*` + sync PR (no Host D deploy). AUTO-2/AUTO-3: see [`CURRENT-STATE.md`](CURRENT-STATE.md).
+Interim: read-only upstream monitor (no branch updates). **AUTO-1 OPERATIONAL** prepares `automation/upstream-*` + sync PR (no Host D deploy; absorb PR unmerged until AUTO-2/AUTO-3). AUTO-2 is NOW: see [`CURRENT-STATE.md`](CURRENT-STATE.md).
 
 ## Validation levels
 
