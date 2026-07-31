@@ -1,7 +1,0 @@
-OK denied /etc/appsolino-fusion/staging/acceptance/bwrap-bwrap-20260729T191512Z.txt
-OK denied /opt/appsolino-fusion/staging/releases/bwrap-bwrap-20260729T191512Z.txt
-OK denied /srv/appsolino-fusion/build/bwrap-bwrap-20260729T191512Z.txt
-OK allowed staging workspace write
-apparmor_userns=0
-BUBBLEWRAP_PASS
-EXIT:0

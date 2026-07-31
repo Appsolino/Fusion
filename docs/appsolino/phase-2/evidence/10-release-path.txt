@@ -1,1 +1,0 @@
-/opt/appsolino-fusion/staging/releases/phase2a-0.74.0-beta.5-040b61e8873e

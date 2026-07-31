@@ -1,9 +1,0 @@
-{
-  "encoding": "cl100k_base",
-  "counts": {
-    "example.ts": 21,
-    "view.tsx": 13,
-    "settings.json": 23,
-    "notes.md": 28
-  }
-}

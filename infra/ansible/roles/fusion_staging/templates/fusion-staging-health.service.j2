@@ -1,8 +1,0 @@
-[Unit]
-Description=Appsolino Fusion staging health check
-After=fusion-staging.service
-
-[Service]
-Type=oneshot
-User=root
-ExecStart=/usr/local/sbin/staging-health-check.sh

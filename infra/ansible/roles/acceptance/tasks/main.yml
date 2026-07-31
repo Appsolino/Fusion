@@ -1,9 +1,0 @@
----
-# FNXC:Phase2A 2026-07-29-21:45: Acceptance dir + probe unit already covered by fusion_staging.
-- name: Ensure acceptance directory writable by fusion via group
-  file:
-    path: "{{ acceptance_dir }}"
-    state: directory
-    owner: root
-    group: "{{ fusion_group }}"
-    mode: "0770"

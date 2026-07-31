@@ -1,2 +1,0 @@
-?? docs/appsolino/phase-2/
-?? infra/

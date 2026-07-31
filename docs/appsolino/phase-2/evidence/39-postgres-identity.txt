@@ -1,8 +1,0 @@
-server_version=16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
-db=fusion_staging
-owner=fusion_staging
-encoding=UTF8
-listen=localhost
-role=fusion_staging
-restore_test_db=fusion_staging_restore_test
-password_encryption=scram-sha-256

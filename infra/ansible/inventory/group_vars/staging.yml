@@ -1,9 +1,0 @@
----
-# FNXC:Phase2A 2026-07-29-21:45:
-# Staging-specific inventory. Real secrets live outside git.
-environment_name: staging
-fusion_service_name: fusion-staging
-fusion_health_timer: fusion-staging-health.timer
-off_host_backup_configured: false
-off_host_backup_target: ""
-# When empty, backup scripts fail closed with OFF_HOST_TARGET_NOT_CONFIGURED
