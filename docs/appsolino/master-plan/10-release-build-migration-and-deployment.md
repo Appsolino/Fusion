@@ -1,3 +1,6 @@
+> **Status: Historical/reference**
+> This document does not override `MASTER-PLAN.md`, `OPERATING-MODEL.md` or `CURRENT-STATE.md`.
+
 # Release, Build, Migration, and Deployment
 
 Last updated: 2026-07-29

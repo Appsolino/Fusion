@@ -1,0 +1,120 @@
+---
+description: Binding Appsolino Fusion project authority and autonomous-work rules
+globs:
+alwaysApply: true
+---
+
+# Appsolino Fusion governing rule
+
+## Authority
+
+Read these before every mission:
+
+1. `docs/appsolino/START-HERE.md`
+2. `docs/appsolino/master-plan/MASTER-PLAN.md`
+3. `docs/appsolino/OPERATING-MODEL.md`
+4. `docs/appsolino/CURRENT-STATE.md`
+
+Authority order:
+
+1. Explicit current owner decision
+2. MASTER-PLAN.md
+3. OPERATING-MODEL.md
+4. CURRENT-STATE.md
+5. Cursor rules
+6. Historical/reference documents
+
+Stop and report a conflict when two governing sources disagree. Do not
+silently choose one.
+
+## Primary goal
+
+Build a reliable autonomous Fusion dashboard that completes development work
+without routine operator intervention.
+
+Every task must either complete successfully or stop once in a durable,
+actionable terminal state.
+
+Never accept:
+
+- duplicate execution;
+- deterministic failure loops;
+- cross-task contamination;
+- lost completed work;
+- hidden provider fallback;
+- mock execution presented as real-provider proof;
+- reported success without physical repository changes.
+
+## Automation first
+
+A recurring manual command sequence is an automation gap.
+
+Do not design normal operation around repeated SSH commands by the owner.
+
+Automation must perform:
+
+- upstream detection and integration preparation;
+- risk classification;
+- affected validation;
+- PR creation and update;
+- safe-change merging where authorised;
+- Host D package creation;
+- immutable staging deployment;
+- health verification;
+- rollback after failed deployment;
+- issue and deviation recording.
+
+Human approval remains required for:
+
+- first-time credentials;
+- sensitive changes designated by the operating model;
+- destructive data operations;
+- Host P or production activation.
+
+## Environment boundaries
+
+Host D is development, build and staging only.
+
+Do not create production services, databases, roles, credentials or state on
+Host D.
+
+Host P remains inaccessible until explicitly authorised.
+
+Legacy degraded production remains untouched.
+
+## Provider truthfulness
+
+Record both configured and actual provider/model.
+
+Do not silently use mock, testMode, fallback or a different provider.
+
+A provider mismatch is a blocking result.
+
+## Issues and deviations
+
+Record every meaningful error, interruption, unexpected fallback, failed
+automation, security deviation or documentation conflict.
+
+Update the existing GitHub issue when the failure fingerprint matches.
+Do not create repeated duplicate issues.
+
+Update `CURRENT-STATE.md` in the same PR when project status, active release,
+blockers or next authorised work changes.
+
+## Documentation
+
+Do not duplicate current status across multiple documents.
+
+Keep required governing-document reading time at ten minutes or less.
+
+Historical documents are not governing.
+
+## Scope
+
+Classify the mission as Level A, B or C.
+
+Run only validation required by the actual changed risk.
+
+Stop when the authorised scope is complete.
+
+Do not begin the next phase automatically.
