@@ -10,12 +10,25 @@ Last updated: 2026-07-31
 | Layer | Role |
 | --- | --- |
 | **Interim detection** | `.github/workflows/upstream-shadow.yml` (**Upstream Monitor**): daily + dispatch; `contents: read`; fetch upstream; job summary (SHAs, merge-base, ahead/behind); **no** branch create/update, push, pnpm, build, or secrets |
-| **AUTO-1…AUTO-3 (target)** | Integration branch + risk-gated PR + Host D release — see CURRENT-STATE for implementation status |
+| **AUTO-1 (implementing)** | `.github/workflows/upstream-auto1.yml` + `infra/scripts/auto1-upstream-sync.mjs`: concurrency lock; `create-github-app-token@v3` with contents/PRs/workflows write; `persist-credentials: false` + `gh auth setup-git` + non-mutating `git ls-remote` probe; fetch `Runfusion/Fusion:main`; create/refresh `automation/upstream-<sha>`; `merge --no-ff`; open/update one PR; resolve default branch via `origin/HEAD` (ISS-GIT-007); **no** build/deploy/auto-merge; **fail closed** without Appsolino Automation GitHub App secrets |
+| **AUTO-2…AUTO-3 (target)** | Risk classify, package, Host D immutable release — not AUTO-1 |
 | **Historical assessment** | `UPSTREAM-ASSESSMENT-2026-07-30.md` numbers are frozen; do not rewrite them when policy changes |
 
 ## Rejected approach
 
 Exact-tip force-push to `upstream-shadow` failed (run `30601438029`) when upstream history touches `.github/workflows/*`. Do not bypass with owner OAuth/PAT in the job. Durable automation uses a dedicated GitHub App (MASTER-PLAN).
+
+## AUTO-1 local harness
+
+```bash
+node --test infra/scripts/__tests__/auto1-upstream-sync.test.mjs
+node infra/scripts/auto1-upstream-sync.mjs --repo-dir "$PWD" --json
+```
+
+Required GitHub Actions secrets (routine identity):
+
+- `APPSOLINO_AUTOMATION_APP_ID`
+- `APPSOLINO_AUTOMATION_APP_PRIVATE_KEY`
 
 ## Local inspect
 

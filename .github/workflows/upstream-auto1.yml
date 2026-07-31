@@ -1,0 +1,128 @@
+# FNXC:AppsolinoAuto1 2026-07-31-12:40:
+# AUTO-1: scheduled/manual upstream integration into automation/upstream-<sha> via merge --no-ff.
+# Never force-pushes or updates Appsolino main. Never builds or deploys Host D (AUTO-2/AUTO-3).
+# Routine identity: Appsolino Automation GitHub App only — fail closed when App credentials are missing.
+# Observation-only detection remains in upstream-shadow.yml.
+#
+# FNXC:AppsolinoAuto1 2026-07-31-16:05:
+# Live push auth: persist-credentials stays false after checkout, so configure `gh auth setup-git`
+# with the App installation token before any git push. Probe with non-mutating `git ls-remote`.
+# App token action is v3 with explicit contents/pull-requests/workflows write permissions.
+
+name: Upstream AUTO-1 Sync
+
+on:
+  schedule:
+    # Daily ~06:30 UTC — after the read-only monitor window.
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: auto1-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Prepare upstream sync branch + PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Appsolino Automation GitHub App credentials
+        shell: bash
+        env:
+          APP_ID: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          APP_KEY: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_ID}" || -z "${APP_KEY}" ]]; then
+            echo "::error::AUTO-1 fail-closed: APPSOLINO_AUTOMATION_APP_ID / APPSOLINO_AUTOMATION_APP_PRIVATE_KEY missing. Owner OAuth and ad-hoc PATs are not the routine automation identity."
+            exit 1
+          fi
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Checkout Appsolino
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure GitHub App authentication for git
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+
+      - name: Configure git identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Appsolino Automation"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Probe App git authentication (non-mutating)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # Fail closed before merge/push if App credentials cannot talk to origin.
+          git ls-remote --exit-code origin HEAD >/dev/null
+
+      - name: Run AUTO-1 sync
+        id: sync
+        shell: bash
+        env:
+          AUTO1_GITHUB_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # FNXC:AppsolinoAuto1 2026-07-31-16:05: never inherit owner interactive gh config.
+          GH_CONFIG_DIR: ${{ runner.temp }}/auto1-gh-config
+        run: |
+          set -euo pipefail
+          mkdir -p "$GH_CONFIG_DIR"
+          set +e
+          node infra/scripts/auto1-upstream-sync.mjs \
+            --repo-dir "$GITHUB_WORKSPACE" \
+            --push \
+            --create-pr \
+            --gh-repo "$GITHUB_REPOSITORY" \
+            --json > /tmp/auto1-result.json
+          code=$?
+          set -e
+          cat /tmp/auto1-result.json
+          {
+            echo "## AUTO-1 result"
+            echo
+            echo '```json'
+            cat /tmp/auto1-result.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          outcome="$(python3 -c 'import json;print(json.load(open("/tmp/auto1-result.json"))["outcome"])')"
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          # conflict → workflow fails visibly; no-change/merged → success
+          if [[ "$outcome" == "conflict" || "$code" -eq 2 ]]; then
+            exit 2
+          fi
+          exit "$code"
+
+      - name: Guard — no Host D deploy in AUTO-1
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AUTO-1 does not build, install, or activate Host D releases."
