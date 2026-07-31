@@ -82,7 +82,7 @@ import {
 import { resolveSelfExtension } from "./self-extension.js";
 import { registerCustomProviders, reregisterCustomProviders } from "./custom-provider-registry.js";
 import { handleOpencodeGoApiKeySaved, syncStartupModels } from "./startup-model-sync.js";
-import { ensureBundledDependencyGraphPluginInstalled, ensureBundledGrokRuntimePluginInstalled, ensureBundledPluginInstalled, isBundledPluginId } from "../plugins/bundled-plugin-install.js";
+import { ensureBundledDependencyGraphPluginInstalled, ensureBundledCursorRuntimePluginInstalled, ensureBundledGrokRuntimePluginInstalled, ensureBundledPluginInstalled, isBundledPluginId } from "../plugins/bundled-plugin-install.js";
 import { ensureCwdProjectRegistered } from "./ensure-project-registered.js";
 import { phaseTime } from "../startup-phase.js";
 
@@ -628,7 +628,23 @@ export async function runServe(
     console.warn(`[plugins] Failed to auto-install bundled Dependency Graph plugin: ${err instanceof Error ? err.message : err}`);
   }
 
-  /*
+  
+    /*
+     * FNXC:CursorCli 2026-07-31-10:15:
+     * ISS-CLI-005 follow-up: packaged hosts must eagerly install/load fusion-plugin-cursor-runtime before planning/execution. Routing alone hard-fails when getRuntimeById("cursor") is undefined (G1 KB-003). Mirror FN-7761 Grok eager install.
+     */
+    try {
+      const installStatus = await ensureBundledCursorRuntimePluginInstalled(pluginStore, pluginLoader);
+      if (installStatus === "installed") {
+      console.log("[plugins] Installed bundled Cursor runtime plugin");
+      } else if (installStatus === "missing-bundle") {
+      console.warn("[plugins] Bundled Cursor runtime plugin was not found in this build");
+      }
+    } catch (err) {
+    console.warn(`[plugins] Failed to auto-install bundled Cursor runtime plugin: ${err instanceof Error ? err.message : err}`);
+    }
+
+/*
    * FNXC:GrokCliRouting 2026-07-09-23:05:
    * FN-7761: packaged `fn serve` must make the bundled Grok CLI runtime discoverable before any message-sending lane starts. Otherwise grok-cli/no-key selections fall through to the direct xAI endpoint and incorrectly ask for GROK_API_KEY even though the `grok` CLI owns auth.
    */

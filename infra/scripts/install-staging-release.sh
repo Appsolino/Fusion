@@ -108,6 +108,9 @@ verify_stage_permissions() {
   if [[ -d "$src/migrations" ]]; then
     verify_tree_executable_modes "$src/migrations" "$dst/migrations" "migrations" || mismatch=1
   fi
+  if [[ -d "$src/plugins" ]]; then
+    verify_tree_executable_modes "$src/plugins" "$dst/plugins" "plugins" || mismatch=1
+  fi
   if [[ -d "$src/runtime" ]]; then
     verify_tree_executable_modes "$src/runtime" "$dst/runtime" "runtime" || mismatch=1
   fi
@@ -191,6 +194,8 @@ mkdir -p "$stage"
 cp -a "$SRC_DIST/fn" "$stage/fn"
 [[ -d "$SRC_DIST/client" ]] && cp -a "$SRC_DIST/client" "$stage/client"
 [[ -d "$SRC_DIST/migrations" ]] && cp -a "$SRC_DIST/migrations" "$stage/migrations"
+# FNXC:CursorCli 2026-07-31-10:16: Stage bundled runtime plugins next to fn so ensureBundled*Cursor/Grok can resolve packages in immutable Host D releases (ISS-CLI-005).
+[[ -d "$SRC_DIST/plugins" ]] && cp -a "$SRC_DIST/plugins" "$stage/plugins"
 [[ -d "$SRC_DIST/runtime" ]] && cp -a "$SRC_DIST/runtime" "$stage/runtime"
 
 stage_sha="$(sha256sum "$stage/fn" | awk '{print $1}')"
