@@ -10,7 +10,7 @@ Last updated: 2026-07-31
 | Layer | Role |
 | --- | --- |
 | **Interim detection** | `.github/workflows/upstream-shadow.yml` (**Upstream Monitor**): daily + dispatch; `contents: read`; fetch upstream; job summary (SHAs, merge-base, ahead/behind); **no** branch create/update, push, pnpm, build, or secrets |
-| **AUTO-1 (on main, live BLOCKED)** | Workflow + script merged via PR #29. Live `workflow_dispatch` fail-closed: repo secrets `APPSOLINO_AUTOMATION_APP_ID` / `APPSOLINO_AUTOMATION_APP_PRIVATE_KEY` absent (runs 30633998306, 30634031885). Not OPERATIONAL until App install + two green runs. |
+| **AUTO-1 (OPERATIONAL)** | `.github/workflows/upstream-auto1.yml` on main. Live App-identity proven: `create-github-app-token@v3`, `gh auth setup-git`, `git ls-remote` probe, push + PR as `appsolino-fusion-automation[bot]`. Idempotent same-tip pair → PR #34 (`automation/upstream-73bff5f88cf2`). Do **not** merge absorb PRs until AUTO-2/AUTO-3. |
 | **AUTO-2…AUTO-3 (target)** | Risk classify, package, Host D immutable release — not AUTO-1 |
 | **Historical assessment** | `UPSTREAM-ASSESSMENT-2026-07-30.md` numbers are frozen; do not rewrite them when policy changes |
 
