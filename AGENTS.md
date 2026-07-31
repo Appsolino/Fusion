@@ -143,6 +143,36 @@ pnpm verify:workspace  # deep opt-in verification (lint -> test:full -> build); 
 
 `pnpm verify:fast` is the recommended **test-free verification** path: bootstrap missing/stale workspace dist artifacts, typecheck + build scoped to the changed packages (it reuses `pnpm test`'s changed-package resolution), an always-on `@runfusion/fusion` CLI build required by the source-checkout boot smoke, plus the boot smoke once, with **no test run**. It is deterministic and flake-free, suitable as a project `testCommand`/verification command when you want non-test verification; the full suite stays available and runs non-blocking. It is additive and does not change `pnpm test`, the gate, or CI. See `docs/testing.md`.
 
+### Check whether a file is claimed before converting it
+
+Every fleet worker pushes as the same GitHub account, so `gh pr list --author "@me"` returns EVERY open
+PR and cannot distinguish your work from a teammate's. Before starting a conversion, ask:
+
+```bash
+node scripts/check-file-claimed.mjs packages/engine/src/self-healing.ts
+```
+
+It lists the open PRs touching that path and exits non-zero if any do, so it can gate work directly.
+
+It narrows the collision window rather than closing it — it cannot see unpushed work in progress.
+Measured cost of not having it: four PRs in one session were superseded by teammates landing the same
+conversion first, each time with both implementations correct and independently identical.
+
+<!--
+FNXC:FleetClaims 2026-07-31-21:15: WHY THIS IS A RULE AND NOT A SUGGESTION.
+
+Every worker ranks work from the same census output, so without a published claim they independently
+pick the same top file. In one fleet phase that produced three parallel conversions of
+`self-healing.ts` (two left unmergeable after the first landed), two workers marking the same two
+files, and two independent versions of the same `task:moved` emitter fix — five collisions, all with
+both sides correct.
+
+The check is cheap because the claim is a pushed branch: `git ls-remote` is authoritative the moment
+work starts, whereas a claim announced anywhere else is invisible until the duplicate work exists.
+That asymmetry is the whole point — the first signal of a collision used to be a failed checkout or a
+conflicting PR, i.e. after the cost was already paid.
+-->
+
 ### Standing Rule: Flaky Tests Are Quarantined on Sight (Deletion Ratchet)
 
 - A test observed failing without a corresponding real bug in the change is QUARANTINED ON SIGHT: add an entry to `scripts/lib/test-quarantine.json` (`file`, `reason` with a link to the failing run, `quarantinedAt`) AND a matching one-line `exclude` in that package's vitest config, in the same commit.
