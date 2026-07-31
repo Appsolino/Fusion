@@ -1130,6 +1130,9 @@ export { getPrimaryPrInfo, taskHasManualOpenPullRequest } from "./task-helpers.j
 export {
   getTaskMergeBlocker,
   getTaskHardMergeBlocker,
+  REVIEW_ELIGIBLE_SENTINEL_COLUMN,
+  MERGE_CONFIRMED_TRANSIENT_STATUSES,
+  clearMergeConfirmedTransientStatus,
   getTaskCompletionBlocker,
   getLatestFailedPreMergeReviewStep,
   isTaskReadyForMerge,
