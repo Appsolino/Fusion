@@ -1,0 +1,161 @@
+# FNXC:AppsolinoAuto2 2026-07-31-18:00:
+# Trusted decision/finalizer trust zone. Workflow code always from Appsolino main.
+# Does not execute candidate package scripts. Mints App installation token only here.
+# Recomputes risk from GitHub API with trusted classifier. Exact-head merge for low-risk only.
+# Never deploys Host D. Never merges sensitive PR #34-class changes automatically.
+
+name: Upstream AUTO-2 Finalize
+
+on:
+  workflow_run:
+    workflows: ["Upstream AUTO-2 Validate"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to finalize"
+        required: true
+        type: string
+      validated_head:
+        description: "Exact head SHA that was validated"
+        required: true
+        type: string
+      validation_conclusion:
+        description: "success|failure|cancelled"
+        required: true
+        default: success
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: auto2-finalize
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    name: Trusted classify + controlled merge
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion != ''
+    steps:
+      - name: Require Appsolino Automation GitHub App credentials
+        env:
+          APP_ID: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          APP_KEY: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_ID}" || -z "${APP_KEY}" ]]; then
+            echo "::error::AUTO-2 fail-closed: App credentials missing"
+            exit 1
+          fi
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+          permission-issues: write
+
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@v6
+        with:
+          # workflow_run: always Appsolino main. workflow_dispatch: allow proof from feature ref.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || 'main' }}
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Resolve PR + validated SHA
+        id: meta
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PR: ${{ inputs.pr_number }}
+          INPUT_HEAD: ${{ inputs.validated_head }}
+          INPUT_CONC: ${{ inputs.validation_conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_HEAD: ${{ github.event.workflow_run.head_sha }}
+          RUN_CONC: ${{ github.event.workflow_run.conclusion }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            PR="$INPUT_PR"
+            VSHA="$INPUT_HEAD"
+            VCONC="$INPUT_CONC"
+          else
+            VSHA="$RUN_HEAD"
+            VCONC="$RUN_CONC"
+            PR="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}" --jq '.pull_requests[0].number // empty')"
+            if [[ -z "$PR" ]]; then
+              # Same-repo PRs sometimes omit pull_requests on workflow_run — resolve by head branch.
+              PR="$(gh api "repos/${REPO}/pulls?state=open&head=${REPO%%/*}:${RUN_BRANCH}&per_page=5" --jq '.[0].number // empty')"
+            fi
+          fi
+          if [[ -z "${PR}" || -z "${VSHA}" ]]; then
+            echo "::error::Unable to resolve PR/validated head for AUTO-2 finalize (pr='${PR}' sha='${VSHA}')"
+            exit 1
+          fi
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "validated_head=$VSHA" >> "$GITHUB_OUTPUT"
+          echo "validation_conclusion=$VCONC" >> "$GITHUB_OUTPUT"
+
+      - name: Configure App git/gh auth (trusted zone only)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/auto2-gh-config
+        run: |
+          set -euo pipefail
+          mkdir -p "$GH_CONFIG_DIR"
+          gh auth setup-git
+
+      - name: Run trusted finalizer
+        id: fin
+        env:
+          AUTO2_GITHUB_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/auto2-gh-config
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GH_CONFIG_DIR"
+          set +e
+          node infra/scripts/auto2-finalize.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "${{ steps.meta.outputs.pr }}" \
+            --validated-head "${{ steps.meta.outputs.validated_head }}" \
+            --validation-conclusion "${{ steps.meta.outputs.validation_conclusion }}" \
+            --json > /tmp/auto2-finalize.json
+          code=$?
+          set -e
+          cat /tmp/auto2-finalize.json
+          {
+            echo "## AUTO-2 finalize"
+            echo
+            echo '```json'
+            cat /tmp/auto2-finalize.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          action="$(python3 -c 'import json;print(json.load(open("/tmp/auto2-finalize.json"))["action"])')"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          if [[ "$action" == "blocked" || "$code" -eq 1 ]]; then
+            exit 2
+          fi
+          exit 0
+
+      - name: Guard — no Host D deploy in AUTO-2
+        run: |
+          set -euo pipefail
+          echo "AUTO-2 does not build, install, or activate Host D releases."

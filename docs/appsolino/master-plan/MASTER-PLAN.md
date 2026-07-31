@@ -73,8 +73,9 @@ Usable Fusion on **Host P**; backup + restore proven; rebuildable from Git; Host
 ## Authorised sequence
 
 ```text
-G0 governance → G1 real provider (V1A.3) → AUTO-1 OPERATIONAL → AUTO-2 (NOW) → AUTO-3 → AUTO-4 catch-up → V1B (deferred)
-Parked: ISS-UI-001 / PR #28 (not FIXED; do not merge while AUTO sequence is active)
+G0 → G1 → AUTO-1 OPERATIONAL → AUTO-2 OPERATIONAL → AUTO-3 (NOW) → AUTO-4 catch-up → V1B (deferred)
+Parked: ISS-UI-001 / PR #28
+PR #34: SENSITIVE / UNMERGED (AUTO-4 backlog)
 ```
 
 Live phase and blockers: [`CURRENT-STATE.md`](../CURRENT-STATE.md).

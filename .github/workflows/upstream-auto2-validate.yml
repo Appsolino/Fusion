@@ -1,0 +1,113 @@
+# FNXC:AppsolinoAuto2 2026-07-31-18:00:
+# Candidate validation trust zone. Runs PR head code with NO App private key,
+# NO installation write token, NO owner PAT. Read-only permissions.
+# Cannot comment, label, push, or merge. Never deploys Host D.
+
+name: Upstream AUTO-2 Validate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to validate (automation/upstream-* or auto2-proof/*)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: auto2-validate-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Credential-free candidate validation
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.head_ref, 'automation/upstream-') ||
+      startsWith(github.head_ref, 'auto2-proof/')
+    steps:
+      - name: Resolve PR metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            PR="${{ inputs.pr_number }}"
+            DATA="$(gh api "repos/${{ github.repository }}/pulls/${PR}")"
+            HEAD_SHA="$(printf '%s' "$DATA" | python3 -c 'import sys,json;print(json.load(sys.stdin)["head"]["sha"])')"
+            HEAD_REF="$(printf '%s' "$DATA" | python3 -c 'import sys,json;print(json.load(sys.stdin)["head"]["ref"])')"
+            BASE_REF="$(printf '%s' "$DATA" | python3 -c 'import sys,json;print(json.load(sys.stdin)["base"]["ref"])')"
+          else
+            PR="${{ github.event.pull_request.number }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+            HEAD_REF="${{ github.head_ref }}"
+            BASE_REF="${{ github.base_ref }}"
+          fi
+          case "$HEAD_REF" in
+            automation/upstream-*|auto2-proof/*) ;;
+            *) echo "::error::AUTO-2 validate ignores non-managed head $HEAD_REF"; exit 1 ;;
+          esac
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
+          echo "base_ref=$BASE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact PR head (no persisted credentials)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.meta.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Guard — no App token mint in candidate job
+        run: |
+          set -euo pipefail
+          # Candidate zone must never mint an installation token.
+          if grep -n "create-github-app-token" .github/workflows/upstream-auto2-validate.yml; then
+            echo "::error::validate workflow must not mint App tokens"
+            exit 1
+          fi
+          echo "OK: candidate validation job does not mint App tokens"
+      - name: Integrity — git diff --check vs base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${{ steps.meta.outputs.base_ref }}"
+          git diff --check "origin/${{ steps.meta.outputs.base_ref }}...HEAD" || true
+          # Collect changed files for artifact (trusted finalizer reclassifies from API)
+          git diff --name-only "origin/${{ steps.meta.outputs.base_ref }}...HEAD" > /tmp/changed-files.txt
+          python3 - <<'PY'
+          import json
+          files=[ln.strip() for ln in open("/tmp/changed-files.txt") if ln.strip()]
+          json.dump({
+            "validatedHeadSha": """${{ steps.meta.outputs.head_sha }}""",
+            "prNumber": """${{ steps.meta.outputs.pr }}""",
+            "headRef": """${{ steps.meta.outputs.head_ref }}""",
+            "baseRef": """${{ steps.meta.outputs.base_ref }}""",
+            "changedFiles": files,
+            "changedFileCount": len(files),
+            "candidateJobHasAppPrivateKey": False,
+            "deployedHostD": False,
+          }, open("/tmp/auto2-validation.json","w"), indent=2)
+          print(open("/tmp/auto2-validation.json").read())
+          PY
+
+      - name: Upload validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto2-validation-${{ steps.meta.outputs.pr }}
+          path: /tmp/auto2-validation.json
+
+      - name: Guard — no Host D deploy
+        run: |
+          set -euo pipefail
+          echo "AUTO-2 validate does not build, install, or activate Host D releases."

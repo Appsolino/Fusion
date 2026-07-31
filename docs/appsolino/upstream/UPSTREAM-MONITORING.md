@@ -9,30 +9,29 @@ Last updated: 2026-07-31
 
 | Layer | Role |
 | --- | --- |
-| **Interim detection** | `.github/workflows/upstream-shadow.yml` (**Upstream Monitor**): daily + dispatch; `contents: read`; fetch upstream; job summary (SHAs, merge-base, ahead/behind); **no** branch create/update, push, pnpm, build, or secrets |
-| **AUTO-1 (OPERATIONAL)** | `.github/workflows/upstream-auto1.yml` on main. Live App-identity proven: `create-github-app-token@v3`, `gh auth setup-git`, `git ls-remote` probe, push + PR as `appsolino-fusion-automation[bot]`. Idempotent same-tip pair → PR #34 (`automation/upstream-73bff5f88cf2`). Do **not** merge absorb PRs until AUTO-2/AUTO-3. |
-| **AUTO-2…AUTO-3 (target)** | Risk classify, package, Host D immutable release — not AUTO-1 |
-| **Historical assessment** | `UPSTREAM-ASSESSMENT-2026-07-30.md` numbers are frozen; do not rewrite them when policy changes |
+| **Interim detection** | `.github/workflows/upstream-shadow.yml` — observation only |
+| **AUTO-1 (OPERATIONAL)** | `upstream-auto1.yml` + `auto1-upstream-sync.mjs` — App identity; `automation/upstream-*` + sync PR; no Host D |
+| **AUTO-2 (OPERATIONAL)** | `upstream-auto2-validate.yml` (credential-free candidate checks) + `upstream-auto2-finalize.yml` (trusted classify/labels/exact-head low-risk merge). Sensitive → `auto2:approval-required`. Never Host D |
+| **AUTO-3 (NEXT)** | Immutable Host D package/deploy/rollback |
+| **Historical assessment** | `UPSTREAM-ASSESSMENT-2026-07-30.md` numbers are frozen |
 
-## Rejected approach
+## AUTO-2 trust zones
 
-Exact-tip force-push to `upstream-shadow` failed (run `30601438029`) when upstream history touches `.github/workflows/*`. Do not bypass with owner OAuth/PAT in the job. Durable automation uses a dedicated GitHub App (MASTER-PLAN).
+1. **Candidate validate** — checkout PR head; `persist-credentials: false`; no App private key; no merge/comment/label.
+2. **Trusted finalize** — checkout Appsolino main (or dispatch ref for proofs); mint App token; recompute risk via `auto2-classify-upstream.mjs`; exact-head `--match-head-commit` merge for **low** only.
 
-## AUTO-1 local harness
+## Local harness
 
 ```bash
 node --test infra/scripts/__tests__/auto1-upstream-sync.test.mjs
-node infra/scripts/auto1-upstream-sync.mjs --repo-dir "$PWD" --json
+node --test infra/scripts/__tests__/auto2-classify-upstream.test.mjs
 ```
 
-Required GitHub Actions secrets (routine identity):
+Required secrets (finalizer / AUTO-1 only):
 
 - `APPSOLINO_AUTOMATION_APP_ID`
 - `APPSOLINO_AUTOMATION_APP_PRIVATE_KEY`
 
-## Local inspect
+## Current absorb PR
 
-```bash
-git fetch https://github.com/Runfusion/Fusion.git main
-git log --oneline origin/main..FETCH_HEAD | head
-```
+PR #34 — **SENSITIVE / UNMERGED** (do not auto-merge; AUTO-4 backlog after AUTO-3).
