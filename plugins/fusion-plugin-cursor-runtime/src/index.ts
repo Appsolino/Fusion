@@ -24,7 +24,19 @@ const plugin: FusionPlugin = definePlugin({
       name: "Cursor Runtime",
       version: "0.1.0",
     },
-    factory: async () => new CursorRuntimeAdapter(),
+    /*
+    FNXC:CursorCli 2026-07-31-09:40:
+    ISS-CLI-005: pass plugin/context settings so an operator binaryPath override
+    can reach the print-mode adapter (same path used by auth/probe discovery).
+    */
+    factory: async (ctx?: { settings?: Record<string, unknown> }) => {
+      const binaryPath = typeof ctx?.settings?.binaryPath === "string"
+        ? ctx.settings.binaryPath
+        : typeof ctx?.settings?.cursorCliBinaryPath === "string"
+          ? ctx.settings.cursorCliBinaryPath
+          : undefined;
+      return new CursorRuntimeAdapter({ binaryPath });
+    },
   },
   cliProviders: [
     {
@@ -53,7 +65,14 @@ const plugin: FusionPlugin = definePlugin({
       discoverModels: discoverCursorProviderModels,
       runtime: {
         runtimeId: "cursor",
-        createAdapter: async () => new CursorRuntimeAdapter(),
+        createAdapter: async (ctx?: { settings?: Record<string, unknown> }) => {
+          const binaryPath = typeof ctx?.settings?.binaryPath === "string"
+            ? ctx.settings.binaryPath
+            : typeof ctx?.settings?.cursorCliBinaryPath === "string"
+              ? ctx.settings.cursorCliBinaryPath
+              : undefined;
+          return new CursorRuntimeAdapter({ binaryPath });
+        },
       },
     },
   ],

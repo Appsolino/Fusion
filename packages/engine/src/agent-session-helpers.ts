@@ -368,6 +368,7 @@ function stripGrokCliModelProviderPrefix(modelId: string | undefined): string | 
 }
 
 const OMP_CLI_PROVIDER_ID = "omp-cli";
+const CURSOR_CLI_PROVIDER_ID = "cursor-cli";
 
 function isOmpCliSelection(runtimeOptions: AgentRuntimeOptions): boolean {
   return runtimeOptions.defaultProvider === OMP_CLI_PROVIDER_ID
@@ -380,6 +381,20 @@ function stripOmpCliModelProviderPrefix(modelId: string | undefined): string | u
   const ompCliPrefix = `${OMP_CLI_PROVIDER_ID}/`;
   return normalized.startsWith(ompCliPrefix)
     ? normalized.slice(ompCliPrefix.length)
+    : normalized;
+}
+
+function isCursorCliSelection(runtimeOptions: AgentRuntimeOptions): boolean {
+  return runtimeOptions.defaultProvider === CURSOR_CLI_PROVIDER_ID
+    || runtimeOptions.fallbackProvider === CURSOR_CLI_PROVIDER_ID;
+}
+
+function stripCursorCliModelProviderPrefix(modelId: string | undefined): string | undefined {
+  const normalized = modelId?.trim();
+  if (!normalized) return normalized;
+  const cursorCliPrefix = `${CURSOR_CLI_PROVIDER_ID}/`;
+  return normalized.startsWith(cursorCliPrefix)
+    ? normalized.slice(cursorCliPrefix.length)
     : normalized;
 }
 
@@ -420,6 +435,59 @@ function applyOmpCliRuntimeOptions(runtimeOptions: AgentRuntimeOptions): AgentRu
       ...runtimeOptions,
       defaultProvider: runtimeOptions.fallbackProvider,
       defaultModelId: stripOmpCliModelProviderPrefix(runtimeOptions.fallbackModelId),
+      defaultThinkingLevel: runtimeOptions.fallbackThinkingLevel ?? runtimeOptions.defaultThinkingLevel,
+      fallbackProvider: undefined,
+      fallbackModelId: undefined,
+      fallbackThinkingLevel: undefined,
+    };
+  }
+
+  return runtimeOptions;
+}
+
+/*
+FNXC:CursorCli 2026-07-31-09:40:
+ISS-CLI-005: `cursor-cli/*` models appear in `/api/models` via Cursor discovery but are
+never registered in pi's ModelRegistry. G1 KB-001 failed with "not found in the pi model
+registry" because createResolvedAgentSession fell through to DefaultPiRuntime. Mirror
+omp-cli: auto-route primary/fallback cursor-cli selections to the bundled `cursor`
+runtime, never require pi registry membership, and fail closed with plugin remediation
+instead of DeepSeek/mock/pi fallthrough. Test mode still short-circuits to mock.
+*/
+function buildMissingCursorRuntimeError(): Error {
+  return new Error(
+    "Cursor CLI models require the bundled Cursor runtime plugin. "
+    + "Install and enable the Cursor Runtime plugin (fusion-plugin-cursor-runtime), "
+    + "authenticate `cursor-agent` under the Fusion service HOME, and select a discovered cursor-cli model.",
+  );
+}
+
+function deriveCursorRuntimeHint(
+  runtimeOptions: AgentRuntimeOptions,
+  pluginRunner: PluginRunner | undefined,
+): string | undefined {
+  if (!isCursorCliSelection(runtimeOptions)) return undefined;
+  try {
+    if (pluginRunner?.getRuntimeById("cursor")) return "cursor";
+  } catch {
+    throw buildMissingCursorRuntimeError();
+  }
+  throw buildMissingCursorRuntimeError();
+}
+
+function applyCursorCliRuntimeOptions(runtimeOptions: AgentRuntimeOptions): AgentRuntimeOptions {
+  if (runtimeOptions.defaultProvider === CURSOR_CLI_PROVIDER_ID) {
+    return {
+      ...runtimeOptions,
+      defaultModelId: stripCursorCliModelProviderPrefix(runtimeOptions.defaultModelId),
+    };
+  }
+
+  if (runtimeOptions.fallbackProvider === CURSOR_CLI_PROVIDER_ID) {
+    return {
+      ...runtimeOptions,
+      defaultProvider: runtimeOptions.fallbackProvider,
+      defaultModelId: stripCursorCliModelProviderPrefix(runtimeOptions.fallbackModelId),
       defaultThinkingLevel: runtimeOptions.fallbackThinkingLevel ?? runtimeOptions.defaultThinkingLevel,
       fallbackProvider: undefined,
       fallbackModelId: undefined,
@@ -932,12 +1000,20 @@ export async function createResolvedAgentSession(
   const autoOmpRuntimeHint = !useMockRuntime && !runtimeHint
     ? deriveOmpRuntimeHint(runtimeOptions, pluginRunner)
     : undefined;
-  const effectiveRuntimeHint = autoGrokRuntimeHint ?? autoOmpRuntimeHint ?? runtimeHint;
+  const autoCursorRuntimeHint = !useMockRuntime && !runtimeHint
+    ? deriveCursorRuntimeHint(runtimeOptions, pluginRunner)
+    : undefined;
+  const effectiveRuntimeHint = autoGrokRuntimeHint ?? autoOmpRuntimeHint ?? autoCursorRuntimeHint ?? runtimeHint;
   const usesOmpRuntime = effectiveRuntimeHint === "omp" && isOmpCliSelection(runtimeOptions);
+  const usesCursorRuntime = effectiveRuntimeHint === "cursor" && isCursorCliSelection(runtimeOptions);
   if (usesOmpRuntime) {
     // resolveRuntime intentionally falls back to pi for an unavailable hint; OMP
     // selections must fail here instead so pi never attempts registry resolution.
     deriveOmpRuntimeHint(runtimeOptions, pluginRunner);
+  }
+  if (usesCursorRuntime) {
+    // Same fail-closed gate as OMP: never let cursor-cli fall through to pi registry.
+    deriveCursorRuntimeHint(runtimeOptions, pluginRunner);
   }
   /*
   FNXC:GrokCliRouting 2026-07-22-15:10:
@@ -952,7 +1028,9 @@ export async function createResolvedAgentSession(
     ? applyGrokCliNoKeyRuntimeOptions(effectiveRuntimeOptions)
     : usesOmpRuntime
       ? applyOmpCliRuntimeOptions(grokFallbackDeferral.options)
-      : grokFallbackDeferral.options;
+      : usesCursorRuntime
+        ? applyCursorCliRuntimeOptions(grokFallbackDeferral.options)
+        : grokFallbackDeferral.options;
   const deferredGrokFallback = "deferred" in grokFallbackDeferral ? grokFallbackDeferral.deferred : undefined;
   if (grokFallbackDeferral.dropped) {
     sessionLog.warn(
@@ -1062,9 +1140,10 @@ export async function createResolvedAgentSession(
         ...(effectiveRuntimeHint ? { runtimeHint: effectiveRuntimeHint } : {}),
         ...(autoGrokRuntimeHint ? { reason: "grok-cli-no-visible-key" } : {}),
         ...(autoOmpRuntimeHint ? { reason: "omp-cli-runtime" } : {}),
+        ...(autoCursorRuntimeHint ? { reason: "cursor-cli-runtime" } : {}),
         ...(grokFallbackDeferral.dropped ? { reason: "grok-cli-fallback-dropped-no-visible-key" } : {}),
         ...(deferredGrokFallback ? { reason: "grok-cli-fallback-deferred-no-visible-key" } : {}),
-        ...(!autoGrokRuntimeHint && !autoOmpRuntimeHint && !grokFallbackDeferral.dropped && !deferredGrokFallback && "fallbackReason" in resolved && resolved.fallbackReason ? { reason: resolved.fallbackReason } : {}),
+        ...(!autoGrokRuntimeHint && !autoOmpRuntimeHint && !autoCursorRuntimeHint && !grokFallbackDeferral.dropped && !deferredGrokFallback && "fallbackReason" in resolved && resolved.fallbackReason ? { reason: resolved.fallbackReason } : {}),
       },
     });
   } catch (err) {
