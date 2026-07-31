@@ -346,6 +346,10 @@ export interface BatchStatusResponse {
 // ── task-log ──────────────────────────────────────────────────────────
 // FNXC:CodeOrganization 2026-07-22-14:00: Peels live in types/task-log.ts
 
+// FNXC:WorkflowLifecycleColumns 2026-07-30-10:55: a VALUE re-export (not a type) — the
+// planner AGENT ROLE name, so role comparisons stop reading as column guards.
+export { PLANNER_AGENT_ROLE } from "./types/task-log.js";
+
 import type {
   StepStatus,
   WorkflowTransitionNotificationKind,
@@ -1168,6 +1172,12 @@ import {
   getLegacyAgentAssetDirectoryName,
   getLegacyAgentInstructionsBundleDirName,
   getSafeAgentAssetIdSegment,
+  // FNXC:ApprovalLifecycleSecurity 2026-07-26-14:20: lazy approval TTLs must reach the engine gate + dashboard via the stable barrel.
+  APPROVAL_REQUEST_PENDING_TTL_MS,
+  APPROVAL_REQUEST_GRANT_TTL_MS,
+  getApprovalRequestGrantTtlMs,
+  configureApprovalRequestTtls,
+  isApprovalRequestExpired,
   isValidApprovalRequestTransition,
   normalizeApprovalRequestActionCategory,
 } from "./types/agents.js";
@@ -1193,6 +1203,11 @@ export {
   getLegacyAgentAssetDirectoryName,
   getLegacyAgentInstructionsBundleDirName,
   getSafeAgentAssetIdSegment,
+  APPROVAL_REQUEST_PENDING_TTL_MS,
+  APPROVAL_REQUEST_GRANT_TTL_MS,
+  getApprovalRequestGrantTtlMs,
+  configureApprovalRequestTtls,
+  isApprovalRequestExpired,
   isValidApprovalRequestTransition,
   normalizeApprovalRequestActionCategory,
 };
