@@ -1277,7 +1277,7 @@ export class Scheduler {
          hottest write path (26 emit sites against 7, measured), not a signature change here. */
       if (task.column === "in-progress") this.failedTaskIds.add(task.id);
         /*
-        FNXC:MissionReconciliation 2026-08-01-00:00:
+        FNXC:MissionReconciliation 2026-07-31-22:00:
         In-place failure parks do not emit task:moved, but they release the
         task's durable symbol lock. Reconcile any mission-linked failure update
         so the roadmap records withheld provenance without fabricating completion.
@@ -2229,6 +2229,19 @@ export class Scheduler {
       Count every non-terminal task that HOLDS a worktree (`task.worktree` set) in addition to WIP
       membership — wip cards without a worktree yet still reserve (they are about to acquire), and
       terminal lanes are excluded because their retained worktrees are cleanup-owned, not capacity.
+      */
+      /*
+      FNXC:WorkflowResolvedColumns 2026-07-31-20:55 (u12 — the ratchet caught this, correctly):
+      DELIBERATE-LITERAL — the unresolvable-workflow default. The trait path above is the real answer;
+      this arm is reached only when `columnFlagsForTask` returns undefined, i.e. the task's workflow
+      could not be read at all, and it then gives the same answer the pre-trait code gave.
+
+      Recorded rather than converted because there is nothing to convert TO: a task with no readable
+      workflow has no resolved lane, and treating it as non-terminal would count a finished card's
+      retained worktree against live capacity — the opposite of what the surrounding fix does.
+
+      Marker sits in the DECLARATION's leading comments, not inline: markers are read from a node's
+      leading comments, so a mid-expression one attaches to the wrong node and is silently ignored.
       */
       const isTerminalColumnTask = (task: Task): boolean => {
         const flags = columnFlagsForTask(task);
