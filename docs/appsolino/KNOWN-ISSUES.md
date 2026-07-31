@@ -115,24 +115,32 @@ Correction A: preserve execute bits on packaged runtime binaries; immutable rele
 
 ---
 
-## G1 / V1A.3 — Real-provider credential for physical-edit proof
+## G1 / V1A.3 — Real-provider physical-edit proof (Cursor CLI)
 
 Status: OPEN / BLOCKED
 Severity: High
-Component: Host D staging provider auth
+Component: Host D staging / Cursor CLI runtime
 Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
 GitHub issue: https://github.com/Appsolino/Fusion/issues/21
 
 ### Failure fingerprint
 
-- No usable real-provider credential (or Settings unreachable without Guest/InPrivate).
-- `testMode=true` forces `mock`/`scripted`.
+- Cursor CLI not installed or not authenticated on Host D.
+- Default provider not set to Cursor CLI / `cursor-cli`.
+- `testMode=true` would force `mock`/`scripted`.
 - Physical repository edit proof cannot start safely.
+
+### Owner provider decisions (2026-07-31)
+
+- **Cursor CLI** selected as G1 and ongoing default provider.
+- **DeepSeek** credential present (stored) but **runtime unverified** — not selected for G1; test separately after G1.
+- **Anthropic** not required for G1.
+- **No fallback** permitted during G1.
 
 ### Temporary workaround
 
-Enter Anthropic API key via Guest/InPrivate (ISS-UI-001 workaround), then clear `testMode` and run G1 once.
+Use Guest/InPrivate if ISS-UI-001 blocks Settings while configuring Cursor CLI defaults. Does not replace Cursor CLI install/auth.
 
 ### Permanent correction
 
-Complete G1 physical-edit proof; keep ISS-UI-001 permanent Settings fix before relying on AUTO-1 credential UX.
+Install/authenticate Cursor CLI on Host D; complete G1 physical-edit proof with fallback disabled; keep ISS-UI-001 permanent Settings fix before AUTO-1.
