@@ -11,12 +11,13 @@ Live blockers / next action: `CURRENT-STATE.md` (links high-priority open items 
 
 ## ISS-UI-001 — Settings search hijacked by browser autofill
 
-Status: OPEN / REGRESSION
+Status: OPEN / PENDING OWNER BROWSER ACCEPTANCE
 Severity: High
 Component: Dashboard / Settings
 First observed: Unknown historical occurrence — owner reports it happened previously
 Last observed: 2026-07-31
-Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
+Affected release: `v1a2-0.74.0-beta.5-3bc46bffe` (reproduced)
+Candidate fix release: `issui001-0.74.0-beta.5-d1e7cc423`
 GitHub issue: https://github.com/Appsolino/Fusion/issues/23
 
 ### Failure fingerprint
@@ -58,7 +59,7 @@ Proven in source (2026-07-31): the Settings filter (`type="search"`) had no `nam
 
 | Release/SHA | Result | Evidence |
 | --- | --- | --- |
-| Not fixed yet | — | — |
+| `issui001-0.74.0-beta.5-d1e7cc423` / `d1e7cc423` | DEPLOYED — pending Chrome/Edge saved-profile acceptance | Unit suite `SettingsModal.search-autofill.test.tsx` (6); Host D health ok; enginePaused; Cursor CLI ready |
 
 ---
 
