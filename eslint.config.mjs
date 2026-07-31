@@ -421,6 +421,8 @@ export default tseslint.config(
     files: [
       "scripts/**/*.js",
       "scripts/**/*.mjs",
+      "infra/scripts/**/*.js",
+      "infra/scripts/**/*.mjs",
       "**/*.cjs",
       "packages/cli-alias/**/*.js",
     ],

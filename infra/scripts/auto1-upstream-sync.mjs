@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-env node */
 /**
  * FNXC:AppsolinoAuto1 2026-07-31-12:40:
  * AUTO-1 upstream integration core. Fetches Runfusion/Fusion:main, creates or refreshes
@@ -9,9 +10,8 @@
  * ISS-GIT-007: resolve the repository default/integration branch via origin/HEAD
  * (with explicit override) instead of assuming `main`.
  */
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 

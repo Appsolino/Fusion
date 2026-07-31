@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-env node */
 /**
  * FNXC:AppsolinoAuto1 2026-07-31-12:40:
  * Disposable-repo validation harness for AUTO-1 (no Host D deploy, no Appsolino main mutation).
