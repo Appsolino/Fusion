@@ -1,3 +1,9 @@
+> **Status: Historical/reference**
+> This document does not override `MASTER-PLAN.md`, `OPERATING-MODEL.md` or `CURRENT-STATE.md`.
+
+
+**Live status:** [`docs/appsolino/CURRENT-STATE.md`](../CURRENT-STATE.md) — do not treat numbers below as authoritative.
+
 # Open Decisions — Approval Record
 
 Last updated: 2026-07-31

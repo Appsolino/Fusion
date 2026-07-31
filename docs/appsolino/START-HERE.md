@@ -1,0 +1,31 @@
+# Appsolino Fusion — start here
+
+**Reading time:** ≤ 1 minute.
+
+## Primary objective
+
+Build a reliable autonomous Fusion dashboard that completes development work **without routine operator intervention**.
+
+## Authority (binding)
+
+1. Explicit current owner decision
+2. [`MASTER-PLAN.md`](master-plan/MASTER-PLAN.md)
+3. [`OPERATING-MODEL.md`](OPERATING-MODEL.md)
+4. [`CURRENT-STATE.md`](CURRENT-STATE.md)
+5. Cursor rules (`.cursor/rules/appsolino-governance.mdc`, `appsolino-task-timing.mdc`)
+6. Historical/reference documents (do not override 1–5)
+
+## Required reading (≤ 10 minutes total)
+
+| Doc | Role | Budget |
+| --- | --- | ---: |
+| This file | Entry | 1 min |
+| `master-plan/MASTER-PLAN.md` | What we build | 3 min |
+| `OPERATING-MODEL.md` | How we work | 3 min |
+| `CURRENT-STATE.md` | Only authoritative status | 2 min |
+
+## Current phase / next action
+
+See **[`CURRENT-STATE.md`](CURRENT-STATE.md)** — do not trust status copied elsewhere.
+
+**Sequence:** G0 governance → G1 real provider (V1A.3) → AUTO-1…AUTO-4 → V1B (deferred).

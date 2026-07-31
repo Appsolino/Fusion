@@ -1,3 +1,6 @@
+> **Status: Historical/reference**
+> This document does not override `MASTER-PLAN.md`, `OPERATING-MODEL.md` or `CURRENT-STATE.md`.
+
 # Strategic Questions and Decisions
 
 Last updated: 2026-07-29
