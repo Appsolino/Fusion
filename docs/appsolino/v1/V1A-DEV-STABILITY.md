@@ -335,3 +335,23 @@ No real-provider proof attempted. Candidate unchanged. No mock laundering.
 - LEGACY_PRODUCTION_TOUCHED: NO
 - UPSTREAM_MERGED: NO
 - V1B_STARTED: NO
+
+# G1 / V1A.3 retest — 2026-07-31
+
+result: **BLOCKED**
+
+Pinned candidate: `v1a2-0.74.0-beta.5-3bc46bffe` / source `3bc46bffe5fd217206f2f993753445f645374431`
+
+Evidence (redacted):
+
+- Health `ok`; engine paused (`--paused` / `enginePaused=true`)
+- `testMode=true` → `/api/models` resolves `mock` / `scripted`
+- `auth.json` empty; `secrets.env` DB-only
+- `executorModelEscalationEnabled=false`
+- No task created; mock not used as proof
+
+HOST_P_ACCESSED: NO
+PRODUCTION_IDENTITIES_ON_HOST_D: ABSENT
+LEGACY_PRODUCTION_TOUCHED: NO
+UPSTREAM_MERGED: NO
+V1B_STARTED: NO
