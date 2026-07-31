@@ -2,12 +2,16 @@
 /**
  * FNXC:AppsolinoAuto1 2026-07-31-12:40:
  * Disposable-repo validation harness for AUTO-1 (no Host D deploy, no Appsolino main mutation).
+ *
+ * FNXC:AppsolinoAuto1 2026-07-31-16:05:
+ * Also asserts the live workflow App-token + gh auth setup-git contract (static YAML checks).
  */
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import {
   resolveIntegrationBranch,
@@ -15,6 +19,9 @@ import {
   syncBranchNameForUpstream,
   STATUS_PATH,
 } from "../auto1-upstream-sync.mjs";
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+const WORKFLOW_PATH = join(REPO_ROOT, ".github/workflows/upstream-auto1.yml");
 
 function sh(cwd, args) {
   const r = spawnSync(args[0], args.slice(1), { cwd, encoding: "utf8" });
@@ -323,5 +330,32 @@ describe("AUTO-1 upstream sync", () => {
         else process.env[k] = v;
       }
     }
+  });
+
+  it("workflow uses App token v3, explicit write perms, setup-git before sync, no owner PAT", () => {
+    const yaml = readFileSync(WORKFLOW_PATH, "utf8");
+    assert.match(yaml, /uses:\s*actions\/create-github-app-token@v3\b/);
+    assert.doesNotMatch(yaml, /create-github-app-token@v2\b/);
+    assert.match(yaml, /permission-contents:\s*write/);
+    assert.match(yaml, /permission-pull-requests:\s*write/);
+    assert.match(yaml, /permission-workflows:\s*write/);
+    assert.match(yaml, /persist-credentials:\s*false/);
+    assert.match(yaml, /APPSOLINO_AUTOMATION_APP_ID/);
+    assert.match(yaml, /APPSOLINO_AUTOMATION_APP_PRIVATE_KEY/);
+    assert.match(yaml, /gh auth setup-git/);
+    assert.match(yaml, /git ls-remote --exit-code origin HEAD/);
+    assert.match(yaml, /concurrency:[\s\S]*group:\s*auto1-upstream-sync/);
+    assert.match(yaml, /does not build, install, or activate Host D/);
+
+    const setupIdx = yaml.indexOf("gh auth setup-git");
+    const probeIdx = yaml.indexOf("git ls-remote --exit-code origin HEAD");
+    const syncIdx = yaml.indexOf("infra/scripts/auto1-upstream-sync.mjs");
+    assert.ok(setupIdx > 0 && probeIdx > setupIdx && syncIdx > probeIdx,
+      "gh auth setup-git and ls-remote probe must precede AUTO-1 script");
+
+    // Owner interactive OAuth / ad-hoc PAT must not be the routine identity.
+    assert.doesNotMatch(yaml, /secrets\.(GH_PAT|GITHUB_PAT|OWNER_PAT|PERSONAL_ACCESS_TOKEN)\b/i);
+    assert.match(yaml, /Owner OAuth and ad-hoc PATs are not the routine automation identity/);
+    assert.match(yaml, /GH_CONFIG_DIR:\s*\$\{\{\s*runner\.temp\s*\}\}\/auto1-gh-config/);
   });
 });

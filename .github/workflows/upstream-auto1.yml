@@ -3,6 +3,11 @@
 # Never force-pushes or updates Appsolino main. Never builds or deploys Host D (AUTO-2/AUTO-3).
 # Routine identity: Appsolino Automation GitHub App only — fail closed when App credentials are missing.
 # Observation-only detection remains in upstream-shadow.yml.
+#
+# FNXC:AppsolinoAuto1 2026-07-31-16:05:
+# Live push auth: persist-credentials stays false after checkout, so configure `gh auth setup-git`
+# with the App installation token before any git push. Probe with non-mutating `git ls-remote`.
+# App token action is v3 with explicit contents/pull-requests/workflows write permissions.
 
 name: Upstream AUTO-1 Sync
 
@@ -39,12 +44,15 @@ jobs:
 
       - name: Create GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
 
       - name: Checkout Appsolino
         uses: actions/checkout@v6
@@ -53,12 +61,28 @@ jobs:
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
 
+      - name: Configure GitHub App authentication for git
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+
       - name: Configure git identity
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "Appsolino Automation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Probe App git authentication (non-mutating)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # Fail closed before merge/push if App credentials cannot talk to origin.
+          git ls-remote --exit-code origin HEAD >/dev/null
 
       - name: Run AUTO-1 sync
         id: sync
@@ -67,8 +91,11 @@ jobs:
           AUTO1_GITHUB_APP_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # FNXC:AppsolinoAuto1 2026-07-31-16:05: never inherit owner interactive gh config.
+          GH_CONFIG_DIR: ${{ runner.temp }}/auto1-gh-config
         run: |
           set -euo pipefail
+          mkdir -p "$GH_CONFIG_DIR"
           set +e
           node infra/scripts/auto1-upstream-sync.mjs \
             --repo-dir "$GITHUB_WORKSPACE" \
