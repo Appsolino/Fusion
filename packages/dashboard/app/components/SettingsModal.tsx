@@ -1173,6 +1173,21 @@ export function SettingsModal({
   const [settingsNavWidth, setSettingsNavWidth] = useState(() => readSettingsNavWidthPreference());
   const settingsNavDragRef = useRef<{ startX: number; startWidth: number; previousUserSelect: string } | null>(null);
   const [settingsSearchQuery, setSettingsSearchQuery] = useState("");
+  /*
+  FNXC:SettingsSearchAutofill 2026-07-31-10:55:
+  ISS-UI-001: Chromium/Edge password managers classified the Settings filter as an identity field
+  (first text-like control near Authentication credential inputs) and injected the saved browser email.
+  Clearing re-triggered autofill, so every section disappeared and Auth/Models became unreachable.
+  Start read-only until the operator focuses the filter so the browser cannot write a restored identity
+  before any user gesture. Re-lock when the field is empty on blur or clear so a second autofill pass
+  cannot refill after Clear. Scoped only to this non-identity search control — Authentication API-key
+  and password rows keep their own autocomplete contract.
+  */
+  const [settingsSearchAutofillLocked, setSettingsSearchAutofillLocked] = useState(true);
+  const clearSettingsSearch = useCallback(() => {
+    setSettingsSearchQuery("");
+    setSettingsSearchAutofillLocked(true);
+  }, []);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(() => {
     const requestedSection = initialSection === "pi-extensions" ? "plugins" : initialSection;
     /*
@@ -4580,23 +4595,52 @@ export function SettingsModal({
                 <span>{t("settings.advanced.toggle", "Advanced settings")}</span>
               </label>
               {settingsSearchRowVisible && (
-                <div className="settings-search" data-testid="settings-search">
+                /*
+                FNXC:SettingsSearchAutofill 2026-07-31-10:55:
+                ISS-UI-001 permanent correction: isolate the filter in its own search form with
+                autocomplete=off, unambiguous id/name `settings-filter` (not email/username/login),
+                and Chromium-resistant readOnly-until-focus. Do not disable autocomplete on real
+                Authentication credential fields from this surface.
+                */
+                <form
+                  className="settings-search"
+                  data-testid="settings-search"
+                  role="search"
+                  autoComplete="off"
+                  onSubmit={(event) => event.preventDefault()}
+                >
                   <div id="settings-search-row-region" className="settings-search-row">
-                    <label className="settings-search-label" htmlFor="settings-search-input">
+                    <label className="settings-search-label" htmlFor="settings-filter">
                       {t("settings.search.label", "Search settings")}
                     </label>
                     <div className="settings-search-input-wrap">
                       <input
-                        id="settings-search-input"
+                        id="settings-filter"
+                        name="settings-filter"
                         data-testid="settings-search-input"
                         className="input settings-search-input"
                         type="search"
                         value={settingsSearchQuery}
+                        readOnly={settingsSearchAutofillLocked}
+                        autoComplete="off"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        spellCheck={false}
+                        data-1p-ignore=""
+                        data-lpignore="true"
+                        data-bwignore="true"
+                        data-form-type="other"
+                        onFocus={() => setSettingsSearchAutofillLocked(false)}
+                        onBlur={(event) => {
+                          if (!event.currentTarget.value) {
+                            setSettingsSearchAutofillLocked(true);
+                          }
+                        }}
                         onChange={(event) => setSettingsSearchQuery(event.target.value)}
                         onKeyDown={(event) => {
                           if (event.key === "Escape" && hasSettingsSearchQuery) {
                             event.stopPropagation();
-                            setSettingsSearchQuery("");
+                            clearSettingsSearch();
                           }
                         }}
                         placeholder={t("settings.search.placeholder", "Search by setting or section")}
@@ -4606,7 +4650,7 @@ export function SettingsModal({
                         <button
                           type="button"
                           className="btn btn-sm settings-search-clear"
-                          onClick={() => setSettingsSearchQuery("")}
+                          onClick={clearSettingsSearch}
                           aria-label={t("settings.search.clear", "Clear settings search")}
                         >
                           {t("actions.clear", "Clear")}
@@ -4667,7 +4711,7 @@ export function SettingsModal({
                       </ul>
                     )}
                   </div>
-                </div>
+                </form>
               )}
               <nav className="settings-sidebar">
                 {hasSettingsSearchResults ? searchMatchedSections.map((section) => {

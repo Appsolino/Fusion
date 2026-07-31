@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { fetchOmpCliStatus, setOmpCliBinaryPath, setOmpCliEnabled, type OmpCliStatus } from "../api";
 import { ProviderIcon } from "./ProviderIcon";
+import { SETTINGS_NON_IDENTITY_TEXT_INPUT_PROPS } from "./settings/nonIdentityInputProps";
 import "./OmpCliProviderCard.css";
 
 interface OmpCliProviderCardProps {
@@ -23,8 +24,18 @@ export function OmpCliProviderCard({ authenticated, compact = false, onToggled }
   const [binaryPathInput, setBinaryPathInput] = useState("");
   const [pathMessage, setPathMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  /*
+  FNXC:SettingsNonIdentityAutofill 2026-07-31-12:20:
+  ISS-UI-001: same Authentication-section credential autofill class as Cursor CLI path — lock until focus.
+  */
+  const [pathAutofillLocked, setPathAutofillLocked] = useState(true);
   const pathDirtyRef = useRef(false);
+  const pathAutofillLockedRef = useRef(true);
   const mountedRef = useRef(true);
+
+  useEffect(() => {
+    pathAutofillLockedRef.current = pathAutofillLocked;
+  }, [pathAutofillLocked]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -88,6 +99,7 @@ export function OmpCliProviderCard({ authenticated, compact = false, onToggled }
   const binaryPathChanged = trimmedBinaryPath !== savedBinaryPath;
 
   const handleBinaryPathChange = useCallback((value: string) => {
+    if (pathAutofillLockedRef.current) return;
     setBinaryPathInput(value);
     pathDirtyRef.current = true;
     setPathMessage(null);
@@ -129,14 +141,21 @@ export function OmpCliProviderCard({ authenticated, compact = false, onToggled }
       <div className="omp-cli-binary-path-row">
         <input
           id="omp-cli-binary-path"
+          name="omp-cli-binary-path"
           className="omp-cli-binary-path-input"
           type="text"
           value={binaryPathInput}
+          readOnly={pathAutofillLocked}
+          {...SETTINGS_NON_IDENTITY_TEXT_INPUT_PROPS}
+          onFocus={() => setPathAutofillLocked(false)}
+          onBlur={() => {
+            if (!pathDirtyRef.current) setPathAutofillLocked(true);
+          }}
           onChange={(event) => handleBinaryPathChange(event.target.value)}
           placeholder={t("setup.ompCli.binaryPathPlaceholder", "/usr/local/bin/omp")}
           disabled={busy !== null}
         />
-        <button type="button" className="btn btn-sm" onClick={() => void handleSaveBinaryPath()} disabled={busy !== null || !binaryPathChanged}>
+        <button type="button" className="btn btn-sm" onClick={() => void handleSaveBinaryPath()} disabled={busy !== null || !binaryPathChanged || pathAutofillLocked}>
           {busy === "saving-path" ? t("setup.ompCli.savingPath", "Saving…") : t("setup.ompCli.saveAndTestPath", "Save & Test")}
         </button>
       </div>

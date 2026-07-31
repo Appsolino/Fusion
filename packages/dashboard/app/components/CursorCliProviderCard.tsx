@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { fetchCursorCliStatus, setCursorCliBinaryPath, setCursorCliEnabled, type CursorCliStatus } from "../api";
 import { ProviderIcon } from "./ProviderIcon";
+import { SETTINGS_NON_IDENTITY_TEXT_INPUT_PROPS } from "./settings/nonIdentityInputProps";
 import "./CursorCliProviderCard.css";
 
 interface CursorCliProviderCardProps {
@@ -17,8 +18,20 @@ export function CursorCliProviderCard({ authenticated, compact = false, onToggle
   const [busy, setBusy] = useState<"enabling" | "disabling" | "testing" | "saving-path" | null>(null);
   const [binaryPathInput, setBinaryPathInput] = useState("");
   const [pathMessage, setPathMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  /*
+  FNXC:SettingsNonIdentityAutofill 2026-07-31-12:20:
+  ISS-UI-001 Edge acceptance: saved email was injected into Cursor CLI binary path even after
+  search-field hardening. Keep the path read-only until explicit focus and ignore change events
+  while locked so browser injection cannot dirty state or enable Save & Test.
+  */
+  const [pathAutofillLocked, setPathAutofillLocked] = useState(true);
   const pathDirtyRef = useRef(false);
+  const pathAutofillLockedRef = useRef(true);
   const mountedRef = useRef(true);
+
+  useEffect(() => {
+    pathAutofillLockedRef.current = pathAutofillLocked;
+  }, [pathAutofillLocked]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -65,12 +78,16 @@ export function CursorCliProviderCard({ authenticated, compact = false, onToggle
   const binaryPathChanged = trimmedBinaryPath !== savedBinaryPath;
 
   const handleBinaryPathChange = useCallback((value: string) => {
+    // FNXC:SettingsNonIdentityAutofill 2026-07-31-12:20: discard pre-focus browser writes; they must not mark the path dirty.
+    if (pathAutofillLockedRef.current) return;
     setBinaryPathInput(value);
     pathDirtyRef.current = true;
     setPathMessage(null);
   }, []);
 
   const handleSaveBinaryPath = useCallback(async () => {
+    // FNXC:SettingsNonIdentityAutofill 2026-07-31-12:20: Save & Test requires an explicit operator edit after unlock.
+    if (!pathDirtyRef.current || pathAutofillLockedRef.current) return;
     setBusy("saving-path");
     setPathMessage(null);
     try {
@@ -81,6 +98,7 @@ export function CursorCliProviderCard({ authenticated, compact = false, onToggle
       if (mountedRef.current) {
         setStatus(refreshed);
         setBinaryPathInput(refreshed.binaryPath ?? "");
+        setPathAutofillLocked(true);
         setPathMessage({
           tone: "success",
           text: trimmedBinaryPath
@@ -110,14 +128,26 @@ export function CursorCliProviderCard({ authenticated, compact = false, onToggle
       <div className="cursor-cli-binary-path-row">
         <input
           id="cursor-cli-binary-path"
+          name="cursor-cli-binary-path"
           className="cursor-cli-binary-path-input"
           type="text"
           value={binaryPathInput}
+          readOnly={pathAutofillLocked}
+          {...SETTINGS_NON_IDENTITY_TEXT_INPUT_PROPS}
+          onFocus={() => setPathAutofillLocked(false)}
+          onBlur={() => {
+            if (!pathDirtyRef.current) setPathAutofillLocked(true);
+          }}
           onChange={(event) => handleBinaryPathChange(event.target.value)}
           placeholder={t("setup.cursorCli.binaryPathPlaceholder", "/usr/local/bin/cursor-agent")}
           disabled={busy !== null}
         />
-        <button type="button" className="btn btn-sm" onClick={() => void handleSaveBinaryPath()} disabled={busy !== null || !binaryPathChanged}>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => void handleSaveBinaryPath()}
+          disabled={busy !== null || !binaryPathChanged || pathAutofillLocked}
+        >
           {busy === "saving-path" ? t("setup.cursorCli.savingPath", "Saving…") : t("setup.cursorCli.saveAndTestPath", "Save & Test")}
         </button>
       </div>

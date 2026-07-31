@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { fetchGrokCliStatus, setGrokCliBinaryPath, setGrokCliEnabled, type GrokCliStatus } from "../api";
 import { ProviderIcon } from "./ProviderIcon";
+import { SETTINGS_NON_IDENTITY_TEXT_INPUT_PROPS } from "./settings/nonIdentityInputProps";
 import "./GrokCliProviderCard.css";
 
 interface GrokCliProviderCardProps {
@@ -27,8 +28,18 @@ export function GrokCliProviderCard({ authenticated, compact = false, onToggled 
   const [busy, setBusy] = useState<"enabling" | "disabling" | "testing" | "saving-path" | null>(null);
   const [binaryPathInput, setBinaryPathInput] = useState("");
   const [pathMessage, setPathMessage] = useState<{ tone: "success" | "error"; text: string } | null>(null);
+  /*
+  FNXC:SettingsNonIdentityAutofill 2026-07-31-12:20:
+  ISS-UI-001: same Authentication-section credential autofill class as Cursor CLI path — lock until focus.
+  */
+  const [pathAutofillLocked, setPathAutofillLocked] = useState(true);
   const pathDirtyRef = useRef(false);
+  const pathAutofillLockedRef = useRef(true);
   const mountedRef = useRef(true);
+
+  useEffect(() => {
+    pathAutofillLockedRef.current = pathAutofillLocked;
+  }, [pathAutofillLocked]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -76,6 +87,7 @@ export function GrokCliProviderCard({ authenticated, compact = false, onToggled 
   const binaryPathChanged = trimmedBinaryPath !== savedBinaryPath;
 
   const handleBinaryPathChange = useCallback((value: string) => {
+    if (pathAutofillLockedRef.current) return;
     setBinaryPathInput(value);
     pathDirtyRef.current = true;
     setPathMessage(null);
@@ -117,14 +129,21 @@ export function GrokCliProviderCard({ authenticated, compact = false, onToggled 
       <div className="grok-cli-binary-path-row">
         <input
           id="grok-cli-binary-path"
+          name="grok-cli-binary-path"
           className="grok-cli-binary-path-input"
           type="text"
           value={binaryPathInput}
+          readOnly={pathAutofillLocked}
+          {...SETTINGS_NON_IDENTITY_TEXT_INPUT_PROPS}
+          onFocus={() => setPathAutofillLocked(false)}
+          onBlur={() => {
+            if (!pathDirtyRef.current) setPathAutofillLocked(true);
+          }}
           onChange={(event) => handleBinaryPathChange(event.target.value)}
           placeholder={t("setup.grokCli.binaryPathPlaceholder", "/usr/local/bin/grok")}
           disabled={busy !== null}
         />
-        <button type="button" className="btn btn-sm" onClick={() => void handleSaveBinaryPath()} disabled={busy !== null || !binaryPathChanged}>
+        <button type="button" className="btn btn-sm" onClick={() => void handleSaveBinaryPath()} disabled={busy !== null || !binaryPathChanged || pathAutofillLocked}>
           {busy === "saving-path" ? t("setup.grokCli.savingPath", "Saving…") : t("setup.grokCli.saveAndTestPath", "Save & Test")}
         </button>
       </div>

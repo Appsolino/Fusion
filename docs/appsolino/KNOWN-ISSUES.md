@@ -9,56 +9,105 @@ Live blockers / next action: `CURRENT-STATE.md` (links high-priority open items 
 
 ---
 
-## ISS-UI-001 — Settings search hijacked by browser autofill
+## ISS-UI-001 — Settings non-identity fields hijacked by browser credential autofill
 
-Status: OPEN / REGRESSION
+Status: OPEN / FAIL — incomplete autofill correction (expanded; pending Edge re-acceptance)
 Severity: High
-Component: Dashboard / Settings
+Component: Dashboard / Settings / Authentication
 First observed: Unknown historical occurrence — owner reports it happened previously
-Last observed: 2026-07-31
-Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
+Last observed: 2026-07-31 (normal Edge profile acceptance)
+Affected release: `v1a2-0.74.0-beta.5-3bc46bffe` (search); `issui001-0.74.0-beta.5-d1e7cc423` (PARTIAL / FAILED EDGE ACCEPTANCE)
+Candidate fix release: `issui001b-0.74.0-beta.5-6fd7443ee`
 GitHub issue: https://github.com/Appsolino/Fusion/issues/23
 
 ### Failure fingerprint
 
-- Search Settings is populated automatically with the browser account email.
-- Clearing the field causes the email to return immediately.
-- No settings sections remain visible.
-- Authentication and model configuration become inaccessible.
+- Settings search populated with the browser account email (original report).
+- Cursor CLI binary path populated with the saved browser email (Edge evidence: `anas966@gmail.com` instead of `/home/fusion/.local/bin/cursor-agent`).
+- API-key replacement / password input populated with a saved password (DeepSeek masked autofill on Edge).
+- Clearing or reopening fields re-triggers autofill.
+- Saving / Save & Test with injected values could overwrite valid application configuration (Cursor path or stored API keys). **Do not save while contaminated.**
 
 ### Impact
 
-Blocks normal access to Settings and provider authentication.
+Blocks trustworthy Settings configuration; risk of overwriting Cursor CLI path and provider API keys.
 
 ### Temporary workaround
 
-Use Chrome Guest or Edge InPrivate with extensions disabled.
+Use Chrome Guest or Edge InPrivate with extensions disabled for configuration changes. Close Settings without Save / Save & Test if fields show injected credentials.
 
 ### Root cause
 
-UNRESOLVED — likely browser/password-manager classification of the search input as an identity field. Must be proven in source and browser testing.
+Broader than the search box: Settings Authentication non-identity controls (search filter, CLI binary path text inputs, always-mounted `type=password` API-key fields) sit near credential UI and are classified by Edge/Chromium password managers as login username/password fields. Browser injection updates React controlled state and can enable Save & Test.
 
 ### Permanent correction
 
-- Correct input/form autocomplete semantics.
-- Prevent browser and password-manager identity autofill.
-- Preserve normal settings filtering.
-- Validate Chrome and Edge saved-profile behavior.
+- Search: non-identity `settings-filter` + read-only-until-focus (first candidate).
+- Cursor / Grok / OMP CLI binary paths: explicit non-identity id/name, autocomplete off, PM ignore attrs, read-only until focus; discard pre-focus change events so Save & Test cannot submit injected values.
+- API keys: do not mount an editable password input for a stored key; show Key stored / Replace / Clear; mount replacement input only after Replace with `autocomplete=new-password` + lock-until-focus.
+- Do not globally disable browser password management for genuine website logins.
+- Validate on a normal Edge profile with saved credentials before marking FIXED. Chrome with no saved autofill identity is inconclusive.
 
 ### Required regression tests
 
-- Search starts empty.
-- Clear remains empty.
-- Saved browser email is not injected.
-- Typed filtering works.
-- Reload does not restore an email.
-- Authentication section remains accessible.
+- Search starts empty; clear remains empty; non-identity attrs (retained).
+- Cursor path starts configured; DOM email injection before focus does not update state; Save & Test stays disabled without explicit edit.
+- Stored API key has no editable password field until Replace; Replace opens empty input; injection before focus cannot modify state; non-login autocomplete attrs.
+- Authentication / model sections remain reachable; explicit typing/saving still works.
 
 ### Fix history
 
 | Release/SHA | Result | Evidence |
 | --- | --- | --- |
-| Not fixed yet | — | — |
+| `issui001-0.74.0-beta.5-d1e7cc423` / `d1e7cc423` | PARTIAL / FAILED EDGE ACCEPTANCE | Search protected; Edge injected email into Cursor CLI binary path; DeepSeek password-like autofill; Chrome inconclusive (no saved autofill identity) |
+| `issui001b-0.74.0-beta.5-6fd7443ee` / `6fd7443ee` | DEPLOYED — pending Edge re-acceptance | Path + API-key Replace UX; unit suites green; Host D health ok; cursor path still `/home/fusion/.local/bin/cursor-agent` |
+
+---
+
+## ISS-GIT-007 — Merge path assumes `main` instead of repository default branch
+
+Status: OPEN
+Severity: High (blocks AUTO-1 auto-merge reliability)
+Component: Engine / task-merge / default-branch resolution
+First observed: 2026-07-31 (G1 `KB-003` on disposable `v1a3-real-provider`)
+Last observed: 2026-07-31
+Affected release: `g13b-0.74.0-beta.5-cadf34dd4`
+GitHub issue: (record only; fix before AUTO-1 — do not implement inside ISS-UI-001)
+
+### Failure fingerprint
+
+- Repository default branch is `master`.
+- Auto-merge / merge expectation targets `main`.
+- Auto-merge fails; physical edits already succeeded on the task branch.
+- Recovery required manual fast-forward of the agent commit onto `master` (KB-003: `173793d`).
+
+### Impact
+
+G1 physical proof still PASSed (Cursor execution and edits succeeded), but automatic task merging cannot be trusted for AUTO-1 while the merge path ignores the repository default branch.
+
+### Temporary workaround
+
+Manual fast-forward / merge onto the repository default branch when auto-merge fails for this mismatch.
+
+### Root cause
+
+Merge path assumes `main` rather than resolving the repository’s actual default branch (observed `master` on the disposable proof repo). Recorded in PR #27 / CURRENT-STATE G1 merge note.
+
+### Permanent correction
+
+Resolve and merge into the repository default branch (or configured integration branch), not a hard-coded `main`. Add regression coverage for non-`main` defaults. **Do not fix inside ISS-UI-001.**
+
+### Required regression tests
+
+- Disposable / fixture repo whose default branch is `master` completes auto-merge onto `master`.
+- Repo whose default is `main` is unchanged.
+- Missing `main` with default `master` must not fail solely because `main` is absent.
+
+### Fix history
+
+| Release/SHA | Result | Evidence |
+| --- | --- | --- |
+| Not fixed yet | OPEN | KB-003 manual FF onto `master`; PR #27 |
 
 ---
 

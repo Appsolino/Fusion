@@ -1739,6 +1739,7 @@ describe("SettingsModal", () => {
       await waitForSettingsModalReady();
 
       const input = await screen.findByLabelText("Cursor CLI binary path");
+      fireEvent.focus(input);
       fireEvent.change(input, { target: { value: "  C:\\Users\\A User\\AppData\\Roaming\\npm\\cursor-agent.cmd  " } });
       await waitFor(() => expect(screen.getByRole("button", { name: "Save & Test" })).not.toBeDisabled());
       fireEvent.click(screen.getByRole("button", { name: "Save & Test" }));
@@ -1773,6 +1774,7 @@ describe("SettingsModal", () => {
       await waitForSettingsModalReady();
 
       const input = await screen.findByLabelText("Cursor CLI binary path");
+      fireEvent.focus(input);
       fireEvent.change(input, { target: { value: "/missing/cursor-agent" } });
       await waitFor(() => expect(screen.getByRole("button", { name: "Save & Test" })).not.toBeDisabled());
       fireEvent.click(screen.getByRole("button", { name: "Save & Test" }));
