@@ -30,7 +30,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { type TaskMoveLanes, resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, getBuiltinWorkflow, isBuiltinWorkflowId, resolveWorkflowIrForTask, resolveWorkflowIrForTaskWithProvenance, resolveReboundTarget, columnsWithFlag, resolveLifecycleColumns, resolveTaskLifecycleColumns, workflowHasColumn, planLegacyAdoption, resolveOrphanedPendingStepResults, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, DEFAULT_MAX_POST_REVIEW_FIXES, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult, type WorkflowIr,
+import { type TaskMoveLanes, resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, getBuiltinWorkflow, isBuiltinWorkflowId, resolveWorkflowIrForTask, resolveWorkflowIrForTaskWithProvenance, resolveReboundTarget, resolveReboundTargetForTask, resolveArchiveTargetForTask, columnsWithFlag, resolveLifecycleColumns, resolveTaskLifecycleColumns, workflowHasColumn, planLegacyAdoption, resolveOrphanedPendingStepResults, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, DEFAULT_MAX_POST_REVIEW_FIXES, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult, type WorkflowIr,
   LEGACY_COLUMN_IDS_BY_ROLE,
   TERMINAL_ROLES,
   resolveProjectColumnsForRoles,
@@ -251,7 +251,7 @@ export async function archiveAsGhostBug(
   });
   // #1411: recovery/terminal move — recoveryRehome skips order-derived adjacency
   // so a custom-workflow card can always reach the terminal column.
-  await store.moveTask(taskId, "archived", { moveSource: "engine", recoveryRehome: true });
+  await store.moveTask(taskId, await resolveArchiveTargetForTask(store, taskId), { moveSource: "engine", recoveryRehome: true });
 }
 
 async function classifyOwnedLandedEvidenceForSelfHealing(rootDir: string, task: Task, mergeTargetBranch: string): Promise<OwnedLandedClassification> {
@@ -2053,7 +2053,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
 
           await this.store.updateTask(taskId, parkUpdate);
           try {
-            await this.store.moveTask(taskId, "todo", {
+            await this.store.moveTask(taskId, await resolveReboundTargetForTask(this.store, taskId), {
               preserveProgress: true,
               preserveStatus: true,
               // #1411: backward recovery — skip order-derived adjacency.
@@ -3800,7 +3800,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             status: null,
             error: null,
           });
-          await this.store.moveTask(task.id, "todo", {
+          await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), {
             moveSource: "engine",
             // #1411: backward recovery — skip order-derived adjacency.
             recoveryRehome: true,
@@ -4088,7 +4088,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
                   signalReason: liveExecutionSignal.reason,
                 },
               });
-              await this.store.moveTask(task.id, "todo", {
+              await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), {
                 moveSource: "engine",
                 recoveryRehome: true,
                 preserveProgress: true,
@@ -4263,7 +4263,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
                 if (!reviewProof?.ok) {
                   await this.emitBackwardMoveNoAction(task, "reclaim-self-owned-branch-conflict", "task:reclaim-self-owned-branch-conflict-no-action", reviewProof!);
                 } else {
-                  await this.store.moveTask(task.id, "todo", {
+                  await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), {
                     moveSource: "engine",
                     // #1411: backward recovery — skip order-derived adjacency.
                     recoveryRehome: true,
@@ -4368,7 +4368,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
                   if (!reviewProof?.ok) {
                     await this.emitBackwardMoveNoAction(task, "reclaim-self-owned-branch-conflict", "task:reclaim-self-owned-branch-conflict-no-action", reviewProof!);
                   } else {
-                    await this.store.moveTask(task.id, "todo", {
+                    await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), {
                       moveSource: "engine",
                       // #1411: backward recovery — skip order-derived adjacency.
                       recoveryRehome: true,
@@ -4463,7 +4463,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             const idleAnchor = task.executionStartedAt ?? task.columnMovedAt ?? task.updatedAt;
             const idleAnchorMs = Date.parse(idleAnchor ?? "");
             const idleMs = Number.isFinite(idleAnchorMs) ? Math.max(0, Date.now() - idleAnchorMs) : null;
-            await this.store.moveTask(task.id, "todo", {
+            await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), {
               moveSource: "engine",
               // #1411: backward recovery — skip order-derived adjacency.
               recoveryRehome: true,
@@ -4532,7 +4532,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             if (!reviewProof?.ok) {
               await this.emitBackwardMoveNoAction(task, "reclaim-self-owned-branch-conflict", "task:reclaim-self-owned-branch-conflict-no-action", reviewProof!);
             } else {
-              await this.store.moveTask(task.id, "todo", {
+              await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), {
                 moveSource: "engine",
                 // #1411: backward recovery — skip order-derived adjacency.
                 recoveryRehome: true,
@@ -5619,7 +5619,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         continue;
       }
 
-      await this.store.moveTask(task.id, "todo", {
+      await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), {
         preserveProgress: true,
         preserveWorktree: true,
         preserveResumeState: true,
@@ -6416,7 +6416,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         continue;
       }
 
-      await this.store.moveTask(holder.id, "todo", {
+      await this.store.moveTask(holder.id, await resolveReboundTargetForTask(this.store, holder.id), {
         preserveProgress: true,
         preserveWorktree: true,
         preserveResumeState: true,
@@ -6679,7 +6679,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       }
 
       try {
-        await this.store.moveTask(task.id, "todo", {
+        await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), {
           preserveProgress: true,
           preserveWorktree: true,
           preserveResumeState: true,
@@ -7768,7 +7768,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             continue;
           }
           // #1411: backward recovery — skip order-derived adjacency.
-          await this.store.moveTask(task.id, "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
+          await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
           continue;
         }
 
@@ -7831,7 +7831,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
               lane: "self-healing-finalize-no-op-review",
             });
             // #1411: backward recovery — skip order-derived adjacency.
-            await this.store.moveTask(task.id, "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
+            await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
             recovered++;
             continue;
           }
@@ -7851,7 +7851,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
               baseRef: classification.baseRef,
             });
             // #1411: backward recovery — skip order-derived adjacency.
-            await this.store.moveTask(task.id, "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
+            await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
             recovered++;
             continue;
           }
@@ -7876,7 +7876,8 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           await this.store.logEntry(task.id, `Auto-finalized no-op (proven): start point on ${classification.baseRef}; modifiedFiles cleared`);
         }
 
-        const movedTask = await this.store.moveTask(task.id, "done");
+        const completeLane = (await resolveTaskLifecycleColumns(this.store, task.id))?.complete ?? "done";
+const movedTask = await this.store.moveTask(task.id, completeLane);
         this.emitTaskMerged(movedTask, { mergeConfirmed: true });
         recovered++;
       }
@@ -8635,7 +8636,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             "Auto-recovered: in-review task still had incomplete steps — moved back to todo for retry",
           );
           // #1411: backward recovery — skip order-derived adjacency.
-          await this.store.moveTask(task.id, "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
+          await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
           log.log(`Recovered stale incomplete review task ${task.id}: moved back to todo`);
           recovered++;
         } catch (err: unknown) { const errorMessage = err instanceof Error ? err.message : String(err);
@@ -9123,7 +9124,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             "Auto-recovered: in-review task idle past stuck-task timeout — kicked back to todo",
           );
           // #1411: backward recovery — skip order-derived adjacency.
-          await this.store.moveTask(task.id, "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
+          await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
           log.log(`Kicked ghost review task ${task.id} back to todo`);
           recovered++;
         } catch (err: unknown) {
@@ -9517,7 +9518,8 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
               mergeDetails,
             });
             await this.recordSelfHealingBranchGroupMemberLanding(task, mergeTarget, "recover-interrupted-merging");
-            const movedTask = await this.store.moveTask(task.id, "done");
+            const completeLane = (await resolveTaskLifecycleColumns(this.store, task.id))?.complete ?? "done";
+const movedTask = await this.store.moveTask(task.id, completeLane);
             this.emitTaskMerged(movedTask, { mergeConfirmed: true });
             await this.cleanupInterruptedMergeArtifacts(task);
             await this.store.logEntry(
@@ -10722,7 +10724,8 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
               mergeDetails,
             });
             await this.recordSelfHealingBranchGroupMemberLanding(task, mergeTarget, "recover-stuck-merge-deadlocks");
-            const movedTask = await this.store.moveTask(task.id, "done");
+            const completeLane = (await resolveTaskLifecycleColumns(this.store, task.id))?.complete ?? "done";
+const movedTask = await this.store.moveTask(task.id, completeLane);
             this.emitTaskMerged(movedTask, { mergeConfirmed: true });
             await this.cleanupInterruptedMergeArtifacts(task);
 
@@ -10962,7 +10965,8 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             mergeDetails,
           });
           await this.recordSelfHealingBranchGroupMemberLanding(task, mergeTarget, "recover-orphan-only-scope-violations");
-          const movedTask = await this.store.moveTask(task.id, "done");
+          const completeLane = (await resolveTaskLifecycleColumns(this.store, task.id))?.complete ?? "done";
+const movedTask = await this.store.moveTask(task.id, completeLane);
           this.emitTaskMerged(movedTask, { mergeConfirmed: true });
           await this.store.logEntry(
             task.id,
@@ -11226,7 +11230,8 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           });
           const worktreeHint = task.worktree;
           await this.recordSelfHealingBranchGroupMemberLanding(task, mergeTarget, "recover-already-merged-review");
-          const movedTask = await this.store.moveTask(task.id, "done");
+          const completeLane = (await resolveTaskLifecycleColumns(this.store, task.id))?.complete ?? "done";
+const movedTask = await this.store.moveTask(task.id, completeLane);
           this.emitTaskMerged(movedTask, { mergeConfirmed: true });
           await this.store.logEntry(
             task.id,
@@ -11876,7 +11881,8 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           // merger.ts completeTask() and project-engine.ts auto-merge already-confirmed path.
           await this.store.updateTask(task.id, { status: null, error: null, paused: false });
           await this.recordSelfHealingBranchGroupMemberLanding(task, mergeTarget, "recover-branch-misbound-in-review");
-          const movedTask = await this.store.moveTask(task.id, "done");
+          const completeLane = (await resolveTaskLifecycleColumns(this.store, task.id))?.complete ?? "done";
+const movedTask = await this.store.moveTask(task.id, completeLane);
           this.emitTaskMerged(movedTask, { mergeConfirmed: true });
           await this.store.logEntry(
             task.id,
@@ -12767,7 +12773,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             },
           });
           // #1411: backward recovery — skip order-derived adjacency.
-          await this.store.moveTask(task.id, "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
+          await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
           recovered++;
         } catch (err: unknown) {
           const errorMessage = err instanceof Error ? err.message : String(err);
@@ -13848,7 +13854,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             "Auto-recovered no-progress no-task_done failure — clean worktree, moved back to todo",
           );
           // #1411: backward recovery — skip order-derived adjacency.
-          await this.store.moveTask(task.id, "todo", { moveSource: "engine", recoveryRehome: true });
+          await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), { moveSource: "engine", recoveryRehome: true });
           recovered++;
         } catch (err: unknown) { const errorMessage = err instanceof Error ? err.message : String(err);
           log.error(`Failed to recover no-progress no-task_done failure ${task.id}: ${errorMessage}`);
@@ -14137,7 +14143,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             `Auto-retry ${nextCount}/${MAX_TASK_DONE_RETRIES}: agent finished without fn_task_done — requeuing to todo to resume partial work`,
           );
           // #1411: backward recovery — skip order-derived adjacency.
-          await this.store.moveTask(task.id, "todo", { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
+          await this.store.moveTask(task.id, await resolveReboundTargetForTask(this.store, task.id), { preserveProgress: true, moveSource: "engine", recoveryRehome: true });
           recovered++;
         } catch (err: unknown) {
           const errorMessage = err instanceof Error ? err.message : String(err);
