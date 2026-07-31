@@ -117,18 +117,18 @@ Correction A: preserve execute bits on packaged runtime binaries; immutable rele
 
 ## G1 / V1A.3 — Real-provider physical-edit proof (Cursor CLI)
 
-Status: OPEN / BLOCKED
+Status: FAIL (one attempt; blocked by ISS-CLI-005)
 Severity: High
 Component: Host D staging / Cursor CLI runtime
 Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
 GitHub issue: https://github.com/Appsolino/Fusion/issues/21
 
-### Failure fingerprint
+### Failure fingerprint (superseded layers)
 
-- Cursor CLI not installed or not authenticated on Host D.
-- Default provider not set to Cursor CLI / `cursor-cli`.
-- `testMode=true` would force `mock`/`scripted`.
-- Physical repository edit proof cannot start safely.
+- ~~Cursor CLI not installed or not authenticated on Host D.~~ (ISS-CLI-004 FIXED)
+- ~~Default provider not set to Cursor CLI / `cursor-cli`.~~ (configured for attempt)
+- ~~`testMode=true` would force `mock`/`scripted`.~~ (`testMode=false` for attempt)
+- Physical repository edit proof still incomplete: planning hard-fails before edits (ISS-CLI-005).
 
 ### Owner provider decisions (2026-07-31)
 
@@ -137,10 +137,111 @@ GitHub issue: https://github.com/Appsolino/Fusion/issues/21
 - **Anthropic** not required for G1.
 - **No fallback** permitted during G1.
 
+### G1 single-attempt evidence (2026-07-31)
+
+- Task `KB-001` on disposable `v1a3-real-provider`; column `triage` / status `failed`.
+- Configured: `cursor-cli` / `composer-2.5` (default + planning + execution lanes); `fallbackProvider` unset; `testMode=false`.
+- Error: `Configured model cursor-cli/composer-2.5 (primary selection) was not found in the pi model registry`.
+- No `provider-proof.txt`; `notes.txt` and `README.md` unchanged; no second attempt; engine paused after terminal; restart while paused showed no redispatch of a successful edit.
+
 ### Temporary workaround
 
-Use Guest/InPrivate if ISS-UI-001 blocks Settings while configuring Cursor CLI defaults. Does not replace Cursor CLI install/auth.
+None for G1 PASS on this pinned release until ISS-CLI-005 is fixed. Do not retry a second physical-edit task under the same broken registry path.
 
 ### Permanent correction
 
-Install/authenticate Cursor CLI on Host D; complete G1 physical-edit proof with fallback disabled; keep ISS-UI-001 permanent Settings fix before AUTO-1.
+Fix ISS-CLI-005 so `cursor-cli/<explicit-model>` is usable for planning/execution; then re-run G1 once. Keep ISS-UI-001 permanent Settings fix before AUTO-1.
+
+---
+
+## ISS-CLI-004 — Cursor CLI auth HOME mismatch under fusion-staging
+
+Status: FIXED
+Severity: High
+Component: Host D staging / Cursor CLI / systemd HOME
+First observed: 2026-07-31 (G1.2a)
+Last observed fixed: 2026-07-31 (owner Cursor login under service HOME)
+Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
+GitHub issue: https://github.com/Appsolino/Fusion/issues/21
+
+### Failure fingerprint
+
+- Authentication UI shows Cursor CLI Connected/Active (`useCursorCli=true`).
+- Default Model picker shows only DeepSeek (or other API-key) models; no `cursor-cli` rows.
+- `/api/providers/cursor-cli/status` reports `authenticated=false` while binary is available.
+- Interactive `cursor-agent status` is logged-in under `/home/fusion`, but not under staging service `HOME`.
+
+### Impact
+
+G1 cannot pin `configured provider = actual provider = cursor-cli`. “Use default” does not route to Cursor CLI.
+
+### Temporary workaround
+
+Authenticate `cursor-agent` under `HOME=/srv/appsolino-fusion/staging/state/fusion-home` (service HOME), or otherwise align Cursor credential location with the service environment. Then set explicit `defaultProvider=cursor-cli` + `defaultModelId`. Do not use DeepSeek for G1.
+
+### Root cause
+
+`fusion-staging.service` sets `HOME`/`FUSION_HOME` to the staging fusion-home tree; Cursor CLI login state lives under the interactive user home. Model discovery spawned by the dashboard inherits the service HOME and sees an unauthenticated CLI.
+
+### Permanent correction
+
+Document and automate Host D Cursor CLI auth under the service HOME (or a deliberate shared credential path). Ensure `/api/models` surfaces `cursor-cli` rows before G1. Add regression coverage for service-HOME vs interactive-HOME auth mismatch.
+
+### Required regression tests
+
+- With `useCursorCli=true` and CLI auth under service HOME, `/api/models` includes `provider=cursor-cli`.
+- With CLI auth only under a different HOME, status reports unauthenticated and Cursor rows are absent.
+- Selecting `cursor-cli/<id>` sets resolved planning/execution away from DeepSeek and mock when `testMode=false`.
+
+### Fix history
+
+| Release/SHA | Result | Evidence |
+| --- | --- | --- |
+| G1.2a | OPEN | Service HOME unauthenticated; `/api/models` DeepSeek-only |
+| `v1a2-0.74.0-beta.5-3bc46bffe` (2026-07-31) | FIXED | Owner login under service HOME; `/api/providers/cursor-cli/status` `binary.authenticated=true` / `ready=true`; `/api/models` returns many `provider=cursor-cli` rows (incl. `composer-2.5`) |
+
+---
+
+## ISS-CLI-005 — cursor-cli models in `/api/models` but absent from pi model registry
+
+Status: OPEN / BLOCKING G1
+Severity: High
+Component: Engine planning / pi model registry / cursor-cli plugin path
+First observed: 2026-07-31 (G1 physical-edit attempt `KB-001`)
+Last observed: 2026-07-31
+Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
+GitHub issue: https://github.com/Appsolino/Fusion/issues/21
+
+### Failure fingerprint
+
+- Phase 1/2 preflight PASS: service-HOME Cursor auth OK; `/api/models` lists `cursor-cli` (193+ rows); settings pin `cursor-cli`/`composer-2.5`; `fallbackProvider` unset; `testMode=false`.
+- Exactly one task (`KB-001`) fails at planning with: `Configured model cursor-cli/composer-2.5 (primary selection) was not found in the pi model registry`.
+- No runtime-resolved session provider/model; no physical edits; DeepSeek/fallback/mock not used.
+
+### Impact
+
+G1 cannot prove `configured provider = actual provider = cursor-cli` on this pinned candidate. Catalog discovery and session creation disagree.
+
+### Temporary workaround
+
+None accepted for G1 (no second attempt; no DeepSeek; no fallback; no mock PASS).
+
+### Root cause
+
+UNRESOLVED — dashboard model catalog merges Cursor CLI models for `/api/models`, but `resolveConfiguredModel` in the engine pi path hard-fails when the pi `ModelRegistry` has zero models for provider `cursor-cli` (same class of failure previously seen for other CLI providers before registry wiring).
+
+### Permanent correction
+
+Register Cursor CLI models into the pi model registry used by planning/execution session creation (or route cursor-cli through the plugin runtime path that already succeeds for discovery), so an explicit `cursor-cli/<id>` from `/api/models` is accepted. Add a regression that selects a catalogued `cursor-cli` model and asserts session creation does not throw the pi-registry hard-fail.
+
+### Required regression tests
+
+- With Cursor CLI authenticated and `useCursorCli=true`, a model present in `/api/models` with `provider=cursor-cli` must resolve in planning session creation.
+- Hard-fail message must not appear for that pair when auth and toggle are healthy.
+- DeepSeek must remain unused when `defaultProvider=cursor-cli` and fallback is unset.
+
+### Fix history
+
+| Release/SHA | Result | Evidence |
+| --- | --- | --- |
+| `v1a2-0.74.0-beta.5-3bc46bffe` | OPEN | G1 `KB-001` journal + task.error (2026-07-31) |
