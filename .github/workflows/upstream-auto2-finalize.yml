@@ -32,7 +32,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: auto2-finalize
+  # Per-PR/head so sequential proofs are not cancelled by a global lock.
+  group: auto2-finalize-${{ github.event.inputs.pr_number || github.event.workflow_run.head_branch || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -65,7 +66,6 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
-          permission-issues: write
 
       - name: Checkout trusted workflow code
         uses: actions/checkout@v6
