@@ -72,6 +72,134 @@ describe("archiving a task releases its active-session registry entries (FN-7717
     ).not.toThrow();
   });
 
+  /*
+  FNXC:WorkflowResolvedColumns 2026-07-31-21:30 (fleet):
+  The archive branch keyed on `to === "archived"`. On a board whose terminal lane is renamed it matched
+  nothing, so archiving never released the task's active-session entry — and the registry entry is what
+  blocks a SUCCESSOR task from acquiring the same path. The leak is therefore not cosmetic: the next
+  task to want that path fails to register.
+
+  Lanes come from the emitter, so this drives the listener exactly as `moves.ts` now emits. The literal
+  is deliberately absent from the payload's lane: `shipped` matches no legacy id, so the branch fires
+  only if the payload is actually consulted.
+  */
+  it("releases the session when archiving into a RENAMED terminal lane", async () => {
+    const { executor, store } = makeExecutor();
+    (executor as any).setActiveWorkflowStepSession("TASK-R", {}, SHARED_ROOT);
+    const [heldPath] = activeSessionRegistry.pathsForTask("TASK-R");
+    expect(heldPath).toBeDefined();
+
+    store.emit("task:moved", {
+      task: makeTask("TASK-R"),
+      from: "signoff",
+      to: "shipped",
+      source: "user",
+      lanes: { hold: "backlog", wip: "building", archived: "shipped" },
+    });
+
+    await (executor as any).pendingTaskDisposals.get("TASK-R");
+    expect(activeSessionRegistry.pathsForTask("TASK-R")).toHaveLength(0);
+  });
+
+  /*
+  FNXC:WorkflowResolvedColumns 2026-07-31-23:55 (fleet):
+  THE OTHER TWO CONVERTED READS, which the archive case above does NOT cover.
+
+  Mutation-testing the three converted reads together produced only ONE failure — the archive case.
+  `wipLane` and `holdLane` were converted with nothing that fails when they regress, so on this
+  program's own standard they shipped unproven. These two cases close that.
+
+  They target the LAST branch of the if/else-if chain (`from === wipLane`), which is only reached when
+  the archive and backward-out-of-planning branches both decline. `isBackwardMoveOutOfPlanning` is
+  stubbed false so the test pins the lane comparison rather than that predicate's own logic — without
+  the stub a change in planner-lane tracking could silently route these moves elsewhere and leave the
+  assertions passing for the wrong reason.
+  */
+  it("aborts in-flight work when a card leaves a RENAMED wip lane", async () => {
+    const { executor, store } = makeExecutor();
+    vi.spyOn(executor as any, "isBackwardMoveOutOfPlanning").mockReturnValue(false);
+    const abort = vi
+      .spyOn(executor as any, "awaitAbortInFlightTaskWork")
+      .mockResolvedValue(undefined);
+
+    /* `building` matches no legacy id, so the branch fires only if the payload's wip lane is read. */
+    store.emit("task:moved", {
+      task: makeTask("TASK-W"),
+      from: "building",
+      to: "checking",
+      source: "engine",
+      lanes: { hold: "backlog", wip: "building", archived: "shipped" },
+    });
+
+    await (executor as any).pendingTaskDisposals.get("TASK-W");
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+  FNXC:WorkflowResolvedColumns 2026-07-31-23:59 (the LISTENER must forward the payload lanes):
+  THIS IS THE PRODUCER HALF, and it was missing.
+
+  `isBackwardMoveOutOfPlanning` now receives its lanes instead of resolving them, and its own suite
+  (`executor-planner-lanes-resolved`) covers the predicate thoroughly. But that suite calls the
+  predicate DIRECTLY, so it says nothing about whether the `task:moved` listener actually hands the
+  payload down. Measured: replacing the listener's `lanes` argument with `undefined` left
+  `planning-evacuation` at 20/20 green — the exact producer/consumer split this program's learnings
+  record as its fifth failure shape, where a converted consumer with an unconverted producer passes
+  every instrument.
+
+  So this drives the real listener. The board is renamed with NO legacy id anywhere near the planner
+  lanes (`queued` holds, `drafting` intakes), and the move withdraws a card from the hold lane to a
+  non-lifecycle column — the reported symptom, `todo -> Ideas`, in this board's vocabulary. The
+  evacuation must fire, which it can only do if the payload lanes reached the predicate: with
+  `undefined` the legacy pair answers, `from` is not `todo`/`triage`, and the branch declines.
+  */
+  it("evacuates a card withdrawn from a RENAMED planner lane — the listener forwards payload lanes", async () => {
+    const { executor, store } = makeExecutor();
+    const abort = vi
+      .spyOn(executor as any, "awaitAbortInFlightTaskWork")
+      .mockResolvedValue(undefined);
+    vi.spyOn(executor as any, "releasePreExecutionWorktree").mockResolvedValue(undefined);
+
+    store.emit("task:moved", {
+      task: makeTask("TASK-E2"),
+      from: "queued",
+      to: "ideas",
+      source: "user",
+      lanes: { intake: "drafting", hold: "queued", wip: "building", review: "checking", complete: "shipped", archived: "filed" },
+    });
+
+    await (executor as any).pendingTaskDisposals.get("TASK-E2");
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(String(abort.mock.calls[0]?.[1] ?? "")).toContain("out of planning");
+  });
+
+  /*
+  `userCanceled` is the one place `holdLane` changes an OUTCOME rather than just a branch: a user
+  dragging a card from the wip lane back to the board's hold lane is a cancel, and anything else is
+  not. Keyed on the literal `"todo"`, a renamed hold lane made every such drag read as NOT
+  user-canceled — the executor then treats the abort as an engine rebound and the task is eligible to
+  be picked straight back up, which is the opposite of what the operator just asked for.
+  */
+  it("marks a user drag into a RENAMED hold lane as user-canceled", async () => {
+    const { executor, store } = makeExecutor();
+    vi.spyOn(executor as any, "isBackwardMoveOutOfPlanning").mockReturnValue(false);
+    const abort = vi
+      .spyOn(executor as any, "awaitAbortInFlightTaskWork")
+      .mockResolvedValue(undefined);
+
+    store.emit("task:moved", {
+      task: makeTask("TASK-H"),
+      from: "building",
+      to: "backlog",
+      source: "user",
+      lanes: { hold: "backlog", wip: "building", archived: "shipped" },
+    });
+
+    await (executor as any).pendingTaskDisposals.get("TASK-H");
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort.mock.calls[0]?.[2]).toMatchObject({ userCanceled: true });
+  });
+
   it("releases executor and step-session surfaces archived from planning/todo columns", async () => {
     const { executor, store } = makeExecutor();
 

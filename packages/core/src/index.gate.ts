@@ -350,6 +350,20 @@ export type {
   TraitViolationSeverity,
   TraitAuditWarning,
 } from "./trait-registry.js";
+/* FNXC:WorkflowResolvedColumns 2026-07-30-15:05: column-ROLE predicates must be in the GATE barrel
+   too — the engine-core gate project resolves @fusion/core to the bundle built from THIS file, so an
+   export present only in index.ts is undefined at runtime under the gate. */
+export {
+  isIntakeColumnRole,
+  isPreImplementationColumnRole,
+  isHoldColumnRole,
+  isWipColumnRole,
+  isReviewColumnRole,
+  isCompleteColumnRole,
+  isArchivedColumnRole,
+  isTerminalColumnRole,
+} from "./column-roles.js";
+export type { ColumnRoleTraitFlags } from "./column-roles.js";
 export {
   BUILTIN_TRAIT_IDS,
   BUILTIN_TRAIT_DEFINITIONS,
@@ -508,6 +522,9 @@ export {
 } from "./builtin-completion-summary-node.js";
 export {
   resolveWorkflowIrForTask,
+  resolveWorkflowIrForTaskWithProvenance,
+  type ResolvedWorkflowIr,
+  type WorkflowIrResolutionSource,
   resolveWorkflowIrById,
   resolveSeamPromptFromIr,
   resolvePlanningPromptFromIr,
@@ -987,6 +1004,9 @@ export { getPrimaryPrInfo, taskHasManualOpenPullRequest } from "./task-helpers.j
 export {
   getTaskMergeBlocker,
   getTaskHardMergeBlocker,
+  REVIEW_ELIGIBLE_SENTINEL_COLUMN,
+  MERGE_CONFIRMED_TRANSIENT_STATUSES,
+  clearMergeConfirmedTransientStatus,
   getTaskCompletionBlocker,
   isTaskReadyForMerge,
   allowsAutoMergeProcessing,
@@ -1084,6 +1104,7 @@ export {
   ensureGhAuth,
   parseRepoFromRemote,
   getCurrentRepo,
+  getPushRepo,
   type GhError,
   type GhErrorCode,
   type StructuredGhError,
@@ -2237,7 +2258,18 @@ export { createWorkflowEventBus, getWorkflowEventBus, emitWorkflowLifecycleEvent
 export type { WorkflowEventBus, WorkflowEventSubscriber, WorkflowEventSubscription } from "./workflow-events.js";
 export { findWorkflowEventShapeViolations, isIdsOnlyWorkflowEvent, MAX_ID_VALUE_LENGTH, IMPLEMENTATION_EXITS } from "./types/workflow-events.js";
 export type { WorkflowLifecycleEvent, WorkflowLifecycleEventType, WorkflowLifecycleEventBase, TaskTransitionedEvent, NodeEnteredEvent, NodeCompletedEvent, RunSuspendedEvent, RunResumedEvent, WorkflowEventShapeViolation, ImplementationExit } from "./types/workflow-events.js";
-export { columnsWithFlag, columnHasFlag, resolveReboundTarget, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveLifecycleColumns, resolveTaskLifecycleColumns } from "./workflow-lifecycle-traits.js";
+export { columnsWithFlag, columnHasFlag, resolveReboundTarget, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveLifecycleColumns, resolveTaskLifecycleColumns, resolveTerminalColumns, resolveReviewColumns } from "./workflow-lifecycle-traits.js";
+/*
+FNXC:WorkflowLifecycleColumns 2026-08-01-00:40:
+ALSO exported from the GATE barrel, not just `index.ts`.
+
+`packages/engine`'s gate vitest project resolves `@fusion/core` through a bundle built from THIS
+file (`scripts/build-engine-core-gate-bundle.mjs`), so an export added only to `index.ts` resolves to
+`undefined` inside every gate test — and the failure is a runtime `TypeError` deep in the caller, not
+an import error. That cost 88 red tests in `project-engine.test.ts`, all with the same misleading
+"columns is not iterable" a hundred lines from the actual cause.
+*/
+export { resolveProjectColumnsForRoles, resolveArchivedLanes, REVIEW_ROLES, TERMINAL_ROLES, LEGACY_COLUMN_IDS_BY_ROLE, type ProjectLaneVocabularyStore } from "./project-lane-vocabulary.js";
 export type { LifecycleColumns } from "./workflow-lifecycle-traits.js";
 export { resolveReviewLevelSteps, applyReviewLevelPreset } from "./review-level-preset.js";
 export { LEGACY_STATUS_ADOPTION, resolveLegacyStatusAdoption, resolveReviewLevelBackfill, planLegacyAdoption, resolveOrphanedPendingStepResults, type LegacyAdoptionPlan, type LegacyAdoptionCandidate, type LegacyAdoptionAction, type LegacyAdoptionKind } from "./legacy-adoption.js";

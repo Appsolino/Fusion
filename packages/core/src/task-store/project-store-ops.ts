@@ -32,7 +32,7 @@ import {CentralCore} from "../central-core.js";
 import {extractTaskIdTokens, normalizeTitleForTaskId} from "../task-title-id-drift.js";
 import {generateTaskLineageId} from "../task-lineage.js";
 import {sanitizeFileScopeInPromptContent} from "../task-store/file-scope.js";
-import {type TaskRow} from "../task-store/persistence.js";
+import {preserveResolvedTaskWedgeEpisode, type TaskRow} from "../task-store/persistence.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
 import {isWorkflowDefinitionIdPrimaryKeyCollision, nextWorkflowDefinitionIdAsyncImpl} from "../task-store/workflow-definitions.js";
 import {upsertTaskRowInTransaction, buildTaskInsertValues} from "../task-store/async-persistence.js";
@@ -136,6 +136,7 @@ export async function atomicWriteTaskJsonWithAuditImpl(store: TaskStore, dir: st
       */
       if (row) {
         const existing = store.pgRowToTaskRow(row);
+        preserveResolvedTaskWedgeEpisode(existing, task);
         const changedColumns = store.getChangedTaskColumns(existing, task);
         if (changedColumns.size > 0) {
           const context = store.createTaskPersistSerializationContext(task, existing);
@@ -503,6 +504,25 @@ export function getRunAuditEventsImpl(store: TaskStore, options: RunAuditEventFi
     return rows.map((row) => store.rowToRunAuditEvent(row));
   }
 
+/*
+FNXC:WorkflowLifecycleColumns 2026-07-31-02:45 (audited — DEAD SYNC PATH, do not convert):
+The literal below would leak a merge-queue entry on a renamed board — a card leaving review would
+never be dequeued — except that this function does not run in production.
+
+It is the SQLite-mode twin. The live path is `dequeueMergeQueueOnColumnExitInTransaction`
+(`async-merge-coordination.ts`), called from `moves.ts`, and it is ALREADY converted: it takes
+`moveReviewColumns` and the caller supplies them. This body reaches for `store.db.prepare`, which
+throws in PostgreSQL backend mode, so a renamed board never gets far enough to be mis-dequeued.
+
+Converting it would mean threading a lane set into a function whose first statement cannot execute.
+DELIBERATE-LITERAL — marked, not merely described. The audit note below already said "do not
+convert", but a prose note is invisible to the census, so this stayed in `byFile` as apparent debt
+and the next fleet pass re-derives the same conclusion. The marker moves it to `deliberateByFile`,
+which is where a reviewed-and-kept literal belongs.
+
+Recorded instead, so the census entry is not mistaken for unconverted debt — and so that whoever
+finally deletes the sync SQLite residue can take this with it.
+*/
 export function dequeueMergeQueueOnColumnExitImpl(store: TaskStore, taskId: string, previousColumn: ColumnId, nextColumn: ColumnId, now: string): void {
     if (previousColumn !== "in-review" || nextColumn === "in-review") {
       return;
