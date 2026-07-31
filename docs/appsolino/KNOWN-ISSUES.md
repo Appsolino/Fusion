@@ -9,26 +9,30 @@ Live blockers / next action: `CURRENT-STATE.md` (links high-priority open items 
 
 ---
 
-## ISS-UI-001 — Settings search hijacked by browser autofill
+## ISS-UI-001 — Settings non-identity fields hijacked by browser credential autofill
 
-Status: OPEN / REGRESSION
+Status: **PARKED** (OPEN — not FIXED; do not merge PR #28)
 Severity: High
 Component: Dashboard / Settings
 First observed: Unknown historical occurrence — owner reports it happened previously
-Last observed: 2026-07-31
-Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
+Last observed: 2026-07-31 (Edge acceptance FAIL on path/API-key fields after search-only candidate)
+Affected release (active Host D): restored to `g13b-0.74.0-beta.5-cadf34dd4` — UI candidates inactive
 GitHub issue: https://github.com/Appsolino/Fusion/issues/23
+GitHub PR: https://github.com/Appsolino/Fusion/pull/28 (**do not merge**)
+
+### Owner park (2026-07-31)
+
+Primary target restored to **AUTO-1**. Do not continue this defect until AUTO-1…AUTO-3 land. Host D is not on `issui001` / `issui001b`.
 
 ### Failure fingerprint
 
-- Search Settings is populated automatically with the browser account email.
-- Clearing the field causes the email to return immediately.
-- No settings sections remain visible.
-- Authentication and model configuration become inaccessible.
+- Search Settings and/or non-identity fields (CLI binary path, API keys) receive browser credential autofill.
+- Clearing can bounce the value back; Settings sections become hard to use.
+- Edge profile reproduced path-field email injection after the first candidate.
 
 ### Impact
 
-Blocks normal access to Settings and provider authentication.
+Blocks reliable Settings / provider authentication UX under saved browser profiles.
 
 ### Temporary workaround
 
@@ -36,29 +40,28 @@ Use Chrome Guest or Edge InPrivate with extensions disabled.
 
 ### Root cause
 
-UNRESOLVED — likely browser/password-manager classification of the search input as an identity field. Must be proven in source and browser testing.
+UNRESOLVED — incomplete after search-only + expanded autofill hardening candidates; not accepted as FIXED.
 
 ### Permanent correction
 
-- Correct input/form autocomplete semantics.
-- Prevent browser and password-manager identity autofill.
-- Preserve normal settings filtering.
+- Correct input/form autocomplete semantics across non-identity Settings fields.
+- Prevent browser/password-manager credential autofill hijack.
+- Preserve normal settings filtering and Replace UX for secrets.
 - Validate Chrome and Edge saved-profile behavior.
 
 ### Required regression tests
 
-- Search starts empty.
-- Clear remains empty.
-- Saved browser email is not injected.
-- Typed filtering works.
-- Reload does not restore an email.
+- Search starts empty; clear remains empty; typed filtering works.
+- CLI binary path / API-key surfaces reject credential autofill in Edge/Chrome profiles.
 - Authentication section remains accessible.
 
 ### Fix history
 
 | Release/SHA | Result | Evidence |
 | --- | --- | --- |
-| Not fixed yet | — | — |
+| `issui001-0.74.0-beta.5-d1e7cc423` / PR #28 | FAIL (Edge) | Path field injected email |
+| `issui001b-0.74.0-beta.5-6fd7443ee` | Candidate only — not accepted | Expanded hardening; Host D restored to g13b |
+| Not FIXED | PARKED | Owner priority → AUTO-1 |
 
 ---
 
@@ -150,7 +153,7 @@ None for G1 PASS on this pinned release until ISS-CLI-005 is fixed. Do not retry
 
 ### Permanent correction
 
-Fix ISS-CLI-005 so `cursor-cli/<explicit-model>` is usable for planning/execution; then re-run G1 once. Keep ISS-UI-001 permanent Settings fix before AUTO-1.
+ISS-CLI-005 FIXED; G1 `KB-003` PASS on `g13b`. ISS-UI-001 is **parked** — do not block AUTO-1 on Settings autofill.
 
 ---
 
@@ -246,3 +249,37 @@ Register Cursor CLI models into the pi model registry used by planning/execution
 | --- | --- | --- |
 | `v1a2-0.74.0-beta.5-3bc46bffe` | OPEN | G1 `KB-001` journal + task.error (2026-07-31) |
 | `g13b-0.74.0-beta.5-cadf34dd4` / PR #26 + eager-install follow-up | FIXED | Route `cursor-cli`→`cursor` runtime; print-mode adapter; eager host install; stage `dist/plugins`; G1 `KB-003` PASS |
+
+---
+
+## ISS-GIT-007 — Auto-merge / integration assumes `main` when default branch differs
+
+Status: OPEN (design incorporated in AUTO-1 branch resolution; engine task-merge fix still required before AUTO-3 trust)
+Severity: High
+Component: Engine merge / git default-branch resolution
+First observed: 2026-07-31 (G1 `KB-003` disposable repo)
+Last observed: 2026-07-31
+GitHub: (track via CURRENT-STATE; no separate issue required for AUTO-1)
+
+### Failure fingerprint
+
+- Disposable proof repo default branch was `master`.
+- Auto-merge / integration logic looked for `main` and blocked or mis-targeted.
+- Manual fast-forward recovered G1 evidence; automation must not assume `main`.
+
+### Impact
+
+Blocks trustworthy AUTO-3 auto-merge and can mis-target integration PRs if default ≠ `main`.
+
+### Permanent correction
+
+- Resolve the repository's actual default/integration branch (`origin/HEAD` / API default_branch) everywhere merge/PR base is chosen.
+- AUTO-1: `resolveIntegrationBranch()` in `infra/scripts/auto1-upstream-sync.mjs` (override + `origin/HEAD`).
+- Remaining: engine task-merge / auto-merge paths before AUTO-3.
+
+### Fix history
+
+| Surface | Result | Evidence |
+| --- | --- | --- |
+| G1 `KB-003` | OPEN (manual FF) | Missing `main` while default was `master` |
+| AUTO-1 script | Partial (design) | Non-`main` harness test + `origin/HEAD` resolution |
