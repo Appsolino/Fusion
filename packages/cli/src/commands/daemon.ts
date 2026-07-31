@@ -80,7 +80,7 @@ import { wrapAuthStorageWithApiKeyProviders } from "./provider-auth.js";
 import { getPackageManagerAgentDir } from "./auth-paths.js";
 import { resolveProject } from "../project-context.js";
 import { startMigrationHoldingServer } from "./migration-holding-server.js";
-import { ensureBundledDependencyGraphPluginInstalled, ensureBundledGrokRuntimePluginInstalled } from "../plugins/bundled-plugin-install.js";
+import { ensureBundledDependencyGraphPluginInstalled, ensureBundledCursorRuntimePluginInstalled, ensureBundledGrokRuntimePluginInstalled } from "../plugins/bundled-plugin-install.js";
 import { handleOpencodeGoApiKeySaved, syncStartupModels } from "./startup-model-sync.js";
 import { registerCustomProviders, reregisterCustomProviders } from "./custom-provider-registry.js";
 import { ensureCwdProjectRegistered } from "./ensure-project-registered.js";
@@ -550,7 +550,23 @@ export async function runDaemon(opts: DaemonOptions = {}) {
     console.warn(`[plugins] Failed to auto-install bundled Dependency Graph plugin: ${err instanceof Error ? err.message : err}`);
   }
 
-  /*
+  
+    /*
+     * FNXC:CursorCli 2026-07-31-10:15:
+     * ISS-CLI-005 follow-up: packaged hosts must eagerly install/load fusion-plugin-cursor-runtime before planning/execution. Routing alone hard-fails when getRuntimeById("cursor") is undefined (G1 KB-003). Mirror FN-7761 Grok eager install.
+     */
+    try {
+      const installStatus = await ensureBundledCursorRuntimePluginInstalled(pluginStore, pluginLoader);
+      if (installStatus === "installed") {
+      console.log("[plugins] Installed bundled Cursor runtime plugin");
+      } else if (installStatus === "missing-bundle") {
+      console.warn("[plugins] Bundled Cursor runtime plugin was not found in this build");
+      }
+    } catch (err) {
+    console.warn(`[plugins] Failed to auto-install bundled Cursor runtime plugin: ${err instanceof Error ? err.message : err}`);
+    }
+
+/*
    * FNXC:GrokCliRouting 2026-07-09-23:05:
    * FN-7761: packaged daemon sessions must load the bundled Grok CLI runtime before executors/reviewers create sessions, so grok-cli/no-key routing uses the logged-in `grok` CLI instead of pi's key-requiring direct endpoint.
    */

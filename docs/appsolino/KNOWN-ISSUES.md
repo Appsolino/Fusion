@@ -117,7 +117,7 @@ Correction A: preserve execute bits on packaged runtime binaries; immutable rele
 
 ## G1 / V1A.3 — Real-provider physical-edit proof (Cursor CLI)
 
-Status: FAIL (one attempt; blocked by ISS-CLI-005)
+Status: PASS (KB-003; ISS-CLI-005 FIXED)
 Severity: High
 Component: Host D staging / Cursor CLI runtime
 Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
@@ -204,7 +204,7 @@ Document and automate Host D Cursor CLI auth under the service HOME (or a delibe
 
 ## ISS-CLI-005 — cursor-cli models in `/api/models` but absent from pi model registry
 
-Status: OPEN / BLOCKING G1
+Status: FIXED
 Severity: High
 Component: Engine planning / pi model registry / cursor-cli plugin path
 First observed: 2026-07-31 (G1 physical-edit attempt `KB-001`)
@@ -245,3 +245,4 @@ Register Cursor CLI models into the pi model registry used by planning/execution
 | Release/SHA | Result | Evidence |
 | --- | --- | --- |
 | `v1a2-0.74.0-beta.5-3bc46bffe` | OPEN | G1 `KB-001` journal + task.error (2026-07-31) |
+| `g13b-0.74.0-beta.5-cadf34dd4` / PR #26 + eager-install follow-up | FIXED | Route `cursor-cli`→`cursor` runtime; print-mode adapter; eager host install; stage `dist/plugins`; G1 `KB-003` PASS |
