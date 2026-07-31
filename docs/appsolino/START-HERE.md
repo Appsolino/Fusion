@@ -32,4 +32,4 @@ Known recurring defects: [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md) — search before 
 
 See **[`CURRENT-STATE.md`](CURRENT-STATE.md)** — do not trust status copied elsewhere.
 
-**Sequence:** G0 governance → G1 real provider (V1A.3) → **AUTO-1 (NOW)** → AUTO-2 → AUTO-3 → AUTO-4 catch-up → V1B (deferred). ISS-UI-001 / PR #28 is **parked**.
+**Sequence:** G0 governance → G1 real provider (V1A.3) → **AUTO-1 live (BLOCKED on App secrets)** → AUTO-2 → AUTO-3 → AUTO-4 catch-up → V1B (deferred). ISS-UI-001 / PR #28 is **parked**.
