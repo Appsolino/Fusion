@@ -74,6 +74,7 @@ describe("CursorCliProviderCard", () => {
 
     render(<CursorCliProviderCard authenticated compact />);
     const input = await screen.findByLabelText("Cursor CLI binary path");
+    await user.click(input);
     await user.clear(input);
     await user.type(input, "/tmp/does-not-exist");
 

@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
+import { useRef, useState } from "react";
 import type { AuthProvider, ManualOAuthCodeInfo, OAuthDeviceCodeInfo } from "../../../api";
 import type { ToastType } from "../../../hooks/useToast";
 import { useTranslation } from "react-i18next";
@@ -15,6 +16,7 @@ import { OAuthManualCodeForm } from "../../OAuthManualCodeForm";
 import { CustomProvidersSection } from "../../CustomProvidersSection";
 import { SettingsHelpTip } from "../SettingsHelpTip";
 import { SettingsSelectRow } from "../SettingsSelectRow";
+import { SETTINGS_API_KEY_REPLACEMENT_INPUT_PROPS } from "../nonIdentityInputProps";
 import type { SectionBaseProps } from "./context";
 import { copyTextToClipboard } from "../../../utils/copyToClipboard";
 import { appendTokenQuery } from "../../../auth";
@@ -85,6 +87,15 @@ const compareAuthProviderDisplayOrder = (a: AuthProvider, b: AuthProvider) => {
 export function AuthenticationSection({ auth, form, setForm }: AuthenticationSectionProps) {
     const { t } = useTranslation("app");
     const { projectId, addToast, authProviders, authLoading, authActionInProgress, apiKeyInputs, setApiKeyInputs, apiKeyErrors, opencodeApiKeyRefreshStatus, deviceCodes, loginInstructions, manualCodeConfigs, manualCodeInputs, setManualCodeInputs, manualCodeSubmitInProgress, loadAuthStatus, handleLogin, handleLogout, handleCancelLogin, handleSaveApiKey, handleClearApiKey, handleSubmitManualCode, onReopenOnboarding, } = auth;
+    /*
+    FNXC:SettingsNonIdentityAutofill 2026-07-31-12:20:
+    ISS-UI-001 Edge acceptance: always-mounted type=password API-key inputs were classified as
+    login password fields. Keep stored keys non-editable until Replace; gate change handlers on
+    explicit unlock so pre-Replace browser injection cannot enter React state.
+    */
+    const [apiKeyReplaceOpen, setApiKeyReplaceOpen] = useState<Record<string, boolean>>({});
+    const [apiKeyAutofillLocked, setApiKeyAutofillLocked] = useState<Record<string, boolean>>({});
+    const apiKeyAutofillLockedRef = useRef<Record<string, boolean>>({});
     const hasSeparatedAnthropicProvider = authProviders.some((p) => p.id === "anthropic-subscription" || p.id === "anthropic-api-key");
     /*
     FNXC:ProviderAuth 2026-06-29-23:50:
@@ -197,14 +208,92 @@ export function AuthenticationSection({ auth, form, setForm }: AuthenticationSec
     const renderProviderAuthError = (provider: AuthProvider) => provider.loginError
         ? (<small className="form-error" role="alert">{provider.loginError}</small>)
         : null;
-    const renderApiKeySection = (provider: AuthProvider) => (<div className="auth-apikey-section">
+    const renderApiKeySection = (provider: AuthProvider) => {
+      const hasStoredKey = Boolean(provider.keyHint);
+      const replacing = !hasStoredKey || apiKeyReplaceOpen[provider.id] === true;
+      const inputId = `settings-api-key-${provider.id}`;
+      const inputLocked = apiKeyAutofillLocked[provider.id] !== false;
+
+      if (hasStoredKey && !replacing) {
+        return (<div className="auth-apikey-section" data-testid={`auth-apikey-stored-${provider.id}`}>
+          <div className="auth-apikey-input-row">
+            <span className="auth-apikey-stored-label">{t("settings.auth.keyStored", "Key stored")}</span>
+            <button
+              type="button"
+              className="btn btn-sm"
+              data-testid={`auth-apikey-replace-${provider.id}`}
+              onClick={() => {
+                setApiKeyInputs((prev) => ({ ...prev, [provider.id]: "" }));
+                setApiKeyReplaceOpen((prev) => ({ ...prev, [provider.id]: true }));
+                apiKeyAutofillLockedRef.current[provider.id] = true;
+                setApiKeyAutofillLocked((prev) => ({ ...prev, [provider.id]: true }));
+              }}
+              disabled={authActionInProgress === provider.id}
+            >
+              {t("settings.auth.replaceKey", "Replace")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => handleClearApiKey(provider.id)}
+              disabled={authActionInProgress === provider.id}
+            >
+              {t("settings.auth.clearKey", "Clear")}
+            </button>
+          </div>
+          {authActionInProgress === provider.id && (<small className="auth-apikey-progress">{t("settings.auth.savingKey", "Saving…")}</small>)}
+          {apiKeyErrors[provider.id] && (<small className="auth-apikey-error">{apiKeyErrors[provider.id]}</small>)}
+        </div>);
+      }
+
+      return (<div className="auth-apikey-section">
       <div className="auth-apikey-input-row">
-        <input type="password" className="auth-apikey-input" placeholder={t("settings.authentication.enterAPIKey", "Enter API key")} value={apiKeyInputs[provider.id] ?? ""} onChange={(e) => setApiKeyInputs((prev) => ({ ...prev, [provider.id]: e.target.value }))} disabled={authActionInProgress === provider.id}/>
-        {provider.keyHint && !apiKeyInputs[provider.id] ? (<button className="btn btn-sm" onClick={() => handleClearApiKey(provider.id)} disabled={authActionInProgress === provider.id}>
-            {t("settings.auth.clearKey", "Clear")}
-          </button>) : (<button className="btn btn-primary btn-sm" onClick={() => handleSaveApiKey(provider.id)} disabled={authActionInProgress === provider.id}>
+        <input
+          id={inputId}
+          name={inputId}
+          type="password"
+          className="auth-apikey-input"
+          data-testid={inputId}
+          placeholder={t("settings.authentication.enterAPIKey", "Enter API key")}
+          value={apiKeyInputs[provider.id] ?? ""}
+          readOnly={inputLocked}
+          {...SETTINGS_API_KEY_REPLACEMENT_INPUT_PROPS}
+          onFocus={() => {
+            apiKeyAutofillLockedRef.current[provider.id] = false;
+            setApiKeyAutofillLocked((prev) => ({ ...prev, [provider.id]: false }));
+          }}
+          onBlur={(event) => {
+            if (!event.currentTarget.value) {
+              apiKeyAutofillLockedRef.current[provider.id] = true;
+              setApiKeyAutofillLocked((prev) => ({ ...prev, [provider.id]: true }));
+            }
+          }}
+          onChange={(e) => {
+            if (apiKeyAutofillLockedRef.current[provider.id] !== false) return;
+            setApiKeyInputs((prev) => ({ ...prev, [provider.id]: e.target.value }));
+          }}
+          disabled={authActionInProgress === provider.id}
+        />
+        {hasStoredKey ? (<button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => {
+            setApiKeyInputs((prev) => {
+              const next = { ...prev };
+              delete next[provider.id];
+              return next;
+            });
+            setApiKeyReplaceOpen((prev) => ({ ...prev, [provider.id]: false }));
+            apiKeyAutofillLockedRef.current[provider.id] = true;
+            setApiKeyAutofillLocked((prev) => ({ ...prev, [provider.id]: true }));
+          }}
+          disabled={authActionInProgress === provider.id}
+        >
+          {t("actions.cancel", "Cancel")}
+        </button>) : null}
+        <button className="btn btn-primary btn-sm" onClick={() => handleSaveApiKey(provider.id)} disabled={authActionInProgress === provider.id}>
             {t("settings.actions.save", "Save")}
-          </button>)}
+          </button>
       </div>
       {authActionInProgress === provider.id && (<small className="auth-apikey-progress">{t("settings.auth.savingKey", "Saving…")}</small>)}
       {apiKeyErrors[provider.id] && (<small className="auth-apikey-error">{apiKeyErrors[provider.id]}</small>)}
@@ -212,6 +301,7 @@ export function AuthenticationSection({ auth, form, setForm }: AuthenticationSec
           {opencodeApiKeyRefreshStatus[provider.id].message}
         </small>)}
     </div>);
+    };
     const renderAuthenticatedOAuthActions = (provider: AuthProvider) => (<div>
       {authActionInProgress === provider.id ? (<button className="btn btn-sm" disabled>
           {t("settings.auth.loggingOut", "Logging out…")}

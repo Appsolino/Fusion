@@ -9,57 +9,58 @@ Live blockers / next action: `CURRENT-STATE.md` (links high-priority open items 
 
 ---
 
-## ISS-UI-001 — Settings search hijacked by browser autofill
+## ISS-UI-001 — Settings non-identity fields hijacked by browser credential autofill
 
-Status: OPEN / PENDING OWNER BROWSER ACCEPTANCE
+Status: OPEN / FAIL — incomplete autofill correction (expanded; pending Edge re-acceptance)
 Severity: High
-Component: Dashboard / Settings
+Component: Dashboard / Settings / Authentication
 First observed: Unknown historical occurrence — owner reports it happened previously
-Last observed: 2026-07-31
-Affected release: `v1a2-0.74.0-beta.5-3bc46bffe` (reproduced)
-Candidate fix release: `issui001-0.74.0-beta.5-d1e7cc423`
+Last observed: 2026-07-31 (normal Edge profile acceptance)
+Affected release: `v1a2-0.74.0-beta.5-3bc46bffe` (search); `issui001-0.74.0-beta.5-d1e7cc423` (PARTIAL / FAILED EDGE ACCEPTANCE)
+Candidate fix release: (pending `issui001b` build on PR #28)
 GitHub issue: https://github.com/Appsolino/Fusion/issues/23
 
 ### Failure fingerprint
 
-- Search Settings is populated automatically with the browser account email.
-- Clearing the field causes the email to return immediately.
-- No settings sections remain visible.
-- Authentication and model configuration become inaccessible.
+- Settings search populated with the browser account email (original report).
+- Cursor CLI binary path populated with the saved browser email (Edge evidence: `anas966@gmail.com` instead of `/home/fusion/.local/bin/cursor-agent`).
+- API-key replacement / password input populated with a saved password (DeepSeek masked autofill on Edge).
+- Clearing or reopening fields re-triggers autofill.
+- Saving / Save & Test with injected values could overwrite valid application configuration (Cursor path or stored API keys). **Do not save while contaminated.**
 
 ### Impact
 
-Blocks normal access to Settings and provider authentication.
+Blocks trustworthy Settings configuration; risk of overwriting Cursor CLI path and provider API keys.
 
 ### Temporary workaround
 
-Use Chrome Guest or Edge InPrivate with extensions disabled.
+Use Chrome Guest or Edge InPrivate with extensions disabled for configuration changes. Close Settings without Save / Save & Test if fields show injected credentials.
 
 ### Root cause
 
-Proven in source (2026-07-31): the Settings filter (`type="search"`) had no `name`, no `autoComplete`, and no Chromium-resistant lock. Browsers/password managers classified it as an identity field beside Authentication credential inputs and injected the saved account email into React filter state. Clearing re-triggered autofill, so every section disappeared.
+Broader than the search box: Settings Authentication non-identity controls (search filter, CLI binary path text inputs, always-mounted `type=password` API-key fields) sit near credential UI and are classified by Edge/Chromium password managers as login username/password fields. Browser injection updates React controlled state and can enable Save & Test.
 
 ### Permanent correction
 
-- Search-specific `id`/`name` (`settings-filter`), `type="search"`, form `autocomplete="off"`, `autoCapitalize`/`autoCorrect`/`spellCheck` off.
-- Chromium mitigation scoped only to this filter: read-only until focus; re-lock on clear/empty blur.
-- Do not disable autocomplete on real Authentication credential fields.
-- Validate Chrome and Edge saved-profile behavior on the deployed Host D release before marking FIXED.
+- Search: non-identity `settings-filter` + read-only-until-focus (first candidate).
+- Cursor / Grok / OMP CLI binary paths: explicit non-identity id/name, autocomplete off, PM ignore attrs, read-only until focus; discard pre-focus change events so Save & Test cannot submit injected values.
+- API keys: do not mount an editable password input for a stored key; show Key stored / Replace / Clear; mount replacement input only after Replace with `autocomplete=new-password` + lock-until-focus.
+- Do not globally disable browser password management for genuine website logins.
+- Validate on a normal Edge profile with saved credentials before marking FIXED. Chrome with no saved autofill identity is inconclusive.
 
 ### Required regression tests
 
-- Search starts empty.
-- Clear remains empty.
-- Saved browser email is not injected.
-- Typed filtering works.
-- Reload does not restore an email.
-- Authentication section remains accessible.
+- Search starts empty; clear remains empty; non-identity attrs (retained).
+- Cursor path starts configured; DOM email injection before focus does not update state; Save & Test stays disabled without explicit edit.
+- Stored API key has no editable password field until Replace; Replace opens empty input; injection before focus cannot modify state; non-login autocomplete attrs.
+- Authentication / model sections remain reachable; explicit typing/saving still works.
 
 ### Fix history
 
 | Release/SHA | Result | Evidence |
 | --- | --- | --- |
-| `issui001-0.74.0-beta.5-d1e7cc423` / `d1e7cc423` | DEPLOYED — pending Chrome/Edge saved-profile acceptance | Unit suite `SettingsModal.search-autofill.test.tsx` (6); Host D health ok; enginePaused; Cursor CLI ready |
+| `issui001-0.74.0-beta.5-d1e7cc423` / `d1e7cc423` | PARTIAL / FAILED EDGE ACCEPTANCE | Search protected; Edge injected email into Cursor CLI binary path; DeepSeek password-like autofill; Chrome inconclusive (no saved autofill identity) |
+| (issui001b pending) | — | Expanded path + API-key Replace UX on PR #28 |
 
 ---
 

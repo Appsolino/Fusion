@@ -2456,6 +2456,11 @@ Design tokens only (spacing/radius/color vars), no hardcoded px besides 0.
   gap: 6px;
   align-items: center;
 }
+.auth-apikey-stored-label {
+  color: var(--text-muted, var(--muted));
+  font-size: var(--font-sm, 0.85rem);
+  margin-right: auto;
+}
 .auth-apikey-input {
   background: var(--surface-1);
   border: 1px solid var(--border);
