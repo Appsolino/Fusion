@@ -1,0 +1,15 @@
+{
+  "outcome": "merged",
+  "recordedAt": "2026-07-31T16:39:52.165Z",
+  "integrationBranch": "main",
+  "appsolinoSha": "19971cd9f96e1e4e28ea52e8608594617bc29fc5",
+  "upstreamSha": "73bff5f88cf2db1a75ca7ff7235758fdc4b2ceaf",
+  "mergeBase": "b85a5d4531df8fa749d77bf85ea4ab9ab960ce86",
+  "ahead": 57,
+  "behind": 509,
+  "conflictedFiles": [],
+  "touchesWorkflows": true,
+  "touchesMigrations": true,
+  "touchesLockfile": false,
+  "changedFileCount": 1084
+}
