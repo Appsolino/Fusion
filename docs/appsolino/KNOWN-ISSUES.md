@@ -144,3 +144,50 @@ Use Guest/InPrivate if ISS-UI-001 blocks Settings while configuring Cursor CLI d
 ### Permanent correction
 
 Install/authenticate Cursor CLI on Host D; complete G1 physical-edit proof with fallback disabled; keep ISS-UI-001 permanent Settings fix before AUTO-1.
+
+---
+
+## ISS-CLI-004 — Cursor CLI auth HOME mismatch under fusion-staging
+
+Status: OPEN
+Severity: High
+Component: Host D staging / Cursor CLI / systemd HOME
+First observed: 2026-07-31 (G1.2a)
+Last observed: 2026-07-31
+Affected release: `v1a2-0.74.0-beta.5-3bc46bffe`
+GitHub issue: https://github.com/Appsolino/Fusion/issues/21
+
+### Failure fingerprint
+
+- Authentication UI shows Cursor CLI Connected/Active (`useCursorCli=true`).
+- Default Model picker shows only DeepSeek (or other API-key) models; no `cursor-cli` rows.
+- `/api/providers/cursor-cli/status` reports `authenticated=false` while binary is available.
+- Interactive `cursor-agent status` is logged-in under `/home/fusion`, but not under staging service `HOME`.
+
+### Impact
+
+G1 cannot pin `configured provider = actual provider = cursor-cli`. “Use default” does not route to Cursor CLI.
+
+### Temporary workaround
+
+Authenticate `cursor-agent` under `HOME=/srv/appsolino-fusion/staging/state/fusion-home` (service HOME), or otherwise align Cursor credential location with the service environment. Then set explicit `defaultProvider=cursor-cli` + `defaultModelId`. Do not use DeepSeek for G1.
+
+### Root cause
+
+`fusion-staging.service` sets `HOME`/`FUSION_HOME` to the staging fusion-home tree; Cursor CLI login state lives under the interactive user home. Model discovery spawned by the dashboard inherits the service HOME and sees an unauthenticated CLI.
+
+### Permanent correction
+
+Document and automate Host D Cursor CLI auth under the service HOME (or a deliberate shared credential path). Ensure `/api/models` surfaces `cursor-cli` rows before G1. Add regression coverage for service-HOME vs interactive-HOME auth mismatch.
+
+### Required regression tests
+
+- With `useCursorCli=true` and CLI auth under service HOME, `/api/models` includes `provider=cursor-cli`.
+- With CLI auth only under a different HOME, status reports unauthenticated and Cursor rows are absent.
+- Selecting `cursor-cli/<id>` sets resolved planning/execution away from DeepSeek and mock when `testMode=false`.
+
+### Fix history
+
+| Release/SHA | Result | Evidence |
+| --- | --- | --- |
+| Not fixed yet | — | G1.2a |
