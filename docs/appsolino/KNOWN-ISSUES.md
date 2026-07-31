@@ -17,7 +17,7 @@ Component: Dashboard / Settings / Authentication
 First observed: Unknown historical occurrence — owner reports it happened previously
 Last observed: 2026-07-31 (normal Edge profile acceptance)
 Affected release: `v1a2-0.74.0-beta.5-3bc46bffe` (search); `issui001-0.74.0-beta.5-d1e7cc423` (PARTIAL / FAILED EDGE ACCEPTANCE)
-Candidate fix release: (pending `issui001b` build on PR #28)
+Candidate fix release: `issui001b-0.74.0-beta.5-6fd7443ee`
 GitHub issue: https://github.com/Appsolino/Fusion/issues/23
 
 ### Failure fingerprint
@@ -60,7 +60,7 @@ Broader than the search box: Settings Authentication non-identity controls (sear
 | Release/SHA | Result | Evidence |
 | --- | --- | --- |
 | `issui001-0.74.0-beta.5-d1e7cc423` / `d1e7cc423` | PARTIAL / FAILED EDGE ACCEPTANCE | Search protected; Edge injected email into Cursor CLI binary path; DeepSeek password-like autofill; Chrome inconclusive (no saved autofill identity) |
-| (issui001b pending) | — | Expanded path + API-key Replace UX on PR #28 |
+| `issui001b-0.74.0-beta.5-6fd7443ee` / `6fd7443ee` | DEPLOYED — pending Edge re-acceptance | Path + API-key Replace UX; unit suites green; Host D health ok; cursor path still `/home/fusion/.local/bin/cursor-agent` |
 
 ---
 
