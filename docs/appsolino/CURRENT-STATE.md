@@ -2,11 +2,11 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-07-31T18:10:00Z
+**Last updated UTC:** 2026-07-31T18:25:00Z
 
 | Field | Value |
 | --- | --- |
-| Current `main` SHA | `1af5dd92c` (PR #35 merged) |
+| Current `main` SHA | `49956ff66` (AUTO-2 + perms hotfix) |
 | Active Host D release | `g13b-0.74.0-beta.5-cadf34dd4` |
 | Executable SHA-256 | `3b0f701b7e3fe3c7b5441f784dadb659d439378cc7d858a5bc743463e9cea82a` |
 | Staging health | `ok` / `0.74.0-beta.5` @ `127.0.0.1:4140` (`enginePaused=true`) |
@@ -29,6 +29,18 @@ NOTE:    PR #34 is SENSITIVE / UNMERGED — no auto-merge; no Host D deploy unti
 Live App-identity + same-tip idempotency proven. Absorb PR path: `automation/upstream-*`.
 
 ## AUTO-2 — OPERATIONAL (this mission)
+
+## AUTO-2 live proof (2026-07-31)
+
+| Item | Value |
+| --- | --- |
+| Safe proof | PR #38 low-risk docs vs `auto2-proof-base` — App auto-merged ([finalize 30654612281](https://github.com/Appsolino/Fusion/actions/runs/30654612281)); Appsolino `main` unchanged |
+| Sensitive proof | PR #39 workflow path — `auto2:approval-required`, not merged ([finalize 30654662418](https://github.com/Appsolino/Fusion/actions/runs/30654662418)); closed after proof |
+| PR #34 | **SENSITIVE** / `auto2:approval-required` / UNMERGED ([finalize 30654699213](https://github.com/Appsolino/Fusion/actions/runs/30654699213)) |
+| Hotfix | PR #41 removed `permission-issues: write` (installation lacked it) |
+| Host D | unchanged `g13b-0.74.0-beta.5-cadf34dd4` |
+
+
 
 | Item | Value |
 | --- | --- |
