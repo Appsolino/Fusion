@@ -1,44 +1,72 @@
 # Fork and Upstream Update Strategy
 
-Last updated: 2026-07-29
+Last updated: 2026-07-31
+
+## Governing principle
+
+> Automate routine development completely. Require human approval only when automation detects high risk, or before production activation.
+
+Appsolino **rejects** an unbounded long-lived fork without an upstream absorb process — that causes bitrot. Temporary “manual / approximately monthly” sync (Personal Project v1 staging-repair amendment) is **superseded** for Host D development. The permanent model is automated integration with risk-based approval.
+
+```text
+Runfusion/Fusion:main
+        │  scheduled detection
+        ▼
+automation/upstream-* (merge --no-ff)
+        │  tests + package + staging candidate
+        ▼
+Automated sync PR (safe auto-merge | sensitive → one owner approval)
+        │
+        ▼
+Appsolino main → automated immutable Host D release → a.anas.bz
+```
+
+Production on Host P remains human-gated. Host P is never part of this automation until V1B is explicitly authorised.
+
+---
 
 ## 1. Recommended model: hybrid product fork
 
 | Layer | Purpose |
 | --- | --- |
-| **Upstream mirror** | Exact `Runfusion/Fusion` history |
-| **Appsolino product fork** | Reliability, release identity, host contracts, selected UX |
+| **Upstream remote** | Exact `Runfusion/Fusion` history (fetched in automation; no permanent Appsolino mirror branch required) |
+| **Appsolino product fork (`main`)** | Reliability, release identity, host contracts, selected UX, Corrections A/B |
 | **Plugins** | Provider/runtime extras and Appsolino-only integrations |
-| **Host automation** | Provisioning, backups, activation — outside the Node package when possible |
+| **Host automation** | Provisioning, backups, Host D release activation — outside the Node package when possible |
 
 **Not chosen as sole strategy:**
-- Minimal patch fork alone — Appsolino reliability surface is too large (gates, disposition, release identity).
+- Minimal patch fork alone — Appsolino reliability surface is too large.
 - Plugin-only — cannot safely intercept executor/merger/scheduler hotspots via plugins alone.
-- Unbounded long-lived fork without upstream absorb process — bitrot.
+- Unbounded long-lived fork without upstream absorb — bitrot.
+- Permanent exact-tip `upstream-shadow` branch — unnecessary; Actions cannot push upstream history that modifies `.github/workflows/*` with the default token, and a mirror branch is not an absorb process.
 
 ## 2. Branch model
 
 ```text
-upstream/main
-    Exact mirror of Runfusion/Fusion (FF-only; no Appsolino commits).
+main
+    Approved Appsolino development source.
 
-appsolino/main
-    Approved Appsolino product source (rebased/merged via integration branches).
+automation/upstream-sync
+    Durable single active integration branch (preferred),
+    OR dated automation/upstream-YYYY-MM-DD-<sha> created automatically.
+    Only one upstream synchronization workflow may run at a time.
 
-appsolino/stable
-    Last accepted product line for staging promotion candidates.
+feature / fix / docs / ops branches
+    Normal Appsolino changes (worktrees; primary checkout stays on main).
 
-integration/upstream-<version>-<date>
-    Temporary absorb branch from pinned upstream commit.
-
-release/<appsolino-version>
-    Exact source for an immutable release artefact (tag + manifest).
-
-hotfix/<issue>
-    Emergency correction; must merge back to appsolino/main within SLA.
+tags / immutable release IDs
+    Tested packages (Host D development releases and production candidates).
 ```
 
-Protected: `upstream/main` (mirror bots only), `appsolino/main`, `appsolino/stable`, `release/*` — **no force-push**.
+**Not required as permanent lines** unless implementation proves a specific need:
+
+```text
+upstream-shadow
+appsolino/stable
+release/*
+```
+
+Protected: `main` — no force-push. Automation may update only its `automation/upstream-*` branch and open/update one sync PR.
 
 ## 3. What to contribute upstream vs keep Appsolino-specific
 
@@ -61,6 +89,7 @@ Protected: `upstream/main` (mirror bots only), `appsolino/main`, `appsolino/stab
 - Managed-source branding and Appsolino update UX
 - Full-admin sudo policy and provisioning playbooks
 - Organisation boundary credentials model
+- Corrections A/B packaging and mock/executor parks (until upstream adopts)
 
 ### Hybrid
 
@@ -73,49 +102,86 @@ Protected: `upstream/main` (mirror bots only), `appsolino/main`, `appsolino/stab
 3. `packages/core/src/central-core.ts`
 4. Dashboard task workflow / retry routes
 5. Sandbox backends
+6. `.github/workflows` (never import upstream workflow files into Appsolino automation blindly)
 
-**Mitigation:** keep Appsolino changes in **new modules** + thin call-site hooks; avoid editing 20k-line files when a helper module works (Appsolino Phase 2 pattern).
+**Mitigation:** keep Appsolino changes in **new modules** + thin call-site hooks; avoid editing 20k-line files when a helper module works.
 
-## 5. Absorbing new upstream versions
+## 5. Automated absorb process (target)
 
 ```text
-fetch upstream
-→ select pinned upstream commit (record SHA + version tag if any)
-→ create integration/upstream-<ver>-<date> from appsolino/main
-→ merge --no-ff upstream pin (or rebase Appsolino commits onto pin — choose one policy and stick to it)
-→ generate change + conflict report (file list, migration delta, test delta)
-→ resolve by subsystem (engine, core/schema, dashboard, plugins, host docs)
-→ run upstream test:gate / test:full as applicable
-→ run Appsolino reliability suite (contamination, disposition, schema gate, packaged smoke)
-→ build packaged release
-→ stage with isolated database
-→ migration + rollback compatibility tests
-→ soak-test
-→ promote exact immutable artefact to production
-→ update divergence register + retire superseded local patches
+detect new Runfusion/Fusion main tip (every 6–24h)
+→ if unchanged: report and stop
+→ open/update single automation/upstream-* branch from Appsolino main
+→ git merge --no-ff upstream/main   (do not rebase Appsolino history)
+→ classify risk (safe vs sensitive)
+→ preserve Appsolino patches; run Correction A/B contract tests
+→ if migrations added: disposable staging DB apply + ceiling verify (always sensitive)
+→ focused tests + immutable package + temporary staging candidate
+→ open/update one synchronization PR with full report
+→ safe + green → auto-merge
+→ sensitive → wait for one owner approval (automation already did the work)
+→ on merge to main: automated Host D build/install beside previous release
+→ health / migration / smoke; rollback automatically on failure
 ```
 
-**Policy recommendation:** merge upstream into integration branch (`--no-ff`) for auditability; do not rewrite `upstream/main`.
+**Policy:** merge upstream into the integration branch (`--no-ff`) for auditability. Do not rewrite remote upstream history. Do not add a PAT/OAuth/deploy-key/App token solely to force-push exact upstream tips that contain workflow-file changes.
+
+### Risk classification
+
+| Class | Examples | Behaviour |
+| --- | --- | --- |
+| **Safe** | docs, tests only, harmless UI text, non-runtime assets | focused checks → auto-merge PR → auto Host D release |
+| **Sensitive** | `packages/engine`, provider resolution, scheduler/executor, migrations, lockfile/`package.json`, deployment scripts, `.github/workflows`, auth, database code | automation still merges/tests/builds/validates → PR waits for one owner approval |
+
+### Appsolino correction preservation (hard stop)
+
+Automation must fail the sync PR closed when these contract tests fail:
+
+**Correction A:** packaged executable permissions preserved; `initdb`/`postgres` executable; immutable release remains non-writable.
+
+**Correction B:** mock steps remain zero-based; deterministic execute failures park; no todo/in-progress redispatch loop; transient retry behaviour remains intact.
+
+### Failure reporting (required fields)
+
+```text
+source SHA · upstream SHA · risk classification · files changed
+tests run · tests skipped · build result · release ID
+staging result · rollback result · duration · blocking reason
+```
+
+A failed sync remains on its PR/integration branch. It must not repeatedly create duplicate PRs or loop indefinitely.
+
+### Timing expectations (once operational)
+
+| Event | Expected automation time |
+| --- | ---: |
+| Detect upstream change | Within 6–24 hours |
+| Small upstream synchronization | 15–45 minutes |
+| Runtime or migration synchronization | 30–90 minutes |
+| Build and update Host D | 20–45 minutes |
+| Safe change to updated `a.anas.bz` | Usually 30–90 minutes |
+| Sensitive change | Same automated work, then waits for owner approval |
+
+Large backlogs (hundreds of commits behind) are one-time convergence jobs: automation performs most work; engine/migration deltas likely classify as sensitive → one owner review, not hours of manual commands.
 
 ## 6. Database migrations when both sides add migrations
 
 | Rule | Detail |
 | --- | --- |
 | Numbering | Never renumber upstream migrations |
-| Appsolino migrations | Use reserved high range or clearly named Appsolino suffix **only if upstream cannot accept** — prefer contributing |
-| Dual apply order | Upstream numeric order first; Appsolino-only after latest upstream in that absorb |
+| Appsolino migrations | Prefer contributing; local Appsolino-only after latest upstream in that absorb |
+| Dual apply order | Upstream numeric order first |
 | Manifest | `migration-set-hash` + `schemaMax` required |
 | Conflict | If upstream reuses a number Appsolino invented locally, **Appsolino must rename/rebaseline on integration branch** before release |
-| Production | Migrations run only under exclusive lease after pre-backup |
-
-Current fact: `fusion-development` has through `0036_chat_session_tags.sql` while older upstream checkout lags — absorb must reconcile migration sets explicitly.
+| Automation | New migration → disposable staging DB apply → restart → verify ceiling → **always sensitive** |
+| Production | Migrations run only under exclusive lease after pre-backup (Host P; human-gated) |
 
 ## 7. Replacing a local patch with an upstream fix
 
 1. On integration branch, identify overlapping behaviour (tests should express the contract).
 2. Remove Appsolino duplicate module/hook behind feature flag or delete in same commit that adopts upstream.
 3. Keep regression tests green against upstream implementation.
-4. Record retirement in divergence register (`expectedRetirementCondition` met).
+4. Record retirement in divergence register.
 5. Never leave two gates that can disagree.
 
 ## 8. Rejecting or deferring incompatible upstream changes
@@ -123,7 +189,7 @@ Current fact: `fusion-development` has through `0036_chat_session_tags.sql` whil
 | Mechanism | Use when |
 | --- | --- |
 | Pin older upstream SHA | Upstream breaks reliability contract and fix ETA unknown |
-| Integration branch parked | Conflicts too large; document blockers |
+| Integration branch parked | Conflicts too large; document blockers in the sync PR |
 | Compatibility shim | Temporary; time-boxed with register entry |
 | Product veto | Upstream changes require Temporal-like rewrite or remove worktree model Appsolino depends on |
 
@@ -149,22 +215,23 @@ Veto requires entry in `15-open-decisions.md` / risk register — not silent dri
 | DIV-014 | `appsolino_0001_runtime_marker_grants.sql` | Runtime privilege grants | n/a | Keep; never renumber into upstream sequence | pg gate | Medium |
 | DIV-015 | `managed-source.ts` + update UI | Host-controlled releases vs npm auto-update | orthogonal to upstream `autoUpdateAndRestart` | Keep Appsolino-specific | dashboard/managed-source tests | Medium |
 | DIV-016 | Ghost-bug archival / triage-preflight | Appsolino PR #1 lineage | unknown upstream parity | Verify on absorb; keep until proven | triage tests | Medium (`project-engine` / triage) |
+| DIV-017 | Correction A install execute bits | Packaged runtime binaries must stay executable | n/a | Upstream packaging parity or keep Appsolino install script | Host D install checks | High on absorb |
+| DIV-018 | Correction B mock step indexes / park | Zero-based steps; deterministic failure park | n/a | Upstream adopts | executor/mock unit tests | High on absorb |
 
 ### Three source layers (must not be conflated)
 
 | Layer | Contents |
 | --- | --- |
-| (a) Mirrored `main` | Exact upstream (`b85a5d453…` observed 2026-07-29) |
-| (b) `appsolino/stable` | Durable fork deltas: managed-source, FUS-010/029, `appsolino_0001`, ghost-bug, auth/CI/ops docs (~90 commits behind upstream tip on local compare) |
-| (c) Surgical / `fusion-development` | CONTAM Phase 1–3 modules + release-schema gate — **not** on upstream or `appsolino/stable` tips |
+| (a) Upstream tip | Exact Runfusion/Fusion `main` (fetched; not force-mirrored onto Appsolino) |
+| (b) Appsolino `main` | Durable fork deltas + Corrections A/B + ops docs |
+| (c) Surgical / legacy production overlay | Historical CONTAM / surgical pins — **not** the Host D development line |
 
-Upstream `recovery/foreign-only-contamination.ts` is **not** equivalent to Appsolino fail-closed path-set / patch-candidate gates.
-
-Maintain this table in-repo under `docs/appsolino/divergence-register.md` once implementation starts (not created in this planning-only pass beyond this section).
+Maintain this table in-repo under `docs/appsolino/divergence-register.md` once the absorb automation lands (this section remains the planning source until then).
 
 ## 10. GitHub protection and push policy
 
-- Active source + release branches pushed to GitHub (accepted).
-- Require PR + green Appsolino reliability checks for `appsolino/main`.
-- Release tags immutable; artefacts hashed in manifest.
-- Mirror job may update `upstream/main` only via FF from Runfusion.
+- Active source pushed to GitHub (accepted).
+- Require PR + green checks for `main` (safe upstream sync PRs may auto-merge when classification and gates allow).
+- Release tags / release IDs immutable; artefacts hashed in manifest.
+- Do **not** embed long-lived PATs in workflows to bypass Actions restrictions on pushing foreign `.github/workflows` history.
+- Host D release automation uses Host D runners/secrets for install only — never Host P production secrets on Host D.

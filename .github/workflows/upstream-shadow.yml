@@ -1,49 +1,50 @@
-# FNXC:AppsolinoUpstream 2026-07-30-21:26:
-# Daily mirror of Runfusion/Fusion main onto Appsolino branch `upstream-shadow` only.
-# Must never merge into Appsolino main, install deps, or run pnpm build.
-# Intentional sync remains a human-controlled sync/upstream-YYYY-MM-DD PR (see docs/appsolino/upstream/UPSTREAM-MONITORING.md).
+# FNXC:AppsolinoUpstream 2026-07-31-03:42:
+# Observation-only daily monitor of Runfusion/Fusion main vs Appsolino main.
+# Exact-tip upstream-shadow mirroring failed (run 30601438029): Actions default credentials cannot update workflow files present in upstream history.
+# Do not force-push upstream history, create upstream-shadow, import upstream workflows, or add external credentials to bypass that restriction.
+# Full automated absorb (automation/upstream-* + risk-gated PR + Host D release) is REQUIRED / NOT IMPLEMENTED — see docs/appsolino/OPERATING-MODEL.md §3 and docs/appsolino/upstream/UPSTREAM-MONITORING.md.
 
-name: Upstream Shadow Monitor
+name: Upstream Monitor
 
 on:
   schedule:
-    # Daily ~06:15 UTC — observational only; not a sync trigger.
+    # Daily ~06:15 UTC — detection/observation only; not an absorb or Host D deploy.
     - cron: "15 6 * * *"
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: upstream-shadow-monitor
+  group: upstream-monitor
   cancel-in-progress: true
 
 jobs:
-  shadow:
-    name: Mirror upstream tip to upstream-shadow
+  monitor:
+    name: Compare Appsolino with upstream
     runs-on: ubuntu-latest
-    # Sparse/minimal checkout of Appsolino tip only so we have git + gh credentials.
-    # No pnpm, no build, no full product tree needed.
+
     steps:
-      - name: Checkout Appsolino (minimal)
-        uses: actions/checkout@v4
+      - name: Checkout Appsolino
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           sparse-checkout: |
             .github
           sparse-checkout-cone-mode: true
+          persist-credentials: false
 
-      - name: Fetch upstream main and force-push shadow branch
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch and compare upstream
+        shell: bash
         run: |
           set -euo pipefail
 
           UPSTREAM_URL="https://github.com/Runfusion/Fusion.git"
-          SHADOW_BRANCH="upstream-shadow"
           APPSOLINO_MAIN_REF="origin/main"
 
-          git remote add upstream "$UPSTREAM_URL" 2>/dev/null || git remote set-url upstream "$UPSTREAM_URL"
+          git remote add upstream "$UPSTREAM_URL" 2>/dev/null \
+            || git remote set-url upstream "$UPSTREAM_URL"
+
           git fetch --no-tags upstream main
           git fetch --no-tags origin main
 
@@ -53,21 +54,18 @@ jobs:
           AHEAD="$(git rev-list --count upstream/main.."$APPSOLINO_MAIN_REF")"
           BEHIND="$(git rev-list --count "$APPSOLINO_MAIN_REF"..upstream/main)"
 
-          # Exact tip mirror onto upstream-shadow (force). Never update main.
-          git push --force origin "upstream/main:refs/heads/${SHADOW_BRANCH}"
-
           {
-            echo "## Upstream shadow monitor"
+            echo "## Upstream monitor"
             echo
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Upstream tip (Runfusion/Fusion main) | \`${UPSTREAM_SHA}\` |"
+            echo "| Upstream tip | \`${UPSTREAM_SHA}\` |"
             echo "| Appsolino main | \`${APPSOLINO_SHA}\` |"
             echo "| Merge-base | \`${MERGE_BASE}\` |"
-            echo "| Appsolino ahead of upstream | ${AHEAD} |"
-            echo "| Appsolino behind upstream | ${BEHIND} |"
-            echo "| Shadow branch | \`${SHADOW_BRANCH}\` (force-updated to upstream tip) |"
+            echo "| Appsolino ahead | ${AHEAD} |"
+            echo "| Appsolino behind | ${BEHIND} |"
+            echo "| Repository refs updated | NO |"
+            echo "| Automated absorb | REQUIRED / NOT IMPLEMENTED |"
             echo
-            echo "This job does **not** merge into \`main\` and does **not** run \`pnpm\` / build."
-            echo "Controlled sync remains a manual \`sync/upstream-YYYY-MM-DD\` PR."
+            echo "Observation only: no branch, merge, install, build or Host D deploy."
           } >> "$GITHUB_STEP_SUMMARY"
