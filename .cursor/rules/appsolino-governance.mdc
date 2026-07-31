@@ -90,6 +90,21 @@ Do not silently use mock, testMode, fallback or a different provider.
 
 A provider mismatch is a blocking result.
 
+## Known-issue preflight
+
+Before diagnosing or fixing any defect:
+
+1. Search `docs/appsolino/KNOWN-ISSUES.md` using the symptom, error text,
+   component and failure fingerprint.
+2. Search open and closed GitHub Issues for the same signature.
+3. If a match exists, treat the occurrence as a recurrence or regression.
+4. Review the previous root cause, workaround, fix commit and regression test.
+5. Update the existing known-issue entry and GitHub issue rather than creating
+   a disconnected fix.
+6. Do not mark an issue fixed without a permanent correction, regression test,
+   affected release/SHA and validation evidence.
+7. Add a new entry only when no existing failure fingerprint matches.
+
 ## Issues and deviations
 
 Record every meaningful error, interruption, unexpected fallback, failed

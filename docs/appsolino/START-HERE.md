@@ -24,6 +24,10 @@ Build a reliable autonomous Fusion dashboard that completes development work **w
 | `OPERATING-MODEL.md` | How we work | 3 min |
 | `CURRENT-STATE.md` | Only authoritative status | 2 min |
 
+## Operational registers (not authority)
+
+Known recurring defects: [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md) — search before diagnosing or fixing defects. Not part of the authority hierarchy.
+
 ## Current phase / next action
 
 See **[`CURRENT-STATE.md`](CURRENT-STATE.md)** — do not trust status copied elsewhere.
