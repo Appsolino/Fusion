@@ -106,11 +106,16 @@ export function mapAuto3RunToTerminal(input) {
 
 /**
  * Parse AUTO3_TERMINAL_STATUS=... from workflow logs.
+ * Prefer the LAST marker. GitHub Actions --log includes the script source that
+ * echoes candidate markers (DEPLOYED/IDEMPOTENT/…); taking the first match made
+ * parent waiters report DEPLOYED after a real FAILED/BLOCKED deploy (PR #55 child
+ * 30705088925).
  * @param {string} logText
  */
 export function parseAuto3TerminalMarker(logText) {
-  const m = String(logText || "").match(/AUTO3_TERMINAL_STATUS=([A-Z_]+)/);
-  return m ? m[1] : null;
+  const matches = [...String(logText || "").matchAll(/AUTO3_TERMINAL_STATUS=([A-Z_]+)/g)];
+  if (!matches.length) return null;
+  return matches[matches.length - 1][1];
 }
 
 /**

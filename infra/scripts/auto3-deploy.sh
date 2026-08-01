@@ -230,6 +230,8 @@ export AUTO3_RELEASES_ROOT="$RELEASES_ROOT"
 export AUTO3_CURRENT_LINK="$CURRENT_LINK"
 export AUTO3_IDENTITY_FILE="$IDENTITY_FILE"
 export AUTO3_PUBLISH_CURRENT=0
+# FNXC:AppsolinoAuto3 2026-08-01-15:20: Pass packaged applicationVersion into installer (no hardcoded beta pin).
+export AUTO3_APPLICATION_VERSION="${APP_VER}"
 set +e
 INSTALL_OUT="$(bash "$INSTALL_SH" "$WORK/dist" "$SOURCE_SHA" "$RELEASE_ID" 2>&1)"
 INSTALL_RC=$?

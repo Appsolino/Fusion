@@ -10,7 +10,10 @@ set -euo pipefail
 SRC_DIST="${1:-}"
 MAIN_SHA="${2:-}"
 RELEASE_ID_OVERRIDE="${3:-}"
-VERSION="0.74.0-beta.5"
+# FNXC:AppsolinoAuto3 2026-08-01-15:20:
+# Upstream absorb may bump package version (e.g. beta.5 → beta.6). AUTO-3 passes
+# applicationVersion via AUTO3_APPLICATION_VERSION; keep beta.5 as legacy default only.
+VERSION="${AUTO3_APPLICATION_VERSION:-0.74.0-beta.5}"
 RELEASES_ROOT="${AUTO3_RELEASES_ROOT:-/opt/appsolino-fusion/staging/releases}"
 CURRENT_LINK="${AUTO3_CURRENT_LINK:-/opt/appsolino-fusion/staging/current}"
 IDENTITY_FILE="${AUTO3_IDENTITY_FILE:-/srv/appsolino-fusion/staging/state/release-identity.txt}"
