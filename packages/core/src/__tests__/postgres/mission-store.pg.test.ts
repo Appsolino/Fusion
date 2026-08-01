@@ -690,8 +690,9 @@ pgTest("MissionStore (PostgreSQL backend mode)", () => {
     const slice = await m.addSlice(milestone.id, { title: "SL" });
     const feature = await m.addFeature(slice.id, { title: "F" });
 
-    const run = await m.startValidatorRun(feature.id, "manual");
+    const run = await m.startValidatorRun(feature.id, "manual", undefined, "fingerprint-round-trip");
     expect(run.status).toBe("running");
+    expect(run.inputFingerprint).toBe("fingerprint-round-trip");
     expect(run.validatorAttempt).toBe(1);
 
     const runs = await m.getValidatorRunsByFeature(feature.id);
@@ -699,6 +700,43 @@ pgTest("MissionStore (PostgreSQL backend mode)", () => {
 
     const fetched = await m.getValidatorRun(run.id);
     expect(fetched?.id).toBe(run.id);
+    expect(fetched?.inputFingerprint).toBe("fingerprint-round-trip");
+  });
+
+  it("clears all validation-budget provenance when a changed fingerprint is admitted", async () => {
+    const m = missions();
+    const mission = await m.createMission({ title: "Changed validation input" });
+    const milestone = await m.addMilestone(mission.id, { title: "MS" });
+    const slice = await m.addSlice(milestone.id, { title: "SL" });
+    const feature = await m.addFeature(slice.id, { title: "F" });
+    const exhaustedFingerprint = "a".repeat(64);
+    const changedFingerprint = "b".repeat(64);
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const run = await m.startValidatorRun(feature.id, "task_completion", undefined, exhaustedFingerprint);
+      await m.completeValidatorRun(run.id, "failed", "deterministic failure");
+    }
+    await expect(m.admitValidatorRun(feature.id, {
+      inputFingerprint: exhaustedFingerprint,
+      failureBudget: 3,
+      reusePass: true,
+    })).resolves.toMatchObject({ outcome: "budget-exhausted" });
+    expect(await m.getFeature(feature.id)).toMatchObject({
+      loopState: "blocked",
+      validationBudgetFingerprint: exhaustedFingerprint,
+    });
+
+    await expect(m.admitValidatorRun(feature.id, {
+      inputFingerprint: changedFingerprint,
+      failureBudget: 3,
+      reusePass: true,
+    })).resolves.toMatchObject({ outcome: "start", run: { inputFingerprint: changedFingerprint } });
+    expect(await m.getFeature(feature.id)).toMatchObject({
+      loopState: "validating",
+      validationBudgetFingerprint: undefined,
+      validationBudgetRunId: undefined,
+      validationBudgetBlockedAt: undefined,
+    });
   });
 
   it("runs the validator/fix lifecycle and reaps stale runs in PostgreSQL", async () => {

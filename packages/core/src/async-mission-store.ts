@@ -11,7 +11,7 @@ const severityAuditLog = createLogger("core-async-mission-store");
  * events; reusable SQL and row mapping live in async-mission-store-queries.ts.
  */
 import { EventEmitter } from "node:events";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import * as schema from "./postgres/schema/index.js";
 import type { AsyncDataLayer } from "./postgres/data-layer.js";
 import { FEATURE_LOOP_TRANSITIONS, normalizeMissionAssertionType, renderValidationCause } from "./mission-types.js";
@@ -21,6 +21,8 @@ import type {
   Slice,
   MissionFeature,
   MissionValidatorRun,
+  ValidatorRunAdmission,
+  ValidatorRunAdmissionInput,
   MissionAssertionFailureRecord,
   MissionFeatureLoopSnapshot,
   MissionCreateInput,
@@ -136,6 +138,7 @@ import {
   linkFeatureToAssertion,
   unlinkFeatureFromAssertion,
   createValidatorRun,
+  rowToValidatorRun,
   getValidatorRun,
   listValidatorRunsByFeature,
   listStaleRunningValidatorRuns,
@@ -1471,7 +1474,7 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
   }
 
   // ════════════════ VALIDATOR RUNS ════════════════
-  async startValidatorRun(featureId: string, triggerType?: string, taskId?: string): Promise<MissionValidatorRun> {
+  async startValidatorRun(featureId: string, triggerType?: string, taskId?: string, inputFingerprint?: string): Promise<MissionValidatorRun> {
     const feature = await getFeature(this.db, featureId);
     if (!feature) throw new Error(`Feature ${featureId} not found`);
     const slice = await getSlice(this.db, feature.sliceId);
@@ -1490,6 +1493,7 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
       implementationAttempt: feature.implementationAttemptCount ?? 0,
       validatorAttempt: newValidatorAttemptCount,
       taskId,
+      inputFingerprint,
       startedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -1502,6 +1506,63 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
       loopState: "validating",
     });
     return run;
+  }
+
+  /**
+   * Atomically admit or suppress an automatic validator dispatch. The feature
+   * row lock serializes one project+feature+fingerprint decision without
+   * holding a database transaction while a model session executes.
+   */
+  async admitValidatorRun(featureId: string, input: ValidatorRunAdmissionInput): Promise<ValidatorRunAdmission> {
+    return this.layer.transactionImmediate(async (tx) => {
+      const locked = await tx.select().from(schema.project.missionFeatures).where(and(
+        eq(schema.project.missionFeatures.projectId, missionProjectId()),
+        eq(schema.project.missionFeatures.id, featureId),
+      )).for("update");
+      const feature = locked[0] ? await getFeature(tx, featureId) : undefined;
+      if (!feature) throw new Error(`Feature ${featureId} not found`);
+      const rows = await tx.select().from(schema.project.missionValidatorRuns).where(and(
+        eq(schema.project.missionValidatorRuns.projectId, missionProjectId()),
+        eq(schema.project.missionValidatorRuns.featureId, featureId),
+        eq(schema.project.missionValidatorRuns.inputFingerprint, input.inputFingerprint),
+      )).orderBy(desc(schema.project.missionValidatorRuns.completedAt), desc(schema.project.missionValidatorRuns.startedAt), desc(schema.project.missionValidatorRuns.createdAt), desc(schema.project.missionValidatorRuns.id)).for("update");
+      const runs = rows.map((row) => rowToValidatorRun(row as never));
+      const running = runs.find((run) => run.status === "running");
+      const terminal = runs.find((run) => run.status === "passed" || run.status === "failed");
+      const failed = runs.filter((run) => run.status === "failed");
+      const slice = await getSlice(tx, feature.sliceId);
+      const milestone = slice ? await getMilestone(tx, slice.milestoneId) : undefined;
+      const mission = milestone ? await getMission(tx, milestone.missionId) : undefined;
+      const append = async (outcome: ValidatorRunAdmission["outcome"], run?: MissionValidatorRun, stuck = false) => {
+        if (!mission) return;
+        const seq = (await getMaxEventSeq(tx)) + 1;
+        await insertMissionEvent(tx, { id: this.generateId("ME"), missionId: mission.id, eventType: "warning", description: "validation memoized", metadata: { outcome, featureId, fingerprint: input.inputFingerprint, ...(run ? { runId: run.id } : {}) }, timestamp: new Date().toISOString(), seq });
+        if (stuck) await insertMissionEvent(tx, { id: this.generateId("ME"), missionId: mission.id, eventType: "warning", description: "validation-stuck", metadata: { featureId, fingerprint: input.inputFingerprint, ...(run ? { runId: run.id } : {}) }, timestamp: new Date().toISOString(), seq: seq + 1 });
+      };
+      if (running) { await append("running", running); return { outcome: "running", run: running }; }
+      if (terminal?.status === "passed" && input.reusePass) {
+        await updateFeature(tx, { ...feature, status: "done", loopState: "passed", lastValidatorStatus: "passed", lastValidatorRunId: terminal.id, updatedAt: new Date().toISOString() });
+        await append("reuse-pass", terminal);
+        return { outcome: "reuse-pass", run: terminal };
+      }
+      if (failed.length >= input.failureBudget) {
+        const alreadyBlocked = feature.loopState === "blocked" && feature.validationBudgetFingerprint === input.inputFingerprint;
+        const latest = terminal?.status === "failed" ? terminal : failed[0];
+        if (!alreadyBlocked) await updateFeature(tx, { ...feature, loopState: "blocked", validationBudgetFingerprint: input.inputFingerprint, validationBudgetRunId: latest?.id, validationBudgetBlockedAt: new Date().toISOString(), lastValidatorRunId: latest?.id ?? feature.lastValidatorRunId, lastValidatorStatus: "failed", updatedAt: new Date().toISOString() });
+        await append("budget-exhausted", latest, !alreadyBlocked);
+        return { outcome: "budget-exhausted", run: latest };
+      }
+      if (!slice || !milestone) throw new Error(`Feature ${featureId} has incomplete hierarchy`);
+      const now = new Date().toISOString();
+      const run: MissionValidatorRun = { id: this.generateId("VR"), featureId, milestoneId: milestone.id, sliceId: slice.id, status: "running", triggerType: "task_completion", implementationAttempt: feature.implementationAttemptCount ?? 0, validatorAttempt: (feature.validatorAttemptCount ?? 0) + 1, taskId: input.taskId, inputFingerprint: input.inputFingerprint, startedAt: now, createdAt: now, updatedAt: now };
+      await createValidatorRun(tx, run);
+      // FNXC:MissionValidation 2026-08-01-16:40:
+      // Starting a changed fingerprint reopens only the FN-8694 budget block.
+      // Clear every companion field so a later ordinary block cannot be mistaken
+      // for the exhausted fingerprint that admission has just superseded.
+      await updateFeature(tx, { ...feature, validatorAttemptCount: run.validatorAttempt, lastValidatorRunId: run.id, loopState: "validating", validationBudgetFingerprint: feature.validationBudgetFingerprint !== input.inputFingerprint ? undefined : feature.validationBudgetFingerprint, validationBudgetRunId: feature.validationBudgetFingerprint !== input.inputFingerprint ? undefined : feature.validationBudgetRunId, validationBudgetBlockedAt: feature.validationBudgetFingerprint !== input.inputFingerprint ? undefined : feature.validationBudgetBlockedAt, updatedAt: now });
+      return { outcome: "start", run };
+    });
   }
 
   async getValidatorRun(id: string): Promise<MissionValidatorRun | undefined> {

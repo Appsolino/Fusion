@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import type {
   TaskStore,
   MissionStore,
@@ -28,7 +29,7 @@ import type {
 import { MissionRemediationStoppedError, normalizeMissionAssertionType, normalizeValidationDiagnostics, renderValidationFailureDescription,
   resolveTaskLifecycleColumns, resolveWorkflowIrForTask, columnsWithFlag,
 } from "@fusion/core";
-import { GitCheckoutMaterializer, type CheckoutMaterializer, type VerificationOutcome } from "./mission-verification.js";
+import { GitCheckoutMaterializer, type CheckoutMaterializer, type DisposableCheckout, type VerificationOutcome } from "./mission-verification.js";
 import { createFnAgent, promptWithFallback, type AgentResult } from "./pi.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
 import {
@@ -59,6 +60,21 @@ export const loopLog = createLogger("mission-loop");
 const VALIDATION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
+ * FNXC:MissionValidation 2026-08-01-16:21:
+ * FN-8694 hashes the fixed JSON UTF-8 tuple (landed SHA, judge identity, and exact
+ * prompts), never delimiter-concatenated text and never a TTL. No SHA, fallback,
+ * unknown identity, or preparation error fails open. Static passes may reuse while
+ * behavioral assertions re-execute; every project+feature atomic suppression is
+ * audited, and only a changed fingerprint can reopen this explicit budget block.
+ */
+export const VALIDATION_FAILURE_BUDGET_PER_FINGERPRINT = 3;
+
+/** Canonical, delimiter-safe content address for one exact judge execution input. */
+export function fingerprintMissionValidationInput(landedSha: string, provider: string, modelId: string, systemPrompt: string, userPrompt: string): string {
+  return createHash("sha256").update(Buffer.from(JSON.stringify(["mission-validation-input-v1", landedSha, provider, modelId, systemPrompt, userPrompt]), "utf8")).digest("hex");
+}
+
+/**
  * Validation result returned by the AI agent.
  * The agent evaluates each linked assertion and returns pass/fail/blocked
  * per assertion plus an overall status.
@@ -80,6 +96,24 @@ interface ValidationWorkspaceStaleness {
 interface ValidationExecution {
   result: ValidationResult;
   inspection: ValidationInspection;
+}
+
+/** Exact execution inputs prepared before atomic validator-run admission. */
+interface PreparedValidationMemoization {
+  fingerprint: string;
+  hasBehavioralAssertions: boolean;
+  landedSha: string;
+  provider: string;
+  modelId: string;
+  credentialInstanceId?: string;
+  systemPrompt: string;
+  userPrompt: string;
+  taskId?: string;
+  taskTitle?: string;
+  taskContext: string;
+  runtimeHint: ReturnType<typeof extractRuntimeHint>;
+  settings?: Settings;
+  checkout: DisposableCheckout;
 }
 
 export interface ValidationResult {
@@ -336,6 +370,23 @@ export class MissionExecutionLoop extends EventEmitter {
                 }
               }
 
+              // FNXC:MissionValidation 2026-08-01-16:21:
+              // A budget block is the only blocked state recovery may revisit. It
+              // stays closed for unknown/fallback preparation, emits an audited
+              // suppression for unchanged bytes, and lets atomic admission reopen
+              // only when a newly prepared fingerprint differs.
+              if (feature.loopState === "blocked" && feature.validationBudgetFingerprint && !this.activeValidations.has(feature.id)) {
+                const prepared = await this.prepareValidationMemoization(feature, await this.missionStore.listAssertionsForFeature(feature.id));
+                if (prepared) {
+                  try {
+                    await this.runFeatureValidation(feature, prepared);
+                    recoveredCount++;
+                  } catch (err) {
+                    loopLog.error(`Recovery failed for validation-budget-blocked feature ${feature.id}:`, err);
+                  }
+                }
+              }
+
               // Features in needs_fix state with completed tasks need to continue
               if (feature.loopState === "needs_fix") {
                 loopLog.log(`Recovery: feature ${feature.id} awaiting fix implementation`);
@@ -573,13 +624,23 @@ export class MissionExecutionLoop extends EventEmitter {
    * method handles lazy assertion linkage, validator run bookkeeping, and
    * dispatch of the validation result.
    */
-  private async runFeatureValidation(feature: MissionFeature): Promise<void> {
+  private async runFeatureValidation(
+    feature: MissionFeature,
+    preparedMemo?: PreparedValidationMemoization,
+  ): Promise<void> {
+    /*
+    FNXC:MissionValidation 2026-08-01-17:14:
+    Budget-block recovery hands its prepared checkout and canonical bytes into
+    this path so admission and execution cannot rebuild divergent inputs or
+    leak the first checkout. The execution path owns disposal exactly once.
+    */
     /*
     FNXC:MissionValidation 2026-07-17-16:40:
     Claim validation before any asynchronous assertion lookup. Concurrent task
     completion events must share one validator run, including the lazy-link path.
     */
     this.activeValidations.add(feature.id);
+    let memoToDispose = preparedMemo;
 
     try {
       // Lazily guarantee a linked assertion before validation so every feature
@@ -594,6 +655,10 @@ export class MissionExecutionLoop extends EventEmitter {
         // contract can complete, but it must still trigger the direct milestone
         // path. That path independently proves all sibling work is done before
         // grading parent-only assertions; parent prose never becomes this feature's fail.
+        if (memoToDispose) {
+          await memoToDispose.checkout.dispose().catch((error) => loopLog.warn(`Error disposing unused validation checkout for ${feature.id}:`, error));
+          memoToDispose = undefined;
+        }
         await this.handleValidationPass(feature.id, undefined, "No assertions linked to feature");
         await this.runMilestoneValidationIfReady(feature);
         return;
@@ -601,15 +666,47 @@ export class MissionExecutionLoop extends EventEmitter {
 
       loopLog.log(`Running internal validation for feature ${feature.id} — no board task created (policy: docs/missions.md)`);
 
-      // FNXC:MissionValidation 2026-07-16-12:00:
-      // Validator runs retain task linkage, while routing consumes inspection
-      // provenance calculated in the exact root the judge read.
-      const run = feature.taskId
-        ? await this.missionStore.startValidatorRun(feature.id, "task_completion", feature.taskId)
-        : await this.missionStore.startValidatorRun(feature.id, "task_completion");
+      // The asynchronous store owns cross-process admission; legacy synchronous
+      // stores retain the existing fail-open path.
+      const memo = memoToDispose ?? await this.prepareValidationMemoization(feature, assertions);
+      memoToDispose = memo;
+      const disposeUnusedMemo = async () => {
+        if (memoToDispose) {
+          await memoToDispose.checkout.dispose().catch((error) => loopLog.warn(`Error disposing unused validation checkout for ${feature.id}:`, error));
+          memoToDispose = undefined;
+        }
+      };
+      const admissionStore = this.missionStore as typeof this.missionStore & { admitValidatorRun?: (featureId: string, input: { inputFingerprint: string; taskId?: string; reusePass: boolean; failureBudget: number }) => Promise<{ outcome: "start" | "running" | "reuse-pass" | "budget-exhausted"; run?: MissionValidatorRun }> };
+      let run: MissionValidatorRun;
+      if (memo && admissionStore.admitValidatorRun) {
+        const admission = await admissionStore.admitValidatorRun(feature.id, { inputFingerprint: memo.fingerprint, taskId: feature.taskId, reusePass: !memo.hasBehavioralAssertions, failureBudget: VALIDATION_FAILURE_BUDGET_PER_FINGERPRINT });
+        if (admission.outcome === "running" || admission.outcome === "budget-exhausted") {
+          await disposeUnusedMemo();
+          return;
+        }
+        if (admission.outcome === "reuse-pass") {
+          await disposeUnusedMemo();
+          await this.handleValidationPass(feature.id, admission.run?.id, "Reused content-addressed validator pass");
+          await this.runMilestoneValidationIfReady(feature);
+          return;
+        }
+        if (!admission.run) {
+          await disposeUnusedMemo();
+          throw new Error(`Validator admission for ${feature.id} started without a run`);
+        }
+        run = admission.run;
+      } else {
+        run = memo
+          ? await this.missionStore.startValidatorRun(feature.id, "task_completion", feature.taskId, memo.fingerprint)
+          : feature.taskId
+            ? await this.missionStore.startValidatorRun(feature.id, "task_completion", feature.taskId)
+            : await this.missionStore.startValidatorRun(feature.id, "task_completion");
+      }
       loopLog.log(`Started validator run ${run.id} for feature ${feature.id}`);
 
-      const { result, inspection } = await this.runValidation(feature, assertions, run);
+      // runValidation takes sole ownership of a started run's checkout.
+      memoToDispose = undefined;
+      const { result, inspection } = await this.runValidation(feature, assertions, run, "feature", memo);
 
       // A fail is not durable evidence until its inspection root is trusted.
       // Do this before mutating assertion state: a pre-merge or stale checkout
@@ -679,6 +776,9 @@ export class MissionExecutionLoop extends EventEmitter {
         await this.handleValidationError(feature.id, run.id, result.summary);
       }
     } finally {
+      if (memoToDispose) {
+        await memoToDispose.checkout.dispose().catch((error) => loopLog.warn(`Error disposing abandoned validation checkout for ${feature.id}:`, error));
+      }
       this.activeValidations.delete(feature.id);
     }
   }
@@ -730,6 +830,47 @@ export class MissionExecutionLoop extends EventEmitter {
     }
   }
 
+  /** Prepare the exact static bytes and landed checkout that an admitted run executes. */
+  private async prepareValidationMemoization(feature: MissionFeature, assertions: MissionContractAssertion[]): Promise<PreparedValidationMemoization | undefined> {
+    try {
+      const landedSha = await this.resolveIntegrationSha(feature);
+      if (!landedSha) return undefined;
+      const task = feature.taskId ? await this.taskStore.getTask(feature.taskId) : null;
+      const baseSettings = await this.taskStore.getSettings().catch(() => undefined);
+      const settings = task && baseSettings ? await mergeEffectiveSettings(this.taskStore, task, baseSettings) : baseSettings;
+      const assignedAgent = task?.assignedAgentId && this.agentStore ? await this.agentStore.getAgent(task.assignedAgentId).catch(() => null) : null;
+      const model = this.resolveValidationSessionModel(task, settings, assignedAgent?.runtimeConfig);
+      if (!model.provider || !model.modelId) return undefined;
+      const userPrompt = this.buildValidationPrompt(feature, assertions, "feature");
+      const taskContext = task ? this.buildTaskContext(task) : "";
+      const systemPrompt = this.buildValidationSystemPrompt(feature, assertions, taskContext, "feature");
+      // FNXC:MissionValidation 2026-08-01-16:40:
+      // FN-8694 admits a fingerprint only after its landed checkout is ready.
+      // An ambient-root fallback has ill-defined code inputs, so it follows the
+      // legacy fail-open path rather than attaching a stale fingerprint to a run.
+      const checkout = await this.checkoutMaterializer.materialize(this.rootDir, landedSha);
+      return {
+        fingerprint: fingerprintMissionValidationInput(landedSha, model.provider, model.modelId, systemPrompt, userPrompt),
+        hasBehavioralAssertions: assertions.some((assertion) => normalizeMissionAssertionType(assertion.type) === "behavioral"),
+        landedSha,
+        provider: model.provider,
+        modelId: model.modelId,
+        credentialInstanceId: model.credentialInstanceId,
+        systemPrompt,
+        userPrompt,
+        taskId: task?.id,
+        taskTitle: task?.title,
+        taskContext,
+        runtimeHint: extractRuntimeHint(assignedAgent?.runtimeConfig),
+        settings,
+        checkout,
+      };
+    } catch (error) {
+      loopLog.warn(`Validation memoization preparation failed open for ${feature.id}:`, error);
+      return undefined;
+    }
+  }
+
   /**
    * Run the validation AI session for a feature.
    *
@@ -742,6 +883,7 @@ export class MissionExecutionLoop extends EventEmitter {
     assertions: MissionContractAssertion[],
     _run: MissionValidatorRun,
     scope: "feature" | "milestone" = "feature",
+    prepared?: PreparedValidationMemoization,
   ): Promise<ValidationExecution> {
     loopLog.log(`Running validation for feature ${feature.id} with ${assertions.length} assertions`);
 
@@ -749,41 +891,38 @@ export class MissionExecutionLoop extends EventEmitter {
     // FN-8542 confines an individual feature verdict to its linked feature
     // assertions. Parent milestone criteria are evaluated by the rollup lane,
     // so they are deliberately not supplied to this feature-validation session.
-    const prompt = this.buildValidationPrompt(feature, assertions, scope);
+    const prompt = prepared?.userPrompt ?? this.buildValidationPrompt(feature, assertions, scope);
 
-    // Get task context for validation
-    const task = feature.taskId ? await this.taskStore.getTask(feature.taskId) : null;
-    const taskContext = task ? this.buildTaskContext(task) : "";
+    // An admitted run must use the exact inputs that were fingerprinted. Manual
+    // and milestone runs retain the legacy preparation path and fail open.
+    const task = prepared ? null : feature.taskId ? await this.taskStore.getTask(feature.taskId) : null;
+    const taskContext = prepared?.taskContext ?? (task ? this.buildTaskContext(task) : "");
     const assignedAgent = task?.assignedAgentId && this.agentStore
       ? await this.agentStore.getAgent(task.assignedAgentId).catch(() => null)
       : null;
-    const validationRuntimeHint = extractRuntimeHint(assignedAgent?.runtimeConfig);
+    const validationRuntimeHint = prepared?.runtimeHint ?? extractRuntimeHint(assignedAgent?.runtimeConfig);
     // Merge per-task effective workflow settings (U3, KTD-3) so the validator
     // model-lane reads pick up workflow values; skip when there is no task in
     // scope (mission-level validation has no per-task workflow). Behavior-inert by
     // default.
-    const baseSettings = await this.taskStore.getSettings().catch(() => undefined);
-    const settings = task && baseSettings
+    const baseSettings = prepared ? undefined : await this.taskStore.getSettings().catch(() => undefined);
+    const settings = prepared?.settings ?? (task && baseSettings
       ? await mergeEffectiveSettings(this.taskStore, task, baseSettings)
-      : baseSettings;
-    const validationSessionModel = this.resolveValidationSessionModel(
-      task,
-      settings,
-      assignedAgent?.runtimeConfig,
-    );
+      : baseSettings);
+    const validationSessionModel = prepared
+      ? { provider: prepared.provider, modelId: prepared.modelId, credentialInstanceId: prepared.credentialInstanceId }
+      : this.resolveValidationSessionModel(task, settings, assignedAgent?.runtimeConfig);
 
     let session: AgentResult | null = null;
-    let checkout: Awaited<ReturnType<CheckoutMaterializer["materialize"]>> | undefined;
-    const landedSha = await this.resolveIntegrationSha(feature);
-    let inspectionRoot = this.rootDir;
-    let fallbackUsed = !landedSha;
+    let checkout: DisposableCheckout | undefined = prepared?.checkout;
+    const landedSha = prepared?.landedSha ?? await this.resolveIntegrationSha(feature);
+    let inspectionRoot = checkout?.dir ?? this.rootDir;
+    let fallbackUsed = !checkout;
 
-    // FNXC:MissionValidation 2026-07-16-12:00:
-    // Issue #2168 requires the read-only judge to inspect the landed merge
-    // checkout, not ambient rootDir whose branch can diverge. If checkout
-    // materialization fails, retain rootDir behavior and evaluate staleness in
-    // that exact fallback root before the disposable checkout is disposed.
-    if (landedSha) {
+    // Manual and milestone validation preserve the pre-FN-8694 fallback posture.
+    // Prepared automatic runs cannot reach this branch: failed materialization
+    // makes them memoization-ineligible before atomic admission.
+    if (!prepared && landedSha) {
       try {
         checkout = await this.checkoutMaterializer.materialize(this.rootDir, landedSha);
         inspectionRoot = checkout.dir;
@@ -798,7 +937,7 @@ export class MissionExecutionLoop extends EventEmitter {
       const runAuditor = createRunAuditor(this.taskStore, {
         runId: generateSyntheticRunId("mission", feature.taskId ?? feature.id),
         agentId: "reviewer",
-        taskId: task?.id,
+        taskId: prepared?.taskId ?? task?.id,
         phase: "mission",
         source: "mission-execution-loop",
       });
@@ -807,7 +946,7 @@ export class MissionExecutionLoop extends EventEmitter {
         runtimeHint: validationRuntimeHint,
         pluginRunner: this.pluginRunner,
         cwd: inspectionRoot,
-        systemPrompt: this.buildValidationSystemPrompt(feature, assertions, taskContext, scope),
+        systemPrompt: prepared?.systemPrompt ?? this.buildValidationSystemPrompt(feature, assertions, taskContext, scope),
         tools: "readonly",
         defaultProvider: validationSessionModel.provider,
         defaultModelId: validationSessionModel.modelId,
@@ -822,14 +961,14 @@ export class MissionExecutionLoop extends EventEmitter {
         onText: (_delta) => {
           // Could stream this to a log entry if needed
         },
-        taskId: task?.id,
-        taskTitle: task?.title,
+        taskId: prepared?.taskId ?? task?.id,
+        taskTitle: prepared?.taskTitle ?? task?.title,
         onFallbackModelUsed: createFallbackModelObserver({
           agent: "reviewer",
           label: "mission validator",
           store: this.taskStore,
-          taskId: task?.id,
-          taskTitle: task?.title,
+          taskId: prepared?.taskId ?? task?.id,
+          taskTitle: prepared?.taskTitle ?? task?.title,
         }),
       });
       session = { session: sessionResult.session, sessionFile: sessionResult.sessionFile };

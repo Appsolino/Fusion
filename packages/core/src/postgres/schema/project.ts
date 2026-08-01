@@ -1552,6 +1552,9 @@ export const missionFeatures = projectSchema.table("mission_features", {
   implementationStopReason: text("implementation_stop_reason"),
   implementationStoppedAt: text("implementation_stopped_at"),
   implementationStopOrigin: text("implementation_stop_origin"),
+  validationBudgetFingerprint: text("validation_budget_fingerprint"),
+  validationBudgetRunId: text("validation_budget_run_id"),
+  validationBudgetBlockedAt: text("validation_budget_blocked_at"),
   lastValidatorRunId: text("last_validator_run_id"),
   lastValidatorStatus: text("last_validator_status"),
   generatedFromFeatureId: text("generated_from_feature_id"),
@@ -2139,12 +2142,14 @@ export const missionValidatorRuns = projectSchema.table("mission_validator_runs"
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
   taskId: text("task_id"),
+  inputFingerprint: text("input_fingerprint"),
 }, (t) => [
   primaryKey({ columns: [t.projectId, t.id] }),
   index("idxValidatorRunsFeatureId").on(t.featureId),
   index("idxValidatorRunsMilestoneId").on(t.milestoneId),
   index("idxValidatorRunsSliceId").on(t.sliceId),
   index("idxValidatorRunsStatus").on(t.status),
+  index("idxValidatorRunsFeatureFingerprint").on(t.projectId, t.featureId, t.inputFingerprint),
 ]);
 
 export const missionValidatorFailures = projectSchema.table("mission_validator_failures", {

@@ -55,7 +55,8 @@ SCHEMA_BASELINE_VERSION advances to 0038 for optional per-mission task_prefix â€
 capacity-model table drop that landed while this PR was open.
 */
 /* FNXC:CrossProcessDeleteObservation 2026-08-01-11:39: advance the schema ceiling so durable consumer state exists before observers begin polling FN-8684's outbox. */
-export const SCHEMA_BASELINE_VERSION = "0041";
+/* FNXC:MissionValidation 2026-08-01-16:21: advance the schema ceiling before validator admission reads durable content fingerprints. */
+export const SCHEMA_BASELINE_VERSION = "0042";
 /** FNXC:SymbolLock 2026-07-20-10:00: upgrades need durable task declarations before admission resolves symbols. */
 export const TASK_DECLARED_SYMBOLS_VERSION = "0028";
 const INITIAL_SCHEMA_VERSION = "0000";
@@ -180,6 +181,8 @@ export const CREDENTIAL_INSTANCE_SELECTION_VERSION = "0039";
 export const TASK_LIFECYCLE_OUTBOX_VERSION = "0040";
 /** FNXC:CrossProcessDeleteObservation 2026-08-01-11:39: 0041 creates project-scoped consumer registration, cursor, receipt, and dead-letter state. */
 export const TASK_LIFECYCLE_CONSUMERS_VERSION = "0041";
+/** FNXC:MissionValidation 2026-08-01-16:21: durable input fingerprints and budget-block provenance. */
+export const VALIDATOR_INPUT_FINGERPRINT_VERSION = "0042";
 
 /** SECURITY DEFINER helper that only inserts LEGACY_ADOPTION_DRAINED_MARKER. */
 export const LEGACY_ADOPTION_DRAINED_MARKER_FUNCTION = "fusion_mark_legacy_adoption_drained";
@@ -395,6 +398,7 @@ const MISSION_TASK_PREFIX_MIGRATION_PATH = join(MIGRATIONS_DIR, "0038_mission_ta
 const CREDENTIAL_INSTANCE_SELECTION_MIGRATION_PATH = join(MIGRATIONS_DIR, "0039_fn_8660_credential_instance_selection.sql");
 const TASK_LIFECYCLE_OUTBOX_MIGRATION_PATH = join(MIGRATIONS_DIR, "0040_fn_8684_task_lifecycle_outbox.sql");
 const TASK_LIFECYCLE_CONSUMERS_MIGRATION_PATH = join(MIGRATIONS_DIR, "0041_fn_8685_task_lifecycle_consumers.sql");
+const VALIDATOR_INPUT_FINGERPRINT_MIGRATION_PATH = join(MIGRATIONS_DIR, "0042_fn_8694_validator_input_fingerprint.sql");
 
 /**
  * Ensure the migration bookkeeping table exists. Lives in the public schema so
@@ -506,6 +510,7 @@ export async function applySchemaBaseline(
     const credentialInstanceSelectionAlreadyApplied = applied.includes(CREDENTIAL_INSTANCE_SELECTION_VERSION);
     const taskLifecycleOutboxAlreadyApplied = applied.includes(TASK_LIFECYCLE_OUTBOX_VERSION);
     const taskLifecycleConsumersAlreadyApplied = applied.includes(TASK_LIFECYCLE_CONSUMERS_VERSION);
+    const validatorInputFingerprintAlreadyApplied = applied.includes(VALIDATOR_INPUT_FINGERPRINT_VERSION);
     assertBinaryNotOlderThanDatabase(applied);
     let schemaChanged = false;
 
@@ -1076,6 +1081,12 @@ export async function applySchemaBaseline(
       const migrationSql = await readFile(TASK_LIFECYCLE_CONSUMERS_MIGRATION_PATH, "utf8");
       await tx.execute(sql.raw(migrationSql));
       await tx.execute(sql`INSERT INTO public.${sql.identifier(MIGRATION_BOOKKEEPING_TABLE)} (version) VALUES (${TASK_LIFECYCLE_CONSUMERS_VERSION}) ON CONFLICT (version) DO NOTHING`);
+      schemaChanged = true;
+    }
+    if (!validatorInputFingerprintAlreadyApplied) {
+      const migrationSql = await readFile(VALIDATOR_INPUT_FINGERPRINT_MIGRATION_PATH, "utf8");
+      await tx.execute(sql.raw(migrationSql));
+      await tx.execute(sql`INSERT INTO public.${sql.identifier(MIGRATION_BOOKKEEPING_TABLE)} (version) VALUES (${VALIDATOR_INPUT_FINGERPRINT_VERSION}) ON CONFLICT (version) DO NOTHING`);
       schemaChanged = true;
     }
 

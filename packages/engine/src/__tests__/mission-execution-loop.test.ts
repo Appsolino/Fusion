@@ -70,7 +70,7 @@ function resetMockSession() {
 
 // Import AFTER vi.mock so the mock is applied
 import { createResolvedAgentSession } from "../agent-session-helpers.js";
-import { MissionExecutionLoop, loopLog } from "../mission-execution-loop.js";
+import { MissionExecutionLoop, loopLog, fingerprintMissionValidationInput } from "../mission-execution-loop.js";
 
 // ── Mock Factories ──────────────────────────────────────────────────────────
 
@@ -229,8 +229,8 @@ function createMockMissionStore() {
     }),
 
     // Validator run methods
-    startValidatorRun: vi.fn((featureId: string, _triggerType?: string, _taskId?: string) => {
-      const run = createMockValidatorRun({ featureId });
+    startValidatorRun: vi.fn((featureId: string, _triggerType?: string, _taskId?: string, inputFingerprint?: string) => {
+      const run = createMockValidatorRun({ featureId, inputFingerprint });
       validatorRuns.set(run.id, run);
       return run;
     }),
@@ -523,6 +523,13 @@ function initGitRepo(): string {
 }
 
 describe("MissionExecutionLoop", () => {
+  it("uses canonical UTF-8 tuple hashing for delimiter-bearing and Unicode validator inputs", () => {
+    const baseline = fingerprintMissionValidationInput("sha|one", "provider", "model", "system|π", "user|日本語");
+    expect(baseline).toMatch(/^[a-f0-9]{64}$/);
+    expect(baseline).toBe(fingerprintMissionValidationInput("sha|one", "provider", "model", "system|π", "user|日本語"));
+    expect(baseline).not.toBe(fingerprintMissionValidationInput("sha", "one|provider", "model", "system|π", "user|日本語"));
+    expect(baseline).not.toBe(fingerprintMissionValidationInput("sha|one", "provider", "other", "system|π", "user|日本語"));
+  });
   let loop: MissionExecutionLoop;
   let missionStore: ReturnType<typeof createMockMissionStore>;
   let taskStore: ReturnType<typeof createMockTaskStore>;
@@ -657,6 +664,56 @@ describe("MissionExecutionLoop", () => {
 
       expect(missionStore.startValidatorRun).toHaveBeenCalledWith("F-STRAND", "task_completion");
       expect(result.recoveredCount).toBeGreaterThanOrEqual(1);
+    });
+
+    it("passes the budget-block recovery checkout into its single validation execution", async () => {
+      const mission = createMockMission({ id: "M-BUDGET", status: "active" });
+      missionStore._setMission(mission);
+      const slice = createMockSlice({ id: "SL-BUDGET", milestoneId: "MS-001", status: "active" });
+      const blocked = createMockFeature({
+        id: "F-BUDGET",
+        sliceId: slice.id,
+        taskId: "FN-BUDGET",
+        status: "done",
+        loopState: "blocked",
+        validationBudgetFingerprint: "previous-fingerprint",
+      });
+      (missionStore as any)._addFeatureWithManagedAssertion(blocked);
+      wireHierarchy(slice, [missionStore.getFeature(blocked.id) as MissionFeature]);
+      taskStore._setTask({
+        id: "FN-BUDGET", title: "Budget task", description: "d", log: [], column: "done",
+        mergeDetails: { commitSha: "landed-budget-sha" },
+      } as any);
+      taskStore.getSettings.mockResolvedValue({
+        missionStaleThresholdMs: 600_000,
+        missionMaxTaskRetries: 3,
+        defaultProvider: "memo-provider",
+        defaultModelId: "memo-model",
+      });
+      const dispose = vi.fn().mockResolvedValue(undefined);
+      const materialize = vi.fn().mockResolvedValue({ dir: "/inspection/budget", dispose });
+      loop = new MissionExecutionLoop({
+        taskStore: taskStore as any,
+        missionStore: missionStore as any,
+        rootDir: "/ambient-root",
+        checkoutMaterializer: { materialize, assertSourceClean: vi.fn() },
+      });
+      loop.start();
+      const runFeatureValidation = vi.spyOn(loop as any, "runFeatureValidation").mockResolvedValue(undefined);
+
+      await loop.recoverActiveMissions();
+
+      expect(materialize).toHaveBeenCalledWith("/ambient-root", "landed-budget-sha");
+      const budgetRecoveryCall = runFeatureValidation.mock.calls.find(
+        ([candidate, prepared]) => candidate.id === blocked.id && prepared,
+      );
+      expect(budgetRecoveryCall?.[1]).toEqual(expect.objectContaining({
+        fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+        checkout: expect.objectContaining({ dir: "/inspection/budget" }),
+      }));
+      // The real execution path owns this checkout; the stub releases it here.
+      await budgetRecoveryCall![1].checkout.dispose();
+      expect(dispose).toHaveBeenCalledOnce();
     });
 
     it("leaves an already-validated done feature untouched", async () => {
@@ -2497,12 +2554,20 @@ describe("MissionExecutionLoop", () => {
         rootDir: "/ambient-root",
         checkoutMaterializer: { materialize, assertSourceClean: vi.fn() },
       });
+      taskStore.getSettings.mockResolvedValue({
+        missionStaleThresholdMs: 600_000,
+        missionMaxTaskRetries: 3,
+        defaultProvider: "memo-provider",
+        defaultModelId: "memo-model",
+      });
       const staleCheck = vi.spyOn(loop as any, "isValidationWorkspaceStale").mockResolvedValue({ workspaceStale: false });
       loop.start();
 
       await loop.processTaskOutcome("FN-001");
 
+      expect(materialize).toHaveBeenCalledOnce();
       expect(materialize).toHaveBeenCalledWith("/ambient-root", "landed-sha");
+      expect(missionStore.startValidatorRun).toHaveBeenCalledWith("F-001", "task_completion", "FN-001", expect.stringMatching(/^[a-f0-9]{64}$/));
       expect(createResolvedAgentSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/inspection/landed" }));
       expect(staleCheck).toHaveBeenCalledWith("landed-sha", "/inspection/landed");
       expect(dispose).toHaveBeenCalledOnce();
@@ -2533,6 +2598,7 @@ describe("MissionExecutionLoop", () => {
       await loop.processTaskOutcome("FN-001");
 
       expect(createResolvedAgentSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/ambient-root" }));
+      expect(missionStore.startValidatorRun).toHaveBeenCalledWith("F-001", "task_completion", "FN-001");
       expect(staleCheck).toHaveBeenCalledWith("landed-sha", "/ambient-root");
       expect(inconclusiveHandler).toHaveBeenCalled();
       expect(failHandler).not.toHaveBeenCalled();
