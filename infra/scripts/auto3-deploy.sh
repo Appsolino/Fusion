@@ -248,10 +248,17 @@ if [[ "$SKIP_PROBE" != "1" ]]; then
   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${PROBE_DB} OWNER fusion_staging ENCODING 'UTF8' TEMPLATE template0;" >/dev/null
   # Clone schema+data from active staging DB when profile uses real staging secrets
   if [[ "$PROFILE" == "staging" || "$PROFILE" == "proof" ]]; then
-    TMP_DUMP="$WORK/probe.dump"
-    sudo -n -u postgres pg_dump -d "$DB_NAME" --format=custom --file="$TMP_DUMP" 2>/dev/null || \
-      sudo -n -u postgres pg_dump -d fusion_staging --format=custom --file="$TMP_DUMP"
+    TMP_DUMP="/tmp/fusion_auto3_probe_$$.dump"
+    rm -f "$TMP_DUMP"
+    # FNXC:AppsolinoAuto3 2026-08-01-01:28: pg_dump runs as postgres and cannot write root-only mktemp dirs — use /tmp file then copy.
+    if [[ "$PROFILE" == "staging" ]]; then
+      sudo -n -u postgres pg_dump -d "$DB_NAME" --format=custom --file="$TMP_DUMP"
+    else
+      sudo -n -u postgres pg_dump -d fusion_staging --format=custom --file="$TMP_DUMP" || \
+        sudo -n -u postgres pg_dump -d "$DB_NAME" --format=custom --file="$TMP_DUMP"
+    fi
     sudo -n -u postgres pg_restore --no-owner --role=fusion_staging --dbname="$PROBE_DB" "$TMP_DUMP" >/dev/null 2>&1 || true
+    rm -f "$TMP_DUMP"
   fi
   STAGING_DB_PASSWORD="$(grep '^STAGING_DB_PASSWORD=' "$SECRETS" | head -1 | cut -d= -f2-)"
   PROBE_HOME="$WORK/probe-home"
@@ -319,8 +326,9 @@ if [[ "$PROFILE" == "staging" && -x "$BACKUP_SH" ]]; then
 elif [[ "$PROFILE" == "proof" ]]; then
   mkdir -p /srv/appsolino-fusion/staging-proof/backups
   BACKUP_DUMP="/srv/appsolino-fusion/staging-proof/backups/proof_$(date -u +%Y%m%dT%H%M%SZ).dump"
-  sudo -n -u postgres pg_dump -d fusion_staging --format=custom --file="$WORK/proof.dump" >/dev/null
-  install -m 0600 -o root -g fusion "$WORK/proof.dump" "$BACKUP_DUMP"
+  sudo -n -u postgres pg_dump -d fusion_staging --format=custom --file="/tmp/fusion_auto3_proof_backup_$$.dump" >/dev/null
+  install -m 0600 -o root -g fusion "/tmp/fusion_auto3_proof_backup_$$.dump" "$BACKUP_DUMP"
+  rm -f "/tmp/fusion_auto3_proof_backup_$$.dump"
   sudo -n -u postgres pg_restore -l "$BACKUP_DUMP" >/dev/null
 fi
 
