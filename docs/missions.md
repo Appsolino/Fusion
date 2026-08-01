@@ -451,7 +451,7 @@ Contract assertions (`MissionContractAssertion`) formalize what must be true for
 
 ```typescript
 interface MissionContractAssertion {
-  id: string;              // e.g., "CA-A3B7CD-E9F2"
+  id: string;              // e.g., "CA-MS39KJP3-000A-8ABO" (legacy: "CA-A3B7CD-E9F2")
   milestoneId: string;     // Parent milestone
   sourceFeatureId?: string;// Store-managed feature assertion owner
   scope: "feature" | "milestone";

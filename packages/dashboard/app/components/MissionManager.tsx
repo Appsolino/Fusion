@@ -88,6 +88,7 @@ import {
   fetchAssertions,
   createAssertion,
   updateAssertion,
+  deleteAssertion,
   linkFeatureToAssertion,
   unlinkFeatureFromAssertion,
   fetchFeaturesForAssertion,
@@ -940,7 +941,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
   }, [isActive, milestoneSliceResumeSessionId, onMilestoneSliceResumeFetchError]);
 
   // Delete confirmation
-  const [deleteConfirmId, setDeleteConfirmId] = useState<{ type: string; id: string } | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<{ type: string; id: string; milestoneId?: string } | null>(null);
 
   // Assertion panel state
   const [assertionsByMilestone, setAssertionsByMilestone] = useState<Map<string, MissionContractAssertion[]>>(new Map());
@@ -2211,6 +2212,14 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
       setSaving(false);
     }
   }, [assertionForm, addToast, loadAssertionsForMilestone, loadValidationRollup, projectId]);
+
+  const handleDeleteAssertion = useCallback(async (assertionId: string, milestoneId: string) => {
+    await deleteAssertion(assertionId, projectId);
+    addToast(t("missions.assertionDeleted", "Assertion deleted"), "success");
+    await loadAssertionsForMilestone(milestoneId);
+    await loadValidationRollup(milestoneId);
+    setDeleteConfirmId(null);
+  }, [addToast, loadAssertionsForMilestone, loadValidationRollup, projectId]);
 
   const handleEditAssertion = useCallback((assertion: MissionContractAssertion) => {
     setEditingAssertionId(assertion.id);
@@ -4065,8 +4074,9 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
                                         </button>
                                         <button
                                           className="mission-icon-btn mission-icon-btn--danger"
-                                          onClick={() => setDeleteConfirmId({ type: "assertion", id: assertion.id })}
+                                          onClick={() => setDeleteConfirmId({ type: "assertion", id: assertion.id, milestoneId: milestone.id })}
                                           title={t("missions.deleteAssertion", "Delete assertion")}
+                                          aria-label={t("missions.deleteAssertion", "Delete assertion")}
                                         >
                                           <Trash2 size={14} />
                                         </button>
@@ -4975,6 +4985,30 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
     );
   };
 
+  /*
+  FNXC:MissionAssertions 2026-08-01-19:44:
+  Every deleteConfirmId type must dispatch a deletion, and the shared confirmation panel must surface rejected requests. Assertion deletion is an operator recovery path for validation failures, so a silent no-op would leave stale rollups unrepairable.
+  */
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteConfirmId) return;
+
+    try {
+      if (deleteConfirmId.type === "milestone") {
+        await handleDeleteMilestone(deleteConfirmId.id);
+      } else if (deleteConfirmId.type === "slice") {
+        await handleDeleteSlice(deleteConfirmId.id);
+      } else if (deleteConfirmId.type === "feature") {
+        await handleDeleteFeature(deleteConfirmId.id);
+      } else if (deleteConfirmId.type === "assertion" && deleteConfirmId.milestoneId) {
+        await handleDeleteAssertion(deleteConfirmId.id, deleteConfirmId.milestoneId);
+      } else if (deleteConfirmId.type === "interview_draft") {
+        await handleDiscardInterviewSession(deleteConfirmId.id);
+      }
+    } catch (err) {
+      addToast(getErrorMessage(err) || t("missions.deleteFailed", "Failed to delete item"), "error");
+    }
+  }, [addToast, deleteConfirmId, handleDeleteAssertion, handleDeleteFeature, handleDeleteMilestone, handleDeleteSlice, handleDiscardInterviewSession, t]);
+
   const renderDeleteConfirmPanel = () => {
     if (deleteConfirmId?.type === "mission") {
       return null;
@@ -4992,18 +5026,7 @@ export function MissionManager({ isOpen, isInline = false, onClose, addToast, pr
           <div className="mission-confirm-panel__actions">
             <button
               className="mission-btn mission-btn--danger"
-              onClick={async () => {
-                if (!deleteConfirmId) return;
-                if (deleteConfirmId.type === "milestone") {
-                  await handleDeleteMilestone(deleteConfirmId.id);
-                } else if (deleteConfirmId.type === "slice") {
-                  await handleDeleteSlice(deleteConfirmId.id);
-                } else if (deleteConfirmId.type === "feature") {
-                  await handleDeleteFeature(deleteConfirmId.id);
-                } else if (deleteConfirmId.type === "interview_draft") {
-                  await handleDiscardInterviewSession(deleteConfirmId.id);
-                }
-              }}
+              onClick={() => { void handleConfirmDelete(); }}
             >
               {isInterviewDraftDelete ? t("missions.discardButton", "Discard") : t("missions.deleteButton", "Delete")}
             </button>
