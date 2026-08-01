@@ -3,6 +3,7 @@ import {
   computeBlockerFanoutMap,
   compareTasksByPriorityThenAgeAndId,
   HIGH_FANOUT_BLOCKER_TODO_THRESHOLD,
+  nonExecutableDuplicateRedirectReason,
   type TaskStore,
   type Task,
   type MissionStore,
@@ -1470,6 +1471,15 @@ export class Scheduler {
       const content = await readFile(promptPath, "utf-8");
       if (!content || content.trim().length === 0) {
         return { valid: false, reason: "missing or empty PROMPT.md" };
+      }
+      /*
+      FNXC:DuplicateIntake 2026-08-01-19:24:
+      Non-empty is not enough: a sole `DUPLICATE: FN-####` line is a triage redirect, not a
+      plan. Admitting it (FN-8704) fails the graph at `parse` and parks failed WIP in a loop.
+      */
+      const duplicateOnly = nonExecutableDuplicateRedirectReason(content);
+      if (duplicateOnly) {
+        return { valid: false, reason: duplicateOnly };
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);

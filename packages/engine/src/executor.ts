@@ -16,7 +16,7 @@ import { DEFAULT_PROVIDER_INSTANCE_ID, type ProviderInstanceRef, type TaskStore,
 import { getUnmetSchedulingDependencies } from "./scheduler.js";
 import type { ImplementationExit, ImplementationExitReporter } from "./executor/implementation-exit.js";
 import { emitWorkflowLifecycleEvent } from "@fusion/core";
-import { resolveTaskLifecycleColumns, resolveProjectColumnsForRoles, resolveWipTargetForTask, resolveTerminalColumns, RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, columnsWithFlag, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveLifecycleColumns, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, DEFAULT_MAX_POST_REVIEW_FIXES, COMPLETION_SUMMARY_NODE_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel, resolveValidatorFallbackModel } from "@fusion/core";
+import { resolveTaskLifecycleColumns, resolveProjectColumnsForRoles, resolveWipTargetForTask, resolveTerminalColumns, RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, columnsWithFlag, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveLifecycleColumns, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, DEFAULT_MAX_POST_REVIEW_FIXES, COMPLETION_SUMMARY_NODE_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel, resolveValidatorFallbackModel, parseExplicitDuplicateMarker, nonExecutableDuplicateRedirectReason } from "@fusion/core";
 import { finalizeProvenAutoMergeTask } from "./auto-merge-finalization.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
 import { generateFeatureVideo, type GenerateFeatureVideoOptions } from "./review-artifacts/feature-video.js";
@@ -11817,6 +11817,61 @@ export class TaskExecutor {
       const failedNode = result.visitedNodeIds[result.visitedNodeIds.length - 1];
       const mergeGraphFailure = this.isMergeGraphFailure(failedNode);
       const failureValue = this.graphFailureValue(result);
+      /*
+      FNXC:DuplicateIntake 2026-08-01-19:24:
+      Defense in depth for FN-8704: if a card slipped into WIP with PROMPT.md = only
+      `DUPLICATE: FN-####`, the graph dies at the parse node. Parked `failed` in WIP
+      re-ran forever on Retry. Rebound to needs-replan with feedback instead of
+      terminal failed so triage rewrites a real plan. Primary gate is scheduler
+      filesystem validation; this recovers cards already past admission.
+      */
+      if (
+        !live.paused
+        && !live.userPaused
+        && !live.deletedAt
+        && typeof failedNode === "string"
+        && (failedNode === "parse" || failedNode.endsWith(":parse") || failedNode.includes("parse-steps") || failureValue === "parse-error" || failureValue === "missing-implementation-steps")
+      ) {
+        try {
+          const tasksDir = typeof this.store.getTasksDir === "function"
+            ? this.store.getTasksDir()
+            : join(this.rootDir, ".fusion", "tasks");
+          const promptContent = await readFile(getPromptPath(tasksDir, live.id), "utf-8").catch(() => "");
+          const redirectReason = nonExecutableDuplicateRedirectReason(promptContent);
+          if (redirectReason) {
+            const marker = parseExplicitDuplicateMarker(promptContent);
+            const replanColumn = await resolveReplanTargetColumn(this.store, live.id);
+            await moveTaskToReplanColumn(this.store, { id: live.id, column: live.column }, replanColumn);
+            await this.store.updateTask(live.id, {
+              status: "needs-replan",
+              error: null,
+            }, this.getRunContextFor(live.id));
+            const feedback = marker
+              ? `Execution parse rejected non-executable PROMPT.md (DUPLICATE: ${marker.canonicalId}). Write a full plan body; do not re-emit only DUPLICATE: ${marker.canonicalId}.`
+              : `Execution parse rejected non-executable PROMPT.md (${redirectReason}). Write a full plan body.`;
+            await this.store.logEntry(
+              live.id,
+              "AI spec revision requested",
+              feedback,
+              this.getRunContextFor(live.id),
+            );
+            await this.store.logEntry(
+              live.id,
+              `Parse node failed on duplicate redirect — rebounded to ${replanColumn} for re-specification`,
+              redirectReason,
+              this.getRunContextFor(live.id),
+            );
+            executorLog.warn(`${live.id}: ${redirectReason} — replan instead of failed park`);
+            this.activeWorktrees.delete(live.id);
+            await this.persistTokenUsage(live.id);
+            return;
+          }
+        } catch (replanErr) {
+          executorLog.warn(
+            `${live.id}: failed to rebound non-executable duplicate prompt after parse failure: ${replanErr instanceof Error ? replanErr.message : String(replanErr)}`,
+          );
+        }
+      }
       /*
       FNXC:WorkflowExecutionOwnership 2026-07-28-09:40 (U8 / R3):
       The execution-policy ladder below — the FN-7863/FN-7926 dispatch-loop gate, the FN-7996
