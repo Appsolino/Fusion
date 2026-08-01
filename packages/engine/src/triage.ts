@@ -1449,7 +1449,18 @@ export class TriageProcessor {
     const promptPath = join(this.rootDir, ".fusion", "tasks", taskId, "PROMPT.md");
     const written = await readFile(promptPath, "utf-8").catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
-      planLog.warn(`${taskId}: failed to read PROMPT.md during ${context} (${promptPath}): ${msg}`);
+      const code = err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : undefined;
+      /*
+      FNXC:EngineDiagnostics 2026-08-01-18:11:
+      needs-replan revision seed commonly has no PROMPT.md yet (ENOENT) — that is an expected
+      cold/fresh respec path, not operator degradation. Demote missing-file to debug
+      (FUSION_DEBUG=plan); keep warn for unexpected I/O so real disk failures stay visible.
+      */
+      if (code === "ENOENT") {
+        planLog.debug(`${taskId}: failed to read PROMPT.md during ${context} (${promptPath}): ${msg}`);
+      } else {
+        planLog.warn(`${taskId}: failed to read PROMPT.md during ${context} (${promptPath}): ${msg}`);
+      }
       return "";
     });
     return written.trim().length > 0 ? written : undefined;
@@ -2589,7 +2600,12 @@ export class TriageProcessor {
             planLog.warn(`${task.id}: failed to resolve triage agent instructions, continuing with defaults: ${msg}`);
           }
         }
-        planLog.log(`${task.id}: planning in ${leanPlanning ? "fast" : "standard"} mode`);
+        /*
+        FNXC:EngineDiagnostics 2026-08-01-18:11:
+        Lean vs standard planning mode is config-derived setup and fires every planning attempt.
+        Same flood class as demoted `using model` — keep on debug (FUSION_DEBUG=plan).
+        */
+        planLog.debug(`${task.id}: planning in ${leanPlanning ? "fast" : "standard"} mode`);
         const triageIdentitySection = assignedAgent
           ? `## Identity\n\nYou are ${assignedAgent.name}${assignedAgent.title?.trim() ? `, ${assignedAgent.title.trim()}` : ""} (agent ID: ${assignedAgent.id}, role: ${assignedAgent.role}).`
           : "";

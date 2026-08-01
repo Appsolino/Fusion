@@ -13355,7 +13355,16 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
       log.log(`Cleared drifted durable agent task link for ${agent.id} (${linkedTaskId}): ${reason}; file-scope lease preserved when present`);
     }
 
-    log.log(`Recovered ${clearedAgentIds.size} drifted durable agent task link(s)`);
+    /*
+    FNXC:EngineDiagnostics 2026-08-01-18:11:
+    Zero-recovery summary is a no-op sweep result — debug only (FUSION_DEBUG=self-healing).
+    Non-zero recoveries stay on log so operators still see real link repairs.
+    */
+    if (clearedAgentIds.size > 0) {
+      log.log(`Recovered ${clearedAgentIds.size} drifted durable agent task link(s)`);
+    } else {
+      log.debug(`Recovered ${clearedAgentIds.size} drifted durable agent task link(s)`);
+    }
     return clearedAgentIds.size;
   }
 

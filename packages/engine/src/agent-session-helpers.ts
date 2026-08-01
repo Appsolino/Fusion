@@ -984,7 +984,13 @@ export async function createResolvedAgentSession(
       `[${sessionPurpose}] configured grok-cli fallback "${runtimeOptions.fallbackModelId ?? "unknown"}" dropped: no Fusion-visible GROK_API_KEY and the Grok CLI runtime plugin is unavailable; primary "${runtimeOptions.defaultProvider}/${runtimeOptions.defaultModelId}" is unchanged. Install/enable the Grok CLI runtime plugin or set GROK_API_KEY.`,
     );
   } else if (deferredGrokFallback) {
-    sessionLog.log(
+    /*
+    FNXC:EngineDiagnostics 2026-08-01-18:11:
+    Deferred grok-cli fallback is the expected no-visible-key config path and fires on every
+    session create. Real engagement already warns + audits `session:grok-cli-fallback-engaged`;
+    keep the deferral notice on debug (FUSION_DEBUG=agent-session) so the TUI is not flooded.
+    */
+    sessionLog.debug(
       `[${sessionPurpose}] grok-cli fallback "${deferredGrokFallback.modelId ?? "unknown"}" deferred to the Grok CLI runtime: it engages only if primary "${runtimeOptions.defaultProvider}/${runtimeOptions.defaultModelId}" fails with a retryable model error.`,
     );
   }
@@ -997,7 +1003,12 @@ export async function createResolvedAgentSession(
     }
     : await resolveRuntime(buildRuntimeResolutionContext(sessionPurpose, pluginRunner, effectiveRuntimeHint));
 
-  sessionLog.log(
+  /*
+  FNXC:EngineDiagnostics 2026-08-01-18:11:
+  Runtime resolution is per-session setup chatter (same class as demoted planning `using model`).
+  Audit already records `session:runtime-resolved`; keep the TUI line on debug (FUSION_DEBUG=agent-session).
+  */
+  sessionLog.debug(
     `[${sessionPurpose}] Using runtime "${resolved.runtimeId}" (configured=${resolved.wasConfigured})`,
   );
 

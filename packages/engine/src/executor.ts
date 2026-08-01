@@ -5145,7 +5145,12 @@ export class TaskExecutor {
     if (!merged) return;
     const tokenUsage = this.tokenUsageWithModelSnapshot(merged, activeSession, task.tokenUsage, delta);
 
-    tokenCacheMetricsLog.log(JSON.stringify({
+    /*
+    FNXC:EngineDiagnostics 2026-08-01-18:11:
+    Executor token-cache metrics mirror session-token-usage: debug-only telemetry
+    (FUSION_DEBUG=token-cache-metrics), not default TUI noise.
+    */
+    tokenCacheMetricsLog.debug(JSON.stringify({
       taskId,
       agentId: task.assignedAgentId ?? undefined,
       role: "executor",

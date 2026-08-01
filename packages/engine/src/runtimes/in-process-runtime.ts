@@ -1559,7 +1559,12 @@ export class InProcessRuntime
           acquirePlanningWorktree: (taskId) => this.executor.ensureTaskWorktreeForPlanning(taskId),
           onSpecifyStart: (t) => {
             this.recordActivity();
-            runtimeLog.log(`Specifying ${t.id}...`);
+            /*
+            FNXC:EngineDiagnostics 2026-08-01-18:11:
+            Duplicate of triage's richer `Specifying ${id}: ${title}` planLog line. Keep this
+            short runtime echo on debug (FUSION_DEBUG=runtime) so planning start is not double-logged.
+            */
+            runtimeLog.debug(`Specifying ${t.id}...`);
           },
           onSpecifyComplete: (t, report) => {
             // Activity is recorded for EVERY outcome: a planning session ran either

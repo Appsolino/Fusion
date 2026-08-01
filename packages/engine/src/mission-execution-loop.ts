@@ -477,7 +477,16 @@ export class MissionExecutionLoop extends EventEmitter {
         }
       }
 
-      loopLog.log(`Active mission recovery complete: recovered ${recoveredCount} features`);
+      /*
+      FNXC:EngineDiagnostics 2026-08-01-18:11:
+      Zero-feature recovery complete is a startup no-op — debug only (FUSION_DEBUG=mission-loop).
+      Non-zero recoveries stay on log as operator-visible state repairs.
+      */
+      if (recoveredCount > 0) {
+        loopLog.log(`Active mission recovery complete: recovered ${recoveredCount} features`);
+      } else {
+        loopLog.debug(`Active mission recovery complete: recovered ${recoveredCount} features`);
+      }
       return { recoveredCount };
     } catch (err) {
       loopLog.error("Error during active mission recovery:", err);
