@@ -2,7 +2,7 @@
 # Trusted decision/finalizer trust zone. Workflow code always from Appsolino main.
 # Does not execute candidate package scripts. Mints App installation token only here.
 # Recomputes risk from GitHub API with trusted classifier. Exact-head merge for low-risk only.
-# Never deploys Host D. Never merges sensitive PR #34-class changes automatically.
+# FNXC:AppsolinoAuto3 2026-08-01-01:20: After eligible low-risk merge to main, dispatches AUTO-3 and waits for DEPLOYED. Never merges sensitive PR #34-class changes automatically. Never executes candidate package scripts.
 
 name: Upstream AUTO-2 Finalize
 
@@ -66,6 +66,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
+          permission-actions: write
 
       - name: Checkout trusted workflow code
         uses: actions/checkout@v6
@@ -155,7 +156,7 @@ jobs:
           fi
           exit 0
 
-      - name: Guard — no Host D deploy in AUTO-2
+      - name: Guard — Host D only via AUTO-3 workflow
         run: |
           set -euo pipefail
-          echo "AUTO-2 does not build, install, or activate Host D releases."
+          echo "AUTO-2 must not SSH/install Host D directly; deploy is delegated to upstream-auto3-deploy.yml."

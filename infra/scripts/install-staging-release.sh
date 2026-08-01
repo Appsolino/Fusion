@@ -5,15 +5,34 @@
 # FNXC:V1A 2026-07-30-09:24: Validate RELEASE_ID_OVERRIDE as a single safe basename before joining privileged /opt/.../releases/${rel}; reject path separators, "..", whitespace, control chars, and leading-dot IDs so a malformed override cannot escape the release directory.
 # FNXC:V1A.1 2026-07-30-10:55: Preserve packaged execute bits from cp -a; never blanket-chmod files to 0644 (that stripped initdb/pg helpers and broke restart under embedded/testMode). Immutability is write-bit removal only (chmod -R a-w), with fail-closed SRC↔stage executable-path verification before publish.
 # FNXC:V1A.1 2026-07-30-11:35: Do not ignore chmod -R a-w failure; fail closed if any file/dir retains write bits. Same-ID existing releases must pass permission+immutability checks before IDEMPOTENT_NOOP/current symlink update (stripped-exec prior installs must not silently reactivate).
+# FNXC:AppsolinoAuto3 2026-08-01-01:20: AUTO-3 reuses this installer with optional root overrides (AUTO3_RELEASES_ROOT / AUTO3_CURRENT_LINK / AUTO3_IDENTITY_FILE) and AUTO3_PUBLISH_CURRENT=0 for side-by-side install before activation. Defaults preserve Phase2A Host D staging paths. Never targets Host P / production trees.
 set -euo pipefail
 SRC_DIST="${1:-}"
 MAIN_SHA="${2:-}"
 RELEASE_ID_OVERRIDE="${3:-}"
 VERSION="0.74.0-beta.5"
+RELEASES_ROOT="${AUTO3_RELEASES_ROOT:-/opt/appsolino-fusion/staging/releases}"
+CURRENT_LINK="${AUTO3_CURRENT_LINK:-/opt/appsolino-fusion/staging/current}"
+IDENTITY_FILE="${AUTO3_IDENTITY_FILE:-/srv/appsolino-fusion/staging/state/release-identity.txt}"
+PUBLISH_CURRENT="${AUTO3_PUBLISH_CURRENT:-1}"
 if [[ -z "$SRC_DIST" || -z "$MAIN_SHA" ]]; then
   echo "usage: $0 <packages/cli/dist> <main-sha> [release-id]" >&2
   exit 1
 fi
+case "$RELEASES_ROOT" in
+  /opt/appsolino-fusion/staging/releases|/opt/appsolino-fusion/staging-proof/releases) ;;
+  *)
+    echo "REFUSED_RELEASES_ROOT: $RELEASES_ROOT (Host P / unknown roots forbidden)" >&2
+    exit 2
+    ;;
+esac
+case "$CURRENT_LINK" in
+  /opt/appsolino-fusion/staging/current|/opt/appsolino-fusion/staging-proof/current) ;;
+  *)
+    echo "REFUSED_CURRENT_LINK: $CURRENT_LINK" >&2
+    exit 2
+    ;;
+esac
 short="${MAIN_SHA:0:12}"
 if [[ -n "$RELEASE_ID_OVERRIDE" ]]; then
   if [[ ! "$RELEASE_ID_OVERRIDE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] ||
@@ -25,7 +44,7 @@ if [[ -n "$RELEASE_ID_OVERRIDE" ]]; then
 else
   rel="phase2a-${VERSION}-${short}"
 fi
-dest="/opt/appsolino-fusion/staging/releases/${rel}"
+dest="${RELEASES_ROOT}/${rel}"
 stage="${dest}.staging.$$"
 if [[ ! -x "$SRC_DIST/fn" ]]; then
   echo "missing $SRC_DIST/fn" >&2
@@ -137,8 +156,14 @@ assert_no_write_bits() {
 }
 
 ensure_current_symlink() {
-  ln -sfn "$dest" /opt/appsolino-fusion/staging/current
-  chown -h root:fusion /opt/appsolino-fusion/staging/current
+  # FNXC:AppsolinoAuto3 2026-08-01-01:20: Side-by-side installs set AUTO3_PUBLISH_CURRENT=0 so pre-activation probes cannot flip the live current pointer.
+  if [[ "$PUBLISH_CURRENT" != "1" ]]; then
+    echo "SIDE_BY_SIDE_INSTALLED $rel"
+    return 0
+  fi
+  mkdir -p "$(dirname "$IDENTITY_FILE")"
+  ln -sfn "$dest" "$CURRENT_LINK"
+  chown -h root:fusion "$CURRENT_LINK" 2>/dev/null || true
   {
     echo "release_id=$rel"
     echo "path=$dest"
@@ -146,9 +171,9 @@ ensure_current_symlink() {
     echo "executable_sha256=$src_sha"
     echo "main_sha=$MAIN_SHA"
     echo "installed_utc=$(date -u --iso-8601=seconds)"
-  } | tee /srv/appsolino-fusion/staging/state/release-identity.txt >/dev/null
-  chmod 0640 /srv/appsolino-fusion/staging/state/release-identity.txt
-  chown root:fusion /srv/appsolino-fusion/staging/state/release-identity.txt
+  } | tee "$IDENTITY_FILE" >/dev/null
+  chmod 0640 "$IDENTITY_FILE"
+  chown root:fusion "$IDENTITY_FILE"
 }
 
 if [[ -e "$dest" ]]; then
