@@ -37,6 +37,12 @@ import {
   isSensitiveApprovalHead,
   resolveRequiredChecksConclusion,
 } from "./auto2-sensitive-approval.mjs";
+import {
+  buildAuto3HandoffId,
+  selectCorrelatedAuto3Run,
+  mapAuto3RunToTerminal,
+  parseAuto3TerminalMarker,
+} from "./auto3-handoff.mjs";
 
 /**
  * @param {string[]} args
@@ -400,27 +406,33 @@ function performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, cu
       deploymentReason: opts.reasonPrefix === "sensitive-approved"
         ? "auto2-sensitive-approved-merge"
         : "auto2-low-risk-merge",
+      // FNXC:AppsolinoAuto3Handoff 2026-08-01-06:50: Bind child wait to this parent Actions run metadata.
+      githubRunId: input.githubRunId || process.env.GITHUB_RUN_ID,
+      githubRunAttempt: input.githubRunAttempt || process.env.GITHUB_RUN_ATTEMPT,
+      handoffNonce: input.handoffNonce,
+      nowMs: input.nowMs,
+      sleep: input.sleep,
     });
     result.auto3 = auto3;
     result.mergedMainSha = auto3.sourceSha || null;
     if (auto3.status === "DEPLOYED" || auto3.status === "IDEMPOTENT_NOOP") {
       result.action = "auto-merged-deployed";
-      result.reason = `${opts.reasonPrefix} merge + AUTO-3 ${auto3.status}`;
+      result.reason = `${opts.reasonPrefix} merge + AUTO-3 ${auto3.status} run=${auto3.auto3RunId || "n/a"} handoff=${auto3.handoffId || "n/a"}`;
       result.deployedHostD = opts.auto3Profile === "proof" || input.auto3Profile === "proof"
         ? false
         : true;
     } else if (auto3.status === "ROLLED_BACK") {
       result.action = "auto-merged-deploy-rolled-back";
-      result.reason = "merge on main retained; AUTO-3 rolled back — no continuous retry";
+      result.reason = `merge on main retained; AUTO-3 rolled back run=${auto3.auto3RunId || "n/a"} — no continuous retry`;
       result.deployedHostD = false;
     } else if (auto3.status === "CRITICAL") {
       result.action = "auto-merged-deploy-critical";
-      result.reason = "merge on main retained; AUTO-3 CRITICAL — owner action required";
+      result.reason = `merge on main retained; AUTO-3 CRITICAL run=${auto3.auto3RunId || "n/a"} — owner action required`;
       result.deployedHostD = false;
     } else {
       // FAILED / BLOCKED / other — durable terminal, no retry loop
       result.action = "auto-merged-deploy-failed";
-      result.reason = `merge on main retained; AUTO-3 status=${auto3.status}`;
+      result.reason = `merge on main retained; AUTO-3 status=${auto3.status} run=${auto3.auto3RunId || "n/a"} handoff=${auto3.handoffId || "n/a"}`;
       result.deployedHostD = false;
     }
   } else if (!mutatedMain) {
@@ -438,16 +450,46 @@ function performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, cu
  * @param {(args: string[], env?: NodeJS.ProcessEnv) => {status:number,stdout:string,stderr:string}} runGh
  * @param {string} repo
  * @param {string} prNumber
- * @param {{pollMs?: number, timeoutMs?: number, profile?: string, deploymentReason?: string, skipWait?: boolean}} [opts]
+ * @param {{
+ *   pollMs?: number,
+ *   timeoutMs?: number,
+ *   profile?: string,
+ *   deploymentReason?: string,
+ *   skipWait?: boolean,
+ *   handoffNonce?: string,
+ *   githubRunId?: string,
+ *   githubRunAttempt?: string,
+ *   nowMs?: number,
+ *   sleep?: (ms: number) => void,
+ * }} [opts]
  */
 export function dispatchAndAwaitAuto3(runGh, repo, prNumber, opts = {}) {
+  /*
+  FNXC:AppsolinoAuto3Handoff 2026-08-01-06:45:
+  Exact handoff correlation. Never select an older AUTO-3 run via display_title
+  or newest-run fallback. Poll until the run-name containing handoff_id appears.
+  */
   const tip = runGh(["api", `repos/${repo}/commits/main`, "--jq", ".sha"]);
   if (tip.status !== 0 || !/^[0-9a-f]{40}$/i.test(tip.stdout.trim())) {
-    return { status: "BLOCKED", reasons: ["unable to resolve main tip after merge"], sourceSha: null };
+    return {
+      status: "BLOCKED",
+      reasons: ["unable to resolve main tip after merge"],
+      sourceSha: null,
+      handoffId: null,
+      auto3RunId: null,
+      conclusion: null,
+    };
   }
   const sourceSha = tip.stdout.trim().toLowerCase();
   const profile = opts.profile === "proof" ? "proof" : "staging";
   const deploymentReason = opts.deploymentReason || "auto2-low-risk-merge";
+  const handoffId = buildAuto3HandoffId({
+    githubRunId: opts.githubRunId,
+    attempt: opts.githubRunAttempt,
+    sourceSha,
+    nonce: opts.handoffNonce,
+  });
+  const dispatchStartedAtMs = opts.nowMs ?? Date.now();
   const dispatch = runGh([
     "workflow", "run", "upstream-auto3-deploy.yml",
     "--repo", repo,
@@ -457,67 +499,109 @@ export function dispatchAndAwaitAuto3(runGh, repo, prNumber, opts = {}) {
     "-f", `profile=${profile}`,
     "-f", "force_smoke_fail=false",
     "-f", `expected_merged_sha=${sourceSha}`,
+    "-f", `handoff_id=${handoffId}`,
   ]);
   if (dispatch.status !== 0) {
     return {
       status: "BLOCKED",
       reasons: [`AUTO-3 dispatch failed: ${dispatch.stderr || dispatch.stdout}`],
       sourceSha,
+      handoffId,
+      auto3RunId: null,
+      conclusion: null,
     };
   }
 
   if (opts.skipWait === true) {
-    return { status: "DISPATCHED", reasons: ["wait skipped"], sourceSha };
+    return {
+      status: "DISPATCHED",
+      reasons: ["wait skipped"],
+      sourceSha,
+      handoffId,
+      auto3RunId: null,
+      conclusion: null,
+    };
   }
 
   const pollMs = opts.pollMs ?? 15_000;
   const timeoutMs = opts.timeoutMs ?? 3_600_000;
+  const sleepFn = opts.sleep ?? ((ms) => {
+    spawnSync("sleep", [String(Math.max(1, Math.floor(ms / 1000)))]);
+  });
   const started = Date.now();
-  let runId = "";
+  /** @type {string|null} */
+  let runId = null;
   while (Date.now() - started < timeoutMs) {
     if (!runId) {
       const list = runGh([
         "api",
-        `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?event=workflow_dispatch&per_page=5`,
-        "--jq",
-        `.workflow_runs[] | select(.head_sha=="${sourceSha}" or .display_title!=null) | .id`,
+        `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?event=workflow_dispatch&per_page=30`,
       ]);
-      runId = (list.stdout || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
-      // Prefer newest run overall if head_sha filter misses dispatch runs (dispatch uses main ref)
-      if (!runId) {
-        const newest = runGh([
-          "api",
-          `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?per_page=1`,
-          "--jq",
-          ".workflow_runs[0].id",
-        ]);
-        runId = (newest.stdout || "").trim();
+      if (list.status === 0) {
+        let payload;
+        try {
+          payload = JSON.parse(list.stdout || "{}");
+        } catch {
+          payload = {};
+        }
+        const hit = selectCorrelatedAuto3Run(payload.workflow_runs || [], {
+          handoffId,
+          dispatchStartedAtMs,
+          sourceSha,
+        });
+        if (hit) runId = String(hit.id);
       }
+      // No newest-run fallback. Keep polling until the exact handoff appears.
     }
     if (runId) {
-      const view = runGh(["api", `repos/${repo}/actions/runs/${runId}`, "--jq", "{status:.status,conclusion:.conclusion}"]);
+      const view = runGh([
+        "api",
+        `repos/${repo}/actions/runs/${runId}`,
+        "--jq",
+        "{status:.status,conclusion:.conclusion}",
+      ]);
       if (view.status === 0) {
         try {
           const st = JSON.parse(view.stdout);
           if (st.status === "completed") {
-            if (st.conclusion === "success") {
-              return { status: "DEPLOYED", reasons: [], sourceSha, runId };
-            }
-            // Inspect job logs is heavy; map failure conclusions conservatively
-            // FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55: ROLLED_BACK/FAILED/BLOCKED/CRITICAL are durable terminals — no retry loop.
-            if (st.conclusion === "failure") {
-              return { status: "FAILED", reasons: ["AUTO-3 workflow failed"], sourceSha, runId };
-            }
-            return { status: "BLOCKED", reasons: [`AUTO-3 conclusion=${st.conclusion}`], sourceSha, runId };
+            let terminalMarker = null;
+            const logs = runGh([
+              "run", "view", runId,
+              "--repo", repo,
+              "--log",
+            ]);
+            if (logs.status === 0) terminalMarker = parseAuto3TerminalMarker(logs.stdout || logs.stderr || "");
+            const mapped = mapAuto3RunToTerminal({
+              status: st.status,
+              conclusion: st.conclusion,
+              terminalMarker,
+            });
+            return {
+              status: mapped.deploymentStatus,
+              reasons: mapped.deploymentStatus === "DEPLOYED" || mapped.deploymentStatus === "IDEMPOTENT_NOOP"
+                ? []
+                : [`AUTO-3 ${mapped.deploymentStatus}`],
+              sourceSha,
+              handoffId,
+              auto3RunId: runId,
+              conclusion: st.conclusion ?? null,
+            };
           }
         } catch {
           // continue polling
         }
       }
     }
-    spawnSync("sleep", [String(Math.max(1, Math.floor(pollMs / 1000)))]);
+    sleepFn(pollMs);
   }
-  return { status: "BLOCKED", reasons: ["AUTO-3 wait timeout"], sourceSha, runId: runId || null };
+  return {
+    status: "BLOCKED",
+    reasons: ["AUTO-3 wait timeout — correlated run never appeared or never completed"],
+    sourceSha,
+    handoffId,
+    auto3RunId: runId,
+    conclusion: null,
+  };
 }
 
 /**

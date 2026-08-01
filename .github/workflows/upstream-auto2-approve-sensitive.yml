@@ -131,9 +131,20 @@ jobs:
           {
             echo "## AUTO-2 approve sensitive"
             echo
-            echo '```json'
-            cat /tmp/auto2-approve-sensitive.json
-            echo '```'
+            python3 - <<'PY'
+import json
+d=json.load(open("/tmp/auto2-approve-sensitive.json"))
+a=d.get("auto3") or {}
+print(f"- action: `{d.get('action')}`")
+print(f"- handoff_id: `{a.get('handoffId') or 'n/a'}`")
+print(f"- auto3_run_id: `{a.get('auto3RunId') or 'n/a'}`")
+print(f"- auto3_status: `{a.get('status') or 'n/a'}`")
+print(f"- source_sha: `{a.get('sourceSha') or d.get('mergedMainSha') or 'n/a'}`")
+print()
+print("```json")
+print(json.dumps(d, indent=2))
+print("```")
+PY
           } >> "$GITHUB_STEP_SUMMARY"
           action="$(python3 -c 'import json;print(json.load(open("/tmp/auto2-approve-sensitive.json"))["action"])')"
           echo "action=$action" >> "$GITHUB_OUTPUT"
