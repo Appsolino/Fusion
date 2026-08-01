@@ -30,6 +30,11 @@ chown -R "$USER_NAME:$USER_NAME" "$HOME_DIR"
 chmod 0750 "$HOME_DIR" "$INBOX"
 chmod 0700 "$HOME_DIR/.ssh"
 chmod 0750 "$KEY_DIR"
+# FNXC:AppsolinoAuto3 2026-08-01-01:33: Proof release trees must be root:fusion 0750 so the fusion service user can traverse and execute immutable releases (same contract as live staging).
+chown root:fusion /opt/appsolino-fusion/staging-proof /opt/appsolino-fusion/staging-proof/releases
+chmod 0750 /opt/appsolino-fusion/staging-proof /opt/appsolino-fusion/staging-proof/releases
+chown -R fusion:fusion /srv/appsolino-fusion/staging-proof
+chmod 0750 /srv/appsolino-fusion/staging-proof /srv/appsolino-fusion/staging-proof/state /srv/appsolino-fusion/staging-proof/backups
 
 install -m 0755 -o root -g root "$REPO_SCRIPTS/auto3-ssh-wrapper.sh" "$WRAPPER"
 install -m 0755 -o root -g root "$REPO_SCRIPTS/auto3-deploy.sh" "$DEPLOY"

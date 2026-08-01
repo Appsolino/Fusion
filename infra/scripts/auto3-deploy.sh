@@ -320,8 +320,10 @@ if [[ "$PROFILE" == "staging" && -x "$BACKUP_SH" ]]; then
   fi
   BACKUP_DUMP="$(ls -1t /srv/appsolino-fusion/staging/backups/fusion_staging_*.dump 2>/dev/null | head -1 || true)"
   if [[ -n "$BACKUP_DUMP" ]]; then
-    # readability check
-    sudo -n -u postgres pg_restore -l "$BACKUP_DUMP" >/dev/null
+    TMPR="/tmp/fusion_auto3_list_$$.dump"
+    install -m 0600 -o postgres -g postgres "$BACKUP_DUMP" "$TMPR"
+    sudo -n -u postgres pg_restore -l "$TMPR" >/dev/null
+    rm -f "$TMPR"
   fi
 elif [[ "$PROFILE" == "proof" ]]; then
   mkdir -p /srv/appsolino-fusion/staging-proof/backups
@@ -329,7 +331,11 @@ elif [[ "$PROFILE" == "proof" ]]; then
   sudo -n -u postgres pg_dump -d fusion_staging --format=custom --file="/tmp/fusion_auto3_proof_backup_$$.dump" >/dev/null
   install -m 0600 -o root -g fusion "/tmp/fusion_auto3_proof_backup_$$.dump" "$BACKUP_DUMP"
   rm -f "/tmp/fusion_auto3_proof_backup_$$.dump"
-  sudo -n -u postgres pg_restore -l "$BACKUP_DUMP" >/dev/null
+  # FNXC:AppsolinoAuto3 2026-08-01-01:29: Verify readability via postgres-owned temp copy (backups are root:fusion 0600).
+  TMPR="/tmp/fusion_auto3_proof_list_$$.dump"
+  install -m 0600 -o postgres -g postgres "$BACKUP_DUMP" "$TMPR"
+  sudo -n -u postgres pg_restore -l "$TMPR" >/dev/null
+  rm -f "$TMPR"
 fi
 
 # Atomic activation
