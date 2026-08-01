@@ -149,16 +149,36 @@ jobs:
           {
             echo "## AUTO-2 finalize"
             echo
-            echo '```json'
-            cat /tmp/auto2-finalize.json
-            echo '```'
+            python3 - <<'PY'
+import json
+d=json.load(open("/tmp/auto2-finalize.json"))
+a=d.get("auto3") or {}
+print(f"- action: `{d.get('action')}`")
+print(f"- handoff_id: `{a.get('handoffId') or 'n/a'}`")
+print(f"- auto3_run_id: `{a.get('auto3RunId') or 'n/a'}`")
+print(f"- auto3_status: `{a.get('status') or 'n/a'}`")
+print(f"- source_sha: `{a.get('sourceSha') or d.get('mergedMainSha') or 'n/a'}`")
+print()
+print("```json")
+print(json.dumps(d, indent=2))
+print("```")
+PY
           } >> "$GITHUB_STEP_SUMMARY"
           action="$(python3 -c 'import json;print(json.load(open("/tmp/auto2-finalize.json"))["action"])')"
           echo "action=$action" >> "$GITHUB_OUTPUT"
-          if [[ "$action" == "blocked" || "$code" -eq 1 ]]; then
-            exit 2
-          fi
-          exit 0
+          # FNXC:AppsolinoAuto3Handoff 2026-08-01-06:50: Durable nonzero for deploy terminals; exit 0 only for DEPLOYED/IDEMPOTENT_NOOP (auto-merged-deployed) or non-deploy success paths.
+          case "$action" in
+            auto-merged|auto-merged-deployed|already-merged-idempotent)
+              exit 0
+              ;;
+            auto-merged-deploy-rolled-back|auto-merged-deploy-critical|auto-merged-deploy-failed|blocked)
+              exit 2
+              ;;
+            *)
+              if [[ "$code" -eq 1 ]]; then exit 2; fi
+              exit 0
+              ;;
+          esac
 
       - name: Guard — Host D only via AUTO-3 workflow
         run: |

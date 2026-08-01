@@ -19,6 +19,10 @@ Target pipeline: detect upstream → one integration branch (`merge --no-ff`) �
 
 Interim: read-only upstream monitor. **AUTO-1 OPERATIONAL** prepares absorb PRs. **AUTO-2 OPERATIONAL** classifies/validates and auto-merges only proven low-risk. Sensitive PRs require one GitHub APPROVED review from owner `Anas966` on the **exact head SHA**, then trusted dispatch of `upstream-auto2-approve-sensitive.yml` (exact-head merge + AUTO-3). A CLI `--owner-approved` flag alone is not authorization. AUTO-3 is OPERATIONAL for Host D: see [`CURRENT-STATE.md`](CURRENT-STATE.md).
 
+### AUTO-2 → AUTO-3 run correlation
+
+Each trusted AUTO-2 dispatch generates a unique `handoff_id` (`auto2-<run>-<attempt>-<sha12>-<nonce>`), passes it into AUTO-3, and waits only for the `workflow_dispatch` run whose **run-name** contains that id (created after dispatch). Never select by `display_title` alone or newest-run fallback. Parent exits 0 only for `DEPLOYED` / `IDEMPOTENT_NOOP`; `ROLLED_BACK` / `FAILED` / `BLOCKED` / `CRITICAL` are durable nonzero terminals (no continuous retry). See ISS-AUTO-003.
+
 ## Validation levels
 
 | Level | Use | Target |

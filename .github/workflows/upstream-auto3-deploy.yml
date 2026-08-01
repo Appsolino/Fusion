@@ -7,6 +7,11 @@
 
 name: Upstream AUTO-3 Deploy
 
+# FNXC:AppsolinoAuto3Handoff 2026-08-01-06:50:
+# run-name embeds handoff_id so AUTO-2 waiters correlate exactly one child run.
+# Never rely on newest-run or display_title fallbacks.
+run-name: AUTO-3 ${{ inputs.handoff_id }} ${{ inputs.source_sha }} pr=${{ inputs.source_pr }} ${{ inputs.profile }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -39,6 +44,11 @@ on:
         default: false
       expected_merged_sha:
         description: "When set, must equal source_sha (AUTO-2 handoff)"
+        required: false
+        type: string
+        default: ""
+      handoff_id:
+        description: "Unique AUTO-2→AUTO-3 correlation id (required for trusted AUTO-2 waiters)"
         required: false
         type: string
         default: ""
@@ -226,19 +236,28 @@ jobs:
           set -e
           echo "$OUT"
           echo "$OUT" | tee "$RUNNER_TEMP/auto3-deploy-out.txt" >/dev/null
-          if echo "$OUT" | grep -q '"status": "DEPLOYED"\|"status": "IDEMPOTENT_NOOP"'; then
+          # FNXC:AppsolinoAuto3Handoff 2026-08-01-06:50: Emit durable terminal marker for parent waiters.
+          if echo "$OUT" | grep -q '"status": "DEPLOYED"'; then
+            echo "AUTO3_TERMINAL_STATUS=DEPLOYED"
+            exit 0
+          fi
+          if echo "$OUT" | grep -q '"status": "IDEMPOTENT_NOOP"'; then
+            echo "AUTO3_TERMINAL_STATUS=IDEMPOTENT_NOOP"
             exit 0
           fi
           if echo "$OUT" | grep -q '"status": "ROLLED_BACK"'; then
+            echo "AUTO3_TERMINAL_STATUS=ROLLED_BACK"
             # Rollback proof success path when force_smoke_fail requested
             if [[ "$FORCE_FAIL" == "true" ]]; then exit 0; fi
             echo "::error::Deployment rolled back"
             exit 4
           fi
           if echo "$OUT" | grep -q '"status": "CRITICAL"'; then
+            echo "AUTO3_TERMINAL_STATUS=CRITICAL"
             echo "::error::CRITICAL rollback failure — owner action required"
             exit 5
           fi
+          echo "AUTO3_TERMINAL_STATUS=FAILED"
           exit "$RC"
 
       - name: Never execute candidate package scripts

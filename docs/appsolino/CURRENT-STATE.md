@@ -2,58 +2,60 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-01T04:56:00Z
+**Last updated UTC:** 2026-08-01T07:00:00Z
 
 | Field | Value |
 | --- | --- |
-| Current `main` SHA | `04a7b4cf519f29afbb0612414a0badbb18143f31` (PR #46 admit-main-fetch) |
-| Active Host D release | `auto3-0.74.0-beta.5-a1b78a197860` |
-| Executable SHA-256 | `d96d3da599598a02239c9e0ae499f4b6571a9d372f6add3a32d9e7aabdc27497` |
-| Archive SHA-256 | `8719344cea79fbe90d6d29361fa47f33460095443aea058f01fb166d797b8773` |
-| Migration-set SHA-256 | `29bd6c6f3ce78948cee5a5c4abb5f83adb99e94b9af941292b000d88f4c2d45e` |
-| Source SHA | `a1b78a19786063b1cfc79ff14e14d352e929bf55` |
-| Previous rollback release | `g13b-0.74.0-beta.5-cadf34dd4` |
+| Current `main` SHA | `3e6a0ad67262152fc846cc0134a424903f0b4dec` (PR #47 AUTO-4 absorb) |
+| Active Host D release | `auto3-0.74.0-beta.5-3e6a0ad67262` |
+| Source SHA | `3e6a0ad67262152fc846cc0134a424903f0b4dec` |
+| Previous rollback release | `auto3-0.74.0-beta.5-a1b78a197860` |
+| Schema ceiling | **0038** (`0038_mission_task_prefix.sql`) |
 | Staging health | `ok` / `0.74.0-beta.5` @ `127.0.0.1:4140` (`enginePaused=true`) |
-| Host P state | Deferred / untouched |
+| Host P state | Deferred / untouched (**accessed=NO**) |
 | Legacy production | DEGRADED / FROZEN |
+| Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** |
 
 ## Owner priority (2026-08-01)
 
 ```text
-NOW:     Land AUTO-2 sensitive-approval correction PR, then restore App installation
-         permissions (contents/PR/workflows/actions write), then owner-approve AUTO-4 #47
-DONE:    AUTO-1 OPERATIONAL; AUTO-2 classify/validate OPERATIONAL; AUTO-3 OPERATIONAL
-PARKED:  ISS-UI-001 / PR #28
-NOTE:    PR #34 CLOSED (superseded by #47). Do not merge #47 until correction lands + App perms + exact-head approval.
+NOW:     Merge AUTO-3 handoff-correlation result PR → live disposable AUTO-2/AUTO-3 proof
+         → post-catch-up AUTO-1 (upstream ahead ~15 commits of pin)
+DONE:    AUTO-4 COMPLETE (pin 71576d953626; merge 3e6a0ad67262; Host D DEPLOYED)
+PARKED:  ISS-UI-001 / PR #28 — do not start until this closure result PR lands
+PARKED:  ISS-GIT-007 — do not start until closure completes
+NOTE:    Do not re-run or re-merge PR #47. Engine stays paused. Host P untouched.
 ```
 
-## AUTO-3 — OPERATIONAL
+## AUTO-4 — COMPLETE
 
 | Item | Value |
 | --- | --- |
-| Build workflow | `upstream-auto3-deploy.yml` (credential-free build zone) |
-| Deploy identity | `appsolino-deploy` + env `host-d-staging` (forced-command SSH) |
-| Deploy entry | `infra/scripts/auto3-deploy.sh` (staging + proof profiles) |
-| Active release | `auto3-0.74.0-beta.5-a1b78a197860` |
+| Pinned upstream | `71576d9536267a7835f352922a55831811717896` |
+| Absorb PR | #47 (merged; do not re-merge) |
+| Merge SHA | `3e6a0ad67262152fc846cc0134a424903f0b4dec` |
+| AUTO-3 child | [run 30687790065](https://github.com/Appsolino/Fusion/actions/runs/30687790065) → **DEPLOYED** |
+| Active release | `auto3-0.74.0-beta.5-3e6a0ad67262` |
+| Previous release | `auto3-0.74.0-beta.5-a1b78a197860` |
+| Parent approve-sensitive | [run 30687772141](https://github.com/Appsolino/Fusion/actions/runs/30687772141) exited **2** (false FAILED — waiter race; real child DEPLOYED) |
+
+## AUTO-3 handoff correlation (this mission)
+
+| Item | Value |
+| --- | --- |
+| Incident | ISS-AUTO-003 — AUTO-2 waiter attached to older failed AUTO-3 run |
+| Fix | Unique `handoff_id` in AUTO-3 `run-name`; poll only exact match; no newest-run / `display_title` fallback |
+| Tests | `infra/scripts/__tests__/auto3-handoff.test.mjs` |
+| Live proof | Pending merge of this correction to main, then disposable low-risk AUTO-2→AUTO-3 |
 | Host P accessed | **NO** |
 
-## AUTO-2 sensitive approval path (this mission)
+## AUTO-1 / AUTO-2 / AUTO-3
 
-**Prior gap (accurate):** AUTO-2 classified sensitive PRs correctly as `approval-required`, but `auto2-finalize.mjs` never merged even when `ownerApproved=true`. There was no trusted post-approval merge workflow and no exact-head GitHub review verification.
-
-| Item | Value |
+| Lane | Status |
 | --- | --- |
-| New workflow | `upstream-auto2-approve-sensitive.yml` (dispatch-only, trusted main code) |
-| Verification | Exact-head APPROVED review from `Anas966`; checks green; `automation/upstream-*` |
-| Merge | `gh pr merge --merge --match-head-commit <approved_head>` then AUTO-3 |
-| Boolean `--owner-approved` alone | **Not** authorization (blocked) |
-| App token mint (Phase 1) | **Still failing** — installation lacks requested write permissions |
-| Disposable proof | PR #48 no-approval→hold; approved exact-head merge to disposable base; stale blocked; main/Host D unchanged |
-| PR #47 | **UNMERGED** — do not ask owner to approve until this correction is on main + App perms restored |
-
-## AUTO-1 / AUTO-2
-
-Classify/validate remain OPERATIONAL. Low-risk finalize + AUTO-3 dispatch remain the happy path once App token mint works. Sensitive merges use **Upstream AUTO-2 Approve Sensitive** after owner GitHub approval of the exact head.
+| AUTO-1 | OPERATIONAL — next: post-catch-up vs Runfusion main (pin lag; ~15 commits ahead as of 2026-08-01) |
+| AUTO-2 | OPERATIONAL — low-risk finalize + sensitive approve path; parent exit 0 only for DEPLOYED/IDEMPOTENT_NOOP |
+| AUTO-3 | OPERATIONAL — deploy + terminal markers; correlation fix landing |
 
 ## Provider posture
 
@@ -63,13 +65,16 @@ Classify/validate remain OPERATIONAL. Low-risk finalize + AUTO-3 dispatch remain
 | `testMode` | `false` |
 | `enginePaused` | `true` |
 
+## Maintenance (non-blocking)
+
+- **app-id → client-id:** When org/repo var `APPSOLINO_AUTOMATION_CLIENT_ID` is available, switch every `create-github-app-token@v3` from `app-id: secrets.APPSOLINO_AUTOMATION_APP_ID` to `client-id: vars.APPSOLINO_AUTOMATION_CLIENT_ID`. Keep private key as secret. Not verified available from this agent identity (403 on variables API).
+
 ## Current blockers
 
-1. **App installation permissions** — restore `contents/pull-requests/workflows/actions: write` so finalize/approve-sensitive can mint tokens.
-2. **AUTO-2 sensitive-approval correction** — land the open correction PR on main.
-3. **AUTO-4 PR #47** — SENSITIVE; exact head `f42eaa96ff1e060d0d00416f62d21843902f8b51`; awaiting correction + App perms + owner exact-head approval.
-4. **ISS-GIT-007** — engine merge default-branch fix still open.
-5. **ISS-UI-001** — PARKED (PR #28).
+1. **Land handoff-correlation result PR** — unlocks accurate AUTO-2 parent results and live correlation proof.
+2. **Post-catch-up AUTO-1** — Runfusion main ahead of pin; one incremental `automation/upstream-*` after proof (do not reopen AUTO-4).
+3. **ISS-GIT-007** — engine merge default-branch fix (after closure).
+4. **ISS-UI-001** — PARKED (PR #28); after closure only.
 
 ## Milestone board
 
@@ -77,15 +82,16 @@ Classify/validate remain OPERATIONAL. Low-risk finalize + AUTO-3 dispatch remain
 G0: COMPLETE
 G1: PASS
 AUTO-1: OPERATIONAL
-AUTO-2: OPERATIONAL (sensitive post-approval path landing; App perms need restore)
-AUTO-3: OPERATIONAL
-AUTO-4: READY FOR OWNER APPROVAL after correction + App perms (PR #47)
-ISS-UI-001: PARKED
+AUTO-2: OPERATIONAL (handoff correlation landing)
+AUTO-3: OPERATIONAL (handoff correlation landing)
+AUTO-4: COMPLETE (pin 71576d953626)
+Mode: CONTINUOUS UPSTREAM MAINTENANCE
+ISS-UI-001: PARKED (do not start until closure PR lands)
 ```
 
 ## Next authorised mission
 
-1. Merge AUTO-2 sensitive-approval correction PR.
-2. Owner restores GitHub App installation permissions.
-3. Re-dispatch finalize on #47 (expect approval-required, no merge) to prove token mint.
-4. Owner APPROVES PR #47 exact head on GitHub, then dispatches **Upstream AUTO-2 Approve Sensitive**.
+1. Merge handoff-correlation result PR (sensitive workflows — exact-head owner approval + approve-sensitive, or equivalent trusted path).
+2. Disposable low-risk AUTO-2→AUTO-3 correlation proof; record handoff id + child run id.
+3. Post-catch-up AUTO-1; process one incremental upstream PR via normal AUTO-2 if divergence remains.
+4. Only then: ISS-UI-001 / ISS-GIT-007 backlog.

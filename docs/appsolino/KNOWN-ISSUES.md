@@ -283,3 +283,42 @@ Blocks trustworthy AUTO-3 auto-merge and can mis-target integration PRs if defau
 | --- | --- | --- |
 | G1 `KB-003` | OPEN (manual FF) | Missing `main` while default was `master` |
 | AUTO-1 script | Partial (design) | Non-`main` harness test + `origin/HEAD` resolution |
+
+---
+
+## ISS-AUTO-003 — AUTO-2 waiter selects unrelated older AUTO-3 run
+
+Status: **FIXED** (code + regression tests; live disposable proof pending merge of handoff-correlation PR)
+Severity: High
+Component: AUTO-2 finalize / approve-sensitive → AUTO-3 dispatch waiter
+First observed: 2026-08-01 (AUTO-4 PR #47 approve-sensitive parent)
+Last observed: 2026-08-01
+GitHub: parent [run 30687772141](https://github.com/Appsolino/Fusion/actions/runs/30687772141); real child [run 30687790065](https://github.com/Appsolino/Fusion/actions/runs/30687790065) DEPLOYED
+
+### Failure fingerprint
+
+- After merge, `dispatchAndAwaitAuto3` listed AUTO-3 runs with jq `select(.head_sha==… or .display_title!=null)` and fell back to newest run.
+- Newly dispatched child not yet visible → waiter attached to older **failed** completed run (e.g. `30679116104`).
+- Parent reported FAILED / exit 2 while the real child later **DEPLOYED** Host D correctly.
+
+### Impact
+
+False-negative parent workflow results; operators cannot trust AUTO-2 success/failure after merge+deploy; risk of unnecessary retries or missed terminals.
+
+### Permanent correction
+
+- Unique `handoff_id` per dispatch; AUTO-3 `run-name` embeds handoff + source SHA + PR + profile.
+- Poll only matching `workflow_dispatch` runs created after dispatch; then stick to that run id.
+- Emit `AUTO3_TERMINAL_STATUS=…`; map DEPLOYED / IDEMPOTENT_NOOP / ROLLED_BACK / FAILED / CRITICAL / BLOCKED.
+- Parent exit 0 only for DEPLOYED / IDEMPOTENT_NOOP; durable nonzero otherwise; no continuous retry.
+
+### Required regression tests
+
+- `infra/scripts/__tests__/auto3-handoff.test.mjs` (legacy race proof + correlated selection + terminals + static workflow guards).
+
+### Fix history
+
+| Surface | Result | Evidence |
+| --- | --- | --- |
+| AUTO-4 #47 parent waiter | FAIL (false) | Attached `30679116104` while child `30687790065` DEPLOYED |
+| `auto3-handoff.mjs` + waiter rewrite | FIXED (pending live proof) | Unit/integration tests green |
