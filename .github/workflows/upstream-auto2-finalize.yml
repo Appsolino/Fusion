@@ -146,15 +146,20 @@ jobs:
           code=$?
           set -e
           cat /tmp/auto2-finalize.json
-          # FNXC:AppsolinoAuto3Handoff 2026-08-01-08:10:
-          # Keep summary generation as indented one-liner python. An unindented <<'PY' heredoc body terminates the YAML run:| scalar and strips workflow_dispatch registration (ISS-AUTO-003 follow-up).
+          # FNXC:AppsolinoAuto3Handoff 2026-08-01-08:30:
+          # Exit policy must run even if step-summary formatting fails. Nested escaped quotes in python -c caused SyntaxError after a successful DEPLOYED proof (run 30691423651) and falsely failed the parent.
+          action="$(python3 -c 'import json;print(json.load(open("/tmp/auto2-finalize.json"))["action"])')"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
           {
             echo "## AUTO-2 finalize"
             echo
-            python3 -c 'import json;d=json.load(open("/tmp/auto2-finalize.json"));a=d.get("auto3") or {};print(f"- action: `{d.get(\"action\")}`");print(f"- handoff_id: `{a.get(\"handoffId\") or \"n/a\"}`");print(f"- auto3_run_id: `{a.get(\"auto3RunId\") or \"n/a\"}`");print(f"- auto3_status: `{a.get(\"status\") or \"n/a\"}`");print(f"- source_sha: `{a.get(\"sourceSha\") or d.get(\"mergedMainSha\") or \"n/a\"}`");print();print("```json");print(json.dumps(d, indent=2));print("```")'
-          } >> "$GITHUB_STEP_SUMMARY"
-          action="$(python3 -c 'import json;print(json.load(open("/tmp/auto2-finalize.json"))["action"])')"
-          echo "action=$action" >> "$GITHUB_OUTPUT"
+            python3 -c 'import json;d=json.load(open("/tmp/auto2-finalize.json"));a=d.get("auto3") or {};print("- action: `"+str(d.get("action"))+"`");print("- handoff_id: `"+(a.get("handoffId") or "n/a")+"`");print("- auto3_run_id: `"+(str(a.get("auto3RunId") or "n/a"))+"`");print("- auto3_status: `"+(a.get("status") or "n/a")+"`");print("- source_sha: `"+(a.get("sourceSha") or d.get("mergedMainSha") or "n/a")+"`")'
+            echo
+            echo '```json'
+            cat /tmp/auto2-finalize.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
           # FNXC:AppsolinoAuto3Handoff 2026-08-01-06:50: Durable nonzero for deploy terminals; exit 0 only for DEPLOYED/IDEMPOTENT_NOOP (auto-merged-deployed) or non-deploy success paths.
           case "$action" in
             auto-merged|auto-merged-deployed|already-merged-idempotent)
