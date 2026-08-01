@@ -17,6 +17,86 @@ import {
   LABEL_BLOCKED,
 } from "../auto2-classify-upstream.mjs";
 import { runAuto2Finalize } from "../auto2-finalize.mjs";
+import {
+  evaluateExactHeadOwnerApproval,
+  isSensitiveApprovalHead,
+} from "../auto2-sensitive-approval.mjs";
+
+const HEAD_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const HEAD_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const MAIN_SHA = "cccccccccccccccccccccccccccccccccccccccc";
+
+function sensitivePrView(overrides = {}) {
+  return {
+    number: 47,
+    state: "OPEN",
+    title: "AUTO-1: absorb",
+    headRefName: "automation/upstream-71576d953626",
+    baseRefName: "main",
+    headRefOid: HEAD_A,
+    mergeable: "MERGEABLE",
+    commits: Array.from({ length: 50 }, (_, i) => ({ oid: String(i) })),
+    labels: [],
+    url: "u",
+    mergedAt: null,
+    ...overrides,
+  };
+}
+
+function sensitiveFilesStdout() {
+  return [".github/workflows/x.yml", "packages/core/migrations/1.sql", ...Array.from({ length: 100 }, (_, i) => `f${i}.ts`)].join("\n");
+}
+
+/**
+ * @param {{merges?: string[][], auto3?: string[][], reviewsJson?: string, pr?: object}} [opts]
+ */
+function makeSensitiveGh(opts = {}) {
+  const merges = opts.merges || [];
+  const auto3 = opts.auto3 || [];
+  const pr = sensitivePrView(opts.pr || {});
+  return (args) => {
+    if (args[0] === "pr" && args[1] === "merge") {
+      merges.push(args);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "pr" && args[1] === "view") {
+      return { status: 0, stdout: JSON.stringify(pr), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1] || "").includes("/files")) {
+      return { status: 0, stdout: sensitiveFilesStdout(), stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1] || "").includes("/reviews")) {
+      return { status: 0, stdout: opts.reviewsJson ?? "[]", stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1] || "").includes("/commits/main")) {
+      return { status: 0, stdout: MAIN_SHA, stderr: "" };
+    }
+    if (args[0] === "workflow" && args[1] === "run") {
+      auto3.push(args);
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1] || "").includes("upstream-auto3-deploy.yml/runs")) {
+      return { status: 0, stdout: "999001", stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1] || "").includes("/actions/runs/")) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ status: "completed", conclusion: "success" }),
+        stderr: "",
+      };
+    }
+    if (args[0] === "label" || (args[0] === "pr" && args[1] === "edit")) {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1] || "").includes("/comments")) {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "api" && (args.includes("POST") || args.includes("PATCH"))) {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    return { status: 0, stdout: "", stderr: "" };
+  };
+}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -375,5 +455,216 @@ describe("AUTO-2 workflow trust zones (static)", () => {
     assert.match(yaml, /upstream-auto3-deploy\.yml/);
     assert.match(yaml, /APPSOLINO_AUTOMATION_APP_ID/);
     assert.doesNotMatch(yaml, /HOST_D_DEPLOY_SSH_KEY/);
+  });
+
+  it("approve-sensitive workflow is dispatch-only, main checkout, App token, no Host D secrets, no candidate scripts", () => {
+    const yaml = readFileSync(join(ROOT, ".github/workflows/upstream-auto2-approve-sensitive.yml"), "utf8");
+    assert.match(yaml, /name:\s*Upstream AUTO-2 Approve Sensitive/);
+    assert.match(yaml, /workflow_dispatch:/);
+    assert.doesNotMatch(yaml, /pull_request:/);
+    assert.match(yaml, /ref:\s*main/);
+    assert.match(yaml, /require-sensitive-approval/);
+    assert.match(yaml, /approved_head/);
+    assert.match(yaml, /create-github-app-token@v3/);
+    assert.match(yaml, /permission-contents:\s*write/);
+    assert.match(yaml, /permission-workflows:\s*write/);
+    assert.doesNotMatch(yaml, /^\s*run:.*\b(pnpm|npm)\s+(test|install)\b/m);
+    // Secret may appear only in the refuse-if-present guard, never as a deploy step.
+    assert.match(yaml, /must not receive Host D deploy secrets/);
+    assert.match(yaml, /must not SSH\/install Host D/);
+    assert.doesNotMatch(yaml, /scp |ssh |systemctl |\/opt\/appsolino-fusion\/staging/);
+  });
+});
+
+describe("AUTO-2 sensitive exact-head approval", () => {
+  it("evaluate: exact-head Anas966 APPROVED → ok", () => {
+    const v = evaluateExactHeadOwnerApproval({
+      currentHead: HEAD_A,
+      approvedHead: HEAD_A,
+      checksConclusion: "success",
+      prState: "OPEN",
+      headRefName: "automation/upstream-abc",
+      reviews: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_A }],
+    });
+    assert.equal(v.ok, true);
+  });
+
+  it("sensitive without approval → approval-required", () => {
+    const merges = [];
+    const gh = makeSensitiveGh({ merges, reviewsJson: "[]" });
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      validationConclusion: "success",
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [],
+      checksConclusionForTest: "success",
+      gh,
+    });
+    assert.equal(r.action, "approval-required");
+    assert.equal(merges.length, 0);
+  });
+
+  it("boolean approval flag without GitHub review → blocked", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      approvedHead: HEAD_A,
+      validationConclusion: "success",
+      ownerApproved: true,
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [],
+      checksConclusionForTest: "success",
+      gh: makeSensitiveGh({ merges }),
+    });
+    assert.equal(r.action, "blocked");
+    assert.match(r.reason, /boolean ownerApproved|missing APPROVED/i);
+    assert.equal(merges.length, 0);
+  });
+
+  it("approval by unauthorized account → blocked on require path", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      approvedHead: HEAD_A,
+      validationConclusion: "success",
+      requireSensitiveApproval: true,
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [{ state: "APPROVED", user: { login: "not-owner" }, commit_id: HEAD_A }],
+      checksConclusionForTest: "success",
+      gh: makeSensitiveGh({ merges }),
+    });
+    assert.equal(r.action, "blocked");
+    assert.match(r.reason, /not from authorized owner|missing APPROVED/i);
+    assert.equal(merges.length, 0);
+  });
+
+  it("approval for an older head SHA → blocked", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      approvedHead: HEAD_A,
+      validationConclusion: "success",
+      requireSensitiveApproval: true,
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_B }],
+      checksConclusionForTest: "success",
+      gh: makeSensitiveGh({ merges }),
+    });
+    assert.equal(r.action, "blocked");
+    assert.match(r.reason, /does not apply to the exact current head/i);
+    assert.equal(merges.length, 0);
+  });
+
+  it("head changed after approval (approved_head ≠ current) → blocked", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      approvedHead: HEAD_B,
+      validationConclusion: "success",
+      requireSensitiveApproval: true,
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_B }],
+      checksConclusionForTest: "success",
+      gh: makeSensitiveGh({ merges, pr: { headRefOid: HEAD_A } }),
+    });
+    assert.equal(r.action, "blocked");
+    assert.match(r.reason, /does not equal current PR head|stale/i);
+    assert.equal(merges.length, 0);
+  });
+
+  it("failed or missing checks → blocked on require path", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      approvedHead: HEAD_A,
+      validationConclusion: "failure",
+      requireSensitiveApproval: true,
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_A }],
+      gh: makeSensitiveGh({ merges }),
+    });
+    assert.equal(r.action, "blocked");
+    assert.equal(merges.length, 0);
+  });
+
+  it("exact-head approval by Anas966 → merge allowed with --match-head-commit", () => {
+    const merges = [];
+    const auto3 = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      approvedHead: HEAD_A,
+      validationConclusion: "success",
+      requireSensitiveApproval: true,
+      allowMissingApp: true,
+      dispatchAuto3: true,
+      auto3PollMs: 1,
+      auto3TimeoutMs: 50,
+      reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_A }],
+      checksConclusionForTest: "success",
+      gh: makeSensitiveGh({ merges, auto3 }),
+    });
+    assert.ok(["auto-merged", "auto-merged-deployed", "auto-merged-deploy-failed"].includes(r.action));
+    assert.equal(merges.length, 1);
+    assert.ok(merges[0].includes("--match-head-commit"));
+    assert.ok(merges[0].includes(HEAD_A));
+    assert.ok(merges[0].includes("--merge"));
+    assert.equal(auto3.length, 1);
+    const shaArg = auto3[0].find((a) => String(a).startsWith("source_sha="));
+    assert.equal(shaArg, `source_sha=${MAIN_SHA}`);
+    assert.equal(r.mergedMainSha, MAIN_SHA);
+  });
+
+  it("repeated approval dispatch after merge is idempotent", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      approvedHead: HEAD_A,
+      validationConclusion: "success",
+      requireSensitiveApproval: true,
+      allowMissingApp: true,
+      gh: makeSensitiveGh({
+        merges,
+        pr: { state: "MERGED", mergedAt: "2026-08-01T00:00:00Z", headRefOid: HEAD_A },
+      }),
+    });
+    assert.equal(r.action, "already-merged-idempotent");
+    assert.equal(merges.length, 0);
+  });
+
+  it("isSensitiveApprovalHead accepts only automation/upstream-*", () => {
+    assert.equal(isSensitiveApprovalHead("automation/upstream-abc"), true);
+    assert.equal(isSensitiveApprovalHead("auto2-proof/low"), false);
+    assert.equal(isSensitiveApprovalHead("fix/x"), false);
+  });
+
+  it("candidate validate still has no App or Host D secrets (regression)", () => {
+    const yaml = readFileSync(join(ROOT, ".github/workflows/upstream-auto2-validate.yml"), "utf8");
+    assert.doesNotMatch(yaml, /APPSOLINO_AUTOMATION_APP_PRIVATE_KEY/);
+    assert.doesNotMatch(yaml, /APPSOLINO_AUTOMATION_APP_ID/);
+    assert.doesNotMatch(yaml, /HOST_D_DEPLOY/);
+    // Guard comments may mention the action name; the job must not `uses:` it.
+    assert.doesNotMatch(yaml, /uses:\s*actions\/create-github-app-token@/);
   });
 });

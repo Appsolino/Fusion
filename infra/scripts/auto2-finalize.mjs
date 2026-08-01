@@ -9,8 +9,14 @@
  * FNXC:AppsolinoAuto3 2026-08-01-01:20:
  * After an eligible low-risk merge to main, dispatch AUTO-3 with the exact
  * merged main SHA and wait for DEPLOYED. ROLLED_BACK/CRITICAL is a durable
- * deployment failure (no retry loop). Sensitive PRs still require owner
- * approval and are never auto-merged here. PR #34 remains out of auto path.
+ * deployment failure (no retry loop).
+ *
+ * FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55:
+ * Prior gap: sensitive PRs correctly classified as approval-required, but even
+ * ownerApproved=true never merged. Sensitive merges now require independently
+ * verified exact-head APPROVED review from Anas966 (see auto2-sensitive-approval.mjs
+ * and upstream-auto2-approve-sensitive.yml). A raw --owner-approved flag alone is
+ * not authorization. Candidate code never receives App/Host D secrets.
  */
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -25,6 +31,12 @@ import {
   LABEL_MEDIUM,
   REPORT_MARKER,
 } from "./auto2-classify-upstream.mjs";
+import {
+  evaluateExactHeadOwnerApproval,
+  fetchPullRequestReviews,
+  isSensitiveApprovalHead,
+  resolveRequiredChecksConclusion,
+} from "./auto2-sensitive-approval.mjs";
 
 /**
  * @param {string[]} args
@@ -51,14 +63,19 @@ export function gh(args, env = process.env) {
  * @param {number|string} input.prNumber
  * @param {string} input.validatedHeadSha
  * @param {string} [input.validationConclusion]
- * @param {boolean} [input.ownerApproved]
+ * @param {boolean} [input.ownerApproved] — non-authoritative; cannot authorize alone
+ * @param {boolean} [input.requireSensitiveApproval] — approve-sensitive workflow entry: must verify review
+ * @param {string} [input.approvedHead] — exact head the owner approved (required when requireSensitiveApproval)
  * @param {boolean} [input.allowMissingApp]
  * @param {(args: string[], env?: NodeJS.ProcessEnv) => {status:number,stdout:string,stderr:string}} [input.gh]
  * @param {boolean} [input.dryRun]
  * @param {boolean} [input.executeCandidateCode] — must remain false
  * @param {boolean} [input.dispatchAuto3] — default true for main merges; tests should set false
+ * @param {string} [input.auto3Profile] — staging (default) or proof
  * @param {number} [input.auto3PollMs]
  * @param {number} [input.auto3TimeoutMs]
+ * @param {Array<*>} [input.reviewsForTest] — inject reviews (unit tests only)
+ * @param {string} [input.checksConclusionForTest] — inject checks conclusion (unit tests only)
  */
 export function runAuto2Finalize(input) {
   if (input.executeCandidateCode === true) {
@@ -78,10 +95,25 @@ export function runAuto2Finalize(input) {
   const prRes = runGh([
     "pr", "view", prNumber,
     "--repo", repo,
-    "--json", "number,state,title,headRefName,baseRefName,headRefOid,mergeable,commits,labels,url",
+    "--json", "number,state,title,headRefName,baseRefName,headRefOid,mergeable,commits,labels,url,mergedAt",
   ]);
   if (prRes.status !== 0) throw new Error(`gh pr view failed: ${prRes.stderr || prRes.stdout}`);
   const pr = JSON.parse(prRes.stdout);
+
+  /*
+  FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55:
+  Repeated approval dispatch after merge is idempotent — do not re-merge or re-loop AUTO-3.
+  */
+  if (String(pr.state || "").toUpperCase() === "MERGED" || pr.mergedAt) {
+    return {
+      action: "already-merged-idempotent",
+      reason: "PR already merged; sensitive approval dispatch is idempotent",
+      classification: null,
+      pr,
+      mutatedMain: false,
+      deployedHostD: false,
+    };
+  }
 
   if (pr.state !== "OPEN") {
     return { action: "ignored", reason: `PR state ${pr.state}`, classification: null, pr };
@@ -141,31 +173,23 @@ export function runAuto2Finalize(input) {
     return { action: "blocked", reason: classification.reasons.join("; "), classification, pr, mutatedMain: false, deployedHostD: false };
   }
 
-  if (classification.riskClass === "sensitive" || classification.riskClass === "medium") {
-    const approved = input.ownerApproved === true;
-    if (classification.riskClass === "sensitive" && approved && !stale && !checksFailed) {
-      // Still no auto-merge for sensitive even with approval in this function —
-      // owner approval is recorded; merge of sensitive requires explicit separate owner action outside AUTO-2 auto path.
-      // FNXC:AppsolinoAuto2 2026-07-31-18:00: sensitive never auto-merges; approval only clears the blocked-wait label story.
-      return {
-        action: "approval-required",
-        reason: "sensitive — owner approval recorded but AUTO-2 does not auto-merge sensitive PRs",
-        classification,
-        pr,
-        mutatedMain: false,
-        deployedHostD: false,
-      };
-    }
+  if (classification.riskClass === "medium") {
     return {
       action: "approval-required",
-      reason: classification.riskClass === "medium"
-        ? "medium — no automatic merge during initial AUTO-2 rollout"
-        : "sensitive — one owner approval required; no automatic merge",
+      reason: "medium — no automatic merge during initial AUTO-2 rollout",
       classification,
       pr,
       mutatedMain: false,
       deployedHostD: false,
     };
+  }
+
+  if (classification.riskClass === "sensitive") {
+    return finalizeSensitive(input, pr, runGh, classification, {
+      currentHead,
+      stale,
+      checksFailed,
+    });
   }
 
   // low risk auto-merge
@@ -181,13 +205,166 @@ export function runAuto2Finalize(input) {
     }, stale ? "stale validated SHA" : "required checks failed");
   }
 
+  return performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, currentHead, {
+    reasonPrefix: "low-risk",
+  });
+}
+
+/**
+ * FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55:
+ * Sensitive path: without verified exact-head owner review → approval-required.
+ * With verified Anas966 APPROVED on exact head → merge + AUTO-3. Boolean flag alone → blocked.
+ *
+ * @param {*} input
+ * @param {*} pr
+ * @param {*} runGh
+ * @param {*} classification
+ * @param {{currentHead:string,stale:boolean,checksFailed:boolean}} ctx
+ */
+function finalizeSensitive(input, pr, runGh, classification, ctx) {
+  const { currentHead, stale, checksFailed } = ctx;
+  const approvedHead = String(input.approvedHead || input.validatedHeadSha || "").trim().toLowerCase();
+  const requirePath = input.requireSensitiveApproval === true;
+
+  if (stale) {
+    return finalizeBlocked(input, pr, runGh, {
+      ...classification,
+      riskClass: "blocked",
+      reasons: ["stale validated SHA"],
+      autoMergeEligible: false,
+    }, "stale validated SHA");
+  }
+  if (checksFailed) {
+    return finalizeBlocked(input, pr, runGh, {
+      ...classification,
+      riskClass: "blocked",
+      reasons: ["required checks failed"],
+      autoMergeEligible: false,
+    }, "required checks failed");
+  }
+  if (requirePath && !isSensitiveApprovalHead(pr.headRefName || "")) {
+    return finalizeBlocked(input, pr, runGh, {
+      ...classification,
+      riskClass: "blocked",
+      reasons: ["sensitive approval requires automation/upstream-* head"],
+      autoMergeEligible: false,
+    }, "head ref not automation/upstream-*");
+  }
+
+  let reviews;
+  if (Array.isArray(input.reviewsForTest)) {
+    reviews = input.reviewsForTest;
+  } else {
+    const fetched = fetchPullRequestReviews(runGh, input.repo, pr.number);
+    if (!fetched.ok) {
+      if (input.ownerApproved === true || requirePath) {
+        return finalizeBlocked(input, pr, runGh, {
+          ...classification,
+          riskClass: "blocked",
+          reasons: [`unable to load reviews: ${fetched.error}`],
+          autoMergeEligible: false,
+        }, `unable to load reviews: ${fetched.error}`);
+      }
+      return {
+        action: "approval-required",
+        reason: "sensitive — one owner approval required; no automatic merge",
+        classification,
+        pr,
+        mutatedMain: false,
+        deployedHostD: false,
+      };
+    }
+    reviews = fetched.reviews;
+  }
+
+  let checksConclusion = input.checksConclusionForTest;
+  if (!checksConclusion) {
+    if (input.validationConclusion === "success") checksConclusion = "success";
+    else if (input.validationConclusion === "failure" || input.validationConclusion === "cancelled") {
+      checksConclusion = "failure";
+    } else {
+      const resolved = resolveRequiredChecksConclusion(runGh, input.repo, pr.number, currentHead);
+      checksConclusion = resolved.conclusion;
+    }
+  }
+
+  const verdict = evaluateExactHeadOwnerApproval({
+    currentHead,
+    approvedHead: approvedHead || currentHead,
+    reviews,
+    prState: pr.state,
+    headRefName: requirePath ? pr.headRefName : undefined,
+    checksConclusion,
+    booleanOwnerApprovedFlag: input.ownerApproved === true,
+  });
+
+  if (verdict.idempotentMerged) {
+    return {
+      action: "already-merged-idempotent",
+      reason: verdict.reasons.join("; "),
+      classification,
+      pr,
+      mutatedMain: false,
+      deployedHostD: false,
+    };
+  }
+
+  if (!verdict.ok) {
+    /*
+    FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55:
+    Passive finalize (no require-sensitive-approval): stay approval-required — never merge.
+    Approve-sensitive workflow or boolean --owner-approved without verified review: blocked.
+    */
+    if (requirePath || input.ownerApproved === true) {
+      return finalizeBlocked(input, pr, runGh, {
+        ...classification,
+        riskClass: "blocked",
+        reasons: verdict.reasons,
+        autoMergeEligible: false,
+      }, verdict.reasons.join("; "));
+    }
+    return {
+      action: "approval-required",
+      reason: "sensitive — one owner approval required; no automatic merge",
+      classification,
+      pr,
+      mutatedMain: false,
+      deployedHostD: false,
+      approval: verdict,
+    };
+  }
+
+  // Verified exact-head owner approval → exact-head merge + AUTO-3
+  return performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, currentHead, {
+    reasonPrefix: "sensitive-approved",
+    auto3Profile: input.auto3Profile,
+  });
+}
+
+/**
+ * @param {*} input
+ * @param {*} pr
+ * @param {*} runGh
+ * @param {*} classification
+ * @param {string} currentHead
+ * @param {{reasonPrefix:string, auto3Profile?: string}} opts
+ */
+function performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, currentHead, opts) {
   if (input.dryRun) {
-    return { action: "auto-merge-dry-run", reason: "dry-run", classification, pr, mutatedMain: false, deployedHostD: false };
+    return {
+      action: "auto-merge-dry-run",
+      reason: "dry-run",
+      classification,
+      pr,
+      mutatedMain: false,
+      deployedHostD: false,
+      mergeHead: currentHead,
+    };
   }
 
   const merge = runGh([
-    "pr", "merge", prNumber,
-    "--repo", repo,
+    "pr", "merge", String(pr.number),
+    "--repo", input.repo,
     "--merge",
     "--match-head-commit", currentHead,
   ]);
@@ -201,28 +378,37 @@ export function runAuto2Finalize(input) {
   }
 
   const mutatedMain = pr.baseRefName === "main";
-  /** @type {{action:string,reason:string,classification:*,pr:*,mutatedMain:boolean,deployedHostD:boolean,auto3?:*}} */
+  /** @type {{action:string,reason:string,classification:*,pr:*,mutatedMain:boolean,deployedHostD:boolean,auto3?:*,mergedMainSha?:string|null,mergeHead?:string}} */
   const result = {
     action: "auto-merged",
-    reason: "low-risk exact-head merge commit",
+    reason: `${opts.reasonPrefix} exact-head merge commit`,
     classification,
     pr,
     mutatedMain,
     // FNXC:AppsolinoAuto2 2026-07-31-18:00: proof PRs may target a temp base — main stays unchanged.
     deployedHostD: false,
+    mergeHead: currentHead,
+    mergedMainSha: null,
   };
 
   // FNXC:AppsolinoAuto3 2026-08-01-01:20: End-to-end success requires AUTO-3 DEPLOYED for merges that land on main.
   if (mutatedMain && input.dispatchAuto3 !== false && !input.dryRun) {
-    const auto3 = dispatchAndAwaitAuto3(runGh, repo, prNumber, {
+    const auto3 = dispatchAndAwaitAuto3(runGh, input.repo, String(pr.number), {
       pollMs: input.auto3PollMs,
       timeoutMs: input.auto3TimeoutMs,
+      profile: opts.auto3Profile || input.auto3Profile || "staging",
+      deploymentReason: opts.reasonPrefix === "sensitive-approved"
+        ? "auto2-sensitive-approved-merge"
+        : "auto2-low-risk-merge",
     });
     result.auto3 = auto3;
+    result.mergedMainSha = auto3.sourceSha || null;
     if (auto3.status === "DEPLOYED" || auto3.status === "IDEMPOTENT_NOOP") {
       result.action = "auto-merged-deployed";
-      result.reason = `low-risk merge + AUTO-3 ${auto3.status}`;
-      result.deployedHostD = true;
+      result.reason = `${opts.reasonPrefix} merge + AUTO-3 ${auto3.status}`;
+      result.deployedHostD = opts.auto3Profile === "proof" || input.auto3Profile === "proof"
+        ? false
+        : true;
     } else if (auto3.status === "ROLLED_BACK") {
       result.action = "auto-merged-deploy-rolled-back";
       result.reason = "merge on main retained; AUTO-3 rolled back — no continuous retry";
@@ -232,9 +418,16 @@ export function runAuto2Finalize(input) {
       result.reason = "merge on main retained; AUTO-3 CRITICAL — owner action required";
       result.deployedHostD = false;
     } else {
+      // FAILED / BLOCKED / other — durable terminal, no retry loop
       result.action = "auto-merged-deploy-failed";
       result.reason = `merge on main retained; AUTO-3 status=${auto3.status}`;
       result.deployedHostD = false;
+    }
+  } else if (!mutatedMain) {
+    // Disposable-base proof merge: resolve tip of base for callers that mock AUTO-3
+    const tip = runGh(["api", `repos/${input.repo}/commits/${pr.baseRefName}`, "--jq", ".sha"]);
+    if (tip.status === 0 && /^[0-9a-f]{40}$/i.test(tip.stdout.trim())) {
+      result.mergedMainSha = tip.stdout.trim().toLowerCase();
     }
   }
 
@@ -245,7 +438,7 @@ export function runAuto2Finalize(input) {
  * @param {(args: string[], env?: NodeJS.ProcessEnv) => {status:number,stdout:string,stderr:string}} runGh
  * @param {string} repo
  * @param {string} prNumber
- * @param {{pollMs?: number, timeoutMs?: number}} [opts]
+ * @param {{pollMs?: number, timeoutMs?: number, profile?: string, deploymentReason?: string, skipWait?: boolean}} [opts]
  */
 export function dispatchAndAwaitAuto3(runGh, repo, prNumber, opts = {}) {
   const tip = runGh(["api", `repos/${repo}/commits/main`, "--jq", ".sha"]);
@@ -253,13 +446,15 @@ export function dispatchAndAwaitAuto3(runGh, repo, prNumber, opts = {}) {
     return { status: "BLOCKED", reasons: ["unable to resolve main tip after merge"], sourceSha: null };
   }
   const sourceSha = tip.stdout.trim().toLowerCase();
+  const profile = opts.profile === "proof" ? "proof" : "staging";
+  const deploymentReason = opts.deploymentReason || "auto2-low-risk-merge";
   const dispatch = runGh([
     "workflow", "run", "upstream-auto3-deploy.yml",
     "--repo", repo,
     "-f", `source_sha=${sourceSha}`,
     "-f", `source_pr=${prNumber}`,
-    "-f", "deployment_reason=auto2-low-risk-merge",
-    "-f", "profile=staging",
+    "-f", `deployment_reason=${deploymentReason}`,
+    "-f", `profile=${profile}`,
     "-f", "force_smoke_fail=false",
     "-f", `expected_merged_sha=${sourceSha}`,
   ]);
@@ -269,6 +464,10 @@ export function dispatchAndAwaitAuto3(runGh, repo, prNumber, opts = {}) {
       reasons: [`AUTO-3 dispatch failed: ${dispatch.stderr || dispatch.stdout}`],
       sourceSha,
     };
+  }
+
+  if (opts.skipWait === true) {
+    return { status: "DISPATCHED", reasons: ["wait skipped"], sourceSha };
   }
 
   const pollMs = opts.pollMs ?? 15_000;
@@ -305,6 +504,7 @@ export function dispatchAndAwaitAuto3(runGh, repo, prNumber, opts = {}) {
               return { status: "DEPLOYED", reasons: [], sourceSha, runId };
             }
             // Inspect job logs is heavy; map failure conclusions conservatively
+            // FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55: ROLLED_BACK/FAILED/BLOCKED/CRITICAL are durable terminals — no retry loop.
             if (st.conclusion === "failure") {
               return { status: "FAILED", reasons: ["AUTO-3 workflow failed"], sourceSha, runId };
             }
@@ -409,6 +609,7 @@ function parseArgs(argv) {
     if (a === "--json") out.json = true;
     else if (a === "--dry-run") out.dryRun = true;
     else if (a === "--owner-approved") out.ownerApproved = true;
+    else if (a === "--require-sensitive-approval") out.requireSensitiveApproval = true;
     else if (a === "--allow-missing-app") out.allowMissingApp = true;
     else if (a === "--help" || a === "-h") out.help = true;
     else if (a.startsWith("--") && i + 1 < argv.length) out[a.slice(2)] = argv[++i];
@@ -420,7 +621,12 @@ const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.arg
 if (isMain) {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || !args.repo || !args.pr) {
-    process.stdout.write(`Usage: auto2-finalize.mjs --repo owner/name --pr N --validated-head SHA [--validation-conclusion X] [--owner-approved] [--dry-run] [--json]\n`);
+    process.stdout.write(
+      "Usage: auto2-finalize.mjs --repo owner/name --pr N --validated-head SHA "
+      + "[--validation-conclusion X] [--approved-head SHA] [--require-sensitive-approval] "
+      + "[--owner-approved] [--auto3-profile staging|proof] [--dry-run] [--json]\n"
+      + "Note: --owner-approved alone never authorizes a sensitive merge.\n",
+    );
     process.exit(args.help ? 0 : 2);
   }
   try {
@@ -428,15 +634,21 @@ if (isMain) {
       repo: String(args.repo),
       prNumber: String(args.pr),
       validatedHeadSha: String(args["validated-head"] || ""),
+      approvedHead: args["approved-head"] ? String(args["approved-head"]) : undefined,
       validationConclusion: args["validation-conclusion"] ? String(args["validation-conclusion"]) : undefined,
       ownerApproved: args.ownerApproved === true,
+      requireSensitiveApproval: args.requireSensitiveApproval === true,
+      auto3Profile: args["auto3-profile"] ? String(args["auto3-profile"]) : undefined,
       allowMissingApp: args.allowMissingApp === true,
       dryRun: args.dryRun === true,
       executeCandidateCode: false,
     });
     if (args.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     else process.stdout.write(`${result.action} risk=${result.classification?.riskClass ?? "-"}\n`);
-    process.exit(result.action === "blocked" ? 2 : 0);
+    process.exit(result.action === "blocked" || String(result.action).includes("deploy-failed")
+      || String(result.action).includes("deploy-critical") || String(result.action).includes("rolled-back")
+      ? 2
+      : 0);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);

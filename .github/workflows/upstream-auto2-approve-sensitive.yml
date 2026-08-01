@@ -1,0 +1,158 @@
+# FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55:
+# Trusted post-approval merge path for AUTO-2 sensitive upstream PRs.
+# Prior gap: finalize classified sensitive correctly but never merged after owner approval.
+# This workflow runs only via workflow_dispatch from trusted Appsolino main code.
+# Independently verifies: open automation/upstream-* PR, exact approved_head, sensitive
+# classification, green checks, APPROVED review from Anas966 on that exact commit.
+# Never executes candidate package scripts. Never receives Host D deploy secrets.
+# Merge uses gh pr merge --merge --match-head-commit <approved_head>, then dispatches
+# AUTO-3 for the exact merged main SHA. ROLLED_BACK/FAILED/BLOCKED/CRITICAL are durable
+# terminals with no retry loop. A raw --owner-approved flag is not used here.
+
+name: Upstream AUTO-2 Approve Sensitive
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Sensitive automation/upstream-* PR number"
+        required: true
+        type: string
+      approved_head:
+        description: "Exact PR head SHA the owner approved"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: auto2-approve-sensitive-${{ inputs.pr_number }}-${{ inputs.approved_head }}
+  cancel-in-progress: false
+
+jobs:
+  approve-and-merge:
+    name: Verify owner approval + exact-head merge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse Host D secrets in this job
+        env:
+          HOST_D_DEPLOY_SSH_KEY: ${{ secrets.HOST_D_DEPLOY_SSH_KEY }}
+          HOST_D_KNOWN_HOSTS: ${{ secrets.HOST_D_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${HOST_D_DEPLOY_SSH_KEY}" || -n "${HOST_D_KNOWN_HOSTS}" ]]; then
+            echo "::error::AUTO-2 approve-sensitive must not receive Host D deploy secrets"
+            exit 1
+          fi
+
+      - name: Require Appsolino Automation GitHub App credentials
+        env:
+          APP_ID: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          APP_KEY: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_ID}" || -z "${APP_KEY}" ]]; then
+            echo "::error::AUTO-2 fail-closed: App credentials missing"
+            exit 1
+          fi
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+          permission-actions: write
+
+      - name: Checkout trusted workflow code from Appsolino main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Guard — never execute candidate package scripts
+        run: |
+          set -euo pipefail
+          if [[ -d node_modules ]] && rg -q "candidate" <<<"${{ github.ref }}" 2>/dev/null; then
+            echo "::error::unexpected candidate context"
+            exit 1
+          fi
+          # Static guard: this job must not invoke package-manager installs from a PR head.
+          echo "Trusted main checkout only; no candidate package scripts."
+
+      - name: Configure App git/gh auth (trusted zone only)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/auto2-gh-config
+        run: |
+          set -euo pipefail
+          mkdir -p "$GH_CONFIG_DIR"
+          gh auth setup-git
+
+      - name: Verify + exact-head merge + AUTO-3 dispatch
+        id: fin
+        env:
+          AUTO2_GITHUB_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/auto2-gh-config
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR: ${{ inputs.pr_number }}
+          APPROVED_HEAD: ${{ inputs.approved_head }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GH_CONFIG_DIR"
+          APPROVED_HEAD="$(echo "$APPROVED_HEAD" | tr 'A-F' 'a-f')"
+          if [[ ! "$APPROVED_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::approved_head must be a full 40-char SHA"
+            exit 1
+          fi
+          set +e
+          node infra/scripts/auto2-finalize.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR" \
+            --validated-head "$APPROVED_HEAD" \
+            --approved-head "$APPROVED_HEAD" \
+            --validation-conclusion success \
+            --require-sensitive-approval \
+            --json > /tmp/auto2-approve-sensitive.json
+          code=$?
+          set -e
+          cat /tmp/auto2-approve-sensitive.json
+          {
+            echo "## AUTO-2 approve sensitive"
+            echo
+            echo '```json'
+            cat /tmp/auto2-approve-sensitive.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          action="$(python3 -c 'import json;print(json.load(open("/tmp/auto2-approve-sensitive.json"))["action"])')"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          merged_sha="$(python3 -c 'import json;d=json.load(open("/tmp/auto2-approve-sensitive.json"));print(d.get("mergedMainSha") or (d.get("auto3") or {}).get("sourceSha") or "")')"
+          echo "merged_main_sha=$merged_sha" >> "$GITHUB_OUTPUT"
+          # Idempotent after merge is success; approval-required / blocked / deploy terminals fail closed.
+          case "$action" in
+            auto-merged|auto-merged-deployed|already-merged-idempotent)
+              exit 0
+              ;;
+            auto-merged-deploy-rolled-back|auto-merged-deploy-critical|auto-merged-deploy-failed|blocked)
+              exit 2
+              ;;
+            *)
+              exit 2
+              ;;
+          esac
+
+      - name: Guard — Host D only via AUTO-3 workflow
+        run: |
+          set -euo pipefail
+          echo "AUTO-2 approve-sensitive must not SSH/install Host D; deploy is delegated to upstream-auto3-deploy.yml."

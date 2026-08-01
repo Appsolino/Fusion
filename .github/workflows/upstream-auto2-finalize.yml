@@ -2,7 +2,11 @@
 # Trusted decision/finalizer trust zone. Workflow code always from Appsolino main.
 # Does not execute candidate package scripts. Mints App installation token only here.
 # Recomputes risk from GitHub API with trusted classifier. Exact-head merge for low-risk only.
-# FNXC:AppsolinoAuto3 2026-08-01-01:20: After eligible low-risk merge to main, dispatches AUTO-3 and waits for DEPLOYED. Never merges sensitive PR #34-class changes automatically. Never executes candidate package scripts.
+# FNXC:AppsolinoAuto3 2026-08-01-01:20: After eligible low-risk merge to main, dispatches AUTO-3 and waits for DEPLOYED. Never executes candidate package scripts.
+# FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55:
+# Sensitive without verified exact-head owner review → approval-required (no merge).
+# Sensitive with verified Anas966 APPROVED on exact head → merge + AUTO-3 (also via upstream-auto2-approve-sensitive.yml).
+# A raw --owner-approved flag alone is not authorization.
 
 name: Upstream AUTO-2 Finalize
 
