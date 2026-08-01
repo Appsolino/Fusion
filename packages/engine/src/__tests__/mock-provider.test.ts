@@ -156,6 +156,8 @@ describe("MockAgentRuntime", () => {
     clearMockScript({ sessionPurpose: "executor", taskId });
     updateExecute.mockClear();
     await runtime.promptWithFallback(session, "default");
+    // FNXC:AppsolinoAuto4 2026-08-01-04:10: Prefer Appsolino Correction B suite (0-based + zero-step fail-closed).
+    // Upstream independently asserted step:0 for the same FN-6607 fix; keep Appsolino expectation + extended cases below.
     expect(updateExecute).toHaveBeenCalledWith(expect.any(String), { step: 0, status: "done" }, undefined, undefined, expect.anything());
   });
 

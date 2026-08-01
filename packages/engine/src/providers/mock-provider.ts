@@ -233,6 +233,12 @@ const DEFAULT_SCRIPTS: Record<MockSessionPurpose, MockScript> = {
       }
       for (const [index, step] of steps.entries()) {
         if (step.status !== "done" && step.status !== "skipped") {
+          /*
+          FNXC:AppsolinoAuto4 2026-08-01-04:10:
+          Overlay: Appsolino V1A.1 Correction B already used 0-based indexes + zero-step fail-closed.
+          Upstream independently landed the same FN-6607 fix (FNXC:MockProvider 2026-07-31-13:00).
+          Keep Appsolino guard behavior; retain 0-based step:index invoke (not index+1).
+          */
           await ctx.invokeTool("fn_task_update", { step: index, status: "done" });
         }
       }

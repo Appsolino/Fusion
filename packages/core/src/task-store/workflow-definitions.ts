@@ -43,6 +43,8 @@ import { resolveDefaultOnOptionalGroupIds } from "../workflow-optional-steps.js"
 import { resolveSwitchReconciliation } from "../workflow-reconciliation.js";
 import { WORKFLOW_COMPILED_STEP_TEMPLATE_PREFIX } from "../store.js";
 import { resolveWorkflowIrForTask } from "../workflow-ir-resolver.js";
+import { resolveProjectColumnsForRoles, REVIEW_ROLES } from "../project-lane-vocabulary.js";
+import type { InReviewDurationLanes } from "./async-audit.js";
 
 export async function getAgentLogsByTimeRangeImpl(store: TaskStore,
     taskId: string,
@@ -115,6 +117,20 @@ export function migrateLegacyArchiveEntriesToArchiveDbImpl(store: TaskStore): vo
 }
 
 export async function migrateActiveArchivedTasksToArchiveDbImpl(store: TaskStore): Promise<void> {
+    /*
+    FNXC:WorkflowResolvedColumns 2026-07-30-22:10 DELIBERATE-LITERAL:
+    `'archived'` here is the STATE marker, not a board lane, and must NOT be widened to the resolved
+    archived columns.
+
+    This finds live rows that Fusion's own archive path stamped (`archive-lifecycle-2.ts` and
+    `serialization.ts` both hardcode `column: "archived"`) so they can be migrated into the archive
+    DB. A workflow may also declare an archived-TRAIT lane under any id — `resolveLifecycleColumns`
+    resolves it, and a card can be moved there — but such a card was never archived by Fusion, has no
+    archive-store row, and migrating it would move live work out of the board.
+
+    So the resolved set is the wrong question at this site even though it is the right one for the
+    live-view exclusions that share this literal. See issue #2839 for the split.
+    */
     const rows = store.db.prepare(`SELECT * FROM tasks WHERE "column" = 'archived'`).all() as unknown as TaskRow[];
     if (rows.length === 0) {
       return;
@@ -505,7 +521,7 @@ export function resolveTaskWorkflowIrSyncImpl(store: TaskStore, taskId: string):
 export function getTaskWorkflowSelectionImpl(_store: TaskStore, _taskId: string): { workflowId: string; stepIds: string[] } | undefined {
     /*
     FNXC:PostgresCutover 2026-07-04-00:00:
-    Backend mode cannot synchronously read PostgreSQL, so return undefined and let the sync readers (resolveEffectiveWorkflowIdSync / resolveTaskWorkflowIrSync) fall back to their defaults. The authoritative read is getTaskWorkflowSelectionAsync; this also converts the prior PG-mode throw into a graceful default.
+    Backend mode cannot synchronously read PostgreSQL, so return undefined and let the sync reader (resolveTaskWorkflowIrSync) fall back to its default. The authoritative read is getTaskWorkflowSelectionAsync; this also converts the prior PG-mode throw into a graceful default.
     */
     /* FNXC:SqliteDualPathCleanup 2026-07-26-14:20: sync selection reader is incomplete-PG; use getTaskWorkflowSelectionAsync. */
     return undefined;
@@ -904,6 +920,12 @@ export function pruneAgentLogFilesImpl(store: TaskStore, retentionDays: number):
     if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
       return { prunedFiles: 0, prunedEntries: 0, freedBytes: 0 };
     }
+    /*
+    FNXC:WorkflowResolvedColumns 2026-07-30-22:14 DELIBERATE-LITERAL:
+    STATE marker again, same reasoning as migrateActiveArchivedTasksToArchiveDbImpl above: this prunes
+    agent-log files for rows Fusion archived or soft-deleted. A card in a workflow's archived-TRAIT
+    lane is live work whose logs must survive, so the resolved set would delete data here.
+    */
     // Only prune JSONL files for tasks that are no longer active (soft-deleted or archived)
     const inactiveTaskIds = new Set(
       (
@@ -993,9 +1015,46 @@ export function getSettingsSyncImpl(store: TaskStore): Settings {
         return store.settingsSyncCache ?? DEFAULT_SETTINGS;
 }
 
+/*
+FNXC:WorkflowLifecycleColumns 2026-07-30-22:15:
+Resolve the two roles the duration query reads, ONCE per call, and hand them to the SQL.
+
+The predicate had `in-review` and `done` baked into a `sql` template — the one place neither the
+lifecycle census nor the unwired-lane-parameter guard can see them — so the Reliability panel's
+duration metric stayed blind on a renamed board after #2861 fixed the two counts beside it.
+
+This impl is where the store is available, which is why the resolution lives here rather than in
+`async-audit.ts`: that function takes a `db` handle and cannot resolve anything. Best-effort — a
+failed resolve leaves the query on its documented legacy lanes rather than failing the panel.
+*/
 export async function getInReviewDurationEventsImpl(store: TaskStore, options: { since: string; until: string }): Promise<ActivityLogEntry[]> {
         const layer = store.asyncLayer!;
-    return getInReviewDurationEventsAsync(layer.db, layer.projectId ?? "", options);
+    /*
+    FNXC:WorkflowLifecycleColumns 2026-07-31-06:20:
+    Named type, not an inferred literal, and the reason is a tool contract rather than style.
+
+    `scripts/lib/unwired-lane-parameter.mjs` decides a lane parameter is WIRED when some other file
+    mentions both the parameter name and its declaring symbol. For an interface passed as an inferred
+    object literal there is no mention of the type anywhere, so this call site — which does supply
+    both lanes — was reported as unwired, and #2875 landed two false entries into a guard written to
+    catch the opposite mistake.
+
+    Annotating the local is the smallest honest fix. I tried three variations of the heuristic first;
+    each traded the false positive for false NEGATIVES (the widest hid twelve genuine entries), which
+    is the usual sign that a co-occurrence check has reached its limit. Naming the type costs one
+    word, makes the wiring visible to both the reader and the tool, and leaves the guard's rule alone.
+    */
+    let lanes: InReviewDurationLanes | undefined;
+    try {
+      const [review, complete] = await Promise.all([
+        resolveProjectColumnsForRoles(store, REVIEW_ROLES),
+        resolveProjectColumnsForRoles(store, ["complete"]),
+      ]);
+      lanes = { reviewColumns: [...review], completeColumns: [...complete] };
+    } catch {
+      lanes = undefined;
+    }
+    return getInReviewDurationEventsAsync(layer.db, layer.projectId ?? "", options, lanes);
 }
 
 export async function getTaskMergedTaskIdsImpl(store: TaskStore, options: { since: string; until: string }): Promise<Set<string>> {

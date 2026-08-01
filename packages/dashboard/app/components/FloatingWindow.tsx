@@ -120,7 +120,7 @@ const FLOATING_WINDOW_OUTSIDE_POINTER_SAFE_SURFACE_SELECTOR = [
 ].join(", ");
 
 /*
-FNXC:ModalTouchGeometry 2026-08-13-12:00:
+FNXC:ModalTouchGeometry 2026-07-27-12:00:
 FN-8619: Task Detail's body-portaled activity-view menu is a logical child of its modal.
 Treating it as safe prevents a preference-enabled outside pointer-down from closing the host.
 
@@ -232,6 +232,16 @@ export function FloatingWindow({
   mouse geometry; a known touch tablet at 768px is the one surface that receives enlarged targets.
   */
   const hasTabletTouchGeometry = isTabletTouchViewport(viewportMode);
+  /*
+  FNXC:ModalTouchGeometry 2026-08-01-03:48:
+  Tablet MODE (touch or not) is a distinct styling surface from touch geometry: a 900px
+  non-touch window classifies tablet without `--touch-geometry`, yet operators still see the
+  FN-8015 scrollbar gutter as an uneven right inset there (third recurrence of the Task Detail
+  right-padding bug — FN-8630/FN-8634 fixed only the `.modal-overlay` shells, while every
+  tablet task popup and floating terminal renders through THIS host). Expose the mode as a
+  class so FloatingWindow.css can zero the gutter for all tablet windows.
+  */
+  const isTabletMode = viewportMode === "tablet";
   const initialGeometry = useRef<{ size: FloatingWindowSize; position: FloatingWindowPosition } | null>(null);
   /*
   FNXC:ModalGeometryPersistence 2026-07-16-00:40:
@@ -632,13 +642,13 @@ export function FloatingWindow({
       aria-labelledby={ariaLabelledBy}
       data-testid={testId ?? `floating-window-overlay-${windowKey}`}
       {...backdropMouseHandlers}
-      // FNXC:ModalTouchGeometry 2026-08-13-12:00: FN-8619 keeps Agent Detail's paired mouse-only backdrop contract at the shared modal backdrop; this deliberately does not alter pointer-down dismissal.
+      // FNXC:ModalTouchGeometry 2026-07-27-12:00: FN-8619 keeps Agent Detail's paired mouse-only backdrop contract at the shared modal backdrop; this deliberately does not alter pointer-down dismissal.
       // FNXC:FloatingWindow 2026-06-22-23:00: The z-index MUST live on the position:fixed overlay (which creates a stacking context), not the panel. A panel z-index is trapped inside the overlay's context and loses to page elements that are stacking contexts in body's context (e.g. the right dock at position:absolute z-index:20). With z on the overlay, the whole window sits at the shared floating band in body's stacking context and reliably paints above page content + tap-to-front reorders correctly.
       style={{ zIndex }}
     >
       <div
         ref={panelRef}
-        className={`floating-window${hideHeader ? " floating-window--headerless" : ""}${hasTabletTouchGeometry ? " floating-window--touch-geometry" : ""}${className ? ` ${className}` : ""}`}
+        className={`floating-window${hideHeader ? " floating-window--headerless" : ""}${hasTabletTouchGeometry ? " floating-window--touch-geometry" : ""}${isTabletMode ? " floating-window--tablet" : ""}${className ? ` ${className}` : ""}`}
         style={panelStyle}
         data-testid={`floating-window-${windowKey}`}
         onPointerDownCapture={bringToFront}

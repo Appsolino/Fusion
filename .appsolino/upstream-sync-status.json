@@ -1,0 +1,28 @@
+{
+  "outcome": "merged",
+  "recordedAt": "2026-08-01T04:08:17Z",
+  "integrationBranch": "main",
+  "appsolinoSha": "04a7b4cf519f29afbb0612414a0badbb18143f31",
+  "upstreamSha": "71576d9536267a7835f352922a55831811717896",
+  "mergeBase": "b85a5d4531df8fa749d77bf85ea4ab9ab960ce86",
+  "ahead": 78,
+  "behind": 639,
+  "conflictedFiles": [],
+  "resolvedConflicts": [
+    {
+      "file": "packages/engine/src/providers/mock-provider.ts",
+      "resolution": "preserve-appsolino-correction-b",
+      "note": "Keep 0-based step indexes + zero-step fail-closed; upstream independently fixed FN-6607"
+    },
+    {
+      "file": "packages/engine/src/__tests__/mock-provider.test.ts",
+      "resolution": "preserve-appsolino-correction-b-suite",
+      "note": "Keep Appsolino 1/4-step + zero-step tests; drop redundant upstream-only assertion"
+    }
+  ],
+  "touchesWorkflows": true,
+  "touchesMigrations": true,
+  "touchesLockfile": false,
+  "auto4Pinned": true,
+  "mutatesAppsolinoMain": false
+}

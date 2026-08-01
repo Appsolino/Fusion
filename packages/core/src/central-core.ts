@@ -215,6 +215,16 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
   private readonly ensureGitRepositoryForProjectPath: typeof ensureGitRepositoryForProjectPath;
   private ownedBackendShutdown: (() => Promise<void>) | null = null;
   private ownedBackendReleaseConnections: (() => Promise<void>) | null = null;
+  private initializationPromise: Promise<void> | null = null;
+  private lifecycleOperation: Promise<void> = Promise.resolve();
+  private closeRequested = false;
+  private closed = false;
+
+  private runLifecycleOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.lifecycleOperation.then(operation, operation);
+    this.lifecycleOperation = result.then(() => undefined, () => undefined);
+    return result;
+  }
 
   /**
    * FNXC:CentralCore 2026-06-26-12:30:
@@ -242,9 +252,15 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
    * call, backendMode is true and all methods delegate to PostgreSQL.
    */
   async attachBackendLayer(layer: AsyncDataLayer): Promise<void> {
+    this.assertAcceptingOperations();
     if (!layer) {
       throw new Error("attachBackendLayer requires a non-null AsyncDataLayer");
     }
+    return this.runLifecycleOperation(() => this.attachBackendLayerOnce(layer));
+  }
+
+  private async attachBackendLayerOnce(layer: AsyncDataLayer): Promise<void> {
+    this.assertOpen();
     // Release a central-only pool before adopting the runtime's shared layer.
     if (this.ownedBackendReleaseConnections) {
       /*
@@ -270,7 +286,7 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
     // post-construction injection point.
     (this as { asyncLayer: AsyncDataLayer | null }).asyncLayer = layer;
     this.initialized = false;
-    await this.init();
+    await this.initializeOnce();
   }
 
   private readonly onDiscoveryNodeDiscovered = (node: DiscoveredNode): void => {
@@ -318,19 +334,39 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
    * Idempotent — safe to call multiple times.
    */
   async init(): Promise<void> {
+    this.assertAcceptingOperations();
     if (this.initialized) return;
 
     /*
+     * FNXC:CentralCore 2026-07-29-16:10:
+     * Layer-less initialization allocates an owned PostgreSQL lifecycle. Concurrent callers must share one in-flight attempt so a second backend cannot be orphaned when ownership fields are overwritten. Clear the promise after either outcome so a failed bootstrap remains retryable.
+     */
+    if (!this.initializationPromise) {
+      this.initializationPromise = this.runLifecycleOperation(() => this.initializeOnce());
+    }
+    const initialization = this.initializationPromise;
+    try {
+      await initialization;
+    } finally {
+      if (this.initializationPromise === initialization) this.initializationPromise = null;
+    }
+  }
+
+  private async initializeOnce(): Promise<void> {
+    this.assertOpen();
+    if (this.initialized) return;
+    /*
     FNXC:SqliteDualPathCleanup 2026-07-26-14:15:
-    CentralCore.init is PostgreSQL-only. When no asyncLayer is attached yet, mark initialized without opening SQLite; attachBackendLayer bootstraps PG later.
+    CentralCore.init is PostgreSQL-only (SQLite CentralDatabase path deleted).
+
+    FNXC:CentralCore 2026-07-28-03:00:
+    #2454 accidentally early-returned on layer-less init and left the PG bootstrap as dead code. Dashboard routes (e.g. GET /api/activity-feed) and CLI fallbacks call `new CentralCore(); await init(); getRecentActivity()` without attachBackendLayer, so a no-op init throws backendHandle ("only available in backend mode"). Restore layer-less createCentralBackendLayer bootstrap. When a pre-injected asyncLayer exists, bootstrap that shared layer only. Runtime serve may still call attachBackendLayer later to adopt the TaskStore pool (releases any owned central-only pool).
     */
     if (this.asyncLayer) {
       await asyncCentralCore.ensureBackendBootstrap(this.asyncLayer);
       this.initialized = true;
       return;
     }
-    this.initialized = true;
-    return;
 
     /*
      * FNXC:CentralPostgresCutover 2026-07-14-17:14:
@@ -364,13 +400,22 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
    * Closes database connections and releases resources.
    */
   async close(): Promise<void> {
+    this.closeRequested = true;
+    return this.runLifecycleOperation(() => this.closeOnce());
+  }
+
+  private async closeOnce(): Promise<void> {
+    /*
+    FNXC:CentralPostgresCutover 2026-07-29-16:26:
+    Initialization, layer replacement, and close share one lifecycle queue. Cleanup must observe and release the backend the preceding operation publishes instead of returning early, leaking it, or letting attachment revive a core after shutdown.
+
+    FNXC:CentralPostgresCutover 2026-07-29-17:43:
+    Close is terminal. Operations queued after cleanup must fail instead of allocating or attaching a backend after listeners and owned resources have been released.
+    */
+    this.closed = true;
     if (this.nodeDiscovery) {
       this.stopDiscovery();
     }
-
-    await this.markLocalNodeOffline().catch((error) => {
-      severityAuditLog.warn("[central-core] Failed to persist local node offline during close", error);
-    });
 
     // FNXC:CentralCore 2026-06-26-12:30: In backend mode there is no SQLite
     // CentralDatabase to close; the shared connection pool is owned by the
@@ -387,6 +432,14 @@ export class CentralCore extends EventEmitter<CentralCoreEvents> {
     }
     this.initialized = false;
     this.removeAllListeners();
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error("CentralCore is closed");
+  }
+
+  private assertAcceptingOperations(): void {
+    if (this.closeRequested) throw new Error("CentralCore is closed");
   }
 
   /** Persist the local mesh node's terminal state before its backend closes. */

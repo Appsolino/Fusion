@@ -70,8 +70,10 @@ jobs:
       - name: Guard — no App token mint in candidate job
         run: |
           set -euo pipefail
-          # Candidate zone must never mint an installation token.
-          if grep -n "create-github-app-token" .github/workflows/upstream-auto2-validate.yml; then
+          # FNXC:AppsolinoAuto4 2026-08-01-04:12:
+          # Match only a real action use of create-github-app-token. A bare string grep matches this
+          # guard's own source and false-fails every candidate validation run.
+          if grep -nE 'uses:[[:space:]]*actions/create-github-app-token@' .github/workflows/upstream-auto2-validate.yml; then
             echo "::error::validate workflow must not mint App tokens"
             exit 1
           fi
