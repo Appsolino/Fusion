@@ -288,12 +288,12 @@ Blocks trustworthy AUTO-3 auto-merge and can mis-target integration PRs if defau
 
 ## ISS-AUTO-003 — AUTO-2 waiter selects unrelated older AUTO-3 run
 
-Status: **FIXED** (code + regression tests; live disposable proof pending merge of handoff-correlation PR)
+Status: **FIXED** (live proven on Host D via PR #52)
 Severity: High
 Component: AUTO-2 finalize / approve-sensitive → AUTO-3 dispatch waiter
 First observed: 2026-08-01 (AUTO-4 PR #47 approve-sensitive parent)
-Last observed: 2026-08-01
-GitHub: parent [run 30687772141](https://github.com/Appsolino/Fusion/actions/runs/30687772141); real child [run 30687790065](https://github.com/Appsolino/Fusion/actions/runs/30687790065) DEPLOYED
+Last observed fixed: 2026-08-01 (proof PR #52 / AUTO-3 run 30691437372)
+GitHub: parent [run 30691423651](https://github.com/Appsolino/Fusion/actions/runs/30691423651); child [run 30691437372](https://github.com/Appsolino/Fusion/actions/runs/30691437372) DEPLOYED
 
 ### Failure fingerprint
 
@@ -321,4 +321,7 @@ False-negative parent workflow results; operators cannot trust AUTO-2 success/fa
 | Surface | Result | Evidence |
 | --- | --- | --- |
 | AUTO-4 #47 parent waiter | FAIL (false) | Attached `30679116104` while child `30687790065` DEPLOYED |
-| `auto3-handoff.mjs` + waiter rewrite | FIXED (pending live proof) | Unit/integration tests green |
+| `auto3-handoff.mjs` + waiter rewrite (#51) | FIXED | Unit/integration tests green |
+| Live proof PR #52 | PROVEN | Handoff `auto2-30691423651-1-5f1b923bd815-5ccedbe0` → child `30691437372` DEPLOYED; older failed ignored |
+| Finalize YAML heredoc (#53) | FIXED | Restored `workflow_dispatch` registration |
+| Finalize summary exit (#54 follow-up) | FIXED | Parent no longer fails after successful DEPLOYED due to summary SyntaxError |
