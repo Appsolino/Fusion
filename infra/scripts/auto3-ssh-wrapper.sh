@@ -25,6 +25,7 @@ fi
 case "$cmd" in
   "auto3-receive "*)
     # auto3-receive <archive-basename>   — writes stdin to inbox (1.5 GiB cap)
+    # FNXC:AppsolinoAuto3 2026-08-01-01:52: Must not use a bash heredoc for the Python body — heredoc steals stdin and empties the archive stream.
     base="${cmd#auto3-receive }"
     base="$(basename "$base")"
     if [[ ! "$base" =~ ^[A-Za-z0-9._-]{1,200}$ ]]; then
@@ -32,8 +33,8 @@ case "$cmd" in
       exit 1
     fi
     dest="$INBOX/$base"
-    python3 - "$dest" <<'PY'
-import sys
+    python3 -c '
+import os, sys
 dest = sys.argv[1]
 cap = 1536 * 1024 * 1024
 written = 0
@@ -45,12 +46,11 @@ with open(dest, "wb") as out:
         written += len(chunk)
         if written > cap:
             out.close()
-            import os
             os.remove(dest)
             raise SystemExit("AUTO3_SSH_DENIED: archive exceeds size cap")
         out.write(chunk)
 print(written)
-PY
+' "$dest"
     chmod 0640 "$dest"
     sha256sum "$dest" | awk '{print $1}'
     ;;
