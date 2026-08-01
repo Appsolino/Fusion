@@ -24,13 +24,20 @@ Last updated: 2026-08-01
 | Host D | `auto3-0.74.0-beta.5-3e6a0ad67262` DEPLOYED |
 | Mode after | **CONTINUOUS UPSTREAM MAINTENANCE** (do not reopen AUTO-4) |
 
-## Post-catch-up divergence (2026-08-01)
+## Post-catch-up AUTO-1 (2026-08-01)
 
-Runfusion/Fusion `main` tip was **ahead by ~15 commits** of the AUTO-4 pin at proof time. After handoff-correlation live proof (PR #52 → AUTO-3 run `30691437372` DEPLOYED with handoff `auto2-30691423651-1-5f1b923bd815-5ccedbe0`), run AUTO-1 once and process **one** incremental `automation/upstream-*` via normal AUTO-2 policy.
+| Item | Value |
+| --- | --- |
+| Run | [30692061966](https://github.com/Appsolino/Fusion/actions/runs/30692061966) |
+| Upstream tip | `5786c87eff118231e58bb0877f2cb2252a346a8d` |
+| vs pin `71576d953626` | upstream ahead ~29 |
+| PR | [#55](https://github.com/Appsolino/Fusion/pull/55) `automation/upstream-5786c87eff11` **CONFLICT** |
+| Conflict | `scripts/lib/lifecycle-column-census-baseline.json` |
+| Migrations | YES → sensitive AUTO-2 path (do not reopen AUTO-4) |
 
 ## AUTO-2 → AUTO-3 correlation
 
-Trusted waiters generate `handoff_id`, pass `-f handoff_id=…`, and poll only `workflow_dispatch` runs whose run-name contains that id (created after dispatch). Removed unsafe `or .display_title != null` and newest-run fallback (ISS-AUTO-003). **Live proven** on Host D via disposable PR #52.
+Trusted waiters generate `handoff_id`, pass `-f handoff_id=…`, and poll only `workflow_dispatch` runs whose run-name contains that id (created after dispatch). Removed unsafe `or .display_title != null` and newest-run fallback (ISS-AUTO-003). **Live proven** on Host D via disposable PR #52 → child [30691437372](https://github.com/Appsolino/Fusion/actions/runs/30691437372) DEPLOYED.
 
 Regression: `node --test infra/scripts/__tests__/auto3-handoff.test.mjs`
 
