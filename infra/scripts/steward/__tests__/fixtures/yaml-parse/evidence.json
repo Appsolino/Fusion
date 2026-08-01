@@ -1,0 +1,13 @@
+{
+  "workflowName": "Upstream AUTO-2 Finalize",
+  "workflowFamily": "auto2",
+  "runId": "30690000001",
+  "attempt": 1,
+  "failureClass": "workflow-yaml-parse",
+  "phase": "workflow-parse",
+  "component": "github-workflows",
+  "errorMessage": "Invalid workflow file: unindented <<PY heredoc broke workflow_dispatch",
+  "logText": "mapping values are not allowed here; workflow_dispatch not found as path-as-name",
+  "terminalStatus": "FAILED",
+  "forceIncident": true
+}

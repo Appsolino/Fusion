@@ -1,0 +1,14 @@
+{
+  "workflowName": "Upstream AUTO-1 Sync",
+  "workflowFamily": "auto1",
+  "runId": "30700000010",
+  "attempt": 1,
+  "failureClass": "generated-file-conflict",
+  "phase": "auto1-merge",
+  "component": "generated-baseline",
+  "errorMessage": "generated-file-conflict",
+  "logText": "CONFLICT Both modified: scripts/lib/lifecycle-column-census-baseline.json",
+  "conflictPaths": ["scripts/lib/lifecycle-column-census-baseline.json"],
+  "terminalStatus": "CONFLICT",
+  "forceIncident": true
+}

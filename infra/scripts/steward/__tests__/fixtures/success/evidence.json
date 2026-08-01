@@ -1,0 +1,11 @@
+{
+  "workflowName": "Upstream AUTO-3 Deploy",
+  "workflowFamily": "auto3",
+  "runId": "30705532077",
+  "attempt": 1,
+  "terminalStatus": "DEPLOYED",
+  "success": true,
+  "sourceSha": "16f24ed3b47321cc1b5aa693b2fac7e13a00b379",
+  "releaseId": "auto3-0.74.0-beta.6-16f24ed3b473",
+  "logText": "AUTO3_TERMINAL_STATUS=DEPLOYED"
+}

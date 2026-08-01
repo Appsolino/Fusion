@@ -1,0 +1,12 @@
+{
+  "incident": true,
+  "failureClass": "correlation-race",
+  "fingerprintPayload": {
+    "workflow": "auto2",
+    "phase": "auto3-run-selection",
+    "class": "correlation-race",
+    "error": "wrong auto-3 child selected via display_title newest-run fallback iss-auto-003",
+    "component": "auto3-handoff",
+    "terminal": "FAILED"
+  }
+}

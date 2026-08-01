@@ -1,0 +1,12 @@
+{
+  "workflowName": "Upstream AUTO-2 Finalize",
+  "workflowFamily": "auto2",
+  "runId": "30800000001",
+  "attempt": 1,
+  "parentRunId": "30800000001",
+  "parentTerminal": "DEPLOYED",
+  "missingChild": true,
+  "errorMessage": "missing auto3 child after timeout",
+  "terminalStatus": "DEPLOYED",
+  "forceIncident": true
+}

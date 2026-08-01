@@ -1,0 +1,12 @@
+{
+  "incident": true,
+  "failureClass": "version-gate-drift",
+  "fingerprintPayload": {
+    "workflow": "auto3",
+    "phase": "trusted-host-d-deploy",
+    "class": "version-gate-drift",
+    "error": "package-version-mismatch",
+    "component": "installer",
+    "terminal": "BLOCKED"
+  }
+}

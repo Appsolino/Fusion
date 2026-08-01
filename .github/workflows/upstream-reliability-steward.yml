@@ -1,0 +1,217 @@
+# FNXC:AppsolinoStewardS0 2026-08-01-21:10:
+# Upstream Reliability Steward S0 — observation only.
+# Fast path: workflow_run on named AUTO workflows.
+# Recovery path: hourly reconciliation at minute 17 (authoritative).
+# Trust rules: checkout trusted main only; never execute candidate code;
+# never dispatch/rerun/merge/deploy; no Host D deploy secrets; no Host P.
+# Evidence collection stays read-only; App token is minted only for issue upsert.
+
+name: Upstream Reliability Steward
+
+on:
+  workflow_run:
+    workflows:
+      - Upstream AUTO-1 Sync
+      - Upstream AUTO-2 Validate
+      - Upstream AUTO-2 Finalize
+      - Upstream AUTO-2 Approve Sensitive
+      - Upstream AUTO-3 Deploy
+    types: [completed]
+  schedule:
+    # Avoid minute-zero schedule contention (GitHub may delay/drop :00 crons).
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "reconcile | fixture-replay (CI self-check; no live issue opens from fixtures)"
+        required: true
+        type: choice
+        options:
+          - reconcile
+          - fixture-replay
+        default: fixture-replay
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: steward-s0-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: Collect + normalize evidence (read-only)
+    runs-on: ubuntu-latest
+    outputs:
+      has_incidents: ${{ steps.observe.outputs.has_incidents }}
+    steps:
+      - name: Checkout trusted main only
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Refuse deploy / Host P secrets in steward
+        env:
+          HOST_D_DEPLOY_SSH_KEY: ${{ secrets.HOST_D_DEPLOY_SSH_KEY }}
+          HOST_P_DEPLOY_SSH_KEY: ${{ secrets.HOST_P_DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${HOST_D_DEPLOY_SSH_KEY}" || -n "${HOST_P_DEPLOY_SSH_KEY}" ]]; then
+            echo "::error::S0 steward must not receive Host D/P deploy secrets"
+            exit 1
+          fi
+          echo "steward deploy-secret refuse check ok"
+
+      - name: Guard S0 invariants in this workflow file
+        run: |
+          set -euo pipefail
+          f=.github/workflows/upstream-reliability-steward.yml
+          grep -Fq 'cron: "17 * * * *"' "$f"
+          grep -q 'ref: main' "$f"
+          ! grep -q 'gh workflow run' "$f"
+          ! grep -q 'gh run rerun' "$f"
+          ! grep -q 'auto3-deploy' "$f"
+          echo "yaml-parse-ok"
+
+      - name: Observe (fixtures / event / reconcile)
+        id: observe
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WR_NAME: ${{ github.event.workflow_run.name || '' }}
+          WR_ID: ${{ github.event.workflow_run.id || '' }}
+          WR_ATTEMPT: ${{ github.event.workflow_run.run_attempt || '1' }}
+          WR_CONCLUSION: ${{ github.event.workflow_run.conclusion || '' }}
+          WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          DISPATCH_MODE: ${{ github.event.inputs.mode || '' }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/steward"
+          OUT="$RUNNER_TEMP/steward/incidents.json"
+          UPSERT="$RUNNER_TEMP/steward/upsert-input.json"
+
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_MODE}" == "fixture-replay" ]]; then
+            node infra/scripts/steward/run-observation.mjs --mode=fixture-replay --out="$OUT"
+            echo "has_incidents=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "${EVENT_NAME}" == "schedule" || ( "${EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_MODE}" == "reconcile" ) ]]; then
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=30" --jq '{
+              recentRuns: [.workflow_runs[] | {
+                id, name, status, conclusion, created_at, updated_at, head_sha, event, run_attempt
+              }],
+              handoffs: [],
+              nowMs: (now * 1000 | floor)
+            }' > "$RUNNER_TEMP/steward/reconcile-input.json"
+            node infra/scripts/steward/run-observation.mjs \
+              --mode=reconcile-file \
+              --input="$RUNNER_TEMP/steward/reconcile-input.json" \
+              --out="$OUT"
+            node --input-type=module -e '
+              import { readFileSync, writeFileSync } from "node:fs";
+              const j = JSON.parse(readFileSync(process.argv[1], "utf8"));
+              const c = (j.once && j.once.candidates) || j.merged || [];
+              writeFileSync(process.argv[2], JSON.stringify({ candidates: c }, null, 2));
+              console.log(c.length ? "true" : "false");
+            ' "$OUT" "$UPSERT" | tee "$RUNNER_TEMP/steward/has.txt"
+            echo "has_incidents=$(cat "$RUNNER_TEMP/steward/has.txt")" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # workflow_run fast path — event fields + logs are untrusted text only.
+          LOG_FILE="$RUNNER_TEMP/steward/run.log"
+          : > "$LOG_FILE"
+          if [[ -n "${WR_ID}" ]]; then
+            set +e
+            gh run view "$WR_ID" --log 2>/dev/null | head -c 200000 > "$LOG_FILE"
+            set -e
+          fi
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const conclusion = process.env.WR_CONCLUSION || "";
+            const success = conclusion === "success";
+            const logText = readFileSync(process.argv[1], "utf8");
+            const payload = {
+              workflowName: process.env.WR_NAME || "",
+              runId: process.env.WR_ID || "0",
+              attempt: process.env.WR_ATTEMPT || "1",
+              conclusion,
+              terminalStatus: success ? "SUCCESS" : "FAILED",
+              success,
+              headSha: process.env.WR_HEAD_SHA || "",
+              logText,
+              errorMessage: success ? "" : `workflow conclusion ${conclusion}`,
+              recordedUtc: new Date().toISOString(),
+            };
+            writeFileSync(process.argv[2], JSON.stringify(payload));
+          ' "$LOG_FILE" "$RUNNER_TEMP/steward/event.json"
+
+          node infra/scripts/steward/run-observation.mjs \
+            --mode=event-file \
+            --input="$RUNNER_TEMP/steward/event.json" \
+            --out="$OUT"
+
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const j = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            const n = j.normalized;
+            const candidates = n && n.openIncident ? [n] : [];
+            writeFileSync(process.argv[2], JSON.stringify({ candidates }, null, 2));
+            console.log(candidates.length ? "true" : "false");
+          ' "$OUT" "$UPSERT" | tee "$RUNNER_TEMP/steward/has.txt"
+          echo "has_incidents=$(cat "$RUNNER_TEMP/steward/has.txt")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload observation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: steward-s0-${{ github.run_id }}
+          path: ${{ runner.temp }}/steward/
+          if-no-files-found: warn
+          retention-days: 14
+
+  upsert-issues:
+    name: Upsert GitHub issues (App token)
+    needs: observe
+    if: needs.observe.outputs.has_incidents == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted main only
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download observation artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: steward-s0-${{ github.run_id }}
+          path: ${{ runner.temp }}/steward
+
+      - name: Create GitHub App token (issues write)
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-contents: read
+
+      - name: Upsert incidents by fingerprint marker
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test -f "$RUNNER_TEMP/steward/upsert-input.json"
+          node infra/scripts/steward/upsert-from-file.mjs \
+            --input="$RUNNER_TEMP/steward/upsert-input.json"

@@ -1,0 +1,13 @@
+{
+  "workflowName": "Upstream AUTO-2 Finalize",
+  "workflowFamily": "auto2",
+  "runId": "30705071215",
+  "attempt": 2,
+  "parentRunId": "30705071215",
+  "childRunId": "30705088925",
+  "parentTerminal": "DEPLOYED",
+  "childTerminal": "BLOCKED",
+  "errorMessage": "parent DEPLOYED child BLOCKED",
+  "terminalStatus": "BLOCKED",
+  "forceIncident": true
+}
