@@ -209,6 +209,21 @@ was SIGKILLed by heap pressure under workspace worker budgeting. The top-level
 `pretest` artifact bootstrap runs once before the orchestrator; lane subprocesses must
 not re-run `scripts/ensure-test-artifacts.mjs`.
 
+Use the exact aggregate command below to attempt all 15 app/API lanes, including after
+one or more lanes fail:
+
+```bash
+pnpm --filter @fusion/dashboard test -- --all
+```
+
+pnpm forwards that invocation as `-- --all`; the quality runner deliberately removes
+only the leading package-script separator and still rejects genuine unknown options.
+`--no-fail-fast` is an equivalent aggregate alias. Without either alias, the default is
+fail-fast for quick local feedback: remaining lanes are reported as **NOT RUN** with
+**UNKNOWN** status, never as passing. Aggregate mode attempts every lane exactly once;
+any failed or signal-terminated lane keeps the command nonzero and is named in the
+final failure summary. It must never print an all-passed summary when any lane failed.
+
 <!-- FNXC:TestInfrastructure 2026-06-21-12:21: FN-6854 applies the dashboard heap-runner pattern to the engine affected-package lane because a wide `vitest --changed` fan-out selected hundreds of real-git-heavy engine files and could be OS-SIGKILLed by heap pressure before Vitest returned a verdict. Keep the engine lane isolated, heap-capped, and lower-worker rather than raising concurrency or widening timeouts.
 
 FNXC:TestInfrastructure 2026-06-21-16:28: FN-6877 applies the same changed-mode envelope to the dashboard scoped affected lane because FN-6874 showed App/jsdom changed runs could be OS-OOM-killed even with inbound test concurrency already set to 1. Keep the per-lane watchdog finite and outside the env; the envelope is a heap-pressure guard, not a hang-budget increase.
