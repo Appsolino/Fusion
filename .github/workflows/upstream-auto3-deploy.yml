@@ -207,17 +207,17 @@ jobs:
           "${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" auto3-ping | grep -q AUTO3_PONG
           test -s "$RUNNER_TEMP/auto3-in/${ARCHIVE_NAME}"
           test -s "$RUNNER_TEMP/auto3-in/${MANIFEST_NAME}"
-          # stream archive + manifest (basenames only)
-          "${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-receive ${ARCHIVE_NAME}" <"$RUNNER_TEMP/auto3-in/${ARCHIVE_NAME}"
-          "${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-receive ${MANIFEST_NAME}" <"$RUNNER_TEMP/auto3-in/${MANIFEST_NAME}"
-          # refuse empty inbox transfers (sha of empty file)
+          # stream archive + manifest (basenames only). Wrapper must not use a heredoc (stdin is the artifact).
+          REMOTE_ARCH_SHA="$("${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-receive ${ARCHIVE_NAME}" <"$RUNNER_TEMP/auto3-in/${ARCHIVE_NAME}" | tail -1)"
+          REMOTE_MAN_SHA="$("${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-receive ${MANIFEST_NAME}" <"$RUNNER_TEMP/auto3-in/${MANIFEST_NAME}" | tail -1)"
           EMPTY_SHA=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-          ARCH_SHA="$("${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-ping" >/dev/null; sha256sum "$RUNNER_TEMP/auto3-in/${ARCHIVE_NAME}" | awk '{print $1}')"
-          if [[ "$ARCH_SHA" == "$EMPTY_SHA" ]]; then
-            echo "::error::archive is empty before transfer"
+          if [[ "$REMOTE_ARCH_SHA" == "$EMPTY_SHA" || "$REMOTE_MAN_SHA" == "$EMPTY_SHA" ]]; then
+            echo "::error::remote receive wrote empty artifact (stdin broken)"
             exit 1
           fi
-          # Verify remote sizes via a receive-report file is hard; deploy entry verifies hashes.          EXTRA=()
+          echo "remote archive sha=$REMOTE_ARCH_SHA"
+          echo "remote manifest sha=$REMOTE_MAN_SHA"
+          EXTRA=()
           if [[ "$FORCE_FAIL" == "true" ]]; then EXTRA+=(--force-smoke-fail); fi
           set +e
           OUT="$("${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-deploy --archive ${ARCHIVE_NAME} --manifest ${MANIFEST_NAME} --profile ${PROFILE} ${EXTRA[*]-}" 2>&1)"
