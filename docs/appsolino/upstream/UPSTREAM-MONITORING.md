@@ -12,7 +12,7 @@ Last updated: 2026-07-31
 | **Interim detection** | `.github/workflows/upstream-shadow.yml` — observation only |
 | **AUTO-1 (OPERATIONAL)** | `upstream-auto1.yml` + `auto1-upstream-sync.mjs` — App identity; `automation/upstream-*` + sync PR; no Host D |
 | **AUTO-2 (OPERATIONAL)** | `upstream-auto2-validate.yml` (credential-free candidate checks) + `upstream-auto2-finalize.yml` (trusted classify/labels/exact-head low-risk merge). Sensitive → `auto2:approval-required`. Never Host D |
-| **AUTO-3 (NEXT)** | Immutable Host D package/deploy/rollback |
+| **AUTO-3 (OPERATIONAL)** | `upstream-auto3-deploy.yml` + `appsolino-deploy` — immutable Host D build/deploy/rollback |
 | **Historical assessment** | `UPSTREAM-ASSESSMENT-2026-07-30.md` numbers are frozen |
 
 ## AUTO-2 trust zones
@@ -34,4 +34,4 @@ Required secrets (finalizer / AUTO-1 only):
 
 ## Current absorb PR
 
-PR #34 — **SENSITIVE / UNMERGED** (do not auto-merge; AUTO-4 backlog after AUTO-3).
+PR #34 — **SENSITIVE / UNMERGED** (AUTO-4 NOW; owner approval required; Host D via AUTO-3 only).
