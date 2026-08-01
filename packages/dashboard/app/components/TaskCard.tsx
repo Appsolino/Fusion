@@ -3557,7 +3557,7 @@ function TaskCardComponent({
         )}
         {(showStatusBadge || showQueuedToPlanBadge || showQueuedBadge) && (
           <span
-            className={`card-status-badge card-status-badge--${task.column}${showQueuedToPlanBadge ? " queued-to-plan" : ""}${isAwaitingApproval ? " awaiting-approval" : ""}${isPlanReviewReplanCapApproval ? " awaiting-approval--plan-review-replan-cap" : ""}${isAwaitingInput ? " awaiting-input" : ""}${isAgentActive ? " pulsing" : ""}${isFailed ? " failed" : ""}${isStuck ? " stuck" : ""}`}
+            className={`card-status-badge card-status-badge--${task.column}${showQueuedToPlanBadge ? " queued-to-plan" : ""}${showQueuedBadge && (task.overlapBlockedBy || task.blockedBy) ? " card-status-badge--queued-with-reason" : ""}${isAwaitingApproval ? " awaiting-approval" : ""}${isPlanReviewReplanCapApproval ? " awaiting-approval--plan-review-replan-cap" : ""}${isAwaitingInput ? " awaiting-input" : ""}${isAgentActive ? " pulsing" : ""}${isFailed ? " failed" : ""}${isStuck ? " stuck" : ""}`}
             title={
               isPlanReviewReplanCapApproval
                 ? t(

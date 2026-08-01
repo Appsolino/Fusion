@@ -264,6 +264,10 @@ Lock the id to the same chip-height row as .card-header-actions so the task id, 
   margin-inline-start: calc(var(--space-xs) / 2);
 }
 
+.card-status-badge--queued-with-reason {
+  padding-inline-end: calc(var(--space-xs) / 2);
+}
+
 /*
 FNXC:WorkflowBoard 2026-06-29-00:00:
 Aggregate Board cards need a compact workflow-name badge so operators can identify each card's source workflow while shared columns combine multiple workflows. The badge is opt-in metadata from Board and uses neutral card tokens so non-board TaskCard callers do not render empty workflow shells.

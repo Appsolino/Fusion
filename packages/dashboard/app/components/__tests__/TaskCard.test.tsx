@@ -4892,6 +4892,7 @@ describe("TaskCard", () => {
 
     const badge = screen.getByText("Queued").closest(".card-status-badge") as HTMLElement;
     expect(badge).toHaveTextContent(/^Queued$/);
+    expect(badge).toHaveClass("card-status-badge--queued-with-reason");
     const icon = badge.querySelector(`[data-testid="${expectedIcon}-${queuedTask.id}"]`);
     expect(icon).not.toBeNull();
     expect(icon).toHaveClass("card-queued-reason-icon");
