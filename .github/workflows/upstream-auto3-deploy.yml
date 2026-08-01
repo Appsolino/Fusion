@@ -87,7 +87,8 @@ jobs:
           SOURCE_PR: ${{ inputs.source_pr }}
         run: |
           set -euo pipefail
-          git fetch origin main --depth=1 || git fetch origin main
+          # FNXC:AppsolinoAuto3 2026-08-01-02:02: Fetch full origin/main history so merge-base --is-ancestor works when source_sha is behind tip (shallow --depth=1 falsely rejects ancestors).
+          git fetch origin main --prune
           SOURCE_SHA="$(echo "$SOURCE_SHA" | tr 'A-F' 'a-f')"
           if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::source_sha must be full 40-char SHA"
