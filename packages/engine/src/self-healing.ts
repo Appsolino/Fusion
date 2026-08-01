@@ -40,6 +40,12 @@ import { type TaskMoveLanes, resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PR
 import { finalizePlanningSegment } from "@fusion/core";
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
 import { createLogger, schedulerLog } from "./logger.js";
+import {
+  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+  buildInactiveDuplicateClearFeedback,
+  buildKeepDuplicateClearFeedback,
+  buildMarkerClearedReplanTaskPatch,
+} from "./duplicate-marker-clear.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
 import { RemovalReason, classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, hasUsableWorktreeShape, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "./worktree-pool.js";
 import {
@@ -7064,12 +7070,31 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           const canonicalFlags = await resolveNearDuplicateCanonicalFlags(this.store, canonical);
           if (!isNearDuplicateCanonicalInactive(canonical ?? undefined, canonicalFlags)) continue;
 
-          await this.store.updateTask(task.id, {
-            paused: false,
-            pausedReason: null,
-            status: null,
-            sourceMetadataPatch: { nearDuplicateDismissed: true },
-          });
+          /*
+          FNXC:NearDuplicateDetection 2026-08-01-18:47:
+          Stale-decision recovery for an inactive canonical is the same writer as marker clear:
+          needs-replan (not status:null) plus dismissal so the card cannot look planning-finished
+          without a real PROMPT. Drop a still-present DUPLICATE marker file when present.
+          */
+          const promptPath = join(this.options.rootDir, ".fusion", "tasks", task.id, "PROMPT.md");
+          if (existsSync(promptPath)) {
+            try {
+              const written = readFileSync(promptPath, "utf-8");
+              if (parseExplicitDuplicateMarker(written)) {
+                rmSync(promptPath, { force: true });
+              }
+            } catch {
+              // best-effort marker removal; status write still proceeds
+            }
+          }
+          await this.store.updateTask(task.id, buildMarkerClearedReplanTaskPatch(canonicalId));
+          if (typeof this.store.logEntry === "function") {
+            await Promise.resolve(this.store.logEntry(
+              task.id,
+              TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+              buildInactiveDuplicateClearFeedback(canonicalId),
+            )).catch(() => {});
+          }
           await createRunAuditor(this.store, {
             runId: generateSyntheticRunId("reconcile-stale-duplicate-decision", task.id),
             agentId: "self-healing",
@@ -14415,6 +14440,10 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
           FN-8356 keeps maintenance from re-parking a marker against a missing, deleted, done,
           or archived canonical. Such a decision has no detail-banner action, so cleanup restores
           eligible work to planning while preserving explicit, implicit, and unrelated system pauses.
+
+          FNXC:NearDuplicateDetection 2026-08-01-18:47:
+          Mirror triage: marker clear leaves needs-replan + feedback + dismissal, never
+          status:null (FN-8704 replan storm when the scheduler wakes on planning→null without PROMPT).
           */
           const canClearInactiveMarker = task.userPaused !== true
             && (task.paused !== true || task.pausedReason === "duplicate-decision-required")
@@ -14423,7 +14452,15 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
           if (!canonicalTask || isNearDuplicateCanonicalInactive(canonicalTask, canonicalFlags)) {
             if (canClearInactiveMarker) {
               rmSync(promptPath, { force: true });
-              await this.store.updateTask(task.id, { paused: false, pausedReason: null, status: null });
+              const patch = buildMarkerClearedReplanTaskPatch(marker.canonicalId);
+              await this.store.updateTask(task.id, patch);
+              if (typeof this.store.logEntry === "function") {
+                await Promise.resolve(this.store.logEntry(
+                  task.id,
+                  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                  buildInactiveDuplicateClearFeedback(marker.canonicalId),
+                )).catch(() => {});
+              }
               resolved += 1;
             }
             continue;
@@ -14439,12 +14476,14 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
           if (resolution === "prompt" && isTriageDuplicateKeepAcknowledged(task.sourceMetadata, canonicalTask.id)) {
             if (canClearInactiveMarker) {
               rmSync(promptPath, { force: true });
-              await this.store.updateTask(task.id, {
-                paused: false,
-                pausedReason: null,
-                status: null,
-                sourceMetadataPatch: { nearDuplicateDismissed: true },
-              });
+              await this.store.updateTask(task.id, buildMarkerClearedReplanTaskPatch(canonicalTask.id));
+              if (typeof this.store.logEntry === "function") {
+                await Promise.resolve(this.store.logEntry(
+                  task.id,
+                  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                  buildKeepDuplicateClearFeedback(canonicalTask.id),
+                )).catch(() => {});
+              }
               resolved += 1;
             }
             continue;
@@ -14456,7 +14495,14 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
             await this.store.updateTask(task.id, { paused: true, pausedReason: "duplicate-decision-required", status: null });
           } else {
             rmSync(promptPath, { force: true });
-            await this.store.updateTask(task.id, { paused: false, pausedReason: null, status: null, sourceMetadataPatch: { nearDuplicateOf: canonicalTask.id, nearDuplicateScore: 1, duplicateSource: "triage-marker", nearDuplicateDismissed: true } });
+            await this.store.updateTask(task.id, buildMarkerClearedReplanTaskPatch(canonicalTask.id));
+            if (typeof this.store.logEntry === "function") {
+              await Promise.resolve(this.store.logEntry(
+                task.id,
+                TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                buildKeepDuplicateClearFeedback(canonicalTask.id),
+              )).catch(() => {});
+            }
           }
           log.log(`[self-healing] resolved explicit duplicate marker ${task.id} → ${canonicalTask.id}`);
           resolved += 1;

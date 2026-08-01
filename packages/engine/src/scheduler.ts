@@ -48,6 +48,7 @@ import { runHoldReleaseSweep, isUnplannedForExecution, type SlotReservation } fr
 import { moveTaskToReplanColumn } from "./replan-target.js";
 import { evaluateParkedAgentTaskLink } from "./task-agent-sync.js";
 import { decideMissionSymbolAdmission, resolveMissionFeatureForTask } from "./mission-symbol-admission.js";
+import { computeRecoveryDecision, formatDelay, MAX_RECOVERY_RETRIES } from "./recovery-policy.js";
 
 const SYMBOL_LOCK_LEASE_MS = 10 * 60_000;
 
@@ -2339,12 +2340,41 @@ export class Scheduler {
           const validation = await this.validateTaskFilesystem(task.id);
           if (!validation.valid) {
             schedulerLog.warn(`Task ${task.id} filesystem validation failed: ${validation.reason}`);
-            // See the FNXC:WorkflowScheduling 2026-07-13-11:25 note in the legacy loop: the
-            // status write is what makes triage rediscover a card whose replan column equals
-            // its current column.
+            /*
+            FNXC:WorkflowScheduling 2026-08-01-18:47:
+            Missing/empty PROMPT used to rebound with unbounded needs-replan writes (FN-8704
+            storm twin). Share the planning recovery budget: backoff while attempts remain,
+            then park failed so a broken task dir cannot spin forever. The status write is
+            still what makes triage rediscover a card whose replan column equals its current column.
+            */
             const replanColumn = await moveTaskToReplanColumn(this.store, task);
-            await this.store.updateTask(task.id, { status: "needs-replan" });
-            await this.store.logEntry(task.id, `Task rebounded to ${replanColumn} for re-specification — filesystem validation failed`, validation.reason);
+            const decision = computeRecoveryDecision({
+              recoveryRetryCount: task.recoveryRetryCount,
+              nextRecoveryAt: task.nextRecoveryAt,
+            });
+            if (!decision.shouldRetry) {
+              const error = `REQUIRED_ARTIFACT_RECOVERY_EXHAUSTED: filesystem validation failed (${validation.reason}) after ${MAX_RECOVERY_RETRIES} automatic planning retries.`;
+              await this.store.updateTask(task.id, {
+                status: "failed",
+                error,
+                recoveryRetryCount: null,
+                nextRecoveryAt: null,
+              });
+              await this.store.logEntry(task.id, error, validation.reason);
+              return null;
+            }
+            const attempt = decision.nextState.recoveryRetryCount ?? MAX_RECOVERY_RETRIES;
+            await this.store.updateTask(task.id, {
+              status: "needs-replan",
+              error: null,
+              recoveryRetryCount: decision.nextState.recoveryRetryCount,
+              nextRecoveryAt: decision.nextState.nextRecoveryAt,
+            });
+            await this.store.logEntry(
+              task.id,
+              `Task rebounded to ${replanColumn} for re-specification — filesystem validation failed (attempt ${attempt}/${MAX_RECOVERY_RETRIES} in ${formatDelay(decision.delayMs)})`,
+              validation.reason,
+            );
             return null;
           }
 

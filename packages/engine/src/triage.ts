@@ -218,6 +218,12 @@ import {
 } from "./tool-availability.js";
 import { runGhostBugPreflight } from "./triage-preflight.js";
 import { archiveAsGhostBug } from "./self-healing.js";
+import {
+  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+  buildInactiveDuplicateClearFeedback,
+  buildKeepDuplicateClearFeedback,
+  buildMarkerClearedReplanTaskPatch,
+} from "./duplicate-marker-clear.js";
 import { createRunAuditor, generateSyntheticRunId } from "./run-audit.js";
 import { resolveAndEmitGoalContext } from "./goal-injection-diagnostics.js";
 import { accumulateSessionTokenUsage } from "./session-token-usage.js";
@@ -2907,6 +2913,7 @@ export class TriageProcessor {
                 || entry.action === "User comment invalidated spec approval — task needs re-specification"
                 || entry.action === "AI spec revision requested"
                 || entry.action === TRIAGE_STUCK_RESUME_LOG_ACTION
+                || entry.action === TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION
               );
             feedback = feedbackLogEntry?.outcome;
 
@@ -4016,6 +4023,36 @@ export class TriageProcessor {
     return true;
   }
 
+  /*
+  FNXC:NearDuplicateDetection 2026-08-01-18:47:
+  Shared writer for every "delete the DUPLICATE marker and ask planning for a real plan"
+  exit. Must leave status:needs-replan (not null), durable replan feedback, and
+  nearDuplicateDismissed so (a) the scheduler's planning→null wake does not re-dispatch
+  a prompt-less card, and (b) the next planner is told not to re-emit the same id.
+  Outcome stays parked (default) — no Plan Review handoff until a real plan is written.
+  */
+  private async clearDuplicateMarkerForReplan(
+    task: Task,
+    canonicalId: string,
+    feedback: string,
+  ): Promise<boolean> {
+    if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
+      await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
+    })) return false;
+
+    try {
+      await Promise.resolve(this.store.logEntry(task.id, TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION, feedback));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      planLog.warn(`${task.id}: failed to log marker-clear replan feedback: ${msg}`);
+    }
+
+    return await this.updatePlanningStateIfStillCurrent(
+      task,
+      buildMarkerClearedReplanTaskPatch(canonicalId),
+    );
+  }
+
   private async finalizeApprovedTaskBody(
     task: Task,
     writtenInput: string,
@@ -4053,14 +4090,20 @@ export class TriageProcessor {
       view deliberately hides decisions for missing, deleted, done, or archived canonicals, so
       remove only the marker and return eligible work to planning instead of stranding its badge;
       explicit, implicit, and unrelated pauses are preserved.
+
+      FNXC:NearDuplicateDetection 2026-08-01-18:47:
+      Clearing must leave needs-replan + feedback + dismissal — never status:null. A prompt-less
+      null status is the scheduler's "planning finished" wake signal and re-opens the FN-8704
+      replan storm (schedule → missing PROMPT → needs-replan → re-emit inactive DUPLICATE).
       */
       const canonicalFlags = await resolveNearDuplicateCanonicalFlags(this.store, canonicalTask);
       if (isNearDuplicateCanonicalInactive(canonicalTask ?? undefined, canonicalFlags)) {
         if (canClearInactiveMarker) {
-          if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
-            await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
-          })) return;
-          await this.updatePlanningStateIfStillCurrent(task, { paused: false, pausedReason: null, status: null });
+          await this.clearDuplicateMarkerForReplan(
+            task,
+            canonicalId,
+            buildInactiveDuplicateClearFeedback(canonicalId),
+          );
         }
         return;
       }
@@ -4075,15 +4118,11 @@ export class TriageProcessor {
       const keepAcknowledged = fusionCore.isTriageDuplicateKeepAcknowledged(task.sourceMetadata, canonicalId);
       if (resolution === "prompt" && keepAcknowledged) {
         if (canClearInactiveMarker) {
-          if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
-            await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
-          })) return;
-          await this.updatePlanningStateIfStillCurrent(task, {
-            paused: false,
-            pausedReason: null,
-            status: null,
-            sourceMetadataPatch: { nearDuplicateDismissed: true },
-          });
+          await this.clearDuplicateMarkerForReplan(
+            task,
+            canonicalId,
+            buildKeepDuplicateClearFeedback(canonicalId),
+          );
         }
         return;
       }
@@ -4114,15 +4153,12 @@ export class TriageProcessor {
         await this.store.recordActivity({ type: "task:auto-archived-duplicate", taskId: task.id, details: "Flagged (not deleted) as triage-marker duplicate", metadata: { canonicalTaskId: canonicalId, source: "triage-marker-flagged" } });
         return;
       }
-      if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
-        await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
-      })) return;
-      if (!await this.updatePlanningStateIfStillCurrent(task, {
-        paused: false,
-        pausedReason: null,
-        status: null,
-        sourceMetadataPatch: { nearDuplicateOf: canonicalId, nearDuplicateScore: 1, duplicateSource: "triage-marker", nearDuplicateDismissed: true },
-      })) return;
+      // resolution === "keep" (and any other non-prompt/delete policy that drops the marker)
+      await this.clearDuplicateMarkerForReplan(
+        task,
+        canonicalId,
+        buildKeepDuplicateClearFeedback(canonicalId),
+      );
       return;
     }
 

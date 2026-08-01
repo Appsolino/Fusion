@@ -94,7 +94,18 @@ describe("triage explicit duplicate marker short-circuit", () => {
     });
     await expect(runExplicitDuplicateMarker(store, task, "DUPLICATE: FN-001\n", { ...settings, triageDuplicateResolution: "keep" })).resolves.toBe(true);
     expect(store.deleteTask).not.toHaveBeenCalled();
-    expect(store.updateTask).toHaveBeenCalledWith("FN-002", expect.objectContaining({ paused: false, pausedReason: null, status: null }));
+    // Must leave needs-replan (not status:null) so the scheduler does not wake on a prompt-less card.
+    expect(store.updateTask).toHaveBeenCalledWith("FN-002", expect.objectContaining({
+      paused: false,
+      pausedReason: null,
+      status: "needs-replan",
+      sourceMetadataPatch: expect.objectContaining({ nearDuplicateOf: "FN-001", nearDuplicateDismissed: true }),
+    }));
+    expect(store.logEntry).toHaveBeenCalledWith(
+      "FN-002",
+      "Duplicate marker cleared for re-specification",
+      expect.stringContaining("FN-001"),
+    );
   });
 
   it("does not re-pause a same-canonical Keep acknowledgement after marker reprocessing", async () => {
@@ -113,7 +124,8 @@ describe("triage explicit duplicate marker short-circuit", () => {
     expect(store.updateTask).toHaveBeenCalledWith("FN-002", expect.objectContaining({
       paused: false,
       pausedReason: null,
-      sourceMetadataPatch: { nearDuplicateDismissed: true },
+      status: "needs-replan",
+      sourceMetadataPatch: expect.objectContaining({ nearDuplicateOf: "FN-001", nearDuplicateDismissed: true }),
     }));
     expect(store.updateTask).not.toHaveBeenCalledWith("FN-002", expect.objectContaining({ paused: true }));
   });
@@ -165,11 +177,22 @@ describe("triage explicit duplicate marker short-circuit", () => {
 
     await expect(runExplicitDuplicateMarker(store, task, "DUPLICATE: FN-001\n")).resolves.toBe(true);
 
-    expect(store.updateTask).toHaveBeenCalledWith("FN-002", {
+    // needs-replan + dismissal + feedback — never status:null (FN-8704 replan storm)
+    expect(store.updateTask).toHaveBeenCalledWith("FN-002", expect.objectContaining({
       paused: false,
       pausedReason: null,
-      status: null,
-    });
+      status: "needs-replan",
+      sourceMetadataPatch: expect.objectContaining({
+        nearDuplicateOf: "FN-001",
+        nearDuplicateDismissed: true,
+        duplicateSource: "triage-marker",
+      }),
+    }));
+    expect(store.logEntry).toHaveBeenCalledWith(
+      "FN-002",
+      "Duplicate marker cleared for re-specification",
+      expect.stringMatching(/FN-001.*do not re-emit/i),
+    );
     expect(store.updateTask).not.toHaveBeenCalledWith("FN-002", expect.objectContaining({ paused: true }));
     expect(store.deleteTask).not.toHaveBeenCalled();
   });
