@@ -1,0 +1,9 @@
+# Disposable AUTO-2 sensitive-approval proof marker — safe to delete
+name: AUTO-2 Sensitive Proof Marker
+on:
+  workflow_dispatch:
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "auto2-sensitive-proof-marker"
