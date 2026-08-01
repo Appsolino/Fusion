@@ -59,6 +59,11 @@ export const loopLog = createLogger("mission-loop");
 /** Maximum time (ms) to wait for a validation session to complete. */
 const VALIDATION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
+/** Bound untrusted validator text while preserving its authoritative trailing payload. */
+const MAX_VALIDATION_RESPONSE_BYTES = 256 * 1024;
+/** Avoid unbounded parsing when a model emits many JSON-like examples. */
+const MAX_VALIDATION_JSON_CANDIDATES = 8;
+
 /**
  * FNXC:MissionValidation 2026-08-01-16:21:
  * FN-8694 hashes the fixed JSON UTF-8 tuple (landed SHA, judge identity, and exact
@@ -1270,27 +1275,22 @@ export class MissionExecutionLoop extends EventEmitter {
         return this.createErrorValidationResult("No response from validation agent", assertions);
       }
 
-      // Extract JSON from the response (handles markdown code blocks)
-      const jsonCandidate = this.extractJsonCandidate(responseText);
-
-      if (!jsonCandidate) {
+      // Prefer the final syntactically valid payload without allowing syntax recovery
+      // to bypass the semantic validation below.
+      const jsonCandidates = this.extractJsonCandidates(responseText);
+      if (jsonCandidates.length === 0) {
         loopLog.warn("No JSON found in validation response");
         return this.createErrorValidationResult("Validation agent did not return JSON", assertions);
       }
 
-      // Try to parse the JSON
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(jsonCandidate);
-      } catch {
-        // Intentional fallback: initial parse can fail on malformed JSON; try repairJson() next.
-        const repaired = this.repairJson(jsonCandidate);
-        try {
-          parsed = JSON.parse(repaired);
-        } catch (e) {
-          loopLog.warn("Failed to parse validation JSON", e);
-          return this.createErrorValidationResult("Invalid JSON in validation response", assertions);
-        }
+      let parsed: Record<string, unknown> | undefined;
+      for (let index = jsonCandidates.length - 1; index >= 0; index -= 1) {
+        parsed = this.parseJsonCandidate(jsonCandidates[index]);
+        if (parsed) break;
+      }
+      if (!parsed) {
+        loopLog.warn("Failed to parse bounded validation JSON candidates");
+        return this.createErrorValidationResult("Invalid JSON in validation response", assertions);
       }
 
       // Validate the status field
@@ -1359,51 +1359,128 @@ export class MissionExecutionLoop extends EventEmitter {
     }
   }
 
-  /**
-   * Extract JSON from a text that may contain markdown code blocks.
-   */
-  private extractJsonCandidate(text: string): string | undefined {
-    // Try to find JSON in markdown code blocks first
-    const codeBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-    if (codeBlockMatch) {
-      return codeBlockMatch[1].trim();
+  /*
+  FNXC:MissionValidation 2026-08-01-20:13:
+  FN-8707 accepts ordinary formatting noise only through a 256 KiB trailing
+  response window and eight string-aware object/fence candidates. Exact parsing
+  precedes one conservative syntax repair; assertion IDs, verdicts, omissions,
+  duplicates, and aggregate status still fail closed in the semantic validators.
+  */
+  private extractJsonCandidates(responseText: string): string[] {
+    const responseBytes = Buffer.from(responseText, "utf8");
+    const text = responseBytes.byteLength <= MAX_VALIDATION_RESPONSE_BYTES
+      ? responseText
+      : responseBytes.subarray(responseBytes.byteLength - MAX_VALIDATION_RESPONSE_BYTES).toString("utf8");
+    const candidates = new Map<string, { start: number; text: string }>();
+    const addCandidate = (start: number, end: number, value: string) => {
+      const trimmed = value.trim();
+      if (trimmed) candidates.set(`${start}:${end}`, { start, text: trimmed });
+    };
+
+    // Fences are candidates too because a safely truncated fence can still hold
+    // an otherwise recoverable JSON object.
+    const fencePattern = /```(?:json)?[ \t]*\r?\n?([\s\S]*?)(?:```|$)/gi;
+    let fenceMatch: RegExpExecArray | null;
+    while ((fenceMatch = fencePattern.exec(text)) !== null) {
+      const bodyOffset = fenceMatch[0].indexOf(fenceMatch[1]);
+      addCandidate(fenceMatch.index + Math.max(bodyOffset, 0), fencePattern.lastIndex, fenceMatch[1]);
     }
 
-    // Try to find JSON directly (starts with { or [)
-    const jsonStartMatch = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-    if (jsonStartMatch) {
-      return jsonStartMatch[1];
+    const starts: number[] = [];
+    let inString = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const character = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{") starts.push(index);
+      else if (character === "}") {
+        const start = starts.pop();
+        if (start !== undefined && starts.length === 0) addCandidate(start, index + 1, text.slice(start, index + 1));
+      }
+    }
+    // A final, string-complete object may be truncated only by closing delimiters.
+    if (!inString && starts.length > 0) {
+      addCandidate(starts[0], text.length, text.slice(starts[0]));
     }
 
+    return [...candidates.values()]
+      .sort((left, right) => left.start - right.start)
+      .slice(-MAX_VALIDATION_JSON_CANDIDATES)
+      .map((candidate) => candidate.text);
+  }
+
+  /** Parse exactly first, then apply one bounded syntax-only repair. */
+  private parseJsonCandidate(candidate: string): Record<string, unknown> | undefined {
+    for (const value of [candidate, this.repairJson(candidate)]) {
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Try the single conservative repair, then the prior candidate.
+      }
+    }
     return undefined;
   }
 
-  /**
-   * Repair common JSON issues in AI responses.
-   */
+  /** Repair only trailing commas and string-complete missing closing delimiters. */
   private repairJson(json: string): string {
-    // Remove trailing commas before closing braces/brackets
-    let repaired = json.replace(/,\s*([\]}])/g, "$1");
+    const removeTrailingCommas = (value: string): string => {
+      let repaired = "";
+      let inString = false;
+      let escaped = false;
+      for (let index = 0; index < value.length; index += 1) {
+        const character = value[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (character === "\\") escaped = true;
+          else if (character === '"') inString = false;
+          repaired += character;
+          continue;
+        }
+        if (character === '"') {
+          inString = true;
+          repaired += character;
+          continue;
+        }
+        if (character === ",") {
+          let next = index + 1;
+          while (/\s/.test(value[next] ?? "")) next += 1;
+          if (value[next] === "}" || value[next] === "]") continue;
+        }
+        repaired += character;
+      }
+      return repaired;
+    };
 
-    // Handle unclosed arrays/objects by finding the last balanced close
-    const openBraces = (repaired.match(/\{/g) || []).length;
-    const closeBraces = (repaired.match(/\}/g) || []).length;
-    const openBrackets = (repaired.match(/\[/g) || []).length;
-    const closeBrackets = (repaired.match(/\]/g) || []).length;
-
-    // Close missing braces
-    while (closeBraces < openBraces) {
-      repaired += "}";
+    let repaired = removeTrailingCommas(json);
+    const closingDelimiters: string[] = [];
+    let inString = false;
+    let escaped = false;
+    for (const character of repaired) {
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{") closingDelimiters.push("}");
+      else if (character === "[") closingDelimiters.push("]");
+      else if (character === "}" || character === "]") {
+        if (closingDelimiters.pop() !== character) return json;
+      }
     }
-    // Close missing brackets
-    while (closeBrackets < openBrackets) {
-      repaired += "]";
-    }
-
-    // Remove any trailing commas
-    repaired = repaired.replace(/,\s*([\]}])/g, "$1");
-
-    return repaired;
+    if (inString) return json;
+    repaired += closingDelimiters.reverse().join("");
+    return removeTrailingCommas(repaired);
   }
 
   /**

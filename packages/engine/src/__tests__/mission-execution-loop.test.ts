@@ -1789,7 +1789,65 @@ describe("MissionExecutionLoop", () => {
   // ── parseValidationResult JSON extraction ─────────────────────────────────
 
   describe("parseValidationResult", () => {
-    it("should parse pass result from plain JSON", async () => {
+    const completePassingPayload = JSON.stringify({
+      status: "pass",
+      assertions: [
+        { assertionId: "CA-1", verdict: "pass", passed: true },
+        { assertionId: "CA-2", verdict: "pass", passed: true },
+      ],
+      summary: "All assertions passed",
+    });
+
+    it.each([
+      ["prose braces before a trailing payload", "The inspection called render({ value: 1 }).\n" + completePassingPayload],
+      ["a malformed earlier object before a trailing payload", '{"status": broken}\n' + completePassingPayload],
+      ["an unlabeled fenced payload", "Reasoning follows.\n```\n" + completePassingPayload + "\n```"],
+      ["a trailing comma", completePassingPayload.replace("\n", "").replace("}", ",}")],
+      ["safely truncated closing delimiters", completePassingPayload.slice(0, -1)],
+      ["oversized leading prose while retaining the trailing payload", "x".repeat(256 * 1024) + completePassingPayload],
+      ["more than eight earlier object candidates", Array.from({ length: 12 }, (_, index) => `{"example":${index}}`).join("\n") + "\n" + completePassingPayload],
+    ])("recovers a complete validator payload after %s", async (_name, response) => {
+      const assertions = makeAssertions(2);
+      mockSessionHolder.session.state.messages = [{ role: "assistant", content: response }];
+      loop = new MissionExecutionLoop({ taskStore: taskStore as any, missionStore: missionStore as any, rootDir: "/tmp" });
+
+      await expect((loop as any).parseValidationResult(mockSessionHolder.session, assertions)).resolves.toMatchObject({
+        status: "pass",
+        assertions: [{ assertionId: "CA-1", passed: true }, { assertionId: "CA-2", passed: true }],
+      });
+    });
+
+    it("caps candidate extraction and preserves braces in JSON strings", () => {
+      const candidate = JSON.stringify({ summary: "literal ,} is evidence", status: "pass" });
+      loop = new MissionExecutionLoop({ taskStore: taskStore as any, missionStore: missionStore as any, rootDir: "/tmp" });
+
+      expect((loop as any).extractJsonCandidates("x".repeat(256 * 1024) + candidate)).toEqual([candidate]);
+      expect((loop as any).extractJsonCandidates(Array.from({ length: 12 }, (_, index) => `{"example":${index}}`).join("\n") + candidate)).toHaveLength(8);
+      expect((loop as any).repairJson(candidate)).toBe(candidate);
+    });
+
+    it("keeps recovered payload semantic validation fail-closed", async () => {
+      const assertions = makeAssertions(2);
+      const cases = [
+        { status: "pass", assertions: [{ assertionId: "CA-1", passed: true }, { assertionId: "unknown", passed: true }] },
+        { status: "pass", assertions: [{ assertionId: "CA-1", passed: true }] },
+        { status: "pass", assertions: [{ assertionId: "CA-1", passed: true }, { assertionId: "CA-1", passed: true }] },
+        { status: "unknown", assertions: [{ assertionId: "CA-1", passed: true }, { assertionId: "CA-2", passed: true }] },
+      ];
+
+      for (const candidate of cases) {
+        mockSessionHolder.session.state.messages = [{ role: "assistant", content: `prose {not JSON}\n${JSON.stringify(candidate)}` }];
+        loop = new MissionExecutionLoop({ taskStore: taskStore as any, missionStore: missionStore as any, rootDir: "/tmp" });
+        const result = await (loop as any).parseValidationResult(mockSessionHolder.session, assertions);
+        expect(result.status).not.toBe("pass");
+      }
+
+      mockSessionHolder.session.state.messages = [{ role: "assistant", content: 'prose {not JSON}\n{"status":"pass","summary":"unterminated' }];
+      loop = new MissionExecutionLoop({ taskStore: taskStore as any, missionStore: missionStore as any, rootDir: "/tmp" });
+      await expect((loop as any).parseValidationResult(mockSessionHolder.session, assertions)).resolves.toMatchObject({ status: "error" });
+    });
+
+    it("routes a recovered trailing pass payload through processTaskOutcome", async () => {
       const assertions = makeAssertions(2);
       const response = JSON.stringify({
         status: "pass",
@@ -1803,7 +1861,7 @@ describe("MissionExecutionLoop", () => {
       // Set up mock session with AI response
       mockSessionHolder.session.state.messages = [
         { role: "user", content: "Validate this" },
-        { role: "assistant", content: response },
+        { role: "assistant", content: "The implementation uses render({ value: 1 }).\n" + response },
       ];
 
       const feature = createMockFeature({ loopState: "implementing", taskId: "FN-001" });
@@ -1978,10 +2036,9 @@ describe("MissionExecutionLoop", () => {
       });
     });
 
-    it("should handle malformed JSON gracefully", async () => {
+    it("routes irreparable JSON to a validator error without generated remediation", async () => {
       const assertions = makeAssertions(1);
-      // Malformed JSON with trailing comma
-      const malformedResponse = '{"status":"blocked","assertions":[{"assertionId":"CA-1","passed":false}],"summary":"Blocked","blockedReason":"API down",}';
+      const malformedResponse = '{"status": broken, "assertions": [';
 
       // Set up mock session with malformed JSON
       mockSessionHolder.session.state.messages = [
@@ -2005,12 +2062,11 @@ describe("MissionExecutionLoop", () => {
 
       await loop.processTaskOutcome("FN-001");
 
-      // When JSON is malformed and cannot be repaired, it should result in an error status
-      // The loop should handle the error gracefully
       expect(emitSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/validation:(passed|failed|blocked|error)/),
-        expect.any(Object),
+        "validation:error",
+        expect.objectContaining({ featureId: "F-001" }),
       );
+      expect(missionStore.createGeneratedFixFeature).not.toHaveBeenCalled();
     });
 
     it("should handle AI session returning no messages gracefully", async () => {
