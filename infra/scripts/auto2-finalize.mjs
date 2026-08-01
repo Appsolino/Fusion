@@ -5,6 +5,12 @@
  * Trusted AUTO-2 finalizer. Workflow code must come from Appsolino main.
  * Never executes candidate package scripts. Mints/uses App token only in this
  * trusted zone after candidate validation. Never deploys Host D.
+ *
+ * FNXC:AppsolinoAuto3 2026-08-01-01:20:
+ * After an eligible low-risk merge to main, dispatch AUTO-3 with the exact
+ * merged main SHA and wait for DEPLOYED. ROLLED_BACK/CRITICAL is a durable
+ * deployment failure (no retry loop). Sensitive PRs still require owner
+ * approval and are never auto-merged here. PR #34 remains out of auto path.
  */
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -50,6 +56,9 @@ export function gh(args, env = process.env) {
  * @param {(args: string[], env?: NodeJS.ProcessEnv) => {status:number,stdout:string,stderr:string}} [input.gh]
  * @param {boolean} [input.dryRun]
  * @param {boolean} [input.executeCandidateCode] — must remain false
+ * @param {boolean} [input.dispatchAuto3] — default true for main merges; tests should set false
+ * @param {number} [input.auto3PollMs]
+ * @param {number} [input.auto3TimeoutMs]
  */
 export function runAuto2Finalize(input) {
   if (input.executeCandidateCode === true) {
@@ -191,15 +200,124 @@ export function runAuto2Finalize(input) {
     }, `merge failed: ${merge.stderr || merge.stdout}`);
   }
 
-  return {
+  const mutatedMain = pr.baseRefName === "main";
+  /** @type {{action:string,reason:string,classification:*,pr:*,mutatedMain:boolean,deployedHostD:boolean,auto3?:*}} */
+  const result = {
     action: "auto-merged",
     reason: "low-risk exact-head merge commit",
     classification,
     pr,
-    mutatedMain: pr.baseRefName === "main",
+    mutatedMain,
     // FNXC:AppsolinoAuto2 2026-07-31-18:00: proof PRs may target a temp base — main stays unchanged.
     deployedHostD: false,
   };
+
+  // FNXC:AppsolinoAuto3 2026-08-01-01:20: End-to-end success requires AUTO-3 DEPLOYED for merges that land on main.
+  if (mutatedMain && input.dispatchAuto3 !== false && !input.dryRun) {
+    const auto3 = dispatchAndAwaitAuto3(runGh, repo, prNumber, {
+      pollMs: input.auto3PollMs,
+      timeoutMs: input.auto3TimeoutMs,
+    });
+    result.auto3 = auto3;
+    if (auto3.status === "DEPLOYED" || auto3.status === "IDEMPOTENT_NOOP") {
+      result.action = "auto-merged-deployed";
+      result.reason = `low-risk merge + AUTO-3 ${auto3.status}`;
+      result.deployedHostD = true;
+    } else if (auto3.status === "ROLLED_BACK") {
+      result.action = "auto-merged-deploy-rolled-back";
+      result.reason = "merge on main retained; AUTO-3 rolled back — no continuous retry";
+      result.deployedHostD = false;
+    } else if (auto3.status === "CRITICAL") {
+      result.action = "auto-merged-deploy-critical";
+      result.reason = "merge on main retained; AUTO-3 CRITICAL — owner action required";
+      result.deployedHostD = false;
+    } else {
+      result.action = "auto-merged-deploy-failed";
+      result.reason = `merge on main retained; AUTO-3 status=${auto3.status}`;
+      result.deployedHostD = false;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * @param {(args: string[], env?: NodeJS.ProcessEnv) => {status:number,stdout:string,stderr:string}} runGh
+ * @param {string} repo
+ * @param {string} prNumber
+ * @param {{pollMs?: number, timeoutMs?: number}} [opts]
+ */
+export function dispatchAndAwaitAuto3(runGh, repo, prNumber, opts = {}) {
+  const tip = runGh(["api", `repos/${repo}/commits/main`, "--jq", ".sha"]);
+  if (tip.status !== 0 || !/^[0-9a-f]{40}$/i.test(tip.stdout.trim())) {
+    return { status: "BLOCKED", reasons: ["unable to resolve main tip after merge"], sourceSha: null };
+  }
+  const sourceSha = tip.stdout.trim().toLowerCase();
+  const dispatch = runGh([
+    "workflow", "run", "upstream-auto3-deploy.yml",
+    "--repo", repo,
+    "-f", `source_sha=${sourceSha}`,
+    "-f", `source_pr=${prNumber}`,
+    "-f", "deployment_reason=auto2-low-risk-merge",
+    "-f", "profile=staging",
+    "-f", "force_smoke_fail=false",
+    "-f", `expected_merged_sha=${sourceSha}`,
+  ]);
+  if (dispatch.status !== 0) {
+    return {
+      status: "BLOCKED",
+      reasons: [`AUTO-3 dispatch failed: ${dispatch.stderr || dispatch.stdout}`],
+      sourceSha,
+    };
+  }
+
+  const pollMs = opts.pollMs ?? 15_000;
+  const timeoutMs = opts.timeoutMs ?? 3_600_000;
+  const started = Date.now();
+  let runId = "";
+  while (Date.now() - started < timeoutMs) {
+    if (!runId) {
+      const list = runGh([
+        "api",
+        `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?event=workflow_dispatch&per_page=5`,
+        "--jq",
+        `.workflow_runs[] | select(.head_sha=="${sourceSha}" or .display_title!=null) | .id`,
+      ]);
+      runId = (list.stdout || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
+      // Prefer newest run overall if head_sha filter misses dispatch runs (dispatch uses main ref)
+      if (!runId) {
+        const newest = runGh([
+          "api",
+          `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?per_page=1`,
+          "--jq",
+          ".workflow_runs[0].id",
+        ]);
+        runId = (newest.stdout || "").trim();
+      }
+    }
+    if (runId) {
+      const view = runGh(["api", `repos/${repo}/actions/runs/${runId}`, "--jq", "{status:.status,conclusion:.conclusion}"]);
+      if (view.status === 0) {
+        try {
+          const st = JSON.parse(view.stdout);
+          if (st.status === "completed") {
+            if (st.conclusion === "success") {
+              return { status: "DEPLOYED", reasons: [], sourceSha, runId };
+            }
+            // Inspect job logs is heavy; map failure conclusions conservatively
+            if (st.conclusion === "failure") {
+              return { status: "FAILED", reasons: ["AUTO-3 workflow failed"], sourceSha, runId };
+            }
+            return { status: "BLOCKED", reasons: [`AUTO-3 conclusion=${st.conclusion}`], sourceSha, runId };
+          }
+        } catch {
+          // continue polling
+        }
+      }
+    }
+    spawnSync("sleep", [String(Math.max(1, Math.floor(pollMs / 1000)))]);
+  }
+  return { status: "BLOCKED", reasons: ["AUTO-3 wait timeout"], sourceSha, runId: runId || null };
 }
 
 /**

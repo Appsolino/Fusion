@@ -1,0 +1,242 @@
+# FNXC:AppsolinoAuto3 2026-08-01-01:20:
+# AUTO-3 trust zones: credential-free build on GitHub-hosted runners; trusted
+# deploy job uses host-d-staging environment secrets only after build succeeds.
+# source_sha must exist on Appsolino main. No PR-head deploys. No Host P.
+# Never merges or deploys PR #34 during AUTO-3 implementation proofs unless an
+# owner later authorises AUTO-4 separately.
+
+name: Upstream AUTO-3 Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Exact Appsolino main commit SHA to build/deploy"
+        required: true
+        type: string
+      source_pr:
+        description: "Source PR number when invoked after AUTO-2 merge (optional)"
+        required: false
+        type: string
+        default: ""
+      deployment_reason:
+        description: "Why this deployment was requested"
+        required: true
+        type: string
+        default: "manual-proof"
+      profile:
+        description: "staging (live Host D) or proof (isolated rollback drill)"
+        required: true
+        type: choice
+        options:
+          - staging
+          - proof
+        default: staging
+      force_smoke_fail:
+        description: "Deliberate post-activation failure for rollback proof"
+        required: false
+        type: boolean
+        default: false
+      expected_merged_sha:
+        description: "When set, must equal source_sha (AUTO-2 handoff)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: host-d-staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Credential-free immutable build
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.pack.outputs.release_id }}
+      archive_name: ${{ steps.pack.outputs.archive_name }}
+      manifest_name: ${{ steps.pack.outputs.manifest_name }}
+      source_sha: ${{ steps.admit.outputs.source_sha }}
+    steps:
+      - name: Refuse deploy secrets in build zone
+        env:
+          HOST_D_DEPLOY_SSH_KEY: ${{ secrets.HOST_D_DEPLOY_SSH_KEY }}
+          HOST_D_KNOWN_HOSTS: ${{ secrets.HOST_D_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${HOST_D_DEPLOY_SSH_KEY}" || -n "${HOST_D_KNOWN_HOSTS}" ]]; then
+            echo "::error::AUTO-3 build job must not receive Host D deploy secrets"
+            exit 1
+          fi
+
+      - name: Checkout exact source SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Admit source SHA on Appsolino main
+        id: admit
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPECTED: ${{ inputs.expected_merged_sha }}
+          SOURCE_PR: ${{ inputs.source_pr }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1 || git fetch origin main
+          SOURCE_SHA="$(echo "$SOURCE_SHA" | tr 'A-F' 'a-f')"
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha must be full 40-char SHA"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" origin/main; then
+            echo "::error::source_sha is not on Appsolino main (PR-head / stale forbidden)"
+            exit 1
+          fi
+          if [[ -n "$EXPECTED" && "$EXPECTED" != "$SOURCE_SHA" ]]; then
+            echo "::error::source_sha must equal expected_merged_sha"
+            exit 1
+          fi
+          if [[ "$SOURCE_PR" == "34" ]]; then
+            echo "::error::PR #34 must not be deployed during AUTO-3 mission"
+            exit 1
+          fi
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node and frozen lockfile install
+        uses: ./.github/actions/setup-node-pnpm
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build immutable package
+        run: pnpm build:exe
+
+      - name: Correction A execute-bit fixture
+        run: bash infra/scripts/test-install-staging-permissions.sh
+
+      - name: Package archive + manifest
+        id: pack
+        env:
+          SOURCE_SHA: ${{ steps.admit.outputs.source_sha }}
+          SOURCE_PR: ${{ inputs.source_pr }}
+          REASON: ${{ inputs.deployment_reason }}
+        run: |
+          set -euo pipefail
+          node infra/scripts/auto3-build-release.mjs \
+            --source-sha "$SOURCE_SHA" \
+            --source-pr "${SOURCE_PR:-}" \
+            --deployment-reason "$REASON" \
+            --skip-build \
+            --out-dir "$RUNNER_TEMP/auto3-out" \
+            --json > "$RUNNER_TEMP/auto3-build.json"
+          REL="$(python3 -c 'import json; print(json.load(open("'"$RUNNER_TEMP"'/auto3-build.json"))["manifest"]["releaseId"])')"
+          ARCH="$(python3 -c 'import json; print(json.load(open("'"$RUNNER_TEMP"'/auto3-build.json"))["manifest"]["archiveName"])')"
+          echo "release_id=$REL" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$ARCH" >> "$GITHUB_OUTPUT"
+          echo "manifest_name=${REL}.manifest.json" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto3-release-${{ steps.pack.outputs.release_id }}
+          path: |
+            ${{ runner.temp }}/auto3-out/${{ steps.pack.outputs.archive_name }}
+            ${{ runner.temp }}/auto3-out/${{ steps.pack.outputs.manifest_name }}
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    name: Trusted Host D deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment: host-d-staging
+    steps:
+      - name: Checkout trusted workflow code from main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: auto3-release-${{ needs.build.outputs.release_id }}
+          path: ${{ runner.temp }}/auto3-in
+
+      - name: Require deploy identity secrets
+        env:
+          HOST_D_DEPLOY_SSH_KEY: ${{ secrets.HOST_D_DEPLOY_SSH_KEY }}
+          HOST_D_KNOWN_HOSTS: ${{ secrets.HOST_D_KNOWN_HOSTS }}
+          HOST_D_HOST: ${{ secrets.HOST_D_HOST }}
+          HOST_D_DEPLOY_USER: ${{ secrets.HOST_D_DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          for v in HOST_D_DEPLOY_SSH_KEY HOST_D_KNOWN_HOSTS HOST_D_HOST HOST_D_DEPLOY_USER; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::AUTO-3 BLOCKED: missing $v in host-d-staging environment. Owner must provision appsolino-deploy secrets (not a personal SSH key)."
+              exit 1
+            fi
+          done
+
+      - name: Deploy via dedicated identity (no candidate scripts)
+        env:
+          HOST_D_DEPLOY_SSH_KEY: ${{ secrets.HOST_D_DEPLOY_SSH_KEY }}
+          HOST_D_KNOWN_HOSTS: ${{ secrets.HOST_D_KNOWN_HOSTS }}
+          HOST_D_HOST: ${{ secrets.HOST_D_HOST }}
+          HOST_D_DEPLOY_USER: ${{ secrets.HOST_D_DEPLOY_USER }}
+          ARCHIVE_NAME: ${{ needs.build.outputs.archive_name }}
+          MANIFEST_NAME: ${{ needs.build.outputs.manifest_name }}
+          PROFILE: ${{ inputs.profile }}
+          FORCE_FAIL: ${{ inputs.force_smoke_fail }}
+        run: |
+          set -euo pipefail
+          # Trusted zone: only scp/ssh + allow-listed remote entry. Never pnpm/node from artifact.
+          KEY="$RUNNER_TEMP/auto3_deploy_key"
+          KH="$RUNNER_TEMP/auto3_known_hosts"
+          printf '%s\n' "$HOST_D_DEPLOY_SSH_KEY" >"$KEY"
+          printf '%s\n' "$HOST_D_KNOWN_HOSTS" >"$KH"
+          chmod 600 "$KEY"
+          SSH=(ssh -i "$KEY" -o IdentitiesOnly=yes -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=yes -o BatchMode=yes)
+          # ping
+          "${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" auto3-ping | grep -q AUTO3_PONG
+          # stream archive + manifest (basenames only)
+          "${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-receive ${ARCHIVE_NAME}" <"$RUNNER_TEMP/auto3-in/${ARCHIVE_NAME}"
+          "${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-receive ${MANIFEST_NAME}" <"$RUNNER_TEMP/auto3-in/${MANIFEST_NAME}"
+          EXTRA=()
+          if [[ "$FORCE_FAIL" == "true" ]]; then EXTRA+=(--force-smoke-fail); fi
+          set +e
+          OUT="$("${SSH[@]}" "${HOST_D_DEPLOY_USER}@${HOST_D_HOST}" "auto3-deploy --archive ${ARCHIVE_NAME} --manifest ${MANIFEST_NAME} --profile ${PROFILE} ${EXTRA[*]-}" 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUT"
+          echo "$OUT" | tee "$RUNNER_TEMP/auto3-deploy-out.txt" >/dev/null
+          if echo "$OUT" | grep -q '"status": "DEPLOYED"\|"status": "IDEMPOTENT_NOOP"'; then
+            exit 0
+          fi
+          if echo "$OUT" | grep -q '"status": "ROLLED_BACK"'; then
+            # Rollback proof success path when force_smoke_fail requested
+            if [[ "$FORCE_FAIL" == "true" ]]; then exit 0; fi
+            echo "::error::Deployment rolled back"
+            exit 4
+          fi
+          if echo "$OUT" | grep -q '"status": "CRITICAL"'; then
+            echo "::error::CRITICAL rollback failure — owner action required"
+            exit 5
+          fi
+          exit "$RC"
+
+      - name: Never execute candidate package scripts
+        run: |
+          set -euo pipefail
+          # Guardrail: deploy job must not have run pnpm lifecycle on the artifact tree
+          if [[ -d "$RUNNER_TEMP/auto3-in/node_modules" ]]; then
+            echo "::error::candidate node_modules present in deploy zone"
+            exit 1
+          fi
+          echo "deploy zone ok"

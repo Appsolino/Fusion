@@ -191,6 +191,7 @@ describe("AUTO-2 finalize policy", () => {
       validatedHeadSha: "sha1",
       validationConclusion: "success",
       allowMissingApp: true,
+      dispatchAuto3: false,
       gh,
     });
     assert.equal(first.action, "auto-merged");
@@ -200,6 +201,7 @@ describe("AUTO-2 finalize policy", () => {
       validatedHeadSha: "sha1",
       validationConclusion: "success",
       allowMissingApp: true,
+      dispatchAuto3: false,
       gh,
     });
     assert.equal(second.action, "auto-merged");
@@ -362,14 +364,16 @@ describe("AUTO-2 workflow trust zones (static)", () => {
     assert.doesNotMatch(yaml, /fusion-staging|systemctl|\/opt\/appsolino-fusion\/staging/);
   });
 
-  it("finalizer workflow uses App token, checks out main workflow code, never deploys", () => {
+  it("finalizer workflow uses App token, checks out main workflow code, delegates Host D to AUTO-3", () => {
     const yaml = readFileSync(join(ROOT, ".github/workflows/upstream-auto2-finalize.yml"), "utf8");
     assert.match(yaml, /name:\s*Upstream AUTO-2 Finalize/);
     assert.match(yaml, /create-github-app-token@v3/);
     assert.match(yaml, /ref:\s*\$\{\{\s*github\.event_name == 'workflow_dispatch' && github\.ref_name \|\| 'main'\s*\}\}/);
     assert.match(yaml, /auto2-finalize\.mjs/);
     assert.doesNotMatch(yaml, /pnpm (test|install)|npm (test|install)/);
-    assert.match(yaml, /does not build, install, or activate Host D/);
+    assert.match(yaml, /must not SSH\/install Host D directly/);
+    assert.match(yaml, /upstream-auto3-deploy\.yml/);
     assert.match(yaml, /APPSOLINO_AUTOMATION_APP_ID/);
+    assert.doesNotMatch(yaml, /HOST_D_DEPLOY_SSH_KEY/);
   });
 });
