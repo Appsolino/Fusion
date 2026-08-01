@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { createSmokeHtml } from "../../scripts/browser-layout-smoke.mjs";
 
 describe("browser layout smoke fixture", () => {
+  it("includes standalone and embedded Git Manager shell fixtures", () => {
+    const html = createSmokeHtml();
+    for (const hook of [
+      "git-manager-standalone",
+      "git-manager-standalone-body",
+      "git-manager-standalone-modal",
+      "git-manager-standalone-header",
+      "git-manager-standalone-close",
+      "git-manager-standalone-layout",
+      "git-manager-standalone-content",
+      "git-manager-embedded-host",
+      "git-manager-embedded-modal",
+      "git-manager-embedded-header",
+      "git-manager-embedded-close",
+      "git-manager-embedded-layout",
+      "git-manager-embedded-content",
+    ]) {
+      expect(html).toContain(`data-smoke="${hook}"`);
+    }
+    expect(html).toContain("floating-window--git-manager");
+    expect(html).toContain("gm-modal--embedded");
+  });
+
   it("includes PR flow fixture sections and class hooks", () => {
     const html = createSmokeHtml();
     expect(html).toContain('data-smoke="pr-create-modal"');

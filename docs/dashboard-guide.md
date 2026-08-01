@@ -903,7 +903,8 @@ See `docs/solutions/developer-experience/login-shell-profile-latency.md` for the
 
 ## Git Manager
 
-Git Manager centralizes repo operations in the dashboard. On desktop/tablet it is available as an embedded right-dock panel and can expand into a resizable modal; on mobile it opens from the compact More surfaces.
+<!-- FNXC:GitManagerMobileSpacing 2026-08-01-19:31: FN-8702 documents that the standalone phone sheet ends strictly below 768px so its hidden desktop resize chrome cannot leave a right-edge gutter, while embedded and tablet presentations keep host-owned geometry. -->
+Git Manager centralizes repo operations in the dashboard. On desktop/tablet (including exactly 768px) it is available as an embedded right-dock panel and can expand into a resizable modal; below 768px it opens as a full-width standalone phone sheet from the compact More surfaces.
 
 Use Git Manager:
 
@@ -912,7 +913,7 @@ Use Git Manager:
 2. Select the dock expand action if you need more room.
    Expected outcome: the same Git Manager surface opens in a resizable modal without changing the selected dock tool.
 3. On mobile, open the compact Header overflow or bottom **More** sheet and select **Git Manager**.
-   Expected outcome: Git Manager opens in the mobile modal layout with the section tabs restored as a horizontal scrolling strip.
+   Expected outcome: Git Manager opens as a full-width phone sheet with no desktop resize-handle gutter; its section tabs remain a horizontal scrolling strip. Embedded dock panels never take over the viewport.
 4. Select **Status**, **Changes**, **Commits**, **Branches**, **Worktrees**, **Stashes**, **Recovery**, or **Remotes**.
    Expected outcome: the corresponding section panel replaces the previous section while preserving the same Git Manager session.
 

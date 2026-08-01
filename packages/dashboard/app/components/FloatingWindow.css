@@ -490,6 +490,18 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
   }
 }
 
+@media (max-width: 767.98px) {
+  /*
+  FNXC:GitManagerMobileSpacing 2026-08-01-19:10:
+  FN-8702 keeps the shared desktop resize-handle clearance for tablet and desktop windows.
+  A standalone Git Manager phone sheet hides those handles, so only below the strict 768px
+  boundary its body clears the obsolete inline-end gutter and aligns its header and close control.
+  */
+  .floating-window--git-manager .floating-window__body {
+    margin-inline-end: 0;
+  }
+}
+
 /*
 FNXC:FloatingWindow 2026-07-15-18:20:
 Long titles (e.g. the GitHub import detail's "#2159 — <issue title>") must truncate with an ellipsis rather than hard-cut mid-word against the close button.

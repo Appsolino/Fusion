@@ -19,6 +19,8 @@ const requireBrowser = process.argv.includes("--require-browser") || process.env
 const screenshotPath = process.env.FUSION_BROWSER_SMOKE_SCREENSHOT;
 const agentHeartbeatMobileScreenshotPath = process.env.FUSION_AGENT_HEARTBEAT_MOBILE_SCREENSHOT;
 const agentHeartbeatDesktopScreenshotPath = process.env.FUSION_AGENT_HEARTBEAT_DESKTOP_SCREENSHOT;
+const gitManagerBeforeMobileScreenshotPath = process.env.FUSION_GIT_MANAGER_BEFORE_MOBILE_SCREENSHOT;
+const gitManagerAfterMobileScreenshotPath = process.env.FUSION_GIT_MANAGER_AFTER_MOBILE_SCREENSHOT;
 
 function log(message) {
   console.log(`[dashboard-browser-smoke] ${message}`);
@@ -230,6 +232,29 @@ export function createSmokeHtml() {
     </section>
   `).join("");
 
+  /*
+  FNXC:GitManagerMobileSpacing 2026-08-01-19:10:
+  FN-8702 measures the emitted standalone FloatingWindow chain and the embedded container separately.
+  The phone-only gutter reset must align every standalone shell edge below 768px without turning the
+  embedded pane or the 768px-and-up movable window into a viewport sheet.
+  */
+  const gitManagerFixtures = `
+    <section class="floating-window floating-window--git-manager" data-smoke="git-manager-standalone" style="width: min(680px, calc(100vw - var(--space-2xl))); height: min(640px, calc(100dvh - var(--space-2xl)));">
+      <div class="floating-window__body" data-smoke="git-manager-standalone-body">
+        <section class="modal gm-modal" data-smoke="git-manager-standalone-modal">
+          <header class="modal-header" data-smoke="git-manager-standalone-header"><h2>Git Manager</h2><div class="gm-header-actions"><button class="modal-close" data-smoke="git-manager-standalone-close" type="button" aria-label="Close Git Manager">×</button></div></header>
+          <div class="gm-layout" data-smoke="git-manager-standalone-layout"><nav class="gm-sidebar"><button class="gm-nav-item active" type="button">Status</button><button class="gm-nav-item" type="button">Changes</button></nav><main class="gm-content" data-smoke="git-manager-standalone-content"><div class="gm-loading">Loading repository</div><div class="gm-error">Fixture error state stays contained</div><div class="gm-panel">${"Long populated Git Manager row ".repeat(30)}</div></main></div>
+        </section>
+      </div>
+      <i class="floating-window__resize-handle floating-window__resize-handle--se" aria-hidden="true"></i>
+    </section>
+    <section class="git-manager-embedded" data-smoke="git-manager-embedded-host" style="width: min(320px, calc(100vw - var(--space-lg))); height: 420px;">
+      <section class="modal gm-modal gm-modal--embedded" data-smoke="git-manager-embedded-modal">
+        <header class="modal-header" data-smoke="git-manager-embedded-header"><h2>Git Manager</h2><div class="gm-header-actions"><button class="modal-close" data-smoke="git-manager-embedded-close" type="button" aria-label="Close embedded Git Manager">×</button></div></header>
+        <div class="gm-layout" data-smoke="git-manager-embedded-layout"><nav class="gm-sidebar"><button class="gm-nav-item active" type="button">Status</button></nav><main class="gm-content" data-smoke="git-manager-embedded-content"><div class="gm-loading">Loading repository</div><div class="gm-error">Embedded fixture error state stays contained</div><div class="gm-panel">${"Embedded populated row ".repeat(30)}</div></main></div>
+      </section>
+    </section>`;
+
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -240,6 +265,7 @@ export function createSmokeHtml() {
   </head>
   <body data-theme="dark">
     <div id="root">
+      ${gitManagerFixtures}
       <div class="header-wrapper">
         <header class="header" data-smoke="header">
           <div class="header-left">
@@ -1142,6 +1168,123 @@ async function runSmokeChecks(page, pageUrl) {
       && modalLayout.documentOverflow <= 1,
     JSON.stringify(modalLayout),
   );
+
+  /*
+  FNXC:GitManagerMobileSpacing 2026-08-01-19:10:
+  Real Chromium must prove the original 390px body-gutter failure is gone across the header,
+  close control, layout, and populated/error content. The strict 767.98px boundary intentionally
+  does not claim a false 768px containment failure: production flex shrinking contains that child,
+  while its desktop/tablet gutter and movable geometry must remain present.
+  */
+  for (const width of [390, 767, 768, 1024]) {
+    await page.send("Emulation.setDeviceMetricsOverride", {
+      width,
+      height: 844,
+      deviceScaleFactor: width < 768 ? 2 : 1,
+      mobile: width < 768,
+    });
+    await evaluate(page, "document.fonts ? document.fonts.ready.then(() => true) : true");
+    const gitManagerLayout = await evaluate(page, `(() => {
+      const viewportWidth = window.innerWidth;
+      const readRect = (selector) => {
+        const rect = document.querySelector(selector).getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: rect.width, top: rect.top, bottom: rect.bottom };
+      };
+      const standalone = document.querySelector('[data-smoke="git-manager-standalone"]');
+      const standaloneBody = document.querySelector('[data-smoke="git-manager-standalone-body"]');
+      const embeddedHost = document.querySelector('[data-smoke="git-manager-embedded-host"]');
+      return {
+        viewportWidth,
+        documentOverflow: document.documentElement.scrollWidth - viewportWidth,
+        standalone: {
+          host: readRect('[data-smoke="git-manager-standalone"]'),
+          body: readRect('[data-smoke="git-manager-standalone-body"]'),
+          modal: readRect('[data-smoke="git-manager-standalone-modal"]'),
+          header: readRect('[data-smoke="git-manager-standalone-header"]'),
+          close: readRect('[data-smoke="git-manager-standalone-close"]'),
+          layout: readRect('[data-smoke="git-manager-standalone-layout"]'),
+          content: readRect('[data-smoke="git-manager-standalone-content"]'),
+          bodyMarginInlineEnd: getComputedStyle(standaloneBody).marginInlineEnd,
+          overflow: standalone.scrollWidth - standalone.clientWidth,
+          resizeHandleDisplay: getComputedStyle(standalone.querySelector('.floating-window__resize-handle')).display,
+        },
+        embedded: {
+          host: readRect('[data-smoke="git-manager-embedded-host"]'),
+          modal: readRect('[data-smoke="git-manager-embedded-modal"]'),
+          header: readRect('[data-smoke="git-manager-embedded-header"]'),
+          close: readRect('[data-smoke="git-manager-embedded-close"]'),
+          layout: readRect('[data-smoke="git-manager-embedded-layout"]'),
+          content: readRect('[data-smoke="git-manager-embedded-content"]'),
+          overflow: embeddedHost.scrollWidth - embeddedHost.clientWidth,
+        },
+      };
+    })()`);
+    if (width === 390 && gitManagerBeforeMobileScreenshotPath) {
+      /*
+      FNXC:GitManagerMobileSpacing 2026-08-01-19:31:
+      FN-8702 preserves an executable reproduction by temporarily restoring the inherited desktop
+      resize-handle gutter. Chromium must observe that resulting right-edge asymmetry before the
+      production phone-sheet assertion proves the reset removes it.
+      */
+      const preFixLayout = await evaluate(page, `(() => {
+        const body = document.querySelector('[data-smoke="git-manager-standalone-body"]');
+        body.style.marginInlineEnd = 'var(--space-lg)';
+        const rect = body.getBoundingClientRect();
+        return { right: rect.right, marginInlineEnd: getComputedStyle(body).marginInlineEnd, viewportWidth: window.innerWidth };
+      })()`);
+      assertSmokeResult(
+        "Git Manager 390px desktop-gutter reproduction",
+        parseFloat(preFixLayout.marginInlineEnd) > 0 && preFixLayout.right < preFixLayout.viewportWidth - 1,
+        JSON.stringify(preFixLayout),
+      );
+      const screenshot = await page.send("Page.captureScreenshot", { format: "png" });
+      await writeFile(gitManagerBeforeMobileScreenshotPath, Buffer.from(screenshot.data, "base64"));
+      await evaluate(page, "document.querySelector('[data-smoke=\"git-manager-standalone-body\"]').style.removeProperty('margin-inline-end')");
+      log(`saved Git Manager before mobile screenshot to ${gitManagerBeforeMobileScreenshotPath}`);
+    }
+    if (width === 390 && gitManagerAfterMobileScreenshotPath) {
+      const screenshot = await page.send("Page.captureScreenshot", { format: "png" });
+      await writeFile(gitManagerAfterMobileScreenshotPath, Buffer.from(screenshot.data, "base64"));
+      log(`saved Git Manager after mobile screenshot to ${gitManagerAfterMobileScreenshotPath}`);
+    }
+
+    const standaloneRects = Object.values(gitManagerLayout.standalone)
+      .filter((value) => value && typeof value === "object" && "left" in value);
+    const embeddedRects = Object.values(gitManagerLayout.embedded)
+      .filter((value) => value && typeof value === "object" && "left" in value);
+    const embeddedContained = embeddedRects.every((rect) => rect.left >= gitManagerLayout.embedded.host.left - 1
+      && rect.right <= gitManagerLayout.embedded.host.right + 1);
+    const standaloneContained = standaloneRects.every((rect) => rect.left >= -1 && rect.right <= width + 1);
+    const common = gitManagerLayout.documentOverflow <= 1
+      && gitManagerLayout.standalone.overflow <= 1
+      && gitManagerLayout.embedded.overflow <= 1
+      && standaloneContained
+      && embeddedContained
+      && gitManagerLayout.standalone.close.right <= gitManagerLayout.standalone.header.right + 1
+      && gitManagerLayout.embedded.close.right <= gitManagerLayout.embedded.header.right + 1;
+    const passed = width < 768
+      ? common
+        && Math.abs(gitManagerLayout.standalone.host.left) <= 1
+        && Math.abs(gitManagerLayout.standalone.host.right - width) <= 1
+        && Math.abs(gitManagerLayout.standalone.body.right - width) <= 1
+        && Math.abs(gitManagerLayout.standalone.modal.right - width) <= 1
+        && gitManagerLayout.standalone.bodyMarginInlineEnd === "0px"
+        && gitManagerLayout.embedded.modal.width < width
+      : common
+        && gitManagerLayout.standalone.host.width < width - 1
+        && parseFloat(gitManagerLayout.standalone.bodyMarginInlineEnd) > 0
+        && gitManagerLayout.standalone.resizeHandleDisplay !== "none"
+        && gitManagerLayout.embedded.modal.width < width;
+    assertSmokeResult(`Git Manager standalone and embedded geometry at ${width}px`, passed, JSON.stringify(gitManagerLayout));
+  }
+
+  await page.send("Emulation.setDeviceMetricsOverride", {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 2,
+    mobile: true,
+  });
+  await evaluate(page, "document.fonts ? document.fonts.ready.then(() => true) : true");
 
   const prCreateModalLayout = await evaluate(page, `(() => {
     document.querySelector('[data-smoke="show-pr-create"]').click();
