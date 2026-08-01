@@ -267,7 +267,7 @@ Lock the id to the same chip-height row as .card-header-actions so the task id, 
 }
 
 .card-status-badge--queued-with-reason {
-  padding-inline-end: 0;
+  padding-inline-end: var(--space-xs);
 }
 
 /*
