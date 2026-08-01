@@ -257,6 +257,11 @@ jobs:
             echo "::error::CRITICAL rollback failure — owner action required"
             exit 5
           fi
+          if echo "$OUT" | grep -q '"status": "BLOCKED"'; then
+            echo "AUTO3_TERMINAL_STATUS=BLOCKED"
+            echo "::error::Deployment blocked"
+            exit 2
+          fi
           echo "AUTO3_TERMINAL_STATUS=FAILED"
           exit "$RC"
 

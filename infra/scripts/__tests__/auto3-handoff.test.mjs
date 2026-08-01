@@ -171,6 +171,16 @@ describe("AUTO-3 terminal mapping", () => {
     assert.equal(parseAuto3TerminalMarker("foo\nAUTO3_TERMINAL_STATUS=ROLLED_BACK\nbar"), "ROLLED_BACK");
     assert.equal(parseAuto3TerminalMarker("no marker"), null);
   });
+
+  it("uses the LAST AUTO3_TERMINAL_STATUS marker (ignores script-source false positives)", () => {
+    const log = `
+echo "AUTO3_TERMINAL_STATUS=DEPLOYED"
+echo "AUTO3_TERMINAL_STATUS=IDEMPOTENT_NOOP"
+echo "AUTO3_TERMINAL_STATUS=FAILED"
+AUTO3_TERMINAL_STATUS=FAILED
+`;
+    assert.equal(parseAuto3TerminalMarker(log), "FAILED");
+  });
 });
 
 describe("dispatchAndAwaitAuto3 correlation integration", () => {
