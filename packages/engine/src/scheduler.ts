@@ -563,6 +563,13 @@ export function shouldHoldActiveFileScopeLease(
   */
   if (task.paused || task.userPaused) return false;
   /*
+  FNXC:OverlapScheduling 2026-08-01-19:22:
+  A failed park is not live work. Review already dropped status:"failed"; WIP must too, or a
+  stranded failed in-progress card keeps its file-scope lease and serializes unrelated todos
+  while consuming no real agent (same class as the capacity-holder fix in isRunningAgentTask).
+  */
+  if (task.status === "failed") return false;
+  /*
   DELIBERATE-LITERAL — the documented default for an unconverted caller, reviewed 2026-07-30-20:40.
   Both scheduler call sites now pass the resolved answer, so these defaults are dead on the
   scheduler's own path; they exist for the self-healing / repair callers this predicate is shared
@@ -2168,7 +2175,15 @@ export class Scheduler {
       */
       const isReviewColumnTask = (task: Task): boolean =>
         isReviewColumnRole(columnFlagsForTask(task), task.column);
-      const wipTaskIds = tasks.filter(isWipColumnTask).map((task) => task.id);
+      /*
+      FNXC:ConcurrencyIndicators 2026-08-01-19:22:
+      Failed WIP is not a live holder (isRunningAgentTask). Keep the WIP id list aligned so
+      diagnostic maxConcurrent holders and any WIP-only arithmetic do not re-count stranded failed
+      parks that the worktree ledger already excludes.
+      */
+      const wipTaskIds = tasks
+        .filter((task) => isWipColumnTask(task) && task.status !== "failed")
+        .map((task) => task.id);
       /*
       FNXC:WorktreeCapacity 2026-08-01-04:38 (inactive retained-worktree capacity inversion):
       Worktree capacity is a LIVE-TASK budget, not a count of directories retained on disk. The
