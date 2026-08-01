@@ -11925,9 +11925,15 @@ export class TaskExecutor {
       FNXC:V1A.1 2026-07-30-12:35:
       A prior step-session path could bounce a deterministic step-execute failure to todo (status cleared) before this sink ran. Do not treat that as a benign advance — park failed so the scheduler cannot redispatch.
       */
+      /*
+      FNXC:AppsolinoAuto4 2026-08-01-04:22 DELIBERATE-LITERAL:
+      Correction B parking must detect the legacy hold/todo column name after a bounce even when the board's resolved hold id differs; converting this comparison to resolveLifecycleColumns would skip the park when the card already sits on default `todo`.
+      Hoisted so the census marker attaches to the declaration (mid-expression markers are ignored).
+      */
+      const bouncedToLegacyTodo = live.column === "todo";
       if (
         isDeterministicStepExecuteGraphFailure(failedNode, failureValue)
-        && live.column === "todo"
+        && bouncedToLegacyTodo
         && !live.paused
         && !live.userPaused
         && !live.deletedAt
@@ -12191,7 +12197,13 @@ export class TaskExecutor {
     FNXC:V1A.1 2026-07-30-12:35:
     Deterministic step-execute failures that already sit in todo must not be "resumed" (status/error cleared) — that is the redispatch storm. in-review→todo incomplete recovery (FN-7228) remains available for review-column rows.
     */
-    if (isDeterministicStepExecuteGraphFailure(failedNode, failureValue) && live.column === "todo") {
+    /*
+    FNXC:AppsolinoAuto4 2026-08-01-04:22 DELIBERATE-LITERAL:
+    Same Correction B hold: refuse resume when already on legacy `todo` so a cleared status cannot re-enter execution.
+    Hoisted so the census marker attaches to the declaration (mid-expression markers are ignored).
+    */
+    const alreadyInLegacyTodo = live.column === "todo";
+    if (isDeterministicStepExecuteGraphFailure(failedNode, failureValue) && alreadyInLegacyTodo) {
       return false;
     }
     if (live.deletedAt) return false;
