@@ -36,6 +36,7 @@ import { useBoardWorkflows } from "../hooks/useBoardWorkflows";
 import { useUnmappedWorkflowRefetch } from "../hooks/useUnmappedWorkflowRefetch";
 import { TaskContextMenu, buildTaskActionMenuModel, getTaskPrAutomationLabel, type TaskContextMenuColumnMetadata, type TaskMenuActionDescriptor } from "./TaskContextMenu";
 import type { DetailTaskOpenOptions } from "../hooks/useModalManager";
+import { isTaskReverted, partitionRevertedTasks } from "../utils/taskRevert";
 
 const COLUMN_COLOR_MAP: Record<Column, string> = {
   triage: "var(--triage)",
@@ -248,6 +249,7 @@ interface ListViewProps {
   tasks: Task[];
   onMoveTask: (id: string, column: ColumnId, optionsOrPosition?: { preserveProgress?: boolean } | number) => Promise<Task>;
   onRetryTask?: (id: string) => Promise<Task>;
+  onReviseTask?: (task: Task) => void;
   onDeleteTask: (id: string, options?: {
     removeDependencyReferences?: boolean;
     removeLineageReferences?: boolean;
@@ -350,6 +352,7 @@ export function ListView({
   onMoveTask,
   onRetryTask,
   onDeleteTask,
+  onReviseTask,
   onPauseTask,
   onUnpauseTask,
   onArchiveTask,
@@ -1158,6 +1161,7 @@ export function ListView({
     columnFiltered.forEach((task) => {
       const column = workflowMode ? task.column : (isColumn(task.column) ? task.column : DEFAULT_COLUMN);
       if (groups[column] !== undefined) {
+        if (isTaskReverted(task.sourceMetadata) && listColumns.find((candidate) => candidate.id === column)?.flags.complete) return;
         groups[column].push(task);
         return;
       }
@@ -3018,6 +3022,18 @@ export function ListView({
                 }}
               />
             </div>
+        {partitionRevertedTasks(tasks).reverted.length > 0 && (
+          <section className="list-reverted-tasks" aria-label="Reverted Tasks" data-testid="list-reverted-tasks">
+            <h2>{t("tasks.revertedTasks", "Reverted Tasks")}</h2>
+            {partitionRevertedTasks(tasks).reverted.map((task) => (
+              <div key={`reverted-${task.id}`} className="list-card">
+                <button type="button" className="btn" onClick={() => onOpenDetail(task)}>{task.id}: {task.title}</button>
+                <button type="button" className="btn" onClick={() => void handleListTaskDelete(task)}>{t("tasks.delete", "Delete")}</button>
+                {onReviseTask && <button type="button" className="btn" onClick={() => onReviseTask(task)}>{t("tasks.revise", "Revise")}</button>}
+              </div>
+            ))}
+          </section>
+        )}
         {filteredCount === 0 ? (
           <div className="list-empty">
             {searchQuery ? t("listView.noTasksMatch", "No tasks match your filter") : t("listView.noTasksYet", "No tasks yet")}
@@ -3588,6 +3604,8 @@ export function ListView({
                       onRequestClose={closeEmbeddedTaskDetail}
                       onOpenDetail={handleEmbeddedOpenDetail}
                       onMoveTask={onMoveTask}
+                      /* FNXC:TaskRevert 2026-08-01-20:27: Split detail receives the list recovery callback so reverted tasks remain revisable here. */
+                      onReviseTask={onReviseTask}
                       onDeleteTask={onDeleteTask}
                       onMergeTask={onMergeTask}
                       onRetryTask={onRetryTask}

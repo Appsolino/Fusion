@@ -618,6 +618,8 @@ interface TaskCardProps {
   onArchiveTask guard).
   */
   onRevertTask?: (id: string, body?: RevertTaskOptions) => Promise<RevertTaskResult>;
+  /** Resolution action for a successfully reverted task. */
+  onReviseTask?: (task: Task) => void;
   onDeleteTask?: (id: string, options?: {
     removeDependencyReferences?: boolean;
     removeLineageReferences?: boolean;
@@ -996,6 +998,7 @@ function TaskCardComponent({
   onUnarchiveTask,
   onRevertTask,
   onDeleteTask,
+  onReviseTask,
   onPauseTask,
   onRetryTask,
   onUnpauseTask,
@@ -3260,6 +3263,12 @@ function TaskCardComponent({
           aria-label={t("tasks.revertedBadgeTitle", "This task's changes were reverted")}
         >
           <span>{t("tasks.revertedBadge", "Reverted")}</span>
+        </span>
+      )}
+      {showRevertedChip && (
+        <span className="card-reverted-actions" aria-label={t("tasks.revertedResolutionActions", "Reverted task resolution actions")}>
+          {onDeleteTask && <button type="button" className="btn" onClick={(event) => { event.stopPropagation(); void handleTaskActionDelete(); }}>{t("tasks.delete", "Delete")}</button>}
+          {onReviseTask && <button type="button" className="btn" onClick={(event) => { event.stopPropagation(); onReviseTask(task); }}>{t("tasks.revise", "Revise")}</button>}
         </span>
       )}
       {showNearDuplicateChip && (

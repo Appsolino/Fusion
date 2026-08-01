@@ -23,7 +23,7 @@ import {
 import { resolveEffectivePlannerOversightLevel } from "../../../core/src/workflow-settings-resolver";
 import { resolveTaskSessionAdvisorEnabled } from "../../../core/src/session-advisor";
 import { isNearDuplicateCanonicalInactive } from "../../../core/src/near-duplicate-canonical";
-import { getRevertOfId, findOpenUndoTaskForSource } from "../utils/taskRevert";
+import { getRevertOfId, findOpenUndoTaskForSource, isTaskReverted } from "../utils/taskRevert";
 import {
   isArchivedColumnRole,
   isCompleteColumnRole,
@@ -368,6 +368,8 @@ export interface TaskDetailModalProps {
   onClose: () => void;
   onOpenDetail: (task: Task | TaskDetail) => void; // For clicking dependencies
   onMoveTask: (id: string, column: Column, optionsOrPosition?: { preserveProgress?: boolean } | number) => Promise<Task>;
+  /** Opens a New Task draft from a reverted task description. */
+  onReviseTask?: (task: Task) => void;
   onDeleteTask: (id: string, options?: {
     removeDependencyReferences?: boolean;
     removeLineageReferences?: boolean;
@@ -760,6 +762,7 @@ export function TaskDetailContent({
   onOpenDetail,
   onMoveTask,
   onDeleteTask,
+  onReviseTask,
   onArchiveTask,
   onRevertTask,
   onMergeTask,
@@ -6814,6 +6817,19 @@ export function TaskDetailContent({
                   <button className="btn btn-danger btn-sm" data-testid="detail-plan-approval-footer-reject" onClick={handleRejectPlan}>
                     {t("taskDetail.plan.rejectBtn", "Reject Plan")}
                   </button>
+                </>
+              )}
+
+              {/*
+              FNXC:TaskRevert 2026-08-01-19:51:
+              A reverted task remains accessible for provenance, but cannot present as ordinary
+              completed work. Detail therefore retains guarded Delete and routes Revise through
+              the shared New Task draft callback with the original description.
+              */}
+              {isTaskReverted(task.sourceMetadata) && (
+                <>
+                  <button className="btn btn-sm btn-danger" onClick={handleDelete} aria-label="Delete reverted task">Delete</button>
+                  {onReviseTask && <button className="btn btn-sm" onClick={() => { onReviseTask(task); requestClose?.(); }}>Revise</button>}
                 </>
               )}
 

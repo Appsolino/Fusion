@@ -2384,3 +2384,7 @@ may remain static. The inventory opt-outs are `AgentErrorDetailsModal` (brief ac
 choice), and `StashConflictModal` (urgent bounded recovery). The executable inventory is guarded by
 `modalFloatingWindowContract.test.tsx`; `migratedModalFixtures.tsx` keeps every hosted surface in
 per-modal geometry coverage.
+
+### Reverted task resolution
+
+When a completed task is successfully reverted, Fusion removes it from ordinary Done collections. It remains discoverable in the **Reverted Tasks** resolution section in Board, List, and the right dock. Open the task for provenance, choose **Delete** to use the existing guarded deletion flow, or choose **Revise** to open New Task with the original description prefilled.
