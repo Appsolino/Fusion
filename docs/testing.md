@@ -132,17 +132,16 @@ netted — a wrong classification stays visible instead of silently moving the b
 `scripts/lib/lifecycle-column-census-baseline.json`:
 
 - a **rise** fails hard — that is the ratchet's purpose, "no new guards";
-- a **drop** TIGHTENS the baseline automatically, reports what it lowered, and exits 0.
+- a **drop** reports that the baseline can be tightened and exits 0 without writing it.
 
-<!-- FNXC:LifecycleColumnCensus 2026-08-01-03:05: the drop behaviour was a hard failure and is not any more,
-because the drop is almost never the failing author's to fix. Eleven files dropped in one merge wave, none of
-those PRs re-recorded, and none of their authors did anything wrong; measured three times since CI began
-gating this. A permanently-red gate is a bigger hole than a stale allowance, because it gets ignored and then
-nothing is guarded at all. -->
-The tightened file must be **committed** — in CI the write is discarded with the runner, which is why the gate
-goes green rather than silently passing a stale allowance. `--strict --exact` restores hard failure on a drop,
-for the end state where the count is pinned and any divergence is a real event. `--strict --update-baseline`
-re-records unconditionally and prints `ACCEPTED RISES`, which is the only way to record a rise deliberately.
+<!-- FNXC:LifecycleColumnCensus 2026-08-01-23:23: Plain strict verification must stay read-only. Drops often
+come from another merge and should not redden the gate, but a check that rewrites the baseline turns every
+reader into an uncredited author. `--exact` catches drift at the pinned end state; explicit baseline recording
+keeps the diff attributable to the change that reviewed it. -->
+A dropped baseline must be **deliberately re-recorded and committed** with
+`--strict --update-baseline`. `--strict --exact` restores hard failure on a drop, for the end state where the
+count is pinned and any divergence is a real event. `--strict --update-baseline` re-records unconditionally
+and prints `ACCEPTED RISES`, which is the only way to record a rise deliberately.
 
 The regression suite is `packages/engine/src/__tests__/lifecycle-column-census.test.ts`. It pins
 each form the census must catch (all six ids, non-`column` locals, single quotes, negation,

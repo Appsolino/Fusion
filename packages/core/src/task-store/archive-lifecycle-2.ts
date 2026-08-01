@@ -468,6 +468,11 @@ export async function archiveTaskBackendImpl(store: TaskStore, id: string, optio
 
     // Best-effort near-duplicate cleanup.
     await store.clearNearDuplicateReferencesToFailSoft(id, {
+      /*
+      FNXC:TaskStoreArchiveLifecycle 2026-08-01-23:23 DELIBERATE-LITERAL — STATE MARKER:
+      This cleanup follows the physical archive transition after soft deletion. It must identify the
+      durable archive marker rather than a custom workflow archived lane, which may still hold live work.
+      */
       column: "archived",
       reason: "archived",
     });

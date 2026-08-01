@@ -187,6 +187,12 @@ export async function softDeleteTaskRow(
   await layer.db
     .update(schema.project.tasks)
     .set({
+      /*
+      FNXC:TaskStorePersistence 2026-08-01-23:23 DELIBERATE-LITERAL — STATE MARKER:
+      Soft deletion persists the physical archive marker together with `deletedAt`; it is not a
+      workflow archive-lane move. Resolving a custom archived lane here would make a deleted row
+      disagree with `getLiveTaskColumn`'s storage sentinel and violate forensic visibility.
+      */
       column: "archived",
       deletedAt,
       allowResurrection: allowResurrection ? 1 : 0,
@@ -287,6 +293,11 @@ export async function softDeleteTaskRowInTransaction(
   const claimed = await tx
     .update(schema.project.tasks)
     .set({
+      /*
+      FNXC:TaskStorePersistence 2026-08-01-23:23 DELIBERATE-LITERAL — STATE MARKER:
+      The transactional soft-delete path writes the same physical archive marker as the direct path.
+      It must remain independent of workflow lanes so `(project_id, id)` deletion stays durable.
+      */
       column: "archived",
       deletedAt,
       allowResurrection: allowResurrection ? 1 : 0,
