@@ -10,11 +10,13 @@ import {
   PRIORITY_SPECIFY,
   clearPreHeldExecutorSlotsForTests,
   computeTopLevelConcurrencyClaimed,
+  getPreHeldExecutorSlotsForTests,
   dropPreHeldExecutorSlot,
   hasPreHeldExecutorSlot,
   persistedTopLevelAgentSlots,
   recoverIdleSemaphoreLeakCandidate,
   registerPreHeldExecutorSlot,
+  resolveActiveTaskCapacityLimit,
   takePreHeldExecutorSlot,
 } from "../concurrency.js";
 
@@ -1067,6 +1069,182 @@ describe("AgentSemaphore resilience (FN-978)", () => {
 
 
 describe("ProjectAdmissionCoordinator", () => {
+  it("clears test-only coordinator and pre-held state across every shared category", async () => {
+    const coordinator = new ProjectAdmissionCoordinator();
+    const projectId = "project-reset";
+    let resolveClaim!: (value: number) => void;
+    const pendingClaim = new Promise<number>((resolve) => { resolveClaim = resolve; });
+
+    const drainingReservation = coordinator.reserveIfAvailable({
+      projectId,
+      taskId: "FN-DRAINING",
+      maxConcurrent: 4,
+      claimed: () => pendingClaim,
+    });
+    await Promise.resolve();
+    expect(coordinator.inspectProjectStateForTests(projectId).draining).toBe(true);
+
+    resolveClaim(0);
+    await drainingReservation;
+    expect(coordinator.inspectProjectStateForTests(projectId)).toMatchObject({
+      reservedCount: 1,
+      draining: false,
+    });
+
+    coordinator.registerProvider("specify:project-reset", {
+      projectId,
+      refresh: async () => [],
+    });
+    expect(coordinator.inspectProjectStateForTests(projectId).providerIds)
+      .toContain("specify:project-reset");
+
+    coordinator.clearReservationsForTests();
+    expect(coordinator.inspectProjectStateForTests(projectId)).toEqual({
+      reservedCount: 0,
+      draining: false,
+      providerIds: [],
+    });
+    expect(await coordinator.reserveIfAvailable({
+      projectId,
+      taskId: "FN-AFTER-DRAINING-RESET",
+      maxConcurrent: 1,
+      claimed: () => 0,
+    })).toBe(true);
+    coordinator.clearReservationsForTests();
+    coordinator.registerProvider("specify:project-reset", {
+      projectId,
+      refresh: async () => [],
+    });
+    expect(coordinator.inspectProjectStateForTests(projectId).providerIds)
+      .toEqual(["specify:project-reset"]);
+
+    registerPreHeldExecutorSlot("FN-PREHELD-RESET");
+    expect(getPreHeldExecutorSlotsForTests()).toContain("FN-PREHELD-RESET");
+    clearPreHeldExecutorSlotsForTests();
+    expect(getPreHeldExecutorSlotsForTests()).toEqual([]);
+  });
+
+  it("shares the final active-task slot across planning, execution, and merge lanes", async () => {
+    const coordinator = new ProjectAdmissionCoordinator();
+    const started: string[] = [];
+    const activeTaskLimit = resolveActiveTaskCapacityLimit({
+      maxConcurrent: 12,
+      maxWorktrees: 9,
+      worktreeLimitEnabled: true,
+    });
+
+    for (const [lane, taskId, createdAt] of [
+      ["planning", "FN-PLANNING", "2026-01-01T00:00:00.000Z"],
+      ["execute", "FN-EXECUTE", "2026-01-02T00:00:00.000Z"],
+      ["merge", "FN-MERGE", "2026-01-03T00:00:00.000Z"],
+    ] as const) {
+      coordinator.registerProvider(lane, {
+        projectId: "project-a",
+        refresh: async () => [{
+          taskId,
+          projectId: "project-a",
+          createdAt,
+          start: async () => { started.push(taskId); },
+        }],
+      });
+    }
+
+    expect(await coordinator.admitOldest({
+      projectId: "project-a",
+      maxConcurrent: activeTaskLimit,
+      claimed: () => 8,
+    })).toBe("FN-PLANNING");
+    expect(await coordinator.reserveIfAvailable({
+      projectId: "project-a",
+      taskId: "FN-DIRECT-SCHEDULER",
+      maxConcurrent: activeTaskLimit,
+      claimed: () => 8,
+    })).toBe(false);
+    expect(started).toEqual(["FN-PLANNING"]);
+
+    // Once the selected task is durably live, its matching reservation is the
+    // same slot—not a second occupant—so the next real slot remains usable.
+    expect(await coordinator.reserveIfAvailable({
+      projectId: "project-a",
+      taskId: "FN-DIRECT-SCHEDULER",
+      maxConcurrent: 10,
+      claimed: () => 9,
+      claimedTaskIds: () => ["FN-PLANNING"],
+    })).toBe(true);
+
+    coordinator.releaseReservation("FN-DIRECT-SCHEDULER");
+    coordinator.releaseReservation("FN-PLANNING");
+  });
+
+  it("does not lose a holder that transfers from reservation to durable state during a claim read", async () => {
+    const coordinator = new ProjectAdmissionCoordinator();
+    expect(await coordinator.reserveIfAvailable({
+      projectId: "project-transfer",
+      taskId: "FN-HANDOFF",
+      maxConcurrent: 1,
+      claimed: () => 0,
+    })).toBe(true);
+
+    let finishSnapshot!: () => void;
+    const snapshotBlocked = new Promise<void>((resolve) => { finishSnapshot = resolve; });
+    let snapshotStarted!: () => void;
+    const snapshotDidStart = new Promise<void>((resolve) => { snapshotStarted = resolve; });
+    const candidate = coordinator.reserveIfAvailable({
+      projectId: "project-transfer",
+      taskId: "FN-CANDIDATE",
+      maxConcurrent: 1,
+      claimed: async () => {
+        snapshotStarted();
+        await snapshotBlocked;
+        // This is the pre-persistence snapshot: the handoff is not durable in it yet.
+        return 0;
+      },
+      claimedTaskIds: () => [],
+    });
+
+    await snapshotDidStart;
+    // The handoff becomes durable and releases its transient reservation while the stale read is open.
+    coordinator.releaseReservation("FN-HANDOFF");
+    finishSnapshot();
+
+    expect(await candidate).toBe(false);
+    coordinator.releaseReservation("FN-CANDIDATE");
+  });
+
+  it("evaluates a waiting admission claim only after the prior project drain finishes", async () => {
+    const coordinator = new ProjectAdmissionCoordinator();
+    let releaseDrain!: () => void;
+    const drainBlocked = new Promise<void>((resolve) => { releaseDrain = resolve; });
+    let drainStarted!: () => void;
+    const drainDidStart = new Promise<void>((resolve) => { drainStarted = resolve; });
+    const first = coordinator.reserveIfAvailable({
+      projectId: "project-serialized-snapshot",
+      taskId: "FN-BLOCKER",
+      maxConcurrent: 0,
+      claimed: async () => {
+        drainStarted();
+        await drainBlocked;
+        return 0;
+      },
+    });
+    await drainDidStart;
+
+    const freshClaim = vi.fn(() => 1);
+    const second = coordinator.reserveIfAvailable({
+      projectId: "project-serialized-snapshot",
+      taskId: "FN-WAITING",
+      maxConcurrent: 1,
+      claimed: freshClaim,
+    });
+    await Promise.resolve();
+    expect(freshClaim).not.toHaveBeenCalled();
+
+    releaseDrain();
+    expect(await first).toBe(false);
+    expect(await second).toBe(false);
+    expect(freshClaim).toHaveBeenCalledOnce();
+  });
+
   it("admits the oldest same-project candidate atomically and partitions projects", async () => {
     const coordinator = new ProjectAdmissionCoordinator();
     const started: string[] = [];
