@@ -17,7 +17,7 @@ A recurring manual command sequence is an **automation gap**. Do not design norm
 
 Target pipeline: detect upstream → one integration branch (`merge --no-ff`) → risk classify → affected tests → package → safe auto-merge or one sensitive approval → automated Host D immutable release → health/smoke → rollback on failure.
 
-Interim: read-only upstream monitor. **AUTO-1 OPERATIONAL** prepares absorb PRs. **AUTO-2 OPERATIONAL** classifies/validates and auto-merges only proven low-risk (sensitive → owner approval). AUTO-3 is OPERATIONAL for Host D: see [`CURRENT-STATE.md`](CURRENT-STATE.md).
+Interim: read-only upstream monitor. **AUTO-1 OPERATIONAL** prepares absorb PRs. **AUTO-2 OPERATIONAL** classifies/validates and auto-merges only proven low-risk. Sensitive PRs require one GitHub APPROVED review from owner `Anas966` on the **exact head SHA**, then trusted dispatch of `upstream-auto2-approve-sensitive.yml` (exact-head merge + AUTO-3). A CLI `--owner-approved` flag alone is not authorization. AUTO-3 is OPERATIONAL for Host D: see [`CURRENT-STATE.md`](CURRENT-STATE.md).
 
 ## Validation levels
 
@@ -41,6 +41,7 @@ Run only checks required by changed risk. Docs alone do not trigger full builds.
 - Merge upstream with `git merge --no-ff` (do not rebase Appsolino history).
 - **Safe:** docs/tests/harmless UI/assets → auto-merge when green → Host D release.
 - **Sensitive:** engine, providers, scheduler/executor, migrations, lockfiles, deploy, workflows, auth, DB → automate work; hold for approval.
+- **Sensitive merge path:** owner approves the exact `automation/upstream-*` head on GitHub → dispatch **Upstream AUTO-2 Approve Sensitive** with that SHA → fail-closed verification → `--match-head-commit` merge → AUTO-3. Prior gap: classification stopped at `approval-required` and never merged after approval.
 - Correction A/B contract failures **block** the sync PR.
 - New migrations → disposable staging DB proof; always sensitive.
 - Do not force-mirror exact upstream tips onto `upstream-shadow`; do not import upstream workflows wholesale; do not use owner interactive OAuth as the durable automation identity.
