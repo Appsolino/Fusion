@@ -606,7 +606,9 @@ export function ListView({
 
   // Bulk edit state and handlers (declared before clearSelection so every clear path resets pending lane edits)
   const [executorModel, setExecutorModel] = useState<string>("__no_change__");
+  const [credentialInstanceId, setCredentialInstanceId] = useState<string>("__no_change__");
   const [validatorModel, setValidatorModel] = useState<string>("__no_change__");
+  const [validatorCredentialInstanceId, setValidatorCredentialInstanceId] = useState<string>("__no_change__");
   const [bulkThinkingLevel, setBulkThinkingLevel] = useState<string>("__no_change__");
   const [nodeOverride, setNodeOverride] = useState<string>("__no_change__");
 
@@ -615,7 +617,9 @@ export function ListView({
       if (prev) {
         setSelectedTaskIds(new Set());
         setExecutorModel("__no_change__");
+        setCredentialInstanceId("__no_change__");
         setValidatorModel("__no_change__");
+        setValidatorCredentialInstanceId("__no_change__");
         setBulkThinkingLevel("__no_change__");
         setNodeOverride("__no_change__");
       }
@@ -640,7 +644,9 @@ export function ListView({
   const clearSelection = useCallback(() => {
     setSelectedTaskIds(new Set());
     setExecutorModel("__no_change__");
+    setCredentialInstanceId("__no_change__");
     setValidatorModel("__no_change__");
+    setValidatorCredentialInstanceId("__no_change__");
     setBulkThinkingLevel("__no_change__");
     setNodeOverride("__no_change__");
   }, []);
@@ -1779,6 +1785,8 @@ export function ListView({
       validatorModelId?: string | null;
       nodeId?: string | null;
       thinkingLevel?: ThinkingLevel | null;
+      credentialInstanceId?: string | null;
+      validatorCredentialInstanceId?: string | null;
     } = { taskIds };
 
     if (executorModel !== "__no_change__") {
@@ -1786,11 +1794,13 @@ export function ListView({
         // "Use default" - clear override
         payload.modelProvider = null;
         payload.modelId = null;
+        payload.credentialInstanceId = null;
       } else {
         const slashIdx = executorModel.indexOf("/");
         if (slashIdx !== -1) {
           payload.modelProvider = executorModel.slice(0, slashIdx);
           payload.modelId = executorModel.slice(slashIdx + 1);
+          payload.credentialInstanceId = null;
         }
       }
     }
@@ -1800,14 +1810,19 @@ export function ListView({
         // "Use default" - clear override
         payload.validatorModelProvider = null;
         payload.validatorModelId = null;
+        payload.validatorCredentialInstanceId = null;
       } else {
         const slashIdx = validatorModel.indexOf("/");
         if (slashIdx !== -1) {
           payload.validatorModelProvider = validatorModel.slice(0, slashIdx);
           payload.validatorModelId = validatorModel.slice(slashIdx + 1);
+          payload.validatorCredentialInstanceId = null;
         }
       }
     }
+
+    if (credentialInstanceId !== "__no_change__") payload.credentialInstanceId = credentialInstanceId || null;
+    if (validatorCredentialInstanceId !== "__no_change__") payload.validatorCredentialInstanceId = validatorCredentialInstanceId || null;
 
     if (nodeOverride !== "__no_change__") {
       if (nodeOverride === "") {
@@ -1840,6 +1855,8 @@ export function ListView({
         payload.nodeId,
         payload.thinkingLevel,
         projectId,
+        payload.credentialInstanceId,
+        payload.validatorCredentialInstanceId,
       );
 
       if (onTasksUpdated) {
@@ -1851,7 +1868,9 @@ export function ListView({
       // Reset state
       clearSelection();
       setExecutorModel("__no_change__");
+      setCredentialInstanceId("__no_change__");
       setValidatorModel("__no_change__");
+      setValidatorCredentialInstanceId("__no_change__");
       setBulkThinkingLevel("__no_change__");
       setNodeOverride("__no_change__");
     } catch (err) {
@@ -1859,7 +1878,7 @@ export function ListView({
     } finally {
       setIsApplying(false);
     }
-  }, [addToast, bulkThinkingLevel, clearSelection, executorModel, isTaskArchivedColumn, nodeOverride, onTasksUpdated, projectId, selectedTaskIds, tasks, validatorModel]);
+  }, [addToast, bulkThinkingLevel, clearSelection, credentialInstanceId, executorModel, isTaskArchivedColumn, nodeOverride, onTasksUpdated, projectId, selectedTaskIds, tasks, validatorCredentialInstanceId, validatorModel]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenuState(null);
@@ -2776,7 +2795,9 @@ export function ListView({
             <CustomModelDropdown
               models={availableModels}
               value={executorModel}
-              onChange={setExecutorModel}
+              onChange={(value) => { setCredentialInstanceId("__no_change__"); setExecutorModel(value); }}
+              credentialInstanceId={credentialInstanceId === "__no_change__" ? undefined : credentialInstanceId}
+              onCredentialInstanceChange={setCredentialInstanceId}
               label={t("listView.executorModel", "Executor Model")}
               noChangeValue="__no_change__"
               noChangeLabel={t("listView.noChange", "No change")}
@@ -2790,7 +2811,9 @@ export function ListView({
             <CustomModelDropdown
               models={availableModels}
               value={validatorModel}
-              onChange={setValidatorModel}
+              onChange={(value) => { setValidatorCredentialInstanceId("__no_change__"); setValidatorModel(value); }}
+              credentialInstanceId={validatorCredentialInstanceId === "__no_change__" ? undefined : validatorCredentialInstanceId}
+              onCredentialInstanceChange={setValidatorCredentialInstanceId}
               label={t("listView.reviewerModel", "Reviewer Model")}
               noChangeValue="__no_change__"
               noChangeLabel={t("listView.noChange", "No change")}

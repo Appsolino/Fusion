@@ -1390,8 +1390,11 @@ export function TaskDetailContent({
   const [editBranch, setEditBranch] = useState(task.branch ?? "");
   const [editBaseBranch, setEditBaseBranch] = useState(task.baseBranch ?? "");
   const [editExecutorModel, setEditExecutorModel] = useState("");
+  const [editCredentialInstanceId, setEditCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editValidatorModel, setEditValidatorModel] = useState("");
+  const [editValidatorCredentialInstanceId, setEditValidatorCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editPlanningModel, setEditPlanningModel] = useState("");
+  const [editPlanningCredentialInstanceId, setEditPlanningCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editThinkingLevel, setEditThinkingLevel] = useState("");
   // FNXC:PlannerOversight 2026-07-04-00:00: Per-task override of the workflow-native plannerOversightLevel setting (FN-7508). "" means "inherit from workflow" (clear-to-default).
   const [editPlannerOversightLevel, setEditPlannerOversightLevel] = useState("");
@@ -2144,8 +2147,11 @@ export function TaskDetailContent({
     const valModel = task.validatorModelProvider && task.validatorModelId ? `${task.validatorModelProvider}/${task.validatorModelId}` : "";
     const planModel = task.planningModelProvider && task.planningModelId ? `${task.planningModelProvider}/${task.planningModelId}` : "";
     setEditExecutorModel(execModel);
+    setEditCredentialInstanceId(task.credentialInstanceId);
     setEditValidatorModel(valModel);
+    setEditValidatorCredentialInstanceId(task.validatorCredentialInstanceId);
     setEditPlanningModel(planModel);
+    setEditPlanningCredentialInstanceId(task.planningCredentialInstanceId);
     setEditThinkingLevel(task.thinkingLevel ?? "");
     setEditPlannerOversightLevel(task.plannerOversightLevel ?? "");
     setEditNodeId(task.nodeId);
@@ -2208,6 +2214,9 @@ export function TaskDetailContent({
     if (editExecutorModel !== currentExecutorModel) {
       updates.modelProvider = executorSelection?.provider ?? null;
       updates.modelId = executorSelection?.modelId ?? null;
+      updates.credentialInstanceId = null;
+    } else if ((editCredentialInstanceId ?? "") !== (task.credentialInstanceId ?? "")) {
+      updates.credentialInstanceId = editCredentialInstanceId ?? null;
     }
 
     const validatorSelection = splitModelSelection(editValidatorModel);
@@ -2215,6 +2224,9 @@ export function TaskDetailContent({
     if (editValidatorModel !== currentValidatorModel) {
       updates.validatorModelProvider = validatorSelection?.provider ?? null;
       updates.validatorModelId = validatorSelection?.modelId ?? null;
+      updates.validatorCredentialInstanceId = null;
+    } else if ((editValidatorCredentialInstanceId ?? "") !== (task.validatorCredentialInstanceId ?? "")) {
+      updates.validatorCredentialInstanceId = editValidatorCredentialInstanceId ?? null;
     }
 
     const planningSelection = splitModelSelection(editPlanningModel);
@@ -2222,6 +2234,9 @@ export function TaskDetailContent({
     if (editPlanningModel !== currentPlanningModel) {
       updates.planningModelProvider = planningSelection?.provider ?? null;
       updates.planningModelId = planningSelection?.modelId ?? null;
+      updates.planningCredentialInstanceId = null;
+    } else if ((editPlanningCredentialInstanceId ?? "") !== (task.planningCredentialInstanceId ?? "")) {
+      updates.planningCredentialInstanceId = editPlanningCredentialInstanceId ?? null;
     }
 
     const currentThinkingLevel = task.thinkingLevel ?? "";
@@ -2269,7 +2284,7 @@ export function TaskDetailContent({
     }
 
     return { updates, error: null as string | null };
-  }, [editBaseBranch, editBranch, editDependencies, editDescription, editExecutionMode, editExecutorModel, editNodeId, editPlanningModel, editPriority, editReviewLevel, editSelectedWorkflowSteps, editSourceIssueExternalId, editSourceIssueProvider, editSourceIssueRepository, editSourceIssueUrl, editThinkingLevel, editPlannerOversightLevel, editTitle, editValidatorModel, task]);
+  }, [editBaseBranch, editBranch, editDependencies, editDescription, editExecutionMode, editCredentialInstanceId, editExecutorModel, editNodeId, editPlanningCredentialInstanceId, editPlanningModel, editPriority, editReviewLevel, editSelectedWorkflowSteps, editSourceIssueExternalId, editSourceIssueProvider, editSourceIssueRepository, editSourceIssueUrl, editThinkingLevel, editPlannerOversightLevel, editTitle, editValidatorCredentialInstanceId, editValidatorModel, task]);
 
   const persistEditChanges = useCallback(async (includeDescription: boolean) => {
     const { updates, error } = buildEditUpdates(includeDescription);
@@ -2370,8 +2385,11 @@ export function TaskDetailContent({
     editBranch,
     editBaseBranch,
     editExecutorModel,
+    editCredentialInstanceId,
     editValidatorModel,
+    editValidatorCredentialInstanceId,
     editPlanningModel,
+    editPlanningCredentialInstanceId,
     editThinkingLevel,
     editPlannerOversightLevel,
     editNodeId,
@@ -4532,11 +4550,17 @@ export function TaskDetailContent({
                 baseBranch={editBaseBranch}
                 onBaseBranchChange={setEditBaseBranch}
                 executorModel={editExecutorModel}
-                onExecutorModelChange={setEditExecutorModel}
+                onExecutorModelChange={(value) => { setEditCredentialInstanceId(undefined); setEditExecutorModel(value); }}
+                credentialInstanceId={editCredentialInstanceId}
+                onCredentialInstanceIdChange={(instanceId) => setEditCredentialInstanceId(instanceId || undefined)}
                 validatorModel={editValidatorModel}
-                onValidatorModelChange={setEditValidatorModel}
+                onValidatorModelChange={(value) => { setEditValidatorCredentialInstanceId(undefined); setEditValidatorModel(value); }}
+                validatorCredentialInstanceId={editValidatorCredentialInstanceId}
+                onValidatorCredentialInstanceIdChange={(instanceId) => setEditValidatorCredentialInstanceId(instanceId || undefined)}
                 planningModel={editPlanningModel}
-                onPlanningModelChange={setEditPlanningModel}
+                onPlanningModelChange={(value) => { setEditPlanningCredentialInstanceId(undefined); setEditPlanningModel(value); }}
+                planningCredentialInstanceId={editPlanningCredentialInstanceId}
+                onPlanningCredentialInstanceIdChange={(instanceId) => setEditPlanningCredentialInstanceId(instanceId || undefined)}
                 thinkingLevel={editThinkingLevel}
                 onThinkingLevelChange={setEditThinkingLevel}
                 plannerOversightLevel={editPlannerOversightLevel}

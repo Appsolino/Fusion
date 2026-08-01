@@ -1808,6 +1808,8 @@ All three lanes (planning / executor / reviewer) follow the same precedence:
 5. Project `defaultProviderOverride` / `defaultModelIdOverride`
 6. Global `defaultProvider` / `defaultModelId` → automatic resolution
 
+A selected credential instance is part of the winning provider/model selection. The model picker shows a **Credential instance** control only when `/api/models` advertises two or more configured instances for that provider. Selecting **Default** removes the instance override entirely; providers with zero or one instance keep the unchanged picker UI.
+
 ## Mock provider (test mode)
 
 Set `defaultProvider: "mock"` at any tier in that hierarchy (or the per-task lane override) to force planning, executor, reviewer/validator, mission validation, merger, and heartbeat sessions onto the deterministic zero-network mock runtime.
