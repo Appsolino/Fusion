@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, chmodSync, rmSync, cpSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   admitSourceSha,
@@ -19,7 +19,7 @@ import {
 } from "../auto3-guards.mjs";
 import { buildAuto3Release } from "../auto3-build-release.mjs";
 
-const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 let passed = 0;
 function test(name, fn) {
   try {
