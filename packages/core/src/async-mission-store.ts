@@ -1958,38 +1958,38 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
 
   // ════════════════ CONTRACT ASSERTIONS ════════════════
   async addContractAssertion(milestoneId: string, input: ContractAssertionCreateInput): Promise<MissionContractAssertion> {
-    const milestone = await getMilestone(this.db, milestoneId);
-    if (!milestone) throw new Error(`Milestone ${milestoneId} not found`);
     const origin = input.origin ?? "authored";
-    const existing = await listContractAssertions(this.db, milestoneId);
-    if (origin === "derived_milestone_acceptance"
-      && existing.some((assertion) => assertion.origin === "derived_milestone_acceptance")) {
-      /*
-      FNXC:MissionValidation 2026-07-23-17:20:
-      Reject duplicate canonical provenance before insert; PostgreSQL also
-      enforces this at rest, while authored/imported rows stay non-unique.
-      */
-      throw new Error(`Milestone ${milestoneId} already has a derived milestone acceptance assertion`);
-    }
-    const now = new Date().toISOString();
-    const orderIndex = existing.length > 0 ? Math.max(...existing.map((a) => a.orderIndex)) + 1 : 0;
-    const assertion: MissionContractAssertion = {
-      id: this.generateId("CA"),
-      milestoneId,
-      sourceFeatureId: input.sourceFeatureId,
-      scope: input.scope ?? "feature",
-      origin,
-      title: input.title,
-      assertion: input.assertion,
-      status: input.status || "pending",
-      type: normalizeMissionAssertionType(input.type),
-      orderIndex,
-      createdAt: now,
-      updatedAt: now,
-    };
-    const created = await createContractAssertion(this.db, assertion);
+    const created = await this.mutateMilestoneAssertions(milestoneId, async (tx) => {
+      const milestone = await getMilestone(tx, milestoneId);
+      if (!milestone) throw new Error(`Milestone ${milestoneId} not found`);
+      const existing = await listContractAssertions(tx, milestoneId);
+      if (origin === "derived_milestone_acceptance"
+        && existing.some((assertion) => assertion.origin === "derived_milestone_acceptance")) {
+        /*
+        FNXC:MissionValidation 2026-07-23-17:20:
+        Reject duplicate canonical provenance before insert; PostgreSQL also
+        enforces this at rest, while authored/imported rows stay non-unique.
+        */
+        throw new Error(`Milestone ${milestoneId} already has a derived milestone acceptance assertion`);
+      }
+      const now = new Date().toISOString();
+      const orderIndex = existing.length > 0 ? Math.max(...existing.map((a) => a.orderIndex)) + 1 : 0;
+      return createContractAssertion(tx, {
+        id: this.generateId("CA"),
+        milestoneId,
+        sourceFeatureId: input.sourceFeatureId,
+        scope: input.scope ?? "feature",
+        origin,
+        title: input.title,
+        assertion: input.assertion,
+        status: input.status || "pending",
+        type: normalizeMissionAssertionType(input.type),
+        orderIndex,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
     this.emit("assertion:created", created);
-    await this.recomputeMilestoneValidation(milestoneId);
     return created;
   }
 
@@ -2004,26 +2004,32 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
   async updateContractAssertion(id: string, updates: ContractAssertionUpdateInput): Promise<MissionContractAssertion> {
     const assertion = await getContractAssertion(this.db, id);
     if (!assertion) throw new Error(`Assertion ${id} not found`);
-    const updated: MissionContractAssertion = {
-      ...assertion,
-      title: updates.title ?? assertion.title,
-      assertion: updates.assertion ?? assertion.assertion,
-      status: updates.status ?? assertion.status,
-      updatedAt: new Date().toISOString(),
-    };
-    await updateContractAssertion(this.db, updated);
+    const updated = await this.mutateMilestoneAssertions(assertion.milestoneId, async (tx) => {
+      const current = await getContractAssertion(tx, id);
+      if (!current) throw new Error(`Assertion ${id} not found`);
+      const next: MissionContractAssertion = {
+        ...current,
+        title: updates.title ?? current.title,
+        assertion: updates.assertion ?? current.assertion,
+        status: updates.status ?? current.status,
+        updatedAt: new Date().toISOString(),
+      };
+      await updateContractAssertion(tx, next);
+      return next;
+    });
     this.emit("assertion:updated", updated);
-    await this.recomputeMilestoneValidation(updated.milestoneId);
     return updated;
   }
 
   async deleteContractAssertion(id: string): Promise<void> {
     const assertion = await getContractAssertion(this.db, id);
     if (!assertion) throw new Error(`Assertion ${id} not found`);
-    const milestoneId = assertion.milestoneId;
-    await deleteContractAssertion(this.db, id);
+    await this.mutateMilestoneAssertions(assertion.milestoneId, async (tx) => {
+      const current = await getContractAssertion(tx, id);
+      if (!current) throw new Error(`Assertion ${id} not found`);
+      await deleteContractAssertion(tx, id);
+    });
     this.emit("assertion:deleted", id);
-    await this.recomputeMilestoneValidation(milestoneId);
   }
 
   async reorderContractAssertions(milestoneId: string, orderedIds: string[]): Promise<void> {
@@ -2049,8 +2055,8 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
       throw new Error(`Feature ${featureId} is already linked to assertion ${assertionId}`);
     }
     await linkFeatureToAssertion(this.db, featureId, assertionId, new Date().toISOString());
-    this.emit("assertion:linked", { featureId, assertionId });
     await this.recomputeMilestoneValidation(assertion.milestoneId);
+    this.emit("assertion:linked", { featureId, assertionId });
   }
 
   async unlinkFeatureFromAssertion(featureId: string, assertionId: string): Promise<void> {
@@ -2058,9 +2064,9 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
       throw new Error(`Feature ${featureId} is not linked to assertion ${assertionId}`);
     }
     await unlinkFeatureFromAssertion(this.db, featureId, assertionId);
-    this.emit("assertion:unlinked", { featureId, assertionId });
     const assertion = await getContractAssertion(this.db, assertionId);
     if (assertion) await this.recomputeMilestoneValidation(assertion.milestoneId);
+    this.emit("assertion:unlinked", { featureId, assertionId });
   }
 
   async listAssertionsForFeature(featureId: string): Promise<MissionContractAssertion[]> {
@@ -2159,15 +2165,15 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
   }
 
   // ════════════════ VALIDATION ROLLUP ════════════════
-  async getMilestoneValidationRollup(milestoneId: string): Promise<MilestoneValidationRollup> {
-    const milestone = await getMilestone(this.db, milestoneId);
+  async getMilestoneValidationRollup(milestoneId: string, handle: QueryHandle = this.db): Promise<MilestoneValidationRollup> {
+    const milestone = await getMilestone(handle, milestoneId);
     if (!milestone) throw new Error(`Milestone ${milestoneId} not found`);
-    const assertions = await listContractAssertions(this.db, milestoneId);
+    const assertions = await listContractAssertions(handle, milestoneId);
     const totalAssertions = assertions.length;
     const proseOnMilestone = (milestone.acceptanceCriteria ?? "").trim().length > 0;
     const [milestoneFeatures, linkedAssertionIds] = await Promise.all([
-      listFeaturesForMilestone(this.db, milestoneId),
-      listLinkedAssertionIds(this.db, assertions.map((assertion) => assertion.id)),
+      listFeaturesForMilestone(handle, milestoneId),
+      listLinkedAssertionIds(handle, assertions.map((assertion) => assertion.id)),
     ]);
     const proseOnFeatures = milestoneFeatures.some((feature) => (feature.acceptanceCriteria ?? "").trim().length > 0);
     const hasProseButNoAssertions = totalAssertions === 0 && (proseOnMilestone || proseOnFeatures);
@@ -2496,10 +2502,38 @@ export class AsyncMissionStore extends EventEmitter<MissionStoreEvents> {
     if (mission && mission.status !== newStatus) await this.updateMission(missionId, { status: newStatus });
   }
 
+  /*
+  FNXC:MilestoneValidationReconciliation 2026-08-01-20:42:
+  Assertion mutations must persist the authoritative current rollup before they publish refresh events. This keeps an operator repair or final-failure deletion from exposing a stale failed milestone state to SSE consumers.
+  */
   private async recomputeMilestoneValidation(milestoneId: string): Promise<void> {
-    const rollup = await this.getMilestoneValidationRollup(milestoneId);
-    await updateMilestoneValidationState(this.db, milestoneId, rollup.state);
+    await this.mutateMilestoneAssertions(milestoneId, async () => undefined);
+  }
+
+  /*
+  FNXC:MilestoneValidationReconciliation 2026-08-01-21:02:
+  Assertion writes and their denormalized milestone rollup share one project-scoped
+  advisory transaction lock. PostgreSQL READ COMMITTED alone permits two repairs to
+  publish snapshots in reverse order; the lock makes the committed current rollup
+  the only state emitted to dashboard refresh consumers.
+  */
+  private async mutateMilestoneAssertions<T>(
+    milestoneId: string,
+    mutation: (tx: QueryHandle) => Promise<T>,
+  ): Promise<T> {
+    let result!: T;
+    let rollup!: MilestoneValidationRollup;
+    await this.layer.transactionImmediate(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(
+        CONCAT('mission-validation:', COALESCE(NULLIF(current_setting('fusion.project_id', true), ''), '__legacy_unscoped__'), ':', CAST(${milestoneId} AS text)),
+        0
+      ))`);
+      result = await mutation(tx);
+      rollup = await this.getMilestoneValidationRollup(milestoneId, tx);
+      await updateMilestoneValidationState(tx, milestoneId, rollup.state);
+    });
     this.emit("milestone:validation:updated", { milestoneId, state: rollup.state, rollup });
+    return result;
   }
 
   private deriveFeatureAssertion(feature: MissionFeature): { assertionText: string; textSource: MissionAssertionTextSource } {
@@ -2581,5 +2615,9 @@ export async function updateMilestoneValidationState(
   await handle
     .update(schema.project.milestones)
     .set({ validationState: state, updatedAt: new Date().toISOString() })
-    .where(eq(schema.project.milestones.id, milestoneId));
+    // FNXC:MilestoneValidationReconciliation 2026-08-01-20:42: Shared PostgreSQL milestone IDs must never let one project's validation repair overwrite another project's rollup.
+    .where(and(
+      eq(schema.project.milestones.projectId, missionProjectId()),
+      eq(schema.project.milestones.id, milestoneId),
+    ));
 }

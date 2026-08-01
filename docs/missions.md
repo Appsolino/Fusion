@@ -492,6 +492,10 @@ interface MilestoneValidationRollup {
 5. `failed` — at least one assertion failed
 6. `blocked` — at least one assertion is blocked
 
+**Current-state reconciliation:** after every successful assertion create, repair, removal, or feature-link change, the PostgreSQL store recomputes this rollup from current assertions, persists the resulting `milestones.validationState` within the same project partition, then emits the validation refresh event. A repaired final failure therefore cannot leave a persisted `failed` badge behind; a remaining failed assertion still wins the current rollup.
+
+**Dashboard refresh freshness:** rollup and validation-telemetry requests share one monotonically increasing generation per milestone. A response writes badge/panel state only when its captured generation is still current, including initial selection, expansion, mutation refreshes, and SSE events. This is request ordering, not validation-state precedence: a newer response is allowed to legitimately transition a milestone back to `failed`.
+
 #### Completion Gate Contract
 
 Canonical authored feature criteria live on `MissionFeature.acceptanceCriteria`, and each feature validator derives its verdict only from its **linked feature-scoped assertions**. Validator prompts list each authoritative assertion ID in brackets; responses must return exactly one result keyed by each listed ID. To recover older model output safely, only an exact-count response with zero recognized IDs is matched positionally and recorded in diagnostics. Partial matches, duplicate IDs, and count mismatches remain fail-closed. Model summary prose, milestone prose, and behavioral results that are not mapped to a linked behavioral assertion cannot override that verdict.
