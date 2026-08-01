@@ -107,12 +107,16 @@ export async function taskToArchiveEntryImpl(store: TaskStore, task: Task, archi
       archivedAt,
       modelPresetId: task.modelPresetId,
       modelProvider: task.modelProvider,
+      credentialInstanceId: task.credentialInstanceId,
       modelId: task.modelId,
       validatorModelProvider: task.validatorModelProvider,
+      validatorCredentialInstanceId: task.validatorCredentialInstanceId,
       validatorModelId: task.validatorModelId,
       planningModelProvider: task.planningModelProvider,
+      planningCredentialInstanceId: task.planningCredentialInstanceId,
       planningModelId: task.planningModelId,
       mergerModelProvider: task.mergerModelProvider,
+      mergerCredentialInstanceId: task.mergerCredentialInstanceId,
       mergerModelId: task.mergerModelId,
       mergerThinkingLevel: task.mergerThinkingLevel,
       breakIntoSubtasks: task.breakIntoSubtasks,
@@ -220,6 +224,7 @@ export async function deleteTaskBackendImpl(store: TaskStore, id: string, option
     });
 
     // Emit lifecycle event (best-effort, outside the transaction).
+    store.laneCache.invalidate(task.id);
     store.emit("task:deleted", task, { githubIssueAction: options?.githubIssueAction ?? "auto" });
     /*
     FNXC:TaskDeleteNotice 2026-07-26-16:10:
@@ -389,7 +394,9 @@ export async function archiveTaskBackendImpl(store: TaskStore, id: string, optio
     lane-less left that leak reachable through this path even after the listener itself was fixed.
     */
     const movedLanes = toTaskMoveLanes(await resolveWorkflowIrForTask(store, task.id).catch(() => undefined));
+    store.laneCache.set(task.id, movedLanes);
     store.emit("task:moved", { task, from: fromColumn, to: "archived" as Column, source: "engine", lanes: movedLanes });
+    store.laneCache.invalidate(task.id);
 
     // Best-effort near-duplicate cleanup.
     await store.clearNearDuplicateReferencesToFailSoft(id, {
@@ -571,12 +578,16 @@ export async function restoreFromArchiveImpl(store: TaskStore, entry: import("..
       columnMovedAt: entry.columnMovedAt,
       modelPresetId: entry.modelPresetId,
       modelProvider: entry.modelProvider,
+      credentialInstanceId: entry.credentialInstanceId,
       modelId: entry.modelId,
       validatorModelProvider: entry.validatorModelProvider,
+      validatorCredentialInstanceId: entry.validatorCredentialInstanceId,
       validatorModelId: entry.validatorModelId,
       planningModelProvider: entry.planningModelProvider,
+      planningCredentialInstanceId: entry.planningCredentialInstanceId,
       planningModelId: entry.planningModelId,
       mergerModelProvider: entry.mergerModelProvider,
+      mergerCredentialInstanceId: entry.mergerCredentialInstanceId,
       mergerModelId: entry.mergerModelId,
       mergerThinkingLevel: entry.mergerThinkingLevel,
       breakIntoSubtasks: entry.breakIntoSubtasks,

@@ -337,6 +337,8 @@ The CI job uses `fetch-depth: 0` because these tests run real git operations.
 
 Flaky tests are quarantined ON SIGHT and deleted on a 2-week clock. This is written policy with minimal mechanics — deliberately no loader module, no automation (see the AGENTS.md standing rule "Flaky Tests Are Quarantined on Sight").
 
+Quarantine is the default when a sighting is reproducible enough to justify evicting a file's coverage. The only exception is the narrow first-sighting record authority in AGENTS.md: a high-value file may be recorded in the [observed suite-only flakes register](solutions/test-failures/suite-only-flakes-observed-register.md) instead (`docs/solutions/test-failures/suite-only-flakes-observed-register.md`). A second sighting of a registered flake moves it to the ledger plus matching Vitest `exclude` in one lockstep commit.
+
 **To quarantine a test** (a test that failed without a corresponding real bug in the change), in one commit:
 
 1. Add an entry to `scripts/lib/test-quarantine.json`:
@@ -356,6 +358,16 @@ Flags:
 - `--strict` exits 1 when any entry is expired or near-deadline, for opt-in local or project-specific gates only. Do not wire this into `pretest`, `test:gate`, or other default blocking lanes without an explicit policy change.
 
 **Rescue** (before the clock runs out) requires both: evidence the test catches real regressions, and a root-cause fix for the flake. Stabilization passes — widened timeouts, retries, loosened assertions — are appeasement, not rescue, and are banned (for agents especially).
+
+### Validate before excluding and preserve timeout budgets
+
+Capture **full runner output** before recording or filing a ledger entry—for example, tee it to a file. Never pipe a dot reporter through `tail`: the summary remains but the `FAIL` identity lines needed for evidence are truncated.
+
+Validate a quarantine-bound file **before** adding its exclusion. The dashboard quarantine array is spread into every dashboard project exclude, so even an explicitly named CLI file is suppressed afterward; no CLI flag removes a configured exclusion. The only local route back to validation is an uncommitted removal of both lockstep entries. Hoisting expensive real-dependency construction into a reusable per-file `beforeAll` is a valid structural rescue, but it inherits the hook timeout and does not by itself fix a duration-driven flake. Do not widen a timeout under a “deliberate budget” framing without an owner-approved policy exception; FN-8647 and [#3245](https://github.com/Runfusion/Fusion/issues/3245) document this distinction.
+
+When proving that a quarantine change did not alter the budget, inspect the **staged** diff before the final lockstep commit and fail nonzero on any added **or removed** config `testTimeout`, `hookTimeout`, or `teardownTimeout` line—removal falls back to a runner default. Then parse the resulting test source rather than applying a line-wise diff regex: any expression in a hook's second or case's third timeout position is forbidden regardless of its shape (`15 * 1000`, a bare identifier, or a cast all count). Resolve calls through a `vitest` import alias map and namespace bindings; reject local rebinding and computed access outright. Rebinding detection must scan the whole initializer/assignment RHS, not one root identifier, so container forms such as `const [h] = [beforeAll]`, object/conditional/sequence wrappers, and element access are caught while direct invocation callee positions are skipped.
+
+Inspect options objects recursively through inline object-literal spreads. Reject every non-inline spread and every computed option key; identifier-spread immutability/dataflow proofs are unsound under direct and alias mutation. An out-of-tree guard must resolve TypeScript from the repository CWD with `createRequire(path.join(process.cwd(), "package.json"))`; an unrunnable guard is a hard failure. For a non-collection check, classify Vitest's status and no-files diagnostic first, then parse only the JSON test-file list: the diagnostic itself echoes the requested path.
 
 ### Vitest timeout-appeasement guard
 
@@ -605,6 +617,12 @@ Prefer `it.each` over copy-pasted `it()` blocks. When trimming, keep: first case
 - Tests linked to an FN-ticket in describe/it names — these guard real regressions.
 - Integration tests exercising real SQLite, real worker pool, or spawned processes.
 - Lean core/engine unit tests with low mock burden.
+
+## Test isolation for module-singleton state
+
+<!-- FNXC:ConcurrencyAdmission 2026-08-01-06:57: Module-singleton admission state can survive mocked lane starts and unstopped processors, silently consuming capacity in later tests. FN-8671 fixes that root cause without quarantine: stop tracked owners first, then clear shared state in a finally block and assert the result through read-only inspection seams. -->
+
+When a test owns a process-wide singleton that has asynchronous owners (timers, processors, or lane starts), use the same teardown in `beforeEach` and `afterEach`: await every tracked owner’s `stop()` with `Promise.allSettled`, then clear all shared state in a `finally` block. Do not clear first: a pending stop or callback can repopulate the singleton after the apparent reset. Test reset mutators establish cleanup; read-only inspection seams must prove reservations, mutex/draining state, registrations, and companion module-global slots are actually empty. Fix the isolation seam at the root rather than adding retries, wider timeouts, weakened assertions, or a quarantine entry.
 
 ## Standing Rule: Do Not Add Slow Tests (FN-5048)
 
