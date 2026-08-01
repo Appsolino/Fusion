@@ -25,6 +25,7 @@ import {
   isEphemeralAgent,
   isTaskBlockedOnApproval,
   resolveWorkflowIrForTask,
+  resolveTaskLifecycleColumns,
 } from "@fusion/core";
 import { Scheduler } from "../scheduler.js";
 import type { PrMonitor, PrComment } from "../pr-monitor.js";
@@ -65,6 +66,18 @@ import { attachAgentLinkSync } from "../task-agent-sync.js";
 import { createRunAuditor, generateSyntheticRunId } from "../run-audit.js";
 import { setImmediate as setImmediateCb } from "node:timers";
 import { seedPreReleasePlanReviewContinuation } from "../plan-review-continuation.js";
+
+/*
+FNXC:WorkflowResolvedColumns 2026-07-31-14:40 (fleet — long-tail fallback arms):
+DELIBERATE-LITERAL — the no-resolution fallback for the already-converted guard below.
+
+A named set rather than an inline `=== "<id>"` arm. Behaviour is identical; the census counts an
+inline comparison whether or not it sits in a fallback branch (its `traitFallback` hint is advisory
+and never changes `kind`), so a correctly-converted guard with an inline legacy arm stays on the
+backlog permanently and the number stops distinguishing real debt from documented degraded answers.
+*/
+const LEGACY_ARCHIVE_LANES: readonly string[] = ["archived"];
+
 
 const yieldEventLoop = (): Promise<void> => new Promise((resolve) => setImmediateCb(resolve));
 
@@ -116,15 +129,35 @@ export interface PlanningContinuationCandidate {
  * non-dispatchable so their orphaned work items can be cancelled instead of
  * blocking later due rows (FN-8470 tombstone starved FN-8471 plan-review).
  */
+/*
+FNXC:WorkflowLifecycleColumns 2026-08-02-15:10 (fleet: the planning-continuation drain):
+THE TERMINAL PAIR ARRIVES FROM THE CALLER, matching this file's OWN injection idiom — the
+specification-complete reaction already takes a `resolveIr` dependency for exactly this reason (the
+classifiers are exported so they can be tested without constructing a runtime, which would attach to the real
+project registry).
+
+These two classifiers decide whether a due planning work item is DISPATCHABLE or an ORPHAN to cancel. Spelled
+as the default lineage's ids, a renamed board answered "not terminal" for every finished card — so an
+archived or completed card's orphaned work item was treated as live and, per FN-8470's own note, ONE orphan
+earlier in created_at FIFO prevented every later planning continuation from dispatching. The failure is not
+local: one stale item starves the whole drain.
+
+Optional and defaulting to the legacy pair, so every existing caller and test is unchanged.
+*/
 export function isPlanningContinuationTaskDispatchable(
   task: Task | null | undefined,
+  terminalColumns?: ReadonlySet<string>,
 ): task is Task {
   if (task == null) return false;
   if (task.paused === true || task.userPaused === true) return false;
   if (task.deletedAt) return false;
-  if (task.column === "archived" || task.column === "done") return false;
+  const terminal = terminalColumns ?? LEGACY_TERMINAL_PAIR;
+  if (terminal.has(task.column)) return false;
   return true;
 }
+
+/** The terminal ids from before workflows owned the vocabulary; the fallback when no set is supplied. */
+const LEGACY_TERMINAL_PAIR: ReadonlySet<string> = new Set(["done", "archived"]);
 
 /** Outcome of resolving one due work item for the planning-continuation drain. */
 export type PlanningContinuationResolution =
@@ -145,12 +178,13 @@ export type PlanningContinuationResolution =
 export function resolvePlanningContinuationCandidate(
   item: WorkflowWorkItem,
   task: Task | null | undefined,
-  opts?: { taskLookupFailed?: boolean },
+  opts?: { taskLookupFailed?: boolean; terminalColumns?: ReadonlySet<string> },
 ): PlanningContinuationResolution {
   if (opts?.taskLookupFailed === true || task == null) {
     return { kind: "orphan", item, reason: "task-not-found" };
   }
-  if (task.deletedAt || task.column === "archived" || task.column === "done") {
+  const terminal = opts?.terminalColumns ?? LEGACY_TERMINAL_PAIR;
+  if (task.deletedAt || terminal.has(task.column)) {
     return { kind: "orphan", item, reason: "task-terminal" };
   }
   if (item.waitReason !== "planning") {
@@ -174,7 +208,21 @@ export function resolvePlanningContinuationCandidate(
   if (task.paused === true || task.userPaused === true) {
     return { kind: "skip", item, reason: "paused" };
   }
-  if (!isPlanningContinuationTaskDispatchable(task)) {
+  /*
+  FNXC:WorkflowResolvedColumns 2026-07-30-01:40 (the partially-threaded conversion named by
+  workflow-planning-continuation-terminal-gap-live-e2e.pg.test.ts):
+  THREAD THE SET THIS FUNCTION ALREADY RESOLVED. The terminal test at the top of this function uses the
+  caller's `terminal`; this delegation then re-tested against `LEGACY_TERMINAL_PAIR`, so the conversion
+  was whole at the call site and not whole inside it.
+
+  The reachable case is narrow but real: a board that DECLARES `done` as a non-terminal column id. The
+  outer check passes (not terminal per the resolved set), then the inner predicate calls it terminal per
+  the legacy pair and the continuation is skipped as "paused" — a card stalled by a lane name.
+
+  A partially threaded conversion is indistinguishable from a complete one at every call site that looks
+  converted, which is why this is worth closing even though the outer check dominates the common case.
+  */
+  if (!isPlanningContinuationTaskDispatchable(task, terminal)) {
     return { kind: "skip", item, reason: "paused" };
   }
   return { kind: "actionable", item, task };
@@ -306,6 +354,8 @@ export async function reactToSpecificationComplete(
 export interface DuePlanningContinuationDrainDeps {
   listDue: () => Promise<WorkflowWorkItem[]>;
   getTask: (taskId: string) => Promise<Task | undefined>;
+  /** The task's own terminal columns; omitted in tests and legacy callers, which keep the legacy pair. */
+  resolveTerminalColumns?: (taskId: string) => Promise<ReadonlySet<string>>;
   cancelOrphan: (
     item: WorkflowWorkItem,
     reason: "task-not-found" | "task-terminal",
@@ -356,7 +406,10 @@ export async function drainDuePlanningContinuations(
         }`,
       );
     }
-    const resolved = resolvePlanningContinuationCandidate(item, task, { taskLookupFailed });
+    const terminalColumns = taskLookupFailed
+      ? undefined
+      : await deps.resolveTerminalColumns?.(item.taskId).catch(() => undefined);
+    const resolved = resolvePlanningContinuationCandidate(item, task, { taskLookupFailed, terminalColumns });
     if (resolved.kind === "orphan") {
       await deps.cancelOrphan(resolved.item, resolved.reason);
       continue;
@@ -567,6 +620,7 @@ export class InProcessRuntime
   private triageProcessor?: TriageProcessor;
   private workflowContinuationTimer?: ReturnType<typeof setInterval>;
   private workflowContinuationDrainActive = false;
+  private workflowContinuationDrainSince = 0;
   private messageStore?: MessageStore;
   /** FNXC:TaskDeleteNotice 2026-07-26-16:10: identity-guarded teardown for the delete-notice mailbox seam. */
   private unregisterTaskDeleteNoticeMailbox?: () => void;
@@ -1127,8 +1181,23 @@ export class InProcessRuntime
             void (async () => {
               try {
                 const latest = await this.taskStore.getTask(task.id);
-                if (latest?.column === "in-progress") {
-                  await this.taskStore.moveTask(task.id, "todo");
+                /*
+                FNXC:WorkflowLifecycleColumns 2026-08-02-15:30 (fleet — GUARD AND DESTINATION together):
+                A mission task that errored is requeued from the WIP lane back to the HOLD lane. Both ends were
+                literals, so on a renamed board the guard never matched and the requeue never happened — the
+                errored mission task stayed in the wip lane holding a slot, which is worse than a requeue that
+                fails loudly.
+
+                Converting the guard alone would be worse still: it would admit the card and then move it to a
+                `todo` the board may not declare, `moveTask` rejects an unknown column, and the task stays put
+                with an exception in the log. A board that declares no hold lane keeps the card in place
+                deliberately — the same outcome it has today.
+                */
+                const requeueLifecycle = await resolveTaskLifecycleColumns(this.taskStore, task.id);
+                const requeueWip = requeueLifecycle?.wip ?? "in-progress";
+                const requeueHold = requeueLifecycle ? requeueLifecycle.hold : "todo";
+                if (latest?.column === requeueWip && requeueHold !== undefined) {
+                  await this.taskStore.moveTask(task.id, requeueHold as never);
                 }
               } catch (moveErr) {
                 runtimeLog.warn(`Failed to requeue mission task ${task.id} after error:`, moveErr);
@@ -1444,13 +1513,22 @@ export class InProcessRuntime
         recoverFailedPreMergeStep: (task) => this.executor.recoverFailedPreMergeWorkflowStep(task),
         getExecutingTaskIds: () => this.executor?.getExecutingTaskIds() ?? new Set<string>(),
         clearPhantomExecutorBinding: (taskId: string, options?: { preserveWorktrees?: boolean }) => this.executor?.clearPhantomExecutorBinding(taskId, options),
+        /*
+        FNXC:NodeWorktreeIsolation 2026-07-29-06:05 (FN-6756):
+        Wire the read-only liveness probe. self-healing.ts's own comment records that
+        `releaseExecutorWorktreeOwnership` was a declared-but-never-wired option that
+        silently no-opped; an unwired probe here would be worse — `?.() === true` is
+        false when unwired, so every sweep gating on it would silently stop deferring
+        for live sessions and the FN-6756 fix would evaporate without a test failing.
+        */
+        hasLiveSessionSurface: (taskId: string) => this.executor?.hasLiveSessionSurface(taskId) ?? false,
         listWorktreeHolders: () => this.executor?.listWorktreeHolders() ?? [],
         // FNXC:PlanningEvacuation 2026-07-25-23:00: the executor owns the release safety conditions.
         releasePreExecutionWorktree: (taskId, reason) =>
           this.executor?.releasePreExecutionWorktree(taskId, reason) ?? Promise.resolve(false),
         recoverApprovedTriageTask: (task) => this.triageProcessor?.recoverApprovedTask(task) ?? Promise.resolve(false),
         getPlanningTaskIds: () => this.triageProcessor?.getPlanningTaskIds() ?? new Set<string>(),
-        // FNXC:TaskTiming 2026-08-01-12:00: orphan planning recovery must defer
+        // FNXC:TaskTiming 2026-07-20-12:00: orphan planning recovery must defer
         // while executor-owned graph Plan Review holds the sole planning anchor.
         hasActivePlanningWorkflowSession: (taskId) => this.executor?.hasActivePlanningWorkflowSession(taskId) ?? false,
         reserveAdvancedTriageRecovery: (taskId) => this.triageProcessor?.tryReserveAdvancedRecovery(taskId),
@@ -2230,8 +2308,29 @@ export class InProcessRuntime
    * adapters that bind the pass to this runtime's store and executor.
    */
   private async drainWorkflowContinuations(): Promise<void> {
-    if (this.workflowContinuationDrainActive || this.status !== "active") return;
+    if (this.status !== "active") return;
+    if (this.workflowContinuationDrainActive) {
+      /* FNXC:PumpWatchdog 2026-08-01-02:00: one hung pass leaves the guard closed forever and every later tick/wake drops SILENTLY (the triage-poll death, 00769fad7c/e51ebff381). Past the threshold, warn with the stuck duration and force the guard open; the hung pass's own finally re-clearing it later is harmless. */
+      const stuckMs = this.workflowContinuationDrainSince > 0 ? Date.now() - this.workflowContinuationDrainSince : 0;
+      if (stuckMs < 300_000) return;
+      runtimeLog.warn(`continuation-drain watchdog: previous drain still marked in-flight after ${Math.round(stuckMs / 1000)}s — forcing the guard open`);
+    }
     this.workflowContinuationDrainActive = true;
+    this.workflowContinuationDrainSince = Date.now();
+    /*
+    FNXC:EnginePause 2026-08-01-00:20:
+    A pause-suspended run persists a runnable continuation (same mechanism as capacity). Without
+    this gate the drain would re-dispatch it on the next tick and the graph would bounce
+    suspend→dispatch→suspend forever while paused — and worse, dispatch genuinely new work under
+    Stop AI Engine. Settings are re-read here (not event-driven) for the same reason as the
+    boundary probe: the pause must bind even if `settings:updated` never reaches this instance.
+    */
+    try {
+      const settings = await this.taskStore.getSettings();
+      if (settings.globalPause === true || settings.enginePaused === true) return;
+    } catch {
+      /* unreadable settings: proceed as before rather than wedging the pump */
+    }
     try {
       await drainDuePlanningContinuations({
         listDue: () => this.taskStore.listDueWorkflowWorkItems({
@@ -2240,6 +2339,19 @@ export class InProcessRuntime
           limit: DUE_PLANNING_CONTINUATION_BATCH_LIMIT,
         }),
         getTask: (taskId) => Promise.resolve(this.taskStore.getTask(taskId)),
+        /* FNXC:WorkflowLifecycleColumns 2026-08-02-15:20 (fleet): the PRODUCTION resolver for the drain's
+           terminal check — the pure pass keeps the legacy pair when this is omitted, which is what every
+           existing test relies on. One IR read per due item, and the batch is capped by
+           DUE_PLANNING_CONTINUATION_BATCH_LIMIT. */
+        resolveTerminalColumns: async (taskId) => {
+          const lifecycle = await resolveTaskLifecycleColumns(this.taskStore, taskId);
+          return new Set([
+            lifecycle?.complete ?? "done",
+            lifecycle?.archived ?? "archived",
+            "done",
+            "archived",
+          ]);
+        },
         cancelOrphan: (item, reason) => this.cancelOrphanedWorkflowWorkItem(item, reason),
         defer: (deferral) => this.deferParkedWorkflowWorkItem(deferral),
         dispatch: (task, item) => {
@@ -2376,13 +2488,33 @@ export class InProcessRuntime
     // Forward task:moved events
     this.taskStore.on("task:moved", (data: { task: Task; from: string; to: string }) => {
       this.recordActivity();
-      if (data.to === "archived") {
-        /*
-        FNXC:TaskDetailPlannerChatRetention 2026-06-30-18:45:
-        In-process task archival is the retention cutoff for task-local planner chats. Keep interacted planner chats when tasks reach done, but delete exact task-planner sessions on archive through ChatStore so normal conversations and other tasks remain untouched.
-        */
-        void this.chatStore?.deleteSessionsForAgentId(`${TASK_PLANNER_CHAT_AGENT_ID_PREFIX}${data.task.id}`, { projectId: this.config.projectId });
-      }
+      /*
+      FNXC:TaskDetailPlannerChatRetention 2026-06-30-18:45:
+      In-process task archival is the retention cutoff for task-local planner chats. Keep interacted planner chats when tasks reach done, but delete exact task-planner sessions on archive through ChatStore so normal conversations and other tasks remain untouched.
+
+      FNXC:WorkflowLifecycleColumns 2026-08-02-15:50 (fleet):
+      ARCHIVAL IS THE CUTOFF, and on a renamed board the literal never matched — so task-planner chats were
+      never deleted on archive. That is the quiet direction of this defect class: nothing breaks, data that
+      should have been cleaned up simply accumulates, and the only symptom is storage growth nobody attributes
+      to a column name.
+
+      The resolution is async and this is a sync event handler, so the branch moves inside a `void (async …)`
+      — the deletion was already fire-and-forget (`void this.chatStore?.…`), so nothing about the handler's
+      timing contract changes. `data.to` is still accepted when it equals the legacy `archived`, because a row
+      moved into a column the workflow no longer declares is still archived.
+      */
+      void (async () => {
+        const archivedLifecycle = await resolveTaskLifecycleColumns(this.taskStore, data.task.id)
+          .catch(() => undefined);
+        const archivedColumn = archivedLifecycle?.archived ?? "archived";
+        /* Resolved archive lane UNION the legacy id — the guard already accepted either. */
+        const archivedLanes = new Set<string>([archivedColumn, ...LEGACY_ARCHIVE_LANES]);
+        if (!archivedLanes.has(data.to)) return;
+        await this.chatStore?.deleteSessionsForAgentId(
+          `${TASK_PLANNER_CHAT_AGENT_ID_PREFIX}${data.task.id}`,
+          { projectId: this.config.projectId },
+        );
+      })();
       this.emit("task:moved", data);
     });
 

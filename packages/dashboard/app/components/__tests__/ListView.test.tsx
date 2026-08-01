@@ -1,3 +1,4 @@
+import React from "react";
 import { readFileSync } from "node:fs";
 import { describe, it, expect, vi } from "vitest";
 import { useEffect, useState } from "react";
@@ -62,7 +63,7 @@ vi.mock("../QuickEntryBox", () => ({
     onPlanningMode?: (initialPlan: string, workflowId?: string | null) => void;
     onSubtaskBreakdown?: (description: string, workflowId?: string | null) => void;
     workflowId?: string | null;
-    workflowOptions?: { id: string; name: string }[];
+    workflowOptions?: { id: string; name: string; columns?: Array<{ flags?: { manualIntake?: boolean } }> }[];
     defaultWorkflowId?: string | null;
     onMoveTask?: (id: string, column: string) => Promise<unknown>;
   }) => {
@@ -90,6 +91,11 @@ vi.mock("../QuickEntryBox", () => ({
         addToast(err instanceof Error ? err.message : "Failed to create task", "error");
       }
     };
+
+    const selectedWorkflow = workflowOptions?.find((option) => option.id === selectedWorkflowId);
+    const showStart = selectedWorkflowId === "builtin:coding-ideas"
+      || defaultWorkflowId === "builtin:coding-ideas"
+      || selectedWorkflow?.columns?.[0]?.flags?.manualIntake === true;
 
     const handoff = (callback?: (description: string, workflowId?: string | null) => void) => {
       const description = value.trim();
@@ -147,9 +153,11 @@ vi.mock("../QuickEntryBox", () => ({
           <button type="button" data-testid="quick-entry-save" onClick={() => void submit()}>
             Save
           </button>
-          <button type="button" data-testid="quick-entry-start" onClick={() => void onCreate?.({ description: "Started task", workflowId: "builtin:coding-ideas", column: "todo" })}>
-            Start
-          </button>
+          {showStart && (
+            <button type="button" data-testid="quick-entry-start" onClick={() => void onCreate?.({ description: "Started task", workflowId: "builtin:coding-ideas", column: "todo" })}>
+              Start
+            </button>
+          )}
           <button type="button" data-testid="quick-entry-move" onClick={() => void onMoveTask?.("FN-created", "todo")}>
             Move
           </button>
@@ -454,6 +462,246 @@ beforeEach(() => {
   writeBoardWorkflowsCache(undefined, DEFAULT_LANE_PAYLOAD);
   writeBoardWorkflowsCache("project-a", DEFAULT_LANE_PAYLOAD);
   writeBoardWorkflowsCache("project-b", DEFAULT_LANE_PAYLOAD);
+});
+
+/*
+FNXC:WorkflowResolvedColumns 2026-07-29-00:00 (U12 — PR #2525 review, greptile):
+List must self-heal a task whose workflow mapping the payload does not yet carry — the
+routine case, because the SSE task list updates before board-workflows does. Board has
+done this since FN-7591; List had not, so a just-created card kept an approximated move
+menu until some unrelated refresh.
+
+REVERT CHECK: remove the `useUnmappedWorkflowRefetch` call from ListView and this fails
+— `fetchBoardWorkflows` is never called a second time, so the mapping never resolves.
+*/
+describe("ListView unmapped-workflow self-heal", () => {
+  it("forces one board-workflows refetch when a rendered task has no workflow mapping", async () => {
+    vi.mocked(fetchBoardWorkflows).mockResolvedValue({
+      ...DEFAULT_LANE_PAYLOAD,
+      // FN-901 is rendered but absent from the mapping: newer than the payload.
+      taskWorkflowIds: {},
+    });
+
+    renderListView({ tasks: [createMockTask({ id: "FN-901", column: "todo", title: "Fresh card" })] });
+
+    await waitFor(() => expect(vi.mocked(fetchBoardWorkflows).mock.calls.length).toBeGreaterThan(1));
+    // Forced fresh, so a cached payload cannot satisfy the repair.
+    expect(vi.mocked(fetchBoardWorkflows).mock.calls.some(([, options]) => options?.forceFresh === true)).toBe(true);
+  });
+
+  /*
+  FNXC:WorkflowBoard 2026-07-29-00:00 (PR #2530 review — greptile):
+  The forced fetch can return BEFORE the workflow-selection write commits, reporting the
+  same suspect set. A one-shot guard treated that as "unresolvable" and gave up, leaving
+  the card on approximate metadata until an unrelated refresh.
+
+  REVERT CHECK: restore the one-shot guard (return whenever the signature repeats) and
+  this fails — only ONE forced fetch is issued, so the mapping that arrives on the
+  second response never triggers the repair.
+  */
+  it("retries once more when the forced fetch races the selection write", async () => {
+    const unmappedPayload = { ...DEFAULT_LANE_PAYLOAD, taskWorkflowIds: {} };
+    vi.mocked(fetchBoardWorkflows).mockResolvedValue(unmappedPayload);
+
+    renderListView({ tasks: [createMockTask({ id: "FN-903", column: "todo", title: "Racing card" })] });
+
+    // Two forced attempts for the same still-suspect signature, then it must stop —
+    // loop protection is kept, just not at one attempt.
+    await waitFor(() => {
+      expect(vi.mocked(fetchBoardWorkflows).mock.calls.filter(([, o]) => o?.forceFresh === true).length).toBe(2);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vi.mocked(fetchBoardWorkflows).mock.calls.filter(([, o]) => o?.forceFresh === true).length).toBe(2);
+  });
+
+  /*
+  FNXC:WorkflowBoard 2026-07-29-00:00 (PR #2530 review — greptile, second round):
+  A REJECTED forced fetch must not end the repair. `refreshBoardWorkflows` swallows a
+  transient failure by design, so `boardWorkflows` never changes and an effect-driven
+  retry would never re-run — the repair would die on exactly the failure it exists to
+  survive.
+
+  HONEST LIMITATION: this case pins the OUTCOME (the repair reaches its second attempt
+  despite a rejected first) but it does NOT discriminate the mechanism. I checked:
+  removing the self re-arm still passes it, because in this environment something else
+  re-renders after the rejection and the effect happens to run again. I could not
+  construct a case that isolates the self-driving loop without freezing re-renders in a
+  way that no longer resembles the app, so I am not claiming revert-proof coverage for
+  it — the loop is defensive against a state where nothing re-renders, which is real in
+  production but not reproducible here.
+
+  The bounded-retry budget IS revert-proof; see the racing-selection-write case above.
+  */
+  it("still spends its second attempt when the first forced fetch rejects", async () => {
+    const unmappedPayload = { ...DEFAULT_LANE_PAYLOAD, taskWorkflowIds: {} };
+    vi.mocked(fetchBoardWorkflows)
+      .mockResolvedValueOnce(unmappedPayload)
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValue(unmappedPayload);
+
+    renderListView({ tasks: [createMockTask({ id: "FN-904", column: "todo", title: "Rejected repair" })] });
+
+    await waitFor(
+      () => {
+        expect(vi.mocked(fetchBoardWorkflows).mock.calls.filter(([, o]) => o?.forceFresh === true).length).toBe(2);
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  /*
+  FNXC:WorkflowBoard 2026-07-29-00:00 (PR #2530 review — greptile):
+  A SLOW forced refresh must not have its successor started before it settles. On a
+  fixed timer alone, a request in flight for longer than the retry delay had its second
+  attempt fired anyway, so both attempts were spent on the same unresolved state before
+  either answer arrived — the budget gone, the card still approximate.
+
+  REVERT CHECK: re-arm on the plain timer (drop the settle-await) and this fails —
+  the second attempt fires while the first is still pending.
+  */
+  it("waits for a slow forced refresh to settle before spending the next attempt", async () => {
+    const unmappedPayload = { ...DEFAULT_LANE_PAYLOAD, taskWorkflowIds: {} };
+    let releaseFirstForced: (() => void) | undefined;
+    let forcedCalls = 0;
+    vi.mocked(fetchBoardWorkflows).mockImplementation((_projectId?: string, options?: { forceFresh?: boolean }) => {
+      if (options?.forceFresh !== true) return Promise.resolve(unmappedPayload);
+      forcedCalls += 1;
+      if (forcedCalls === 1) {
+        return new Promise((resolve) => { releaseFirstForced = () => resolve(unmappedPayload); });
+      }
+      return Promise.resolve(unmappedPayload);
+    });
+
+    renderListView({ tasks: [createMockTask({ id: "FN-905", column: "todo", title: "Slow repair" })] });
+
+    await waitFor(() => expect(forcedCalls).toBe(1));
+    // Well past the retry delay, with the first attempt still in flight.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(forcedCalls).toBe(1);
+
+    await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
+    await waitFor(() => expect(forcedCalls).toBe(2), { timeout: 2000 });
+  });
+
+  /*
+  FNXC:WorkflowBoard 2026-07-29-00:00 (PR #2530 review — greptile):
+  A repair pending across a PROJECT SWITCH must abandon itself. Otherwise its
+  continuation runs through the OLD project's `refreshBoardWorkflows` closure, and that
+  stale request can claim the newest shared fetch sequence number — discarding the
+  CURRENT project's response and leaving the new board without workflow metadata.
+
+  REVERT CHECK: drop the `projectIdRef` comparison in the settle/timer continuations and
+  this fails — a forced fetch is issued for the OLD project after the switch.
+  */
+  it("abandons a pending repair when the project changes", async () => {
+    const unmappedPayload = { ...DEFAULT_LANE_PAYLOAD, taskWorkflowIds: {} };
+    let releaseFirstForced: (() => void) | undefined;
+    const forcedProjects: (string | undefined)[] = [];
+    vi.mocked(fetchBoardWorkflows).mockImplementation((projectId?: string, options?: { forceFresh?: boolean }) => {
+      if (options?.forceFresh !== true) return Promise.resolve(unmappedPayload);
+      forcedProjects.push(projectId);
+      if (forcedProjects.length === 1) {
+        return new Promise((resolve) => { releaseFirstForced = () => resolve(unmappedPayload); });
+      }
+      return Promise.resolve(unmappedPayload);
+    });
+
+    const tasks = [createMockTask({ id: "FN-906", column: "todo", title: "Switching card" })];
+    const view = renderListView({ tasks, projectId: "project-a" });
+    await waitFor(() => expect(forcedProjects).toEqual(["project-a"]));
+
+    // Switch projects while the repair is still in flight, then let it settle.
+    view.rerender(<ListView tasks={tasks} projectId="project-b" onMoveTask={vi.fn()} onOpenDetail={vi.fn()} addToast={mockAddToast} />);
+    await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    // No follow-up may be issued for the project that is no longer displayed.
+    expect(forcedProjects.filter((id) => id === "project-a")).toHaveLength(1);
+  });
+
+  /*
+  FNXC:WorkflowBoard 2026-07-29-00:00 (PR #2530 review — CodeRabbit):
+  A repair in flight at UNMOUNT must not resume. The cleanup can only clear the timer
+  that exists at unmount; a settling request afterwards would schedule a fresh timer
+  nobody will ever clear, and fire a refresh for a view that is gone.
+
+  REVERT CHECK: drop the `mountedRef` guards and this fails — a forced fetch is issued
+  after the component has been unmounted.
+  */
+  it("does not resume a repair that settles after unmount", async () => {
+    const unmappedPayload = { ...DEFAULT_LANE_PAYLOAD, taskWorkflowIds: {} };
+    let releaseFirstForced: (() => void) | undefined;
+    let forcedCalls = 0;
+    vi.mocked(fetchBoardWorkflows).mockImplementation((_projectId?: string, options?: { forceFresh?: boolean }) => {
+      if (options?.forceFresh !== true) return Promise.resolve(unmappedPayload);
+      forcedCalls += 1;
+      if (forcedCalls === 1) {
+        return new Promise((resolve) => { releaseFirstForced = () => resolve(unmappedPayload); });
+      }
+      return Promise.resolve(unmappedPayload);
+    });
+
+    const view = renderListView({ tasks: [createMockTask({ id: "FN-907", column: "todo", title: "Unmount card" })] });
+    await waitFor(() => expect(forcedCalls).toBe(1));
+
+    view.unmount();
+    await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    expect(forcedCalls).toBe(1);
+  });
+
+  /*
+  FNXC:WorkflowBoard 2026-07-29-00:00 (PR #2530 review — greptile):
+  StrictMode replays effects as mount -> cleanup -> mount while PRESERVING refs. A
+  mounted latch that is only ever cleared stays `false` after the replay, so every
+  deferred continuation exits at the guard and the repair is silently dead for the whole
+  session — in production, since the dashboard root uses StrictMode.
+
+  REVERT CHECK: remove `mountedRef.current = true` from the effect SETUP and this fails —
+  no forced fetch is ever issued under StrictMode.
+  */
+  it("still repairs under StrictMode effect replay", async () => {
+    vi.mocked(fetchBoardWorkflows).mockResolvedValue({ ...DEFAULT_LANE_PAYLOAD, taskWorkflowIds: {} });
+
+    render(
+      <React.StrictMode>
+        <ListView
+          tasks={[createMockTask({ id: "FN-908", column: "todo", title: "Strict card" })]}
+          projectId={TEST_PROJECT_ID}
+          onMoveTask={vi.fn()}
+          onOpenDetail={vi.fn()}
+          addToast={mockAddToast}
+        />
+      </React.StrictMode>,
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchBoardWorkflows).mock.calls.filter(([, o]) => o?.forceFresh === true).length).toBeGreaterThan(0);
+    }, { timeout: 2000 });
+  });
+
+  it("does not refetch when every rendered task is mapped", async () => {
+    const mapped = { ...DEFAULT_LANE_PAYLOAD, taskWorkflowIds: { "FN-902": "builtin:coding" } };
+    vi.mocked(fetchBoardWorkflows).mockResolvedValue(mapped);
+    // Seed the FIRST-PAINT cache too: the file-level seed maps no tasks, so without this
+    // the initial render legitimately sees an unmapped card and schedules the repair —
+    // which would make this case assert the opposite of what it means to.
+    writeBoardWorkflowsCache(TEST_PROJECT_ID, mapped);
+
+    renderListView({ tasks: [createMockTask({ id: "FN-902", column: "todo", title: "Mapped card" })] });
+
+    // Let the initial load settle, then watch only what happens AFTER it: other
+    // mechanisms (mount fetch, switcher open) legitimately call the fetcher, so
+    // counting from zero would measure them rather than the self-heal.
+    await act(async () => { await Promise.resolve(); });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    vi.mocked(fetchBoardWorkflows).mockClear();
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The signature guard must not turn a healthy board into a refetch loop.
+    expect(vi.mocked(fetchBoardWorkflows).mock.calls.filter(([, options]) => options?.forceFresh === true)).toHaveLength(0);
+  });
 });
 
 describe("ListView", () => {
@@ -1013,6 +1261,63 @@ describe("ListView", () => {
     viewportSpy.mockRestore();
   });
 
+  /*
+  FNXC:WorkflowResolvedColumns 2026-07-31-03:45 (fleet phase — evidence for the ListView row-menu conversion):
+  The Archive and Revert row entries were gated on `task.column === "done"` / `=== "archived"`, so on a
+  board whose terminal lanes are RENAMED they simply did not render. No error, no log — the operator just
+  has no way to archive or revert from the list.
+
+  Driven through the real `fetchBoardWorkflows` seam with a renamed vocabulary rather than by poking
+  flags in, so the assertion covers the whole path the component actually uses: payload -> listColumns ->
+  columnFlagsById -> row menu.
+
+  REVERT CHECK, measured. Restoring the id comparisons makes the renamed case fail — the menu renders
+  with neither entry ("Unable to find ... name Archive"). The DEFAULT-vocabulary case passes either way,
+  which is why the renamed one exists.
+  */
+  it("offers Archive and Revert on a RENAMED complete lane, which the id comparisons could not see", async () => {
+    const RENAMED_LANE_PAYLOAD = {
+      flagEnabled: true,
+      defaultWorkflowId: "custom:renamed",
+      workflows: [
+        {
+          id: "custom:renamed",
+          name: "Renamed",
+          columns: [
+            { id: "backlog", name: "Backlog", flags: { hold: true } },
+            { id: "building", name: "Building", flags: { countsTowardWip: true } },
+            { id: "checking", name: "Checking", flags: { mergeBlocker: true } },
+            { id: "shipped", name: "Shipped", flags: { complete: true } },
+            { id: "attic", name: "Attic", flags: { archived: true } },
+          ],
+        },
+      ],
+      taskWorkflowIds: { "FN-090": "custom:renamed" },
+    };
+    vi.mocked(fetchBoardWorkflows).mockResolvedValue(RENAMED_LANE_PAYLOAD as never);
+    writeBoardWorkflowsCache(TEST_PROJECT_ID, RENAMED_LANE_PAYLOAD as never);
+
+    const shipped = createMockTask({
+      id: "FN-090",
+      title: "Shipped row",
+      column: "shipped" as never,
+      mergeDetails: { commitSha: "abc1234" } as never,
+    });
+
+    renderListView({
+      tasks: [shipped],
+      onOpenDetail: vi.fn(),
+      onArchiveTask: vi.fn(),
+      onRevertTask: vi.fn(),
+    });
+
+    await waitFor(() => expect(document.querySelector('.list-row[data-id="FN-090"]')).toBeTruthy());
+    fireEvent.contextMenu(document.querySelector('.list-row[data-id="FN-090"]') as HTMLElement, { clientX: 40, clientY: 50 });
+
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Revert" })).toBeInTheDocument();
+  });
+
   it("enables GitHub tracking from desktop and mobile list context menus without selecting rows", async () => {
     const desktopViewportSpy = mockDesktopViewport();
     const onOpenDetail = vi.fn();
@@ -1222,37 +1527,38 @@ describe("ListView", () => {
   });
 
   it("refreshes workflow columns when workflow metadata SSE arrives", async () => {
+    const wf = (columns: { id: string; name: string; flags: Record<string, boolean> }[]) => ({
+      flagEnabled: true,
+      defaultWorkflowId: "wf-custom",
+      workflows: [{ id: "wf-custom", name: "Custom", columns }],
+      taskWorkflowIds: { "FN-001": "wf-custom" },
+    });
+    const before = wf([
+      { id: "backlog", name: "Backlog", flags: { intake: true } },
+      { id: "complete", name: "Complete", flags: { complete: true } },
+    ]);
+    const after = wf([
+      { id: "ready", name: "Ready", flags: { intake: true } },
+      { id: "complete", name: "Complete", flags: { complete: true } },
+    ]);
+    /*
+    FNXC:WorkflowResolvedColumns 2026-07-29-00:00 (U12):
+    Seed the FIRST-PAINT cache with `before`. The file-level seed maps no tasks, so
+    without this the initial render sees FN-001 as unmapped, the unmapped-workflow
+    self-heal correctly forces an extra board-workflows fetch, and that fetch eats the
+    `Once` payload this test is asserting on. Seeding makes the first paint already
+    consistent, which is what the test means to start from.
+
+    The trailing `mockResolvedValue(after)` covers the self-heal firing legitimately
+    AFTER the SSE swap: `backlog` -> `ready` leaves FN-001 in a column its workflow no
+    longer declares, so a repair fetch is correct there. Without a fallback it would
+    resolve `undefined` and wipe the payload.
+    */
+    writeBoardWorkflowsCache(TEST_PROJECT_ID, before);
     vi.mocked(fetchBoardWorkflows)
-      .mockResolvedValueOnce({
-        flagEnabled: true,
-        defaultWorkflowId: "wf-custom",
-        workflows: [
-          {
-            id: "wf-custom",
-            name: "Custom",
-            columns: [
-              { id: "backlog", name: "Backlog", flags: { intake: true } },
-              { id: "complete", name: "Complete", flags: { complete: true } },
-            ],
-          },
-        ],
-        taskWorkflowIds: { "FN-001": "wf-custom" },
-      })
-      .mockResolvedValueOnce({
-        flagEnabled: true,
-        defaultWorkflowId: "wf-custom",
-        workflows: [
-          {
-            id: "wf-custom",
-            name: "Custom",
-            columns: [
-              { id: "ready", name: "Ready", flags: { intake: true } },
-              { id: "complete", name: "Complete", flags: { complete: true } },
-            ],
-          },
-        ],
-        taskWorkflowIds: { "FN-001": "wf-custom" },
-      });
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after)
+      .mockResolvedValue(after);
 
     renderListView({
       tasks: [createMockTask({ id: "FN-001", column: "backlog", title: "Workflow task" })],
@@ -3782,14 +4088,14 @@ describe("ListView Quick Entry", () => {
         id: "builtin:coding-ideas",
         name: "Coding (Ideas)",
         columns: [
-          { id: "ideas", name: "Ideas", flags: { intake: true } },
+          { id: "ideas", name: "Ideas", flags: { intake: true, hold: true, manualIntake: true } },
           { id: "todo", name: "Todo", flags: { hold: true } },
         ],
       }],
       taskWorkflowIds: {},
     });
     renderListView({ onQuickCreate });
-    await screen.findByTestId("quick-entry-box");
+    await waitFor(() => expect(screen.getByTestId("quick-entry-workflow-props")).toHaveAttribute("data-default-workflow-id", "builtin:coding-ideas"));
     fireEvent.click(screen.getByTestId("quick-entry-start"));
 
     await waitFor(() => expect(onQuickCreate).toHaveBeenCalledWith(expect.objectContaining({
@@ -3797,6 +4103,27 @@ describe("ListView Quick Entry", () => {
       workflowId: "builtin:coding-ideas",
       column: "todo",
     })));
+  });
+
+  it.each([
+    ["desktop", mockDesktopViewport],
+    ["mobile", mockMobileViewport],
+  ])("does not expose Quick Add Start for Coding's merged intake/hold lane on %s", async (_label, mockViewport) => {
+    mockViewport();
+    vi.mocked(fetchBoardWorkflows).mockResolvedValue({
+      flagEnabled: true,
+      defaultWorkflowId: "builtin:coding",
+      workflows: [{
+        id: "builtin:coding",
+        name: "Coding",
+        columns: [{ id: "planning", name: "Planning", flags: { intake: true, hold: true } }],
+      }],
+      taskWorkflowIds: {},
+    });
+    renderListView({ onQuickCreate: vi.fn() });
+    await waitFor(() => expect(screen.getByTestId("quick-entry-workflow-props")).toHaveAttribute("data-default-workflow-id", "builtin:coding"));
+
+    expect(screen.queryByTestId("quick-entry-start")).toBeNull();
   });
 
   it("wires QuickEntry Start moves through the list host callback", async () => {
