@@ -2472,7 +2472,9 @@ describe("TaskCard", () => {
     expect(screen.getByText("executing")).toBeDefined();
   });
 
-  it("FN-8493 renders Revising, not Replan, for a bare needs-replan Board card", () => {
+  it("FN-8493 renders the idle Queued to revise label, not Replan, for a bare needs-replan Board card", () => {
+    // FNXC:TaskActivity 2026-08-01-17:53: needs-replan holds no concurrency slot, so the card is
+    // idle — it renders the descriptive waiting label instead of the live "Revising" copy.
     render(
       <TaskCard
         task={makeTask({ column: "triage", status: "needs-replan" })}
@@ -2481,7 +2483,7 @@ describe("TaskCard", () => {
       />,
     );
 
-    expect(screen.getByText("Revising")).toHaveClass("card-status-badge");
+    expect(screen.getByText("Queued to revise")).toHaveClass("card-status-badge");
     expect(screen.queryByText("Replan")).not.toBeInTheDocument();
   });
 
@@ -2972,7 +2974,9 @@ describe("TaskCard", () => {
     expect(headerBadges.contains(badge)).toBe(true);
   });
 
-  it("renders an active Planning badge when a status-null triage card has fresh planner activity", () => {
+  it("does not glow a status-null triage card on fresh planner logs alone", () => {
+    // FNXC:TaskActivity 2026-08-01-17:53: a log line is not a concurrency slot; the pulsing
+    // Planning badge requires the authoritative planning status the engine counts.
     const recentAgentActivityAt = new Date().toISOString();
     const { container } = render(
       <TaskCard
@@ -2982,8 +2986,8 @@ describe("TaskCard", () => {
       />,
     );
 
-    expect(container.querySelector(".card")).toHaveClass("agent-active");
-    expect(screen.getByLabelText("Planning")).toHaveClass("card-status-badge", "pulsing");
+    expect(container.querySelector(".card")).not.toHaveClass("agent-active");
+    expect(container.querySelector(".card-status-badge")).toBeNull();
   });
 
   it("does not render a status badge when a status-null triage card has no fresh planner activity", () => {
@@ -2994,7 +2998,9 @@ describe("TaskCard", () => {
     expect(container.querySelector(".card-status-badge")).toBeNull();
   });
 
-  it("keeps board replan cards glowing and their status badge pulsing", () => {
+  it("does not glow board replan cards — a parked replan holds no concurrency slot", () => {
+    // FNXC:TaskActivity 2026-08-01-17:53: FN-8494's replan chrome is removed so lane counts
+    // and glow can never exceed the live-agent population; the badge stays, statically.
     const { container } = render(
       <TaskCard
         task={makeTask({ id: "FN-8494-board", column: "triage", status: "needs-replan" })}
@@ -3003,8 +3009,9 @@ describe("TaskCard", () => {
       />,
     );
 
-    expect(container.querySelector(".card")).toHaveClass("agent-active");
-    expect(screen.getByText("Revising")).toHaveClass("card-status-badge", "pulsing");
+    expect(container.querySelector(".card")).not.toHaveClass("agent-active");
+    expect(screen.getByText("Queued to revise")).toHaveClass("card-status-badge");
+    expect(screen.getByText("Queued to revise")).not.toHaveClass("pulsing");
   });
 
   it.each([
