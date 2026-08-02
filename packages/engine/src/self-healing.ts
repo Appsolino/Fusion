@@ -36,6 +36,8 @@ import { type TaskMoveLanes, resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PR
   resolveProjectColumnsForRoles,
   REVIEW_ROLES,
   pruneTaskLifecycleEvents,
+  isGhAvailable,
+  runGhJsonAsync,
 } from "@fusion/core";
 import { finalizePlanningSegment } from "@fusion/core";
 import type { MeshLeaseManager } from "./mesh-lease-manager.js";
@@ -2770,6 +2772,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           { name: "reconcile-done-task-integrity", fn: () => this.reconcileDoneTaskIntegrity() },
           { name: "reconcile-stale-merger-status", fn: () => this.reconcileStaleMergerStatus() },
           { name: "reconcile-stale-duplicate-decision", fn: () => this.reconcileStaleDuplicateDecisionPause() },
+          { name: "reconcile-external-pr-blockers", fn: () => this.reconcileExternalPrBlockers() },
           // FNXC:OrphanedPendingSteps 2026-07-22-16:35 (FN-8492 review follow-up): also
           // steady-state — a step session can die without an engine restart, and startup-only
           // cadence left that case riding the 3×30-min stall escalator to a deadlock park.
@@ -14393,6 +14396,79 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
       return recovered;
     } catch (err: unknown) { const errorMessage = err instanceof Error ? err.message : String(err);
       log.error(`Specified triage recovery failed: ${errorMessage}`);
+      return 0;
+    }
+  }
+
+  /*
+  FNXC:HonestBlockedExit 2026-08-02-01:30:
+  Durable parks store github-pr externalBlockers (FN-8700 file-claim). When every blocking
+  PR is MERGED or CLOSED, clear the failed park so the scheduler can re-dispatch. Fail-soft
+  when gh is unavailable — leave the park for the operator.
+  */
+  async reconcileExternalPrBlockers(): Promise<number> {
+    try {
+      if (!(await isGhAvailable())) {
+        log.debug("reconcile-external-pr-blockers skipped — gh unavailable");
+        return 0;
+      }
+      const tasks = await this.store.listTasks({ slim: true, includeArchived: false, limit: 500 });
+      let cleared = 0;
+      for (const task of tasks.slice(0, 80)) {
+        if (task.status !== "failed" || !task.error?.startsWith("BLOCKED:")) continue;
+        const meta = task.sourceMetadata;
+        const blockers = meta?.externalBlockers;
+        if (!Array.isArray(blockers) || blockers.length === 0) continue;
+        const prNumbers = blockers
+          .map((b) => (b && typeof b === "object" && (b as { kind?: string }).kind === "github-pr"
+            ? Number((b as { number?: unknown }).number)
+            : NaN))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        if (prNumbers.length === 0) continue;
+
+        let allResolved = true;
+        for (const n of prNumbers) {
+          try {
+            const pr = await runGhJsonAsync<{ state?: string; mergedAt?: string | null }>(
+              ["pr", "view", String(n), "--json", "state,mergedAt"],
+              { timeoutMs: 15_000 },
+            );
+            const state = String(pr?.state ?? "").toUpperCase();
+            const merged = Boolean(pr?.mergedAt) || state === "MERGED";
+            const closed = state === "CLOSED" || state === "MERGED";
+            if (!merged && !closed) {
+              allResolved = false;
+              break;
+            }
+          } catch {
+            allResolved = false;
+            break;
+          }
+        }
+        if (!allResolved) continue;
+
+        await this.store.updateTask(task.id, {
+          status: null,
+          error: null,
+          sourceMetadataPatch: {
+            externalBlockers: [],
+            blockedClass: null,
+            blockedThrashSignature: null,
+            blockedThrashCount: null,
+            externalPrBlockersClearedAt: new Date().toISOString(),
+            externalPrBlockersCleared: prNumbers,
+          },
+        });
+        await this.store.logEntry(
+          task.id,
+          `Auto-recovered: external PR blocker(s) ${prNumbers.map((n) => `#${n}`).join(", ")} merged/closed — cleared durable BLOCKED park for re-dispatch`,
+        );
+        log.log(`Cleared durable PR block for ${task.id} (prs=${prNumbers.join(",")})`);
+        cleared += 1;
+      }
+      return cleared;
+    } catch (error) {
+      log.warn(`reconcile-external-pr-blockers failed: ${error instanceof Error ? error.message : String(error)}`);
       return 0;
     }
   }
