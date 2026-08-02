@@ -1,5 +1,112 @@
 # @runfusion/fusion
 
+## 0.74.0-beta.7
+
+### Minor Changes
+
+- 5f12044: summary: Add support for managing multiple credential accounts per provider.
+  category: feature
+  dev: Adds instance-aware dashboard auth route and client API surfaces.
+- 04c2bb4: summary: Keep the board moving on a second account instead of pausing when a provider hits its limit.
+  category: feature
+  dev: Adds the credential-instance rotator at the in-process runtime with the inventory-size no-op gate and CREDENTIAL_INSTANCE_COOLDOWN_MS.
+- 8a6949d: summary: Honor selected credential instances when starting AI sessions.
+  category: feature
+  dev: Adds AgentRuntimeOptions.resolvedCredentialInstance and credentialInstanceId, optional ResolvedSessionOptions.authStorage, and /api/models providerInstances.
+- 0e8f676: summary: Let operators select configured credential instances from model pickers.
+  category: feature
+  dev: The picker displays a control only for providers with multiple configured instances.
+- 3793b57: summary: Explain GitHub issue closures when triage splits imported work into subtasks.
+  category: feature
+  dev: Adds typed split closure context to delete events and ids-only run-audit metadata.
+- 23c9992: summary: Explain and close GitLab source issues when triage splits imported work.
+  category: feature
+  dev: Adds ordered split-close notes for resolved GitLab project issues.
+- 8c9346e: summary: Add durable transactional task-deletion lifecycle events for PostgreSQL projects.
+  category: feature
+  dev: Registers migration 0040, first-transition claim, and transactional writer seam.
+- 006cc40: summary: Deliver PostgreSQL task deletions to durable cross-process observers.
+  category: feature
+  dev: Adds lifecycle consumer identity, cursor, receipt, lease, dead-letter, and retention storage.
+- 006cc40: summary: Deliver task deletions safely to configured PostgreSQL runtime consumers.
+  category: feature
+  dev: Adds durable per-consumer outbox cursors, receipts, leases, retries, and bounded retention.
+- c978cdb: summary: Close linked GitLab issues when their Fusion task is deleted.
+  category: feature
+  dev: Delete-only malformed tracking fallback preserves inert behavior in other GitLab lifecycle consumers.
+- 39368f4: summary: Bound repeated mission validator runs using content-addressed input memoization.
+  category: feature
+  dev: Stores per-project feature fingerprints and durable validation-budget block provenance.
+- e8ca86d: summary: Prioritize review and execution work before planning when a project slot opens.
+  category: feature
+  dev: Project admission ranks review, execute, then planning; age and task ID break ties within a lane.
+
+### Patch Changes
+
+- 7dbcff1: summary: Board lane counts and card glow now never exceed the actual number of running agents.
+  category: fix
+  dev: `isTaskAgentActive`'s positive arm now delegates to the shared `isRunningAgentTask` predicate and Column headers count only that predicate; the needs-replan REVISING chrome and fresh planner-log glow window are removed (idle replans render "Queued to revise").
+- ebe514c: summary: Notify operators when manual merges wait in renamed workflow review lanes.
+  category: fix
+  dev: Uses emitter-carried task update lanes without making notification listeners asynchronous.
+- 5786c87: summary: Keep Summary token and cost tables scrollable on mobile.
+  category: fix
+  dev: Contains mobile table overflow within the task Summary surface.
+- 4f09758: summary: Let executor steps use a rotated credential account without interrupting active work.
+  category: feature
+  dev: StepSessionExecutor accepts credentialInstanceId and retargetCredentialInstance(ref).
+- ac8ce14: summary: Prevent repeat task-wedge alerts from flooding operator inboxes.
+  category: fix
+  dev: Adds a six-hour durable per-reason cooldown that survives resolve/re-wedge flaps.
+- 1aa1516: summary: Fix mission validators rejecting passing feature assertion results.
+  category: fix
+  dev: Validator prompts now provide assertion IDs and recover exact-count legacy responses safely.
+- 01d6580: summary: Refresh reused execution worktrees against merged dependency changes.
+  category: fix
+  dev: Execution refresh persists the integration baseline while preserving rebased task commits.
+- 529ab26: summary: Fix mission assertion status edits and deletes failing with invalid assertion IDs.
+  category: fix
+  dev: Align dashboard assertion ID validation with MissionStore-generated IDs and surface delete failures.
+- bf173da: summary: Move reverted tasks out of Done and provide Delete or Revise recovery actions.
+  category: fix
+  dev: Reuse the original task description when opening the New Task revision draft.
+- b8f7f9e: summary: Show complete available tool-call details when expanding chats and logs.
+  category: fix
+  dev: Shares tool-call payload formatting across chat, Activity, and Agent Log Viewer.
+- 1e67e87: summary: Fix Git Manager mobile sheets leaving excess space at the right edge.
+  category: fix
+  dev: Resets the resize-handle gutter only below the standalone 768px phone boundary.
+- b8bde05: summary: Show registered projects immediately while dashboard health metrics load.
+  category: fix
+  dev: Project health batches now hydrate cards and aggregate metrics progressively.
+- 3b63351: summary: Recover valid mission validator JSON from ordinary response formatting noise.
+  category: fix
+  dev: Bounds candidate parsing to 256 KiB and eight attempts while preserving fail-closed assertion validation.
+- 7dc6c4b: summary: Keep named Authentication credential actions targeted to the selected account.
+  category: fix
+  dev: Settings omits default-instance arguments and preserves explicit credential instance ids for OAuth and API-key actions.
+- 5d06c92: summary: Keep auth status available when credential-instance query data is absent.
+  category: fix
+  dev: Treats dangling requested instances as unauthenticated without credential fallback.
+- 54c2c1e: summary: Keep milestone validation badges current after assertion repairs or removals.
+  category: fix
+  dev: Reconciles project-scoped PostgreSQL rollups before events and discards stale dashboard refresh responses by milestone generation.
+- 4fb873f: summary: Fix GitHub Import sheet spacing on phones and short viewports.
+  category: fix
+  dev: Clears the standalone FloatingWindow resize gutter only while its sheet contract hides handles.
+- 4c2369e: summary: Open task links from mail in the active dashboard view.
+  category: fix
+  dev: Mail markdown task deep links now use the shared task-detail handler.
+- df56790: summary: Keep upward Quick Add model and priority menus anchored to their trigger.
+  category: fix
+  dev: Portal menus now use bottom anchoring when opening upward.
+- fab2b3a: summary: Keep translated dashboard catalogs aligned with reverted-task resolution actions.
+  category: fix
+  dev: Adds the revertedTasks, revertedResolutionActions, and revise keys to every secondary app catalog so locale parity remains valid after the reverted-task dashboard UI landed.
+- ebe514c: summary: Keep scheduler and planning reactions working on renamed workflow lanes.
+  category: fix
+  dev: TaskStore decorates task:updated with cached resolved lanes; runtime bridges intentionally drop optional metadata.
+
 ## 0.74.0-beta.6
 
 ### Minor Changes
