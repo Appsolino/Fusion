@@ -1,5 +1,44 @@
 # runfusion.ai
 
+## 0.74.0-beta.7
+
+### Patch Changes
+
+- Updated dependencies [7dbcff1]
+- Updated dependencies [5f12044]
+- Updated dependencies [04c2bb4]
+- Updated dependencies [8a6949d]
+- Updated dependencies [0e8f676]
+- Updated dependencies [3793b57]
+- Updated dependencies [ebe514c]
+- Updated dependencies [5786c87]
+- Updated dependencies [4f09758]
+- Updated dependencies [23c9992]
+- Updated dependencies [8c9346e]
+- Updated dependencies [006cc40]
+- Updated dependencies [006cc40]
+- Updated dependencies [c978cdb]
+- Updated dependencies [ac8ce14]
+- Updated dependencies [1aa1516]
+- Updated dependencies [01d6580]
+- Updated dependencies [39368f4]
+- Updated dependencies [529ab26]
+- Updated dependencies [bf173da]
+- Updated dependencies [b8f7f9e]
+- Updated dependencies [1e67e87]
+- Updated dependencies [b8bde05]
+- Updated dependencies [e8ca86d]
+- Updated dependencies [3b63351]
+- Updated dependencies [7dc6c4b]
+- Updated dependencies [5d06c92]
+- Updated dependencies [54c2c1e]
+- Updated dependencies [4fb873f]
+- Updated dependencies [4c2369e]
+- Updated dependencies [df56790]
+- Updated dependencies [fab2b3a]
+- Updated dependencies [ebe514c]
+  - @runfusion/fusion@0.74.0-beta.7
+
 ## 0.74.0-beta.6
 
 ### Patch Changes

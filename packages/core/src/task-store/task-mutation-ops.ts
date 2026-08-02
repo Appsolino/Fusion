@@ -374,6 +374,12 @@ export async function updateTaskAtomicImpl(store: TaskStore, id: string, updater
     });
   }
 
+/*
+FNXC:TaskWedgeNotifications 2026-08-01-15:35:
+Resolution changes only the active episode status. The PostgreSQL compare-and-set
+merges that field into the existing JSON, preserving per-reason cooldown stamps so
+resolving X or notifying Y cannot reopen X's live spam window.
+*/
 export async function resolveTaskWedgeNotificationEpisodeImpl(
   store: TaskStore,
   id: string,
@@ -1199,6 +1205,7 @@ export async function listApprovedCliAutonomyAdaptersImpl(store: TaskStore): Pro
 
 export async function closeImpl(store: TaskStore): Promise<void> {
     store.closing = true;
+    await store.stopTaskDeletedOutboxConsumer();
     if (store.deferredTaskCreatedWork.size > 0) {
       await Promise.allSettled([...store.deferredTaskCreatedWork]);
     }

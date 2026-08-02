@@ -53,6 +53,8 @@ import { runtimeLog } from "../logger.js";
 import { getActiveNotificationService } from "../notifier.js";
 import { StuckTaskDetector } from "../stuck-task-detector.js";
 import { UsageLimitPauser } from "../usage-limit-detector.js";
+import { CredentialInstanceRotator } from "../credential-instance-rotation.js";
+import { createFusionAuthStorage } from "../auth-storage.js";
 import { SelfHealingManager, VALIDATOR_RUN_STALE_MAX_AGE_MS } from "../self-healing.js";
 import { RestartRecoveryCoordinator } from "../restart-recovery-coordinator.js";
 import { MeshLeaseManager } from "../mesh-lease-manager.js";
@@ -476,7 +478,7 @@ export async function admitPlanningContinuation(input: {
   // turn; a pre-drain project snapshot can admit into its newly occupied slot.
   let admissionSnapshot: Promise<{ count: number; ids: string[] }> | undefined;
   const getAdmissionSnapshot = () => admissionSnapshot ??= loadClaimSnapshot();
-  await projectAdmissionCoordinator.admitOldest({
+  await projectAdmissionCoordinator.admitNext({
     projectId: input.projectId,
     maxConcurrent: resolveActiveTaskCapacityLimit({
       maxConcurrent: settings.maxConcurrent ?? 2,
@@ -488,6 +490,7 @@ export async function admitPlanningContinuation(input: {
     refresh: async () => [{
       taskId: input.task.id,
       projectId: input.projectId,
+      lane: "execute",
       createdAt: input.item.createdAt ?? input.task.createdAt,
       start: async () => {
         // The preflight above is only a fast path. This serialized check is the
@@ -712,6 +715,8 @@ export class InProcessRuntime
    */
   private cliAgentRuntime?: BootstrappedCliAgentRuntime;
   private usageLimitPauser?: UsageLimitPauser;
+  /** One runtime-owned cooldown map keeps executor and recovery paths coherent. */
+  private credentialRotator?: CredentialInstanceRotator;
   /** FNXC:PlanReviewLease 2026-07-26-20:42: cluster node id stamped onto review-gate leases; undefined until start() resolves it, or if resolution fails. */
   private localNodeId?: string;
   private selfHealingManager?: SelfHealingManager;
@@ -818,6 +823,7 @@ export class InProcessRuntime
         // InProcessRuntime.start(). When the factory returns a backend result,
         // the engine owns the result's shutdown() for process teardown.
         createTaskStoreForBackend,
+        buildConsumerId,
         createProjectScopedPluginMcpProvider,
         registerTaskDeleteNoticeMailbox,
       } = await import("@fusion/core");
@@ -828,6 +834,8 @@ export class InProcessRuntime
         const backendBoot = await createTaskStoreForBackend({
           rootDir: this.config.workingDirectory,
           projectId: this.config.projectId,
+          /* FNXC:CrossProcessDeleteObservation 2026-08-01-11:39: the engine owns this store, so its role-only identity is restart-stable and never derives from boot state. */
+          consumerId: buildConsumerId("engine"),
           onMigrationProgress: this.config.onMigrationProgress,
         });
         // FNXC:PostgresFinalCutover 2026-07-14-17:20: Engine runtimes must fail
@@ -843,7 +851,27 @@ export class InProcessRuntime
       FNXC:ProviderRateLimitIsolation 2026-07-19-19:10:
       Every project runtime owns one usage-limit coordinator and shares it across executor, triage, reviewer, and merger surfaces. Runtime isolation replaced the old dashboard-level construction site; constructing it here prevents a silently undefined pauser while keeping a provider outage local to the affected project/task.
       */
-      this.usageLimitPauser ??= new UsageLimitPauser(this.taskStore);
+      this.credentialRotator ??= new CredentialInstanceRotator({
+        instanceSource: createFusionAuthStorage(),
+        // FNXC:CredentialInstanceRotation 2026-08-01-11:05:
+        // Rotation evidence is emitted through the runtime-owned audit seam. Metadata
+        // is supplied by the rotator as ids/counts/outcomes only; audit failures stay
+        // non-fatal so an observability outage cannot prevent rate-limit recovery.
+        recordRunAuditEvent: async (mutationType, metadata) => {
+          await this.taskStore.recordRunAuditEvent?.({
+            taskId: typeof metadata.taskId === "string" ? metadata.taskId : undefined,
+            agentId: typeof metadata.agentId === "string" ? metadata.agentId : "runtime",
+            runId: generateSyntheticRunId("credential-instance-rotation", typeof metadata.taskId === "string" ? metadata.taskId : String(metadata.providerId ?? "unknown")),
+            domain: "database",
+            mutationType,
+            target: String(metadata.providerId ?? "unknown"),
+            metadata,
+          });
+        },
+      });
+      this.usageLimitPauser ??= new UsageLimitPauser(this.taskStore, {
+        credentialRotator: this.credentialRotator,
+      });
 
       // Initialize MessageStore early so TaskExecutor receives send_message capability.
       // FNXC:RuntimeSatelliteAsync 2026-06-24-12:45:
@@ -1255,6 +1283,7 @@ export class InProcessRuntime
         getLocalNodeId: () => this.localNodeId,
         pool: this.worktreePool,
         usageLimitPauser: this.usageLimitPauser,
+        credentialRotator: this.credentialRotator,
         stuckTaskDetector: this.stuckTaskDetector,
         cliAgentRuntime: this.cliAgentRuntime?.bundle,
         pluginRunner: this.pluginRunner,
@@ -1385,6 +1414,7 @@ export class InProcessRuntime
           reflectionStore: reflectionStoreForService,
           reflectionService,
           selfImproveService,
+          credentialRotator: this.credentialRotator,
           snapshotManager: autoClaimSnapshotManager,
           onMissed: (agentId, reason) => {
             runtimeLog.warn(`Agent ${agentId} missed heartbeat: ${reason}`);
@@ -1529,7 +1559,12 @@ export class InProcessRuntime
           acquirePlanningWorktree: (taskId) => this.executor.ensureTaskWorktreeForPlanning(taskId),
           onSpecifyStart: (t) => {
             this.recordActivity();
-            runtimeLog.log(`Specifying ${t.id}...`);
+            /*
+            FNXC:EngineDiagnostics 2026-08-01-18:11:
+            Duplicate of triage's richer `Specifying ${id}: ${title}` planLog line. Keep this
+            short runtime echo on debug (FUSION_DEBUG=runtime) so planning start is not double-logged.
+            */
+            runtimeLog.debug(`Specifying ${t.id}...`);
           },
           onSpecifyComplete: (t, report) => {
             // Activity is recorded for EVERY outcome: a planning session ran either
@@ -1712,6 +1747,12 @@ export class InProcessRuntime
 
       // 8. Set up event forwarding from TaskStore
       this.setupEventForwarding();
+      /*
+      FNXC:CrossProcessDeleteObservation 2026-08-01-13:03:
+      Engine-owned stores do not call watch(), so runtime startup owns durable delete observation.
+      Start only after its bridge is attached so the initial poll cannot lose a cross-process delete.
+      */
+      await this.taskStore.startTaskDeletedOutboxConsumer();
 
       const startupSettings = await this.taskStore.getSettings();
       if (startupSettings.globalPause || startupSettings.enginePaused) {
@@ -2593,6 +2634,7 @@ export class InProcessRuntime
    */
   setUsageLimitPauser(pauser: UsageLimitPauser): void {
     this.usageLimitPauser = pauser;
+    pauser.setCredentialRotator(this.credentialRotator);
   }
 
   /**
@@ -2645,8 +2687,12 @@ export class InProcessRuntime
       this.emit("task:updated", task);
     });
 
-    // Forward task:deleted events
-    this.taskStore.on("task:deleted", (task: Task, meta?: { githubIssueAction?: GithubIssueAction }) => {
+    /*
+    FNXC:CrossProcessDeleteObservation 2026-08-01-12:02:
+    Preserve observed outbox provenance through the runtime bridge. Downstream project and IPC
+    bridges must distinguish cross-process deletion delivery without re-running writer effects.
+    */
+    this.taskStore.on("task:deleted", (task: Task, meta?: { githubIssueAction?: GithubIssueAction; observed?: boolean; outboxEventId?: string }) => {
       this.recordActivity();
       this.emit("task:deleted", task, meta);
     });

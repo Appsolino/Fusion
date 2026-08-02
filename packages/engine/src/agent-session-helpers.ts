@@ -43,6 +43,7 @@ import {
   type FallbackModelUsedPayload,
 } from "./pi.js";
 import type { RunAuditor } from "./run-audit.js";
+import { createFusionAuthStorage, resolveCredentialInstanceRef, type FusionAuthStorage } from "./auth-storage.js";
 import { MockAgentRuntime } from "./providers/mock-provider.js";
 
 /** Logger for agent session helpers */
@@ -140,6 +141,8 @@ export interface ResolvedSessionOptions extends AgentRuntimeOptions {
    * `session:runtime-resolved` metadata.
    */
   settings?: Settings;
+  /** Optional injected storage; only consulted when an instance was explicitly requested. */
+  authStorage?: FusionAuthStorage;
   /**
    * `beforeSpawnSession` and `taskEnv` are inherited from
    * {@link AgentRuntimeOptions}. Both are forwarded verbatim to
@@ -712,25 +715,19 @@ function armDeferredGrokCliFallback(args: {
 function pickSettingsThenRuntimeModel(
   settingsModel: ResolvedModelSelection,
   assignedAgentRuntimeConfig?: Record<string, unknown>,
-): { provider: string | undefined; modelId: string | undefined } {
+): ResolvedModelSelection {
   // Project/task/global settings are the authoritative model hierarchy. The
   // assigned durable agent runtime model is only a final compatibility fallback
   // when the hierarchy produced no complete pair; partial runtime pairs must
   // never be mixed with settings fields or mask saved project overrides.
   if (settingsModel.provider && settingsModel.modelId) {
-    return {
-      provider: settingsModel.provider,
-      modelId: settingsModel.modelId,
-    };
+    return settingsModel;
   }
 
   const assignedRuntimeModel = extractRuntimeModel(assignedAgentRuntimeConfig);
   return hasCompleteRuntimeModel(assignedRuntimeModel)
     ? assignedRuntimeModel
-    : {
-      provider: settingsModel.provider,
-      modelId: settingsModel.modelId,
-    };
+    : settingsModel;
 }
 
 export function resolveExecutorSessionModel(
@@ -738,7 +735,8 @@ export function resolveExecutorSessionModel(
   taskModelId: string | undefined,
   settings: Partial<Settings> | undefined,
   assignedAgentRuntimeConfig?: Record<string, unknown>,
-): { provider: string | undefined; modelId: string | undefined } {
+  taskCredentialInstanceId?: string | null,
+): ResolvedModelSelection {
   if (isTestModeActive(settings)) {
     return {
       provider: TEST_MODE_RESOLVED.provider,
@@ -750,6 +748,7 @@ export function resolveExecutorSessionModel(
     {
       modelProvider: taskModelProvider,
       modelId: taskModelId,
+      credentialInstanceId: taskCredentialInstanceId,
     },
     settings,
   );
@@ -762,7 +761,8 @@ export function resolvePlanningSessionModel(
   taskPlanningModelId: string | undefined,
   settings: Partial<Settings> | undefined,
   assignedAgentRuntimeConfig?: Record<string, unknown>,
-): { provider: string | undefined; modelId: string | undefined } {
+  taskCredentialInstanceId?: string | null,
+): ResolvedModelSelection {
   if (isTestModeActive(settings)) {
     return {
       provider: TEST_MODE_RESOLVED.provider,
@@ -774,6 +774,7 @@ export function resolvePlanningSessionModel(
     {
       planningModelProvider: taskPlanningModelProvider,
       planningModelId: taskPlanningModelId,
+      planningCredentialInstanceId: taskCredentialInstanceId,
     },
     settings,
   );
@@ -798,7 +799,7 @@ export function resolveImplicitPlanningFallbackModel(
   primaryProvider: string | undefined,
   primaryModelId: string | undefined,
   assignedAgentRuntimeConfig?: Record<string, unknown>,
-): { provider: string | undefined; modelId: string | undefined } {
+): ResolvedModelSelection {
   if (isTestModeActive(settings)) {
     return { provider: undefined, modelId: undefined };
   }
@@ -840,7 +841,8 @@ export function resolveValidatorSessionModel(
   taskValidatorModelId: string | undefined,
   settings: Partial<Settings> | undefined,
   assignedAgentRuntimeConfig?: Record<string, unknown>,
-): { provider: string | undefined; modelId: string | undefined } {
+  taskCredentialInstanceId?: string | null,
+): ResolvedModelSelection {
   if (isTestModeActive(settings)) {
     return {
       provider: TEST_MODE_RESOLVED.provider,
@@ -852,6 +854,7 @@ export function resolveValidatorSessionModel(
     {
       validatorModelProvider: taskValidatorModelProvider,
       validatorModelId: taskValidatorModelId,
+      validatorCredentialInstanceId: taskCredentialInstanceId,
     },
     settings,
   );
@@ -865,6 +868,7 @@ export function resolveHeartbeatSessionModels(
 ): {
   defaultProvider: string | undefined;
   defaultModelId: string | undefined;
+  credentialInstanceId?: string;
   fallbackProvider: string | undefined;
   fallbackModelId: string | undefined;
 } {
@@ -884,13 +888,14 @@ export function resolveHeartbeatSessionModels(
   FNXC:AgentHeartbeat 2026-07-14-16:13:
   Durable-agent heartbeats must use the complete model assigned to that agent. Shared project execution defaults are only a fallback for an absent or incomplete assignment; otherwise one broken project override can park every heterogeneous agent under the same unrelated provider.
   */
-  const resolvedModel = hasCompleteRuntimeModel(assignedRuntimeModel)
+  const resolvedModel: ResolvedModelSelection = hasCompleteRuntimeModel(assignedRuntimeModel)
     ? assignedRuntimeModel
     : pickSettingsThenRuntimeModel(executionSettingsModel, assignedAgentRuntimeConfig);
 
   return {
     defaultProvider: resolvedModel.provider,
     defaultModelId: resolvedModel.modelId,
+    ...(resolvedModel.credentialInstanceId ? { credentialInstanceId: resolvedModel.credentialInstanceId } : {}),
     fallbackProvider: executorFallbackModel.provider,
     fallbackModelId: executorFallbackModel.modelId,
   };
@@ -899,8 +904,8 @@ export function resolveHeartbeatSessionModels(
 export function resolveMergerSessionModel(
   settings: Partial<Settings> | undefined,
   assignedAgentRuntimeConfig?: Record<string, unknown>,
-  task?: { mergerModelProvider?: string | null; mergerModelId?: string | null },
-): { provider: string | undefined; modelId: string | undefined } {
+  task?: { mergerModelProvider?: string | null; mergerModelId?: string | null; mergerCredentialInstanceId?: string | null },
+): ResolvedModelSelection {
   if (isTestModeActive(settings)) {
     return {
       provider: TEST_MODE_RESOLVED.provider,
@@ -916,7 +921,7 @@ export function resolveMergerSessionModel(
   */
   /* FNXC:Settings-MergerModel 2026-07-16-12:00: task pair → settings → global/default; partial task pairs inherit settings. */
   const mergerModel = task?.mergerModelProvider && task?.mergerModelId
-    ? { provider: task.mergerModelProvider, modelId: task.mergerModelId }
+    ? { provider: task.mergerModelProvider, modelId: task.mergerModelId, credentialInstanceId: task.mergerCredentialInstanceId ?? undefined }
     : resolveMergerSettingsModel(settings);
   return pickSettingsThenRuntimeModel(mergerModel, assignedAgentRuntimeConfig);
 }
@@ -935,7 +940,23 @@ export function resolveMergerSessionModel(
 export async function createResolvedAgentSession(
   options: ResolvedSessionOptions,
 ): Promise<ResolvedSessionResult> {
-  const { sessionPurpose, pluginRunner, runtimeHint, runAuditor, settings, ...runtimeOptionsRaw } = options;
+  const { sessionPurpose, pluginRunner, runtimeHint, runAuditor, settings, authStorage: injectedAuthStorage, credentialInstanceId: requestedCredentialInstanceId, ...runtimeOptionsRaw } = options;
+  let credentialResolution: ReturnType<typeof resolveCredentialInstanceRef> | undefined;
+  if (requestedCredentialInstanceId) {
+    try {
+      const storage = injectedAuthStorage ?? createFusionAuthStorage();
+      credentialResolution = resolveCredentialInstanceRef(storage, runtimeOptionsRaw.defaultProvider ?? "", requestedCredentialInstanceId);
+    } catch (error) {
+      if ((error as Error).name === "CredentialInstanceResolutionError") throw error;
+      sessionLog.warn(`[${sessionPurpose}] credential instance resolution unavailable; using provider default`);
+    }
+  }
+
+  /*
+  FNXC:ProviderAuth 2026-08-01-08:10:
+  A dangling named instance must be auditable: silent substitution spends the wrong account quota under an identity the operator did not select.
+  */
+  if (credentialResolution?.missing) sessionLog.warn(`[${sessionPurpose}] requested credential instance is missing; using provider default`);
 
   const skillNamesFromSelection = extractSkillNamesFromSelection(runtimeOptionsRaw.skillSelection);
   const mergedSkillNames = runtimeOptionsRaw.skills && runtimeOptionsRaw.skills.length > 0
@@ -959,6 +980,10 @@ export async function createResolvedAgentSession(
       ? runtimeOptionsRaw.toolOutputMaxChars
       : resolveAgentToolOutputMaxChars(settings ?? {}),
     ...(mergedSkillNames.length > 0 ? { skills: mergedSkillNames } : {}),
+    ...(credentialResolution ? {
+      resolvedCredentialInstance: credentialResolution.ref,
+      credentialInstanceId: credentialResolution.requestedInstanceId,
+    } : {}),
   };
   // FNXC:McpConfig 2026-06-25-22:06:
   // createResolvedAgentSession is the common lane helper for executor, reviewer, validator, workflow model-node, summarization, and merger-adjacent paths that pass MCP through this seam. Preserve `mcpServers` verbatim here; runtime-resolution/pi own support-gated forwarding and content-free skip logging.
@@ -1037,7 +1062,13 @@ export async function createResolvedAgentSession(
       `[${sessionPurpose}] configured grok-cli fallback "${runtimeOptions.fallbackModelId ?? "unknown"}" dropped: no Fusion-visible GROK_API_KEY and the Grok CLI runtime plugin is unavailable; primary "${runtimeOptions.defaultProvider}/${runtimeOptions.defaultModelId}" is unchanged. Install/enable the Grok CLI runtime plugin or set GROK_API_KEY.`,
     );
   } else if (deferredGrokFallback) {
-    sessionLog.log(
+    /*
+    FNXC:EngineDiagnostics 2026-08-01-18:11:
+    Deferred grok-cli fallback is the expected no-visible-key config path and fires on every
+    session create. Real engagement already warns + audits `session:grok-cli-fallback-engaged`;
+    keep the deferral notice on debug (FUSION_DEBUG=agent-session) so the TUI is not flooded.
+    */
+    sessionLog.debug(
       `[${sessionPurpose}] grok-cli fallback "${deferredGrokFallback.modelId ?? "unknown"}" deferred to the Grok CLI runtime: it engages only if primary "${runtimeOptions.defaultProvider}/${runtimeOptions.defaultModelId}" fails with a retryable model error.`,
     );
   }
@@ -1050,7 +1081,12 @@ export async function createResolvedAgentSession(
     }
     : await resolveRuntime(buildRuntimeResolutionContext(sessionPurpose, pluginRunner, effectiveRuntimeHint));
 
-  sessionLog.log(
+  /*
+  FNXC:EngineDiagnostics 2026-08-01-18:11:
+  Runtime resolution is per-session setup chatter (same class as demoted planning `using model`).
+  Audit already records `session:runtime-resolved`; keep the TUI line on debug (FUSION_DEBUG=agent-session).
+  */
+  sessionLog.debug(
     `[${sessionPurpose}] Using runtime "${resolved.runtimeId}" (configured=${resolved.wasConfigured})`,
   );
 
@@ -1122,6 +1158,12 @@ export async function createResolvedAgentSession(
         ...(grokFallbackDeferral.dropped ? { grokCliFallbackDropped: true } : {}),
         ...(deferredGrokFallback ? { grokCliFallbackDeferred: true } : {}),
         ...(noModelResolved ? { noModelResolved: true, runtimeBuiltInFallbackModel } : {}),
+        ...(credentialResolution?.ref.instanceId ? { credentialInstanceId: credentialResolution.ref.instanceId } : {}),
+        ...(credentialResolution?.missing ? {
+          credentialInstanceMissing: true,
+          requestedCredentialInstanceId: credentialResolution.requestedInstanceId,
+          resolvedCredentialInstanceId: credentialResolution.ref.instanceId,
+        } : {}),
         /*
         FNXC:FusionToolBridgeDiagnostics 2026-07-20-08:00:
         Plugin bridge failures are session-visible, but they also need one durable

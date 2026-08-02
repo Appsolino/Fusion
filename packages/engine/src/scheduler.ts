@@ -3,6 +3,7 @@ import {
   computeBlockerFanoutMap,
   compareTasksByPriorityThenAgeAndId,
   HIGH_FANOUT_BLOCKER_TODO_THRESHOLD,
+  nonExecutableDuplicateRedirectReason,
   type TaskStore,
   type Task,
   type MissionStore,
@@ -17,7 +18,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   dropPreHeldExecutorSlot,
-  hasPreHeldExecutorSlot,
   projectAdmissionCoordinator,
   persistedTopLevelAgentTaskIdsFromStore,
   recoverIdleSemaphoreLeakCandidate,
@@ -49,6 +49,7 @@ import { runHoldReleaseSweep, isUnplannedForExecution, type SlotReservation } fr
 import { moveTaskToReplanColumn } from "./replan-target.js";
 import { evaluateParkedAgentTaskLink } from "./task-agent-sync.js";
 import { decideMissionSymbolAdmission, resolveMissionFeatureForTask } from "./mission-symbol-admission.js";
+import { computeRecoveryDecision, formatDelay, MAX_RECOVERY_RETRIES } from "./recovery-policy.js";
 
 const SYMBOL_LOCK_LEASE_MS = 10 * 60_000;
 
@@ -563,6 +564,13 @@ export function shouldHoldActiveFileScopeLease(
   */
   if (task.paused || task.userPaused) return false;
   /*
+  FNXC:OverlapScheduling 2026-08-01-19:22:
+  A failed park is not live work. Review already dropped status:"failed"; WIP must too, or a
+  stranded failed in-progress card keeps its file-scope lease and serializes unrelated todos
+  while consuming no real agent (same class as the capacity-holder fix in isRunningAgentTask).
+  */
+  if (task.status === "failed") return false;
+  /*
   DELIBERATE-LITERAL — the documented default for an unconverted caller, reviewed 2026-07-30-20:40.
   Both scheduler call sites now pass the resolved answer, so these defaults are dead on the
   scheduler's own path; they exist for the self-healing / repair callers this predicate is shared
@@ -974,6 +982,7 @@ export class Scheduler {
         .map((task) => ({
           taskId: task.id,
           projectId,
+          lane: "execute",
           createdAt: task.createdAt,
           reserve: () => registerPreHeldExecutorSlot(task.id, this.options.semaphore !== undefined),
           start: async () => {
@@ -1462,6 +1471,15 @@ export class Scheduler {
       const content = await readFile(promptPath, "utf-8");
       if (!content || content.trim().length === 0) {
         return { valid: false, reason: "missing or empty PROMPT.md" };
+      }
+      /*
+      FNXC:DuplicateIntake 2026-08-01-19:24:
+      Non-empty is not enough: a sole `DUPLICATE: FN-####` line is a triage redirect, not a
+      plan. Admitting it (FN-8704) fails the graph at `parse` and parks failed WIP in a loop.
+      */
+      const duplicateOnly = nonExecutableDuplicateRedirectReason(content);
+      if (duplicateOnly) {
+        return { valid: false, reason: duplicateOnly };
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -2167,7 +2185,15 @@ export class Scheduler {
       */
       const isReviewColumnTask = (task: Task): boolean =>
         isReviewColumnRole(columnFlagsForTask(task), task.column);
-      const wipTaskIds = tasks.filter(isWipColumnTask).map((task) => task.id);
+      /*
+      FNXC:ConcurrencyIndicators 2026-08-01-19:22:
+      Failed WIP is not a live holder (isRunningAgentTask). Keep the WIP id list aligned so
+      diagnostic maxConcurrent holders and any WIP-only arithmetic do not re-count stranded failed
+      parks that the worktree ledger already excludes.
+      */
+      const wipTaskIds = tasks
+        .filter((task) => isWipColumnTask(task) && task.status !== "failed")
+        .map((task) => task.id);
       /*
       FNXC:WorktreeCapacity 2026-08-01-04:38 (inactive retained-worktree capacity inversion):
       Worktree capacity is a LIVE-TASK budget, not a count of directories retained on disk. The
@@ -2339,12 +2365,41 @@ export class Scheduler {
           const validation = await this.validateTaskFilesystem(task.id);
           if (!validation.valid) {
             schedulerLog.warn(`Task ${task.id} filesystem validation failed: ${validation.reason}`);
-            // See the FNXC:WorkflowScheduling 2026-07-13-11:25 note in the legacy loop: the
-            // status write is what makes triage rediscover a card whose replan column equals
-            // its current column.
+            /*
+            FNXC:WorkflowScheduling 2026-08-01-18:47:
+            Missing/empty PROMPT used to rebound with unbounded needs-replan writes (FN-8704
+            storm twin). Share the planning recovery budget: backoff while attempts remain,
+            then park failed so a broken task dir cannot spin forever. The status write is
+            still what makes triage rediscover a card whose replan column equals its current column.
+            */
             const replanColumn = await moveTaskToReplanColumn(this.store, task);
-            await this.store.updateTask(task.id, { status: "needs-replan" });
-            await this.store.logEntry(task.id, `Task rebounded to ${replanColumn} for re-specification — filesystem validation failed`, validation.reason);
+            const decision = computeRecoveryDecision({
+              recoveryRetryCount: task.recoveryRetryCount,
+              nextRecoveryAt: task.nextRecoveryAt,
+            });
+            if (!decision.shouldRetry) {
+              const error = `REQUIRED_ARTIFACT_RECOVERY_EXHAUSTED: filesystem validation failed (${validation.reason}) after ${MAX_RECOVERY_RETRIES} automatic planning retries.`;
+              await this.store.updateTask(task.id, {
+                status: "failed",
+                error,
+                recoveryRetryCount: null,
+                nextRecoveryAt: null,
+              });
+              await this.store.logEntry(task.id, error, validation.reason);
+              return null;
+            }
+            const attempt = decision.nextState.recoveryRetryCount ?? MAX_RECOVERY_RETRIES;
+            await this.store.updateTask(task.id, {
+              status: "needs-replan",
+              error: null,
+              recoveryRetryCount: decision.nextState.recoveryRetryCount,
+              nextRecoveryAt: decision.nextState.nextRecoveryAt,
+            });
+            await this.store.logEntry(
+              task.id,
+              `Task rebounded to ${replanColumn} for re-specification — filesystem validation failed (attempt ${attempt}/${MAX_RECOVERY_RETRIES} in ${formatDelay(decision.delayMs)})`,
+              validation.reason,
+            );
             return null;
           }
 
@@ -2825,12 +2880,24 @@ export class Scheduler {
             const ids = await persistedTopLevelAgentTaskIdsFromStore(this.store, liveTasks);
             return { count: ids.length, ids };
           })();
-          const projectSlotReserved = await projectAdmissionCoordinator.reserveIfAvailable({
+          let projectSlotReserved = false;
+          await projectAdmissionCoordinator.admitNext({
             projectId: this.store.getRootDir(),
-            taskId: task.id,
             maxConcurrent: activeTaskLimit,
             claimed: async () => (await getFinalClaimSnapshot()).count,
             claimedTaskIds: async () => (await getFinalClaimSnapshot()).ids,
+            semaphore: this.options.semaphore,
+            refresh: async () => [{
+              taskId: task.id,
+              projectId: this.store.getRootDir(),
+              lane: "execute",
+              createdAt: task.createdAt,
+              reserve: () => registerPreHeldExecutorSlot(task.id, this.options.semaphore !== undefined),
+              start: async () => {
+                projectSlotReserved = true;
+                return true;
+              },
+            }],
           });
           if (!projectSlotReserved) {
             if (reservedScope) {
@@ -2850,27 +2917,9 @@ export class Scheduler {
             return null;
           }
 
+          // admitNext acquired and registered the host slot atomically with the
+          // project reservation, so this handoff cannot bypass review candidates.
           const sem = this.options.semaphore;
-          const hostSlotReserved = hasPreHeldExecutorSlot(task.id);
-          registerPreHeldExecutorSlot(task.id, hostSlotReserved);
-          if (sem && !hostSlotReserved && !sem.tryAcquire()) {
-            dropPreHeldExecutorSlot(task.id);
-            if (reservedScope) {
-              activeScopes.delete(task.id);
-              activeScopeColumns.delete(task.id);
-            }
-            const reason = formatConcurrencyLimitReason({
-              ...concurrencyDiagnostic,
-              available: 0,
-              bindingGates: [...new Set([...concurrencyDiagnostic.bindingGates, "semaphore" as const])],
-            });
-            await this.store.updateTask(task.id, { status: "queued" });
-            await this.logDispatchQueuedReason(task.id, reason, formatConcurrencyLimitMemoKey(concurrencyDiagnostic));
-            return null;
-          }
-          if (sem && !hostSlotReserved) {
-            registerPreHeldExecutorSlot(task.id);
-          }
 
           let acquiredSymbols: string[] | undefined;
           try {

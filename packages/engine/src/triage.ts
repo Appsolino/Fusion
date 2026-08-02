@@ -218,6 +218,14 @@ import {
 } from "./tool-availability.js";
 import { runGhostBugPreflight } from "./triage-preflight.js";
 import { archiveAsGhostBug } from "./self-healing.js";
+import {
+  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+  buildInactiveDuplicateClearFeedback,
+  buildKeepDuplicateClearFeedback,
+  buildMarkerClearedReplanTaskPatch,
+  buildMarkerExhaustedFailedTaskPatch,
+  buildDuplicateReplanExhaustedError,
+} from "./duplicate-marker-clear.js";
 import { createRunAuditor, generateSyntheticRunId } from "./run-audit.js";
 import { resolveAndEmitGoalContext } from "./goal-injection-diagnostics.js";
 import { accumulateSessionTokenUsage } from "./session-token-usage.js";
@@ -595,7 +603,7 @@ export class TriageProcessor {
           now,
         );
         return tasks.filter((task) => !this.coordinatorAdmittedTaskIds.has(task.id)).map((task) => ({
-          taskId: task.id, projectId: this.rootDir, createdAt: task.createdAt,
+          taskId: task.id, projectId: this.rootDir, lane: "planning", createdAt: task.createdAt,
           reserve: () => registerPreHeldExecutorSlot(task.id, this.options.semaphore !== undefined),
           start: async () => {
             this.coordinatorAdmittedTaskIds.add(task.id);
@@ -1231,7 +1239,7 @@ export class TriageProcessor {
       duplicate-claim guard), so a promise that never settles — exactly the case this eviction
       exists for — left the id in the set permanently. Planning discovery does not consult that
       set, so the card stayed in `triageTasks` and `maxToStart` stayed positive, which means the
-      throttle branch (the only thing that logs or emits) never fired; but `admitOldest`'s
+      throttle branch (the only thing that logs or emits) never fired; but `admitNext`'s
       `refresh()` filters on the set, so the coordinator saw no candidate. Silent stall until
       engine restart, and the badge (a pure client-side "unplanned + idle in Todo" inference) kept
       claiming the card was queued.
@@ -1449,7 +1457,18 @@ export class TriageProcessor {
     const promptPath = join(this.rootDir, ".fusion", "tasks", taskId, "PROMPT.md");
     const written = await readFile(promptPath, "utf-8").catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
-      planLog.warn(`${taskId}: failed to read PROMPT.md during ${context} (${promptPath}): ${msg}`);
+      const code = err && typeof err === "object" && "code" in err ? String((err as { code?: unknown }).code) : undefined;
+      /*
+      FNXC:EngineDiagnostics 2026-08-01-18:11:
+      needs-replan revision seed commonly has no PROMPT.md yet (ENOENT) — that is an expected
+      cold/fresh respec path, not operator degradation. Demote missing-file to debug
+      (FUSION_DEBUG=plan); keep warn for unexpected I/O so real disk failures stay visible.
+      */
+      if (code === "ENOENT") {
+        planLog.debug(`${taskId}: failed to read PROMPT.md during ${context} (${promptPath}): ${msg}`);
+      } else {
+        planLog.warn(`${taskId}: failed to read PROMPT.md during ${context} (${promptPath}): ${msg}`);
+      }
       return "";
     });
     return written.trim().length > 0 ? written : undefined;
@@ -2237,7 +2256,7 @@ export class TriageProcessor {
           const ids = await persistedTopLevelAgentTaskIdsFromStore(this.store, fresh);
           return { count: ids.length + pending, ids: [...new Set([...ids, ...this.processing])] };
         })();
-        await projectAdmissionCoordinator.admitOldest({
+        await projectAdmissionCoordinator.admitNext({
           // rootDir is the stable per-project identity held by this processor.
           projectId: this.rootDir,
           maxConcurrent: activeTaskLimit,
@@ -2249,6 +2268,7 @@ export class TriageProcessor {
             .map((task) => ({
               taskId: task.id,
               projectId: this.rootDir,
+              lane: "planning",
               createdAt: task.createdAt,
               // FNXC:ConcurrencyAdmission 2026-08-05-10:00: the planner must
               // own the coordinator's real host reservation before it starts;
@@ -2588,7 +2608,12 @@ export class TriageProcessor {
             planLog.warn(`${task.id}: failed to resolve triage agent instructions, continuing with defaults: ${msg}`);
           }
         }
-        planLog.log(`${task.id}: planning in ${leanPlanning ? "fast" : "standard"} mode`);
+        /*
+        FNXC:EngineDiagnostics 2026-08-01-18:11:
+        Lean vs standard planning mode is config-derived setup and fires every planning attempt.
+        Same flood class as demoted `using model` — keep on debug (FUSION_DEBUG=plan).
+        */
+        planLog.debug(`${task.id}: planning in ${leanPlanning ? "fast" : "standard"} mode`);
         const triageIdentitySection = assignedAgent
           ? `## Identity\n\nYou are ${assignedAgent.name}${assignedAgent.title?.trim() ? `, ${assignedAgent.title.trim()}` : ""} (agent ID: ${assignedAgent.id}, role: ${assignedAgent.role}).`
           : "";
@@ -2684,12 +2709,14 @@ export class TriageProcessor {
           task.planningModelId,
           settings,
           assignedAgent?.runtimeConfig,
+          task.planningCredentialInstanceId,
         );
         activePlanningProvider = planningModel.provider;
 
         const planningSessionModelOptions = {
           defaultProvider: planningModel.provider,
           defaultModelId: planningModel.modelId,
+          ...(planningModel.credentialInstanceId ? { credentialInstanceId: planningModel.credentialInstanceId } : {}),
         };
 
         /*
@@ -2888,6 +2915,7 @@ export class TriageProcessor {
                 || entry.action === "User comment invalidated spec approval — task needs re-specification"
                 || entry.action === "AI spec revision requested"
                 || entry.action === TRIAGE_STUCK_RESUME_LOG_ACTION
+                || entry.action === TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION
               );
             feedback = feedbackLogEntry?.outcome;
 
@@ -3001,8 +3029,18 @@ export class TriageProcessor {
             );
             try {
               // FN-5129 / FN-5131: split-close must unlink lineage children when deleting the parent.
+              /*
+              FNXC:GitHubSourceIssueSplitClose 2026-08-01-09:24:
+              The imported issue reporter needs to learn that this parent closed in favor of these
+              child tasks. Preserve the exact ids as typed delete context so the in-process GitHub
+              lifecycle owner can comment immediately before its close.
+              */
               await this.store.deleteTask(task.id, {
                 removeLineageReferences: true,
+                closureContext: {
+                  kind: "split-into-subtasks",
+                  childTaskIds: [...createdSubtasksRef.current],
+                },
                 auditContext: {
                   // FNXC:TaskDeleteAttribution 2026-07-26-14:30: labelling only — this
                   // split-close delete is intended engine behavior and is unchanged.
@@ -3987,6 +4025,58 @@ export class TriageProcessor {
     return true;
   }
 
+  /*
+  FNXC:NearDuplicateDetection 2026-08-01-18:47:
+  Shared writer for every "delete the DUPLICATE marker and ask planning for a real plan"
+  exit. Must leave status:needs-replan (not null), durable replan feedback, and
+  nearDuplicateDismissed so (a) the scheduler's planning→null wake does not re-dispatch
+  a prompt-less card, and (b) the next planner is told not to re-emit the same id.
+  Outcome stays parked (default) — no Plan Review handoff until a real plan is written.
+
+  FNXC:NearDuplicateDetection 2026-08-02-00:46:
+  If this canonical was already dismissed for this card and the planner re-emits the same
+  DUPLICATE, park failed (not needs-replan). needs-replan re-admits forever (FN-8704);
+  status:failed is filtered out of triage eligibility.
+  */
+  private async clearDuplicateMarkerForReplan(
+    task: Task,
+    canonicalId: string,
+    feedback: string,
+    options?: { exhausted?: boolean; priorClearCount?: number },
+  ): Promise<boolean> {
+    if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
+      await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
+    })) return false;
+
+    const priorClearCount = options?.priorClearCount ?? 0;
+    if (options?.exhausted) {
+      const error = buildDuplicateReplanExhaustedError(canonicalId);
+      try {
+        await Promise.resolve(this.store.logEntry(task.id, error, feedback));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        planLog.warn(`${task.id}: failed to log exhausted duplicate replan: ${msg}`);
+      }
+      planLog.warn(`${task.id}: ${error}`);
+      return await this.updatePlanningStateIfStillCurrent(
+        task,
+        buildMarkerExhaustedFailedTaskPatch(canonicalId, priorClearCount),
+      );
+    }
+
+    try {
+      await Promise.resolve(this.store.logEntry(task.id, TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION, feedback));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      planLog.warn(`${task.id}: failed to log marker-clear replan feedback: ${msg}`);
+    }
+
+    return await this.updatePlanningStateIfStillCurrent(
+      task,
+      buildMarkerClearedReplanTaskPatch(canonicalId, priorClearCount),
+    );
+  }
+
   private async finalizeApprovedTaskBody(
     task: Task,
     writtenInput: string,
@@ -4024,14 +4114,32 @@ export class TriageProcessor {
       view deliberately hides decisions for missing, deleted, done, or archived canonicals, so
       remove only the marker and return eligible work to planning instead of stranding its badge;
       explicit, implicit, and unrelated pauses are preserved.
+
+      FNXC:NearDuplicateDetection 2026-08-01-18:47:
+      Clearing must leave needs-replan + feedback + dismissal — never status:null. A prompt-less
+      null status is the scheduler's "planning finished" wake signal and re-opens the FN-8704
+      replan storm (schedule → missing PROMPT → needs-replan → re-emit inactive DUPLICATE).
       */
       const canonicalFlags = await resolveNearDuplicateCanonicalFlags(this.store, canonicalTask);
+      // Prefer live metadata: the in-memory task snapshot may predate the first clear's dismissal.
+      const liveMeta = (await this.store.getTask(task.id).catch(() => null))?.sourceMetadata ?? task.sourceMetadata;
+      const priorClearCount = typeof liveMeta?.duplicateMarkerClearCount === "number"
+        ? liveMeta.duplicateMarkerClearCount
+        : 0;
       if (isNearDuplicateCanonicalInactive(canonicalTask ?? undefined, canonicalFlags)) {
         if (canClearInactiveMarker) {
-          if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
-            await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
-          })) return;
-          await this.updatePlanningStateIfStillCurrent(task, { paused: false, pausedReason: null, status: null });
+          /*
+          First inactive clear: replan once with dismissal stamped.
+          Re-emit of the same dismissed inactive id (or clearCount>=1): park failed so
+          triage eligibility (status:failed) stops the FN-8704 forever-loop.
+          */
+          const alreadyDismissed = fusionCore.isTriageDuplicateKeepAcknowledged(liveMeta, canonicalId);
+          await this.clearDuplicateMarkerForReplan(
+            task,
+            canonicalId,
+            buildInactiveDuplicateClearFeedback(canonicalId),
+            { exhausted: alreadyDismissed || priorClearCount >= 1, priorClearCount },
+          );
         }
         return;
       }
@@ -4043,18 +4151,16 @@ export class TriageProcessor {
       acknowledgement is scoped to this canonical id, so a marker targeting a different active
       task still receives its own prompt; user and unrelated pauses remain untouched.
       */
-      const keepAcknowledged = fusionCore.isTriageDuplicateKeepAcknowledged(task.sourceMetadata, canonicalId);
+      const keepAcknowledged = fusionCore.isTriageDuplicateKeepAcknowledged(liveMeta, canonicalId);
       if (resolution === "prompt" && keepAcknowledged) {
         if (canClearInactiveMarker) {
-          if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
-            await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
-          })) return;
-          await this.updatePlanningStateIfStillCurrent(task, {
-            paused: false,
-            pausedReason: null,
-            status: null,
-            sourceMetadataPatch: { nearDuplicateDismissed: true },
-          });
+          // First Keep clear still gets one replan; a second DUPLICATE write exhausts.
+          await this.clearDuplicateMarkerForReplan(
+            task,
+            canonicalId,
+            buildKeepDuplicateClearFeedback(canonicalId),
+            { exhausted: priorClearCount >= 1, priorClearCount },
+          );
         }
         return;
       }
@@ -4085,15 +4191,12 @@ export class TriageProcessor {
         await this.store.recordActivity({ type: "task:auto-archived-duplicate", taskId: task.id, details: "Flagged (not deleted) as triage-marker duplicate", metadata: { canonicalTaskId: canonicalId, source: "triage-marker-flagged" } });
         return;
       }
-      if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
-        await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
-      })) return;
-      if (!await this.updatePlanningStateIfStillCurrent(task, {
-        paused: false,
-        pausedReason: null,
-        status: null,
-        sourceMetadataPatch: { nearDuplicateOf: canonicalId, nearDuplicateScore: 1, duplicateSource: "triage-marker", nearDuplicateDismissed: true },
-      })) return;
+      // resolution === "keep" (and any other non-prompt/delete policy that drops the marker)
+      await this.clearDuplicateMarkerForReplan(
+        task,
+        canonicalId,
+        buildKeepDuplicateClearFeedback(canonicalId),
+      );
       return;
     }
 

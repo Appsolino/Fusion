@@ -2454,6 +2454,10 @@ export function SettingsModal({
     void copyTextToClipboard(copilotDeviceCode.userCode);
   }, [deviceCodes]);
 
+  /*
+  FNXC:SettingsCredentialInstance 2026-08-01-17:06:
+  Settings must omit the optional instance argument for a provider's default credential, while every explicit account id follows its OAuth or API-key action unchanged. This preserves the API's default-provider compatibility and prevents UI-local state from conflating default and named account flows.
+  */
   const handleLogin = useCallback(async (providerId: string, instanceId?: string, label?: string) => {
     const stateKey = formatProviderInstanceKey({ providerId, instanceId: instanceId ?? "default" });
     const provider = authProviders.find((entry) => entry.id === providerId);
@@ -2473,7 +2477,11 @@ export function SettingsModal({
     clearAuthLoginUiState(stateKey);
 
     try {
-      const { url, instructions, manualCode, deviceCode } = await loginProvider(providerId, instanceId, label);
+      const { url, instructions, manualCode, deviceCode } = instanceId === undefined
+        ? await loginProvider(providerId)
+        : label === undefined
+          ? await loginProvider(providerId, instanceId)
+          : await loginProvider(providerId, instanceId, label);
       if (instructions?.trim() && !(providerId === "github-copilot" && deviceCode)) {
         setLoginInstructions((prev) => ({ ...prev, [stateKey]: instructions }));
       }
@@ -2491,9 +2499,8 @@ export function SettingsModal({
       pollIntervalRef.current[stateKey] = setInterval(async () => {
         try {
           const { providers } = await fetchAuthStatus({ provider: providerId, instance: instanceId });
-          const visibleProviders = filterVisibleOnboardingAndSettingsProviders(providers);
-          setAuthProviders(visibleProviders);
-          const provider = visibleProviders.find((p) => p.id === providerId);
+          const provider = providers.find((candidate) => candidate.id === providerId
+            && (candidate.instanceId ?? "default") === (instanceId ?? "default"));
           if (provider?.authenticated) {
             if (pollIntervalRef.current[stateKey]) {
               clearInterval(pollIntervalRef.current[stateKey]);
@@ -2501,6 +2508,14 @@ export function SettingsModal({
             }
             setAuthActionInProgress((prev) => { const next = { ...prev }; delete next[stateKey]; return next; });
             clearAuthLoginUiState(stateKey);
+            /*
+            FNXC:SettingsCredentialInstance 2026-08-01-17:49:
+            A targeted OAuth poll reports only the requested account's instance rows. Do not
+            replace Authentication's full provider envelope with that scoped response: sibling
+            providers and named accounts must remain visible while the login finishes. Refresh
+            the unscoped status only after this requested instance is terminal.
+            */
+            await loadAuthStatus().catch(() => {});
             addToast(t("settings.auth.loginSuccessful", "Login successful"), "success");
             window.dispatchEvent(new CustomEvent(OAUTH_RELOGIN_SUCCESS_EVENT, { detail: { providerId } }));
             scrollSettingsToTop();
@@ -2544,7 +2559,9 @@ export function SettingsModal({
 
     setManualCodeSubmitInProgress(stateKey);
     try {
-      const result = await submitProviderManualCode(providerId, code, instanceId);
+      const result = instanceId === undefined
+        ? await submitProviderManualCode(providerId, code)
+        : await submitProviderManualCode(providerId, code, instanceId);
       if (result.submitted) {
         setManualCodeInputs((prev) => {
           if (!(stateKey in prev)) {
@@ -2570,7 +2587,11 @@ export function SettingsModal({
     setAuthActionInProgress((prev) => ({ ...prev, [stateKey]: true }));
     // Provider status is shared; do not optimistically clear a concurrent instance's login flag.
     try {
-      await cancelProviderLogin(providerId, instanceId);
+      if (instanceId === undefined) {
+        await cancelProviderLogin(providerId);
+      } else {
+        await cancelProviderLogin(providerId, instanceId);
+      }
       clearAuthLoginUiState(stateKey);
       await loadAuthStatus().catch(() => {});
       addToast(t("settings.auth.loginCancelled", "Login cancelled"), "success");
@@ -2590,7 +2611,11 @@ export function SettingsModal({
     const stateKey = formatProviderInstanceKey({ providerId, instanceId: instanceId ?? "default" });
     setAuthActionInProgress((prev) => ({ ...prev, [stateKey]: true }));
     try {
-      await logoutProvider(providerId, instanceId);
+      if (instanceId === undefined) {
+        await logoutProvider(providerId);
+      } else {
+        await logoutProvider(providerId, instanceId);
+      }
       await loadAuthStatus();
       addToast(t("settings.auth.loggedOut", "Logged out"), "success");
     } catch (err) {
@@ -2614,7 +2639,9 @@ export function SettingsModal({
       return next;
     });
     try {
-      const saveResult = await saveApiKey(providerId, key, instanceId, label);
+      const saveResult = instanceId === undefined
+        ? await saveApiKey(providerId, key)
+        : await saveApiKey(providerId, key, instanceId, label);
       setApiKeyInputs((prev) => {
         const next = { ...prev };
         delete next[stateKey];
@@ -2677,7 +2704,11 @@ export function SettingsModal({
     const stateKey = formatProviderInstanceKey({ providerId, instanceId: instanceId ?? "default" });
     setAuthActionInProgress((prev) => ({ ...prev, [stateKey]: true }));
     try {
-      await clearApiKey(providerId, instanceId);
+      if (instanceId === undefined) {
+        await clearApiKey(providerId);
+      } else {
+        await clearApiKey(providerId, instanceId);
+      }
       setApiKeyInputs((prev) => {
         const next = { ...prev };
         delete next[stateKey];
@@ -3877,8 +3908,10 @@ export function SettingsModal({
       name: nextName,
       executorProvider: presetDraft.executorProvider,
       executorModelId: presetDraft.executorModelId,
+      ...(presetDraft.executorCredentialInstanceId ? { executorCredentialInstanceId: presetDraft.executorCredentialInstanceId } : {}),
       validatorProvider: presetDraft.validatorProvider,
       validatorModelId: presetDraft.validatorModelId,
+      ...(presetDraft.validatorCredentialInstanceId ? { validatorCredentialInstanceId: presetDraft.validatorCredentialInstanceId } : {}),
     };
 
     setForm((current) => {

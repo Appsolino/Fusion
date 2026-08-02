@@ -330,6 +330,14 @@ describe("TaskCard badge wrapping (FN-5162)", () => {
     expect(mobileSection).not.toMatch(/\.card-meta-badges\s*\{/);
   });
 
+  it("keeps right-side breathing room around queued reason icons at tablet widths", () => {
+    expectCssRuleToContain(
+      loadedCss,
+      ".card-status-badge--queued-with-reason",
+      "padding-inline-end: var(--space-xs);",
+    );
+  });
+
   it("places a fast-mode size badge after the task id before wrapping header badges", () => {
     const { container: sizedContainer } = render(
       <TaskCard

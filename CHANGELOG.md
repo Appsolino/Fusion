@@ -2,6 +2,46 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.74.0-beta.7
+
+### Highlights
+
+- Multiple credential accounts per provider, selectable from every model picker
+- Board keeps running on a second account when a provider hits its rate limit
+- Review and execution work outranks planning when a project slot opens
+- Reverted tasks leave Done and get Delete or Revise recovery actions
+- Board lane counts and card glow match the number of actually running agents
+
+### New
+
+- Manage multiple credential accounts per provider from Authentication settings.
+- When a provider hits its limit, work rotates to another configured account for that provider instead of pausing the board.
+- Pick which configured credential account a model uses; the selector appears only for providers with more than one account.
+- AI sessions start on the credential account you selected, and executor steps can switch to a rotated account without interrupting active work.
+- Project admission ranks review first, then execution, then planning, with age and task ID breaking ties within a lane.
+- When triage splits imported work into subtasks, the linked GitHub or GitLab issue is closed with an explanation of the split.
+- Linked GitLab issues close when their Fusion task is deleted.
+- Repeated mission validator runs are bounded by content-addressed memoization of validated inputs, with a durable per-project validation budget.
+- PostgreSQL projects get durable, transactional task-deletion lifecycle events delivered to cross-process consumers with per-consumer cursors, receipts, leases, retries, and bounded retention.
+
+### Fixed
+
+- Reverted tasks no longer sit in Done; they move out with Delete or Revise actions, and Revise opens a draft prefilled with the original description.
+- Lane counts and card glow no longer exceed the number of agents actually running; idle replans now read "Queued to revise".
+- Manual merges waiting in renamed workflow review lanes now notify operators, and scheduler and planning reactions keep working on renamed lanes.
+- Repeat task-wedge alerts stop flooding inboxes; each reason gets a six-hour cooldown that survives resolve/re-wedge flaps.
+- Mission validators no longer reject passing feature assertion results, and valid validator JSON is recovered from ordinary response formatting noise.
+- Mission assertion status edits and deletes no longer fail with invalid assertion IDs, and delete failures are surfaced.
+- Milestone validation badges stay current after assertion repairs or removals.
+- Reused execution worktrees refresh against merged dependency changes while keeping rebased task commits.
+- Expanding a chat, Activity entry, or agent log now shows the complete tool-call details.
+- Named Authentication actions stay targeted to the selected account, and auth status stays available when credential-instance data is missing.
+- Registered projects show immediately while dashboard health metrics load.
+- Task links opened from mail land in the active dashboard view.
+- Upward Quick Add model and priority menus stay anchored to their trigger.
+- Mobile: Summary token and cost tables scroll again, and Git Manager and GitHub Import sheets no longer leave dead space at the right edge on phones and short viewports.
+- Translated dashboard catalogs cover the new reverted-task resolution actions.
+
 ## 0.74.0-beta.6
 
 ### Highlights

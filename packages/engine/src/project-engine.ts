@@ -687,6 +687,7 @@ export class ProjectEngine {
           return [{
             taskId: task.id,
             projectId,
+            lane: "review",
             createdAt: task.createdAt,
             start: async () => {
               // Do not run merge work in the coordinator; hand the exact queued
@@ -3906,7 +3907,7 @@ export class ProjectEngine {
           a merge IS an agent, so it still consumes one of the project's slots; it
           just no longer consumes a machine-wide slot too.
 
-          `admitOldest` already takes `semaphore` as optional and enforces
+          `admitNext` already takes `semaphore` as optional and enforces
           `maxConcurrent` independently of it (see its `claimed() + reservations >=
           maxConcurrent` check), so dropping the argument keeps per-project
           admission and oldest-first fairness exactly as they were.
@@ -3933,7 +3934,7 @@ export class ProjectEngine {
             FNXC:ConcurrencyAdmission 2026-08-01-01:50 (ROOT CAUSE — triage admission died during every merge):
             This lane previously ran `value = await start()` INSIDE its admission `start()` callback —
             i.e. the ENTIRE merge (git rebase, verification, landing: minutes, or forever when the
-            merge wedges) executed inside `admitOldest`'s single-flight drain. The coordinator is a
+            merge wedges) executed inside `admitNext`'s single-flight drain. The coordinator is a
             project-wide singleton and every caller awaits the previous drain, so triage's poll parked
             at `await existing` for the whole merge window, its `polling` re-entrance guard stayed
             closed, and every 15s tick + task:created wake dropped silently. Observed twice on the
@@ -3942,12 +3943,12 @@ export class ProjectEngine {
             the merge finished. With merge pinned at 1, every merge was a planning outage.
 
             The lane start now only CLAIMS the admission and returns; the merge body runs after
-            `admitOldest` settles, outside the drain. Capacity stays honest: the merge row's own
+            `admitNext` settles, outside the drain. Capacity stays honest: the merge row's own
             merging/landing status is what `claimed()` counts, and at-most-once merging is enforced
             by the merge lease, not by this drain. The transient admit→status-write gap is the same
             one every other lane (triage `void specifyTask`, scheduler `void schedule`) already has.
             */
-            await projectAdmissionCoordinator.admitOldest({
+            await projectAdmissionCoordinator.admitNext({
               projectId: cwd,
               maxConcurrent: resolveActiveTaskCapacityLimit({
                 maxConcurrent: admissionSettings.maxConcurrent ?? 2,
@@ -3959,6 +3960,7 @@ export class ProjectEngine {
               refresh: async () => [{
                 taskId,
                 projectId: cwd,
+                lane: "review",
                 createdAt: mergeCandidate?.createdAt,
                 start: async () => {
                   selected = true;
@@ -4072,6 +4074,10 @@ export class ProjectEngine {
             const agentStore = (this.runtime as any).agentStore;
 
             const usageLimitPauser = (this.runtime as any).usageLimitPauser;
+            // FNXC:CredentialInstanceRotation 2026-08-01-11:05:
+            // Preserve the runtime-owned rotator identity in downstream option bags;
+            // merger does not opt into rotation, so this is forwarding only.
+            const credentialRotator = (this.runtime as any).credentialRotator;
 
             const rawMerge = async () => {
               const abortSignal = this.claimActiveMerge(taskId);
@@ -4083,6 +4089,7 @@ export class ProjectEngine {
                 manual: hasManualResolver,
                 pool,
                 usageLimitPauser,
+                credentialRotator,
                 agentStore,
                 pluginRunner: this.getPluginRunner(),
                 signal: abortSignal,
