@@ -575,8 +575,12 @@ describe("ListView unmapped-workflow self-heal", () => {
     renderListView({ tasks: [createMockTask({ id: "FN-905", column: "todo", title: "Slow repair" })] });
 
     await waitFor(() => expect(forcedCalls).toBe(1));
-    // Well past the retry delay, with the first attempt still in flight.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // FNXC:WorkflowBoard 2026-08-01-17:20: advance well past RETRY_DELAY_MS (250ms) deterministically with fake timers instead of a real 400ms wall wait. The repair re-arms only on settle, so no retry timer is pending while the first attempt is in flight — a regression that armed one would still fire here and fail the assertion, preserving the REVERT CHECK.
+    await act(async () => {
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(400);
+      vi.useRealTimers();
+    });
     expect(forcedCalls).toBe(1);
 
     await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
@@ -613,7 +617,12 @@ describe("ListView unmapped-workflow self-heal", () => {
     // Switch projects while the repair is still in flight, then let it settle.
     view.rerender(<ListView tasks={tasks} projectId="project-b" onMoveTask={vi.fn()} onOpenDetail={vi.fn()} addToast={mockAddToast} />);
     await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // FNXC:WorkflowBoard 2026-08-01-17:20: deterministic fake-timer advance past RETRY_DELAY_MS replaces a real 400ms wall wait. The settled continuation abandons on the project-id mismatch and arms no follow-up timer; a regression that dropped the projectIdRef guard would arm one and this advance would fire it, keeping the REVERT CHECK intact.
+    await act(async () => {
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(400);
+      vi.useRealTimers();
+    });
 
     // No follow-up may be issued for the project that is no longer displayed.
     expect(forcedProjects.filter((id) => id === "project-a")).toHaveLength(1);
@@ -646,7 +655,12 @@ describe("ListView unmapped-workflow self-heal", () => {
 
     view.unmount();
     await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // FNXC:WorkflowBoard 2026-08-01-17:20: deterministic fake-timer advance past RETRY_DELAY_MS replaces a real 400ms wall wait. The settled continuation abandons on the mountedRef guard and arms no follow-up timer; a regression that dropped that guard would arm one and this advance would fire it, keeping the REVERT CHECK intact.
+    await act(async () => {
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(400);
+      vi.useRealTimers();
+    });
 
     expect(forcedCalls).toBe(1);
   });
