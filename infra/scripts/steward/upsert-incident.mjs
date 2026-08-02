@@ -193,6 +193,30 @@ export async function upsertIncident(client, normalized) {
   });
 
   if (plan.action === "create") {
+    // FNXC:AppsolinoStewardS0 2026-08-02-04:55: Re-search immediately before create to shrink duplicate races.
+    const raced = await client.searchIssuesByMarker(normalized.fingerprint);
+    const racedPlan = planUpsert({
+      fingerprint: normalized.fingerprint,
+      existingIssues: raced,
+      occurrenceId: normalized.instance.occurrenceId,
+    });
+    if (racedPlan.action !== "create") {
+      if (racedPlan.action === "noop-duplicate-occurrence") {
+        return { ok: true, action: racedPlan.action, issueNumber: racedPlan.issueNumber, plan: racedPlan };
+      }
+      const current = raced.find((i) => i.number === racedPlan.issueNumber) || raced[0];
+      const { body, appended } = appendOccurrenceToBody(current.body || "", normalized);
+      const patch = { body };
+      if (racedPlan.action === "reopen-and-append") patch.state = "open";
+      const updated = await client.updateIssue(racedPlan.issueNumber, patch);
+      return {
+        ok: true,
+        action: racedPlan.action,
+        issueNumber: updated.number,
+        appended,
+        plan: racedPlan,
+      };
+    }
     const content = buildNewIssueContent(normalized);
     const created = await client.createIssue(content);
     return { ok: true, action: "create", issueNumber: created.number, plan };

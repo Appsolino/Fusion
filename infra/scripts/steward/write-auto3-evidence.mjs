@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardS0 2026-08-01-21:10:
- * Write AUTO-3 structured evidence artifact from trusted deploy-job outputs.
- * Called only from trusted AUTO-3 on main — never from candidate trees.
- * Steward S0 reads this artifact; it does not gain Host D deploy authority.
+ * FNXC:AppsolinoStewardS0 2026-08-02-04:55:
+ * Write AUTO-3 structured evidence from downloaded manifest + deploy receipt text.
+ * Unavailable fields are null. Never hardcode enginePaused/hostPAccessed safe values.
  */
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { AUTO3_EVIDENCE_SCHEMA_VERSION } from "./policy.mjs";
+import { buildFactualAuto3Evidence, readTextIfExists } from "./parse-deploy-evidence.mjs";
 
 function parseArgs(argv) {
   /** @type {Record<string, string>} */
@@ -23,19 +22,29 @@ function parseArgs(argv) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const outPath = resolve(args.out || "auto3-evidence.json");
-  const evidence = {
-    schemaVersion: AUTO3_EVIDENCE_SCHEMA_VERSION,
-    sourceSha: args.sourceSha || "",
-    releaseId: args.releaseId || "",
-    applicationVersion: args.applicationVersion || "",
-    terminal: String(args.terminal || "UNKNOWN").toUpperCase(),
-    highestMigration: args.highestMigration || "",
-    health: args.health || "",
-    enginePaused: String(args.enginePaused || "true").toLowerCase() !== "false",
-    hostPAccessed: String(args.hostPAccessed || "false").toLowerCase() === "true",
-    previousRelease: args.previousRelease || "",
+
+  let manifest = null;
+  if (args.manifest) {
+    const mp = resolve(args.manifest);
+    if (!existsSync(mp)) throw new Error(`manifest not found: ${mp}`);
+    manifest = readFileSync(mp, "utf8");
+  }
+
+  const deployOutput = args["deploy-output"]
+    ? readTextIfExists(resolve(args["deploy-output"]))
+    : null;
+  const terminalFile = args["terminal-file"]
+    ? readTextIfExists(resolve(args["terminal-file"]))
+    : null;
+
+  const evidence = buildFactualAuto3Evidence({
+    manifest,
+    deployOutput,
+    terminalFile,
+    buildSourceSha: args.sourceSha || null,
+    buildReleaseId: args.releaseId || null,
     recordedUtc: args.recordedUtc || new Date().toISOString(),
-  };
+  });
 
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");

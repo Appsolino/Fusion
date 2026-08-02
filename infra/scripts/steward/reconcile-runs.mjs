@@ -1,50 +1,18 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardS0 2026-08-01-21:10:
- * Authoritative hourly reconciliation. Catches missed workflow_run events,
- * parent/child disagreement, missing children after timeout, and abandoned state.
- * S0: emits incident candidates only — no dispatch/rerun/repair.
+ * FNXC:AppsolinoStewardS0 2026-08-02-04:55:
+ * Authoritative hourly reconciliation using real handoff relationships.
+ * Detects missing child, duplicate child, wrong SHA, parent/child and evidence disagreement.
  */
-import { MISSING_CHILD_TIMEOUT_MS, TERMINAL_STATUS } from "./policy.mjs";
+import { MISSING_CHILD_TIMEOUT_MS, TERMINAL_STATUS, FAILURE_CLASS } from "./policy.mjs";
 import { normalizeEvidence } from "./normalize-evidence.mjs";
 
 /**
- * @typedef {{
- *   id: string|number,
- *   name?: string,
- *   display_title?: string,
- *   status?: string,
- *   conclusion?: string|null,
- *   created_at?: string,
- *   updated_at?: string,
- *   head_sha?: string,
- *   event?: string,
- *   run_attempt?: number,
- *   path?: string,
- * }} GhRun
- */
-
-/**
- * @typedef {{
- *   parentRunId: string|number,
- *   parentTerminal: string,
- *   childRunId?: string|number|null,
- *   childTerminal?: string|null,
- *   handoffId?: string|null,
- *   sourceSha?: string|null,
- *   claimedAt?: string|null,
- *   parentWorkflowName?: string,
- * }} HandoffRecord
- */
-
-/**
- * Reconcile recent runs + known handoff records into incident candidates.
- *
  * @param {{
  *   nowMs?: number,
- *   handoffs?: HandoffRecord[],
- *   recentRuns?: GhRun[],
+ *   handoffs?: Array<Record<string, unknown>>,
+ *   recentRuns?: Array<Record<string, unknown>>,
  *   missingChildTimeoutMs?: number,
  * }} input
  */
@@ -57,10 +25,69 @@ export function reconcileRuns(input) {
   for (const h of input.handoffs || []) {
     const parent = String(h.parentTerminal || "").toUpperCase();
     const child = h.childTerminal != null ? String(h.childTerminal).toUpperCase() : null;
+    const evidenceTerminal = h.evidenceTerminal != null ? String(h.evidenceTerminal).toUpperCase() : null;
     const childRunId = h.childRunId ?? null;
+    const childCount = Number(h.childCountForHandoff || 0);
+
+    if (h.duplicateChildren === true || childCount > 1) {
+      pushUnique(candidates, seenOccurrence, normalizeEvidence({
+        workflowName: String(h.parentWorkflowName || "Upstream AUTO-3 Deploy"),
+        workflowFamily: "auto3",
+        runId: h.parentRunId,
+        attempt: 1,
+        parentRunId: h.parentRunId,
+        childRunId,
+        handoffId: h.handoffId,
+        sourceSha: h.sourceSha,
+        failureClass: FAILURE_CLASS.DUPLICATE_CHILD,
+        errorMessage: "multiple AUTO-3 children for one handoff",
+        terminalStatus: child || TERMINAL_STATUS.UNKNOWN,
+        forceIncident: true,
+      }));
+    }
+
+    if (
+      h.expectedSourceSha
+      && h.evidenceSourceSha
+      && String(h.expectedSourceSha).toLowerCase() !== String(h.evidenceSourceSha).toLowerCase()
+    ) {
+      pushUnique(candidates, seenOccurrence, normalizeEvidence({
+        workflowName: String(h.parentWorkflowName || "Upstream AUTO-2 Finalize"),
+        workflowFamily: "auto2",
+        runId: h.parentRunId,
+        attempt: 1,
+        parentRunId: h.parentRunId,
+        childRunId,
+        handoffId: h.handoffId,
+        sourceSha: h.sourceSha,
+        failureClass: FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT,
+        errorMessage: "wrong source SHA between parent expectation and child evidence",
+        terminalStatus: child || TERMINAL_STATUS.FAILED,
+        forceIncident: true,
+      }));
+    }
+
+    if (evidenceTerminal && child && evidenceTerminal !== child && isSuccessTerminal(child)) {
+      // Child workflow conclusion looked successful but evidence terminal disagrees.
+      pushUnique(candidates, seenOccurrence, normalizeEvidence({
+        workflowName: String(h.parentWorkflowName || "Upstream AUTO-3 Deploy"),
+        workflowFamily: "auto3",
+        runId: childRunId || h.parentRunId,
+        attempt: 1,
+        parentRunId: h.parentRunId,
+        childRunId,
+        parentTerminal: parent,
+        childTerminal: child,
+        failureClass: FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT,
+        errorMessage: `child=${child} evidence=${evidenceTerminal}`,
+        terminalStatus: evidenceTerminal,
+        forceIncident: true,
+        evidenceArtifact: { terminal: evidenceTerminal },
+      }));
+    }
 
     if (isSuccessTerminal(parent) && child && !isSuccessTerminal(child)) {
-      const raw = {
+      pushUnique(candidates, seenOccurrence, normalizeEvidence({
         workflowName: h.parentWorkflowName || "Upstream AUTO-2 Finalize",
         workflowFamily: "auto2",
         runId: h.parentRunId,
@@ -71,18 +98,17 @@ export function reconcileRuns(input) {
         childTerminal: child,
         handoffId: h.handoffId,
         sourceSha: h.sourceSha,
-        failureClass: "parent-child-disagreement",
+        failureClass: FAILURE_CLASS.PARENT_CHILD_DISAGREEMENT,
         errorMessage: `parent=${parent} child=${child}`,
         forceIncident: true,
-      };
-      pushUnique(candidates, seenOccurrence, normalizeEvidence(raw));
+      }));
       continue;
     }
 
     if (isSuccessTerminal(parent) && !childRunId) {
       const claimedMs = Date.parse(String(h.claimedAt || ""));
       if (Number.isFinite(claimedMs) && nowMs - claimedMs >= timeoutMs) {
-        const raw = {
+        pushUnique(candidates, seenOccurrence, normalizeEvidence({
           workflowName: h.parentWorkflowName || "Upstream AUTO-2 Finalize",
           workflowFamily: "auto2",
           runId: h.parentRunId,
@@ -92,32 +118,27 @@ export function reconcileRuns(input) {
           handoffId: h.handoffId,
           sourceSha: h.sourceSha,
           missingChild: true,
-          failureClass: "missing-child-timeout",
+          failureClass: FAILURE_CLASS.MISSING_CHILD_TIMEOUT,
           errorMessage: "missing auto3 child after timeout",
           forceIncident: true,
-        };
-        pushUnique(candidates, seenOccurrence, normalizeEvidence(raw));
+        }));
       }
     }
   }
 
-  // Successful completed AUTO runs with no failure signal → no incident.
   for (const run of input.recentRuns || []) {
     const conclusion = String(run.conclusion || "").toLowerCase();
     const status = String(run.status || "").toLowerCase();
     if (status === "completed" && conclusion === "success") {
-      const raw = {
+      const n = normalizeEvidence({
         workflowName: run.name || run.display_title || "",
         runId: run.id,
         attempt: run.run_attempt || 1,
         terminalStatus: TERMINAL_STATUS.SUCCESS,
         success: true,
         headSha: run.head_sha,
-      };
-      const n = normalizeEvidence(raw);
-      if (n.openIncident) {
-        pushUnique(candidates, seenOccurrence, n);
-      }
+      });
+      if (n.openIncident) pushUnique(candidates, seenOccurrence, n);
     }
   }
 
@@ -129,7 +150,6 @@ export function reconcileRuns(input) {
 }
 
 /**
- * Idempotent merge of two reconciliation results by occurrenceId.
  * @param {ReturnType<typeof normalizeEvidence>[]} a
  * @param {ReturnType<typeof normalizeEvidence>[]} b
  */

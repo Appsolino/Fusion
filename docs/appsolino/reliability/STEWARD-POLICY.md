@@ -55,9 +55,10 @@ Occurrence id (evidence only): `workflow-run:<run-id>:attempt:<attempt>`
 - Never checkout failing PR head
 - Never execute candidate scripts or artifact code
 - Treat logs, artifacts, PR fields as **untrusted**; escape Markdown
-- Evidence job: read-only GitHub token
-- Issue upsert: Appsolino Automation App token (issues write)
-- **No** `HOST_D_DEPLOY_SSH_KEY`, install authority, release activation, or Host P credentials
+- Workflow `permissions` are read-only (`contents`/`actions`/`pull-requests`). **No** workflow-level `issues: write`.
+- Issue upsert: Appsolino Automation App token only (`permission-issues: write`), under `steward-s0-issue-upsert` concurrency
+- Steward workflow must **never reference** Host D/P secret expressions (static YAML guard)
+- Unavailable physical fields are JSON `null` — never invented safe values (`enginePaused`/`hostPAccessed`)
 
 ## Physical evidence (without deploy access)
 

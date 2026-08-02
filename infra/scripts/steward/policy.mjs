@@ -69,7 +69,9 @@ export const FAILURE_CLASS = Object.freeze({
   VERSION_GATE_DRIFT: "version-gate-drift",
   GENERATED_FILE_CONFLICT: "generated-file-conflict",
   PARENT_CHILD_DISAGREEMENT: "parent-child-disagreement",
+  TERMINAL_EVIDENCE_DISAGREEMENT: "terminal-evidence-disagreement",
   MISSING_CHILD_TIMEOUT: "missing-child-timeout",
+  DUPLICATE_CHILD: "duplicate-child",
   NEEDS_TRIAGE: "needs-triage",
 });
 

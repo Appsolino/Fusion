@@ -58,8 +58,8 @@ describe("evidence normalization", () => {
       evidenceArtifact: {
         terminal: "DEPLOYED",
         sourceSha: "16f24ed3b47321cc1b5aa693b2fac7e13a00b379",
-        hostPAccessed: false,
-        enginePaused: true,
+        hostPAccessed: null,
+        enginePaused: null,
       },
       expectedMergedSha: "16f24ed3b47321cc1b5aa693b2fac7e13a00b379",
     });

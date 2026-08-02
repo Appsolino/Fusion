@@ -272,33 +272,40 @@ jobs:
           exit "$RC"
 
 
-      # FNXC:AppsolinoStewardS0 2026-08-01-21:10:
-      # Structured evidence for Steward S0 comparison. Steward does not gain deploy authority.
+      # FNXC:AppsolinoStewardS0 2026-08-02-04:55:
+      # Factual evidence from downloaded manifest + deploy receipt. Null when unavailable.
+      # Steward does not gain deploy authority.
       - name: Publish structured AUTO-3 evidence artifact
         if: always()
         env:
           SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
           RELEASE_ID: ${{ needs.build.outputs.release_id }}
+          MANIFEST_NAME: ${{ needs.build.outputs.manifest_name }}
         run: |
           set -euo pipefail
-          TERM=UNKNOWN
-          if [[ -f "$RUNNER_TEMP/auto3-terminal.txt" ]]; then
-            TERM=$(tr -d "[:space:]" < "$RUNNER_TEMP/auto3-terminal.txt")
-          fi
-          APP_VER=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
-          node infra/scripts/steward/write-auto3-evidence.mjs \
-            --out="$RUNNER_TEMP/auto3-evidence.json" \
-            --sourceSha="$SOURCE_SHA" \
-            --releaseId="$RELEASE_ID" \
-            --applicationVersion="$APP_VER" \
-            --terminal="$TERM" \
-            --highestMigration="" \
-            --health="" \
-            --enginePaused=true \
-            --hostPAccessed=false \
-            --previousRelease="" \
+          MANIFEST_PATH="$RUNNER_TEMP/auto3-in/${MANIFEST_NAME}"
+          DEPLOY_OUT="$RUNNER_TEMP/auto3-deploy-out.txt"
+          TERM_FILE="$RUNNER_TEMP/auto3-terminal.txt"
+          ARGS=(
+            --out="$RUNNER_TEMP/auto3-evidence.json"
+            --sourceSha="$SOURCE_SHA"
+            --releaseId="$RELEASE_ID"
             --recordedUtc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          echo "wrote $RUNNER_TEMP/auto3-evidence.json terminal=$TERM"
+          )
+          if [[ -f "$MANIFEST_PATH" ]]; then
+            ARGS+=(--manifest="$MANIFEST_PATH")
+          else
+            echo "::warning::manifest missing for evidence; identity fields may be null"
+          fi
+          if [[ -f "$DEPLOY_OUT" ]]; then
+            ARGS+=(--deploy-output="$DEPLOY_OUT")
+          fi
+          if [[ -f "$TERM_FILE" ]]; then
+            ARGS+=(--terminal-file="$TERM_FILE")
+          fi
+          node infra/scripts/steward/write-auto3-evidence.mjs "${ARGS[@]}"
+          echo "wrote factual auto3-evidence.json"
+          cat "$RUNNER_TEMP/auto3-evidence.json"
 
       - name: Upload AUTO-3 evidence artifact
         if: always()

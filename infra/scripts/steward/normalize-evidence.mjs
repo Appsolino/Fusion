@@ -145,7 +145,7 @@ export function normalizeEvidence(rawEvidence) {
   const workflowFamily =
     String(raw.workflowFamily || "") || workflowFamilyFromName(workflowName) || WORKFLOW_FAMILY.unknown;
 
-  if (Boolean(raw.success)) {
+  if (raw.success === true) {
     const runId = raw.runId ?? raw.workflowRunId ?? "0";
     const attempt = raw.attempt ?? raw.runAttempt ?? 1;
     return {
@@ -190,7 +190,7 @@ export function normalizeEvidence(rawEvidence) {
     logText: String(raw.logText || ""),
     errorMessage: String(raw.errorMessage || ""),
     component: raw.component ? String(raw.component) : undefined,
-    missingChild: Boolean(raw.missingChild),
+    missingChild: raw.missingChild === true,
     conflictPaths: Array.isArray(raw.conflictPaths) ? raw.conflictPaths.map(String) : [],
   });
 
@@ -205,8 +205,8 @@ export function normalizeEvidence(rawEvidence) {
   const openIncident = shouldOpenIncident({
     terminalStatus,
     failureClass: classified.failureClass,
-    forceIncident: Boolean(raw.forceIncident),
-    success: Boolean(raw.success),
+    forceIncident: raw.forceIncident === true,
+    success: raw.success === true,
   });
 
   /** Instance fields — evidence only, never hashed into fingerprint. */
@@ -260,11 +260,14 @@ export function normalizeEvidence(rawEvidence) {
  * @param {{ terminalStatus: string, failureClass: string, forceIncident?: boolean, success?: boolean }} opts
  */
 export function shouldOpenIncident(opts) {
-  if (opts.success) return false;
-  if (opts.forceIncident) return true;
+  // FNXC:AppsolinoStewardS0 2026-08-02-04:55: Only literal boolean true means success/force.
+  if (opts.success === true) return false;
+  if (opts.forceIncident === true) return true;
   if (opts.failureClass === FAILURE_CLASS.NEEDS_TRIAGE) return true;
   if (opts.failureClass === FAILURE_CLASS.PARENT_CHILD_DISAGREEMENT) return true;
+  if (opts.failureClass === FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT) return true;
   if (opts.failureClass === FAILURE_CLASS.MISSING_CHILD_TIMEOUT) return true;
+  if (opts.failureClass === FAILURE_CLASS.DUPLICATE_CHILD) return true;
   if (NON_INCIDENT_TERMINALS.includes(opts.terminalStatus)) {
     // Known failure classes still open even if someone stamped SUCCESS incorrectly.
     const noisy = new Set([
@@ -275,7 +278,9 @@ export function shouldOpenIncident(opts) {
       FAILURE_CLASS.SUMMARY_SYNTAX,
       FAILURE_CLASS.GENERATED_FILE_CONFLICT,
       FAILURE_CLASS.PARENT_CHILD_DISAGREEMENT,
+      FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT,
       FAILURE_CLASS.MISSING_CHILD_TIMEOUT,
+      FAILURE_CLASS.DUPLICATE_CHILD,
     ]);
     return noisy.has(opts.failureClass);
   }
@@ -295,7 +300,9 @@ function componentForClass(c) {
     [FAILURE_CLASS.VERSION_GATE_DRIFT]: "installer",
     [FAILURE_CLASS.GENERATED_FILE_CONFLICT]: "generated-baseline",
     [FAILURE_CLASS.PARENT_CHILD_DISAGREEMENT]: "auto2-auto3-correlation",
+    [FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT]: "auto3-evidence",
     [FAILURE_CLASS.MISSING_CHILD_TIMEOUT]: "auto2-waiter",
+    [FAILURE_CLASS.DUPLICATE_CHILD]: "auto3-handoff",
     [FAILURE_CLASS.NEEDS_TRIAGE]: "unknown",
   };
   return map[c] || "unknown";
@@ -310,7 +317,9 @@ function phaseForClass(c) {
     [FAILURE_CLASS.VERSION_GATE_DRIFT]: "trusted-host-d-deploy",
     [FAILURE_CLASS.GENERATED_FILE_CONFLICT]: "auto1-merge",
     [FAILURE_CLASS.PARENT_CHILD_DISAGREEMENT]: "parent-child-reconcile",
+    [FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT]: "evidence-reconcile",
     [FAILURE_CLASS.MISSING_CHILD_TIMEOUT]: "auto3-handoff-wait",
+    [FAILURE_CLASS.DUPLICATE_CHILD]: "auto3-run-selection",
     [FAILURE_CLASS.NEEDS_TRIAGE]: "unknown",
   };
   return map[c] || "unknown";
