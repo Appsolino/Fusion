@@ -186,6 +186,7 @@ describe("triage explicit duplicate marker short-circuit", () => {
         nearDuplicateOf: "FN-001",
         nearDuplicateDismissed: true,
         duplicateSource: "triage-marker",
+        duplicateMarkerClearCount: 1,
       }),
     }));
     expect(store.logEntry).toHaveBeenCalledWith(
@@ -195,6 +196,34 @@ describe("triage explicit duplicate marker short-circuit", () => {
     );
     expect(store.updateTask).not.toHaveBeenCalledWith("FN-002", expect.objectContaining({ paused: true }));
     expect(store.deleteTask).not.toHaveBeenCalled();
+  });
+
+  it("parks failed when an inactive DUPLICATE is re-emitted after dismissal (FN-8704 loop stop)", async () => {
+    const task = createTask({
+      sourceMetadata: {
+        nearDuplicateOf: "FN-001",
+        duplicateSource: "triage-marker",
+        nearDuplicateDismissed: true,
+        duplicateMarkerClearCount: 1,
+      },
+    });
+    const store = createMockStore({
+      getTask: vi.fn().mockImplementation(async (id: string) =>
+        id === "FN-001" ? createTask({ id: "FN-001", column: "done" }) : task,
+      ),
+      readTaskForMove: vi.fn().mockResolvedValue(task),
+    });
+
+    await expect(runExplicitDuplicateMarker(store, task, "DUPLICATE: FN-001\n")).resolves.toBe(true);
+
+    expect(store.updateTask).toHaveBeenCalledWith("FN-002", expect.objectContaining({
+      status: "failed",
+      error: expect.stringContaining("DUPLICATE_REPLAN_EXHAUSTED"),
+      sourceMetadataPatch: expect.objectContaining({
+        nearDuplicateOf: "FN-001",
+        nearDuplicateDismissed: true,
+      }),
+    }));
   });
 
   it.each([

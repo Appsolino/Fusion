@@ -45,6 +45,8 @@ import {
   buildInactiveDuplicateClearFeedback,
   buildKeepDuplicateClearFeedback,
   buildMarkerClearedReplanTaskPatch,
+  buildMarkerExhaustedFailedTaskPatch,
+  buildDuplicateReplanExhaustedError,
 } from "./duplicate-marker-clear.js";
 import { mergeEffectiveSettings } from "./effective-settings.js";
 import { RemovalReason, classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, hasUsableWorktreeShape, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "./worktree-pool.js";
@@ -14452,12 +14454,19 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
           if (!canonicalTask || isNearDuplicateCanonicalInactive(canonicalTask, canonicalFlags)) {
             if (canClearInactiveMarker) {
               rmSync(promptPath, { force: true });
-              const patch = buildMarkerClearedReplanTaskPatch(marker.canonicalId);
+              const priorClearCount = typeof task.sourceMetadata?.duplicateMarkerClearCount === "number"
+                ? task.sourceMetadata.duplicateMarkerClearCount
+                : 0;
+              const alreadyDismissed = isTriageDuplicateKeepAcknowledged(task.sourceMetadata, marker.canonicalId);
+              const exhausted = alreadyDismissed || priorClearCount >= 1;
+              const patch = exhausted
+                ? buildMarkerExhaustedFailedTaskPatch(marker.canonicalId, priorClearCount)
+                : buildMarkerClearedReplanTaskPatch(marker.canonicalId, priorClearCount);
               await this.store.updateTask(task.id, patch);
               if (typeof this.store.logEntry === "function") {
                 await Promise.resolve(this.store.logEntry(
                   task.id,
-                  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                  exhausted ? buildDuplicateReplanExhaustedError(marker.canonicalId) : TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
                   buildInactiveDuplicateClearFeedback(marker.canonicalId),
                 )).catch(() => {});
               }
@@ -14476,11 +14485,22 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
           if (resolution === "prompt" && isTriageDuplicateKeepAcknowledged(task.sourceMetadata, canonicalTask.id)) {
             if (canClearInactiveMarker) {
               rmSync(promptPath, { force: true });
-              await this.store.updateTask(task.id, buildMarkerClearedReplanTaskPatch(canonicalTask.id));
+              const priorKeepClears = typeof task.sourceMetadata?.duplicateMarkerClearCount === "number"
+                ? task.sourceMetadata.duplicateMarkerClearCount
+                : 0;
+              const keepExhausted = priorKeepClears >= 1;
+              await this.store.updateTask(
+                task.id,
+                keepExhausted
+                  ? buildMarkerExhaustedFailedTaskPatch(canonicalTask.id, priorKeepClears)
+                  : buildMarkerClearedReplanTaskPatch(canonicalTask.id, priorKeepClears),
+              );
               if (typeof this.store.logEntry === "function") {
                 await Promise.resolve(this.store.logEntry(
                   task.id,
-                  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                  keepExhausted
+                    ? buildDuplicateReplanExhaustedError(canonicalTask.id)
+                    : TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
                   buildKeepDuplicateClearFeedback(canonicalTask.id),
                 )).catch(() => {});
               }

@@ -223,6 +223,8 @@ import {
   buildInactiveDuplicateClearFeedback,
   buildKeepDuplicateClearFeedback,
   buildMarkerClearedReplanTaskPatch,
+  buildMarkerExhaustedFailedTaskPatch,
+  buildDuplicateReplanExhaustedError,
 } from "./duplicate-marker-clear.js";
 import { createRunAuditor, generateSyntheticRunId } from "./run-audit.js";
 import { resolveAndEmitGoalContext } from "./goal-injection-diagnostics.js";
@@ -4030,15 +4032,37 @@ export class TriageProcessor {
   nearDuplicateDismissed so (a) the scheduler's planning→null wake does not re-dispatch
   a prompt-less card, and (b) the next planner is told not to re-emit the same id.
   Outcome stays parked (default) — no Plan Review handoff until a real plan is written.
+
+  FNXC:NearDuplicateDetection 2026-08-02-00:46:
+  If this canonical was already dismissed for this card and the planner re-emits the same
+  DUPLICATE, park failed (not needs-replan). needs-replan re-admits forever (FN-8704);
+  status:failed is filtered out of triage eligibility.
   */
   private async clearDuplicateMarkerForReplan(
     task: Task,
     canonicalId: string,
     feedback: string,
+    options?: { exhausted?: boolean; priorClearCount?: number },
   ): Promise<boolean> {
     if (!await this.runIfStillPlanningUnderTaskLock(task, async () => {
       await rm(join(this.rootDir, ".fusion", "tasks", task.id, "PROMPT.md"), { force: true });
     })) return false;
+
+    const priorClearCount = options?.priorClearCount ?? 0;
+    if (options?.exhausted) {
+      const error = buildDuplicateReplanExhaustedError(canonicalId);
+      try {
+        await Promise.resolve(this.store.logEntry(task.id, error, feedback));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        planLog.warn(`${task.id}: failed to log exhausted duplicate replan: ${msg}`);
+      }
+      planLog.warn(`${task.id}: ${error}`);
+      return await this.updatePlanningStateIfStillCurrent(
+        task,
+        buildMarkerExhaustedFailedTaskPatch(canonicalId, priorClearCount),
+      );
+    }
 
     try {
       await Promise.resolve(this.store.logEntry(task.id, TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION, feedback));
@@ -4049,7 +4073,7 @@ export class TriageProcessor {
 
     return await this.updatePlanningStateIfStillCurrent(
       task,
-      buildMarkerClearedReplanTaskPatch(canonicalId),
+      buildMarkerClearedReplanTaskPatch(canonicalId, priorClearCount),
     );
   }
 
@@ -4097,12 +4121,24 @@ export class TriageProcessor {
       replan storm (schedule → missing PROMPT → needs-replan → re-emit inactive DUPLICATE).
       */
       const canonicalFlags = await resolveNearDuplicateCanonicalFlags(this.store, canonicalTask);
+      // Prefer live metadata: the in-memory task snapshot may predate the first clear's dismissal.
+      const liveMeta = (await this.store.getTask(task.id).catch(() => null))?.sourceMetadata ?? task.sourceMetadata;
+      const priorClearCount = typeof liveMeta?.duplicateMarkerClearCount === "number"
+        ? liveMeta.duplicateMarkerClearCount
+        : 0;
       if (isNearDuplicateCanonicalInactive(canonicalTask ?? undefined, canonicalFlags)) {
         if (canClearInactiveMarker) {
+          /*
+          First inactive clear: replan once with dismissal stamped.
+          Re-emit of the same dismissed inactive id (or clearCount>=1): park failed so
+          triage eligibility (status:failed) stops the FN-8704 forever-loop.
+          */
+          const alreadyDismissed = fusionCore.isTriageDuplicateKeepAcknowledged(liveMeta, canonicalId);
           await this.clearDuplicateMarkerForReplan(
             task,
             canonicalId,
             buildInactiveDuplicateClearFeedback(canonicalId),
+            { exhausted: alreadyDismissed || priorClearCount >= 1, priorClearCount },
           );
         }
         return;
@@ -4115,13 +4151,15 @@ export class TriageProcessor {
       acknowledgement is scoped to this canonical id, so a marker targeting a different active
       task still receives its own prompt; user and unrelated pauses remain untouched.
       */
-      const keepAcknowledged = fusionCore.isTriageDuplicateKeepAcknowledged(task.sourceMetadata, canonicalId);
+      const keepAcknowledged = fusionCore.isTriageDuplicateKeepAcknowledged(liveMeta, canonicalId);
       if (resolution === "prompt" && keepAcknowledged) {
         if (canClearInactiveMarker) {
+          // First Keep clear still gets one replan; a second DUPLICATE write exhausts.
           await this.clearDuplicateMarkerForReplan(
             task,
             canonicalId,
             buildKeepDuplicateClearFeedback(canonicalId),
+            { exhausted: priorClearCount >= 1, priorClearCount },
           );
         }
         return;
