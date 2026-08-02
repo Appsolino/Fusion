@@ -1,22 +1,15 @@
 {
   "outcome": "merged",
-  "recordedAt": "2026-08-01T13:29:48Z",
+  "recordedAt": "2026-08-02T08:56:11.412Z",
   "integrationBranch": "main",
-  "appsolinoSha": "168d8cbf39c4d9d0a1e05f11daf301223f585908",
-  "upstreamSha": "5786c87eff118231e58bb0877f2cb2252a346a8d",
-  "mergeBase": "71576d9536267a7835f352922a55831811717896",
-  "ahead": 93,
-  "behind": 29,
+  "appsolinoSha": "1781538cc21ac54e99b476c850267de4c66eef97",
+  "upstreamSha": "4c0ead498a7fd017ecbab670e51742c57d7bd0ba",
+  "mergeBase": "5786c87eff118231e58bb0877f2cb2252a346a8d",
+  "ahead": 103,
+  "behind": 53,
   "conflictedFiles": [],
-  "resolvedConflicts": [
-    {
-      "file": "scripts/lib/lifecycle-column-census-baseline.json",
-      "resolution": "regenerated-from-merged-tree",
-      "note": "Regenerated with node scripts/lifecycle-column-census.mjs --strict --update-baseline after upstream merge"
-    }
-  ],
-  "touchesWorkflows": false,
+  "touchesWorkflows": true,
   "touchesMigrations": true,
   "touchesLockfile": false,
-  "mutatesAppsolinoMain": false
+  "changedFileCount": 375
 }
