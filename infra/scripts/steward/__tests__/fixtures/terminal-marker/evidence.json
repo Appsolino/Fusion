@@ -1,0 +1,18 @@
+{
+  "workflowName": "Upstream AUTO-2 Approve Sensitive",
+  "workflowFamily": "auto2",
+  "runId": "30705071215",
+  "attempt": 1,
+  "parentRunId": "30705071215",
+  "childRunId": "30705088925",
+  "parentTerminal": "DEPLOYED",
+  "childTerminal": "BLOCKED",
+  "sourceSha": "16f24ed3b47321cc1b5aa693b2fac7e13a00b379",
+  "failureClass": "terminal-marker-parse",
+  "phase": "auto3-terminal-parse",
+  "component": "terminal-marker-parser",
+  "errorMessage": "false DEPLOYED from first AUTO3_TERMINAL_STATUS in script source",
+  "logText": "echo AUTO3_TERMINAL_STATUS=DEPLOYED\n...\nAUTO3_TERMINAL_STATUS=BLOCKED\nfalse DEPLOYED parent claim",
+  "terminalStatus": "BLOCKED",
+  "forceIncident": true
+}

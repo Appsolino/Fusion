@@ -110,18 +110,45 @@ trap cleanup EXIT
 write_result() {
   local status="$1"
   local reasons_json="$2"
-  PROFILE="$PROFILE" RESULT_FILE="$RESULT_FILE" STATUS="$status" REASONS_JSON="$reasons_json" python3 <<'PY'
+  # FNXC:AppsolinoStewardS0 2026-08-02-04:55: Factual receipt fields for steward evidence.
+  # Empty env → JSON null. deployedHostP is false because this Host D entry never targets Host P.
+  PROFILE="$PROFILE" RESULT_FILE="$RESULT_FILE" STATUS="$status" REASONS_JSON="$reasons_json" \
+  SOURCE_SHA="${SOURCE_SHA-}" RELEASE_ID="${RELEASE_ID-}" APP_VER="${APP_VER-}" \
+  EVIDENCE_PREVIOUS="${ACTIVE_REL-}" EVIDENCE_HIGHEST="${HIGHEST_NOW-${HIGHEST_BEFORE-}}" \
+  EVIDENCE_HEALTH="${EVIDENCE_HEALTH-}" EVIDENCE_ENGINE_PAUSED="${EVIDENCE_ENGINE_PAUSED-}" \
+  python3 <<'PY'
 import json, os
 from datetime import datetime, timezone
+
+def opt(key):
+    v = (os.environ.get(key, "") or "").strip()
+    return v if v else None
+
+def opt_bool(key):
+    v = (os.environ.get(key, "") or "").strip().lower()
+    if v == "true":
+        return True
+    if v == "false":
+        return False
+    return None
+
 payload = {
   "status": os.environ["STATUS"],
   "reasons": json.loads(os.environ["REASONS_JSON"]),
   "profile": os.environ["PROFILE"],
   "deployedHostP": False,
+  "sourceSha": opt("SOURCE_SHA"),
+  "releaseId": opt("RELEASE_ID"),
+  "applicationVersion": opt("APP_VER"),
+  "previousRelease": opt("EVIDENCE_PREVIOUS"),
+  "highestMigration": opt("EVIDENCE_HIGHEST"),
+  "health": opt("EVIDENCE_HEALTH"),
+  "enginePaused": opt_bool("EVIDENCE_ENGINE_PAUSED"),
   "recordedUtc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 }
 path = os.environ["RESULT_FILE"]
-open(path, "w").write(json.dumps(payload, indent=2) + "\n")
+if path:
+  open(path, "w").write(json.dumps(payload, indent=2) + "\n")
 print(json.dumps(payload, indent=2))
 PY
   RESULT_STATUS="$status"
@@ -220,6 +247,8 @@ if [[ "$PROFILE" == "staging" ]]; then
   # enginePaused must remain true; no dispatching tasks
   SETTINGS="$(curl -fsS -m 5 http://127.0.0.1:4140/api/settings)"
   echo "$SETTINGS" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("enginePaused") is True, "enginePaused must be true"; assert d.get("testMode") is False, "testMode must be false"'
+  EVIDENCE_ENGINE_PAUSED="true"
+  EVIDENCE_HEALTH="ok"
 fi
 
 # Record schema ceiling before
@@ -467,5 +496,8 @@ if [[ "$PROFILE" == "staging" ]]; then
   echo "$SETTINGS" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("enginePaused") is True'
 fi
 
+EVIDENCE_HEALTH="ok"
+EVIDENCE_ENGINE_PAUSED="true"
+HIGHEST_NOW="$(sudo -n -u postgres psql -d "$DB_NAME" -Atc "SELECT coalesce(max(version),'none') FROM fusion_schema_migrations;" 2>/dev/null || echo "${HIGHEST_BEFORE:-}")"
 write_result DEPLOYED "$(python3 -c 'import json,sys; print(json.dumps(["candidate active","health ok","engine paused","release="+sys.argv[1]]))' "$RELEASE_ID")"
 exit 0

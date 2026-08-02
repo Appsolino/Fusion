@@ -1,0 +1,11 @@
+{
+  "incident": true,
+  "failureClass": "summary-syntax",
+  "fingerprintPayload": {
+    "workflow": "auto2",
+    "phase": "report-summary",
+    "class": "summary-syntax",
+    "component": "workflow-summary",
+    "terminal": "FAILED"
+  }
+}

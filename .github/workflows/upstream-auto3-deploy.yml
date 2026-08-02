@@ -239,14 +239,17 @@ jobs:
           # FNXC:AppsolinoAuto3Handoff 2026-08-01-06:50: Emit durable terminal marker for parent waiters.
           if echo "$OUT" | grep -q '"status": "DEPLOYED"'; then
             echo "AUTO3_TERMINAL_STATUS=DEPLOYED"
+            echo DEPLOYED > "$RUNNER_TEMP/auto3-terminal.txt"
             exit 0
           fi
           if echo "$OUT" | grep -q '"status": "IDEMPOTENT_NOOP"'; then
             echo "AUTO3_TERMINAL_STATUS=IDEMPOTENT_NOOP"
+            echo IDEMPOTENT_NOOP > "$RUNNER_TEMP/auto3-terminal.txt"
             exit 0
           fi
           if echo "$OUT" | grep -q '"status": "ROLLED_BACK"'; then
             echo "AUTO3_TERMINAL_STATUS=ROLLED_BACK"
+            echo ROLLED_BACK > "$RUNNER_TEMP/auto3-terminal.txt"
             # Rollback proof success path when force_smoke_fail requested
             if [[ "$FORCE_FAIL" == "true" ]]; then exit 0; fi
             echo "::error::Deployment rolled back"
@@ -254,16 +257,64 @@ jobs:
           fi
           if echo "$OUT" | grep -q '"status": "CRITICAL"'; then
             echo "AUTO3_TERMINAL_STATUS=CRITICAL"
+            echo CRITICAL > "$RUNNER_TEMP/auto3-terminal.txt"
             echo "::error::CRITICAL rollback failure — owner action required"
             exit 5
           fi
           if echo "$OUT" | grep -q '"status": "BLOCKED"'; then
             echo "AUTO3_TERMINAL_STATUS=BLOCKED"
+            echo BLOCKED > "$RUNNER_TEMP/auto3-terminal.txt"
             echo "::error::Deployment blocked"
             exit 2
           fi
           echo "AUTO3_TERMINAL_STATUS=FAILED"
+          echo FAILED > "$RUNNER_TEMP/auto3-terminal.txt"
           exit "$RC"
+
+
+      # FNXC:AppsolinoStewardS0 2026-08-02-04:55:
+      # Factual evidence from downloaded manifest + deploy receipt. Null when unavailable.
+      # Steward does not gain deploy authority.
+      - name: Publish structured AUTO-3 evidence artifact
+        if: always()
+        env:
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          RELEASE_ID: ${{ needs.build.outputs.release_id }}
+          MANIFEST_NAME: ${{ needs.build.outputs.manifest_name }}
+        run: |
+          set -euo pipefail
+          MANIFEST_PATH="$RUNNER_TEMP/auto3-in/${MANIFEST_NAME}"
+          DEPLOY_OUT="$RUNNER_TEMP/auto3-deploy-out.txt"
+          TERM_FILE="$RUNNER_TEMP/auto3-terminal.txt"
+          ARGS=(
+            --out="$RUNNER_TEMP/auto3-evidence.json"
+            --sourceSha="$SOURCE_SHA"
+            --releaseId="$RELEASE_ID"
+            --recordedUtc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          )
+          if [[ -f "$MANIFEST_PATH" ]]; then
+            ARGS+=(--manifest="$MANIFEST_PATH")
+          else
+            echo "::warning::manifest missing for evidence; identity fields may be null"
+          fi
+          if [[ -f "$DEPLOY_OUT" ]]; then
+            ARGS+=(--deploy-output="$DEPLOY_OUT")
+          fi
+          if [[ -f "$TERM_FILE" ]]; then
+            ARGS+=(--terminal-file="$TERM_FILE")
+          fi
+          node infra/scripts/steward/write-auto3-evidence.mjs "${ARGS[@]}"
+          echo "wrote factual auto3-evidence.json"
+          cat "$RUNNER_TEMP/auto3-evidence.json"
+
+      - name: Upload AUTO-3 evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto3-evidence-${{ needs.build.outputs.release_id }}
+          path: ${{ runner.temp }}/auto3-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Never execute candidate package scripts
         run: |

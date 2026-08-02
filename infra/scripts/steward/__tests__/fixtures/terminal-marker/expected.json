@@ -1,0 +1,11 @@
+{
+  "incident": true,
+  "failureClass": "terminal-marker-parse",
+  "fingerprintPayload": {
+    "workflow": "auto2",
+    "phase": "auto3-terminal-parse",
+    "class": "terminal-marker-parse",
+    "component": "terminal-marker-parser",
+    "terminal": "BLOCKED"
+  }
+}

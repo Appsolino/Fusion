@@ -1,0 +1,20 @@
+{
+  "workflowName": "Upstream AUTO-2 Approve Sensitive",
+  "workflowFamily": "auto2",
+  "runId": "30687772141",
+  "attempt": 1,
+  "parentRunId": "30687772141",
+  "childRunId": "30679116104",
+  "parentTerminal": "FAILED",
+  "childTerminal": "FAILED",
+  "handoffId": "auto2-30687772141-1-3e6a0ad67262-deadbeef",
+  "sourceSha": "3e6a0ad67262152fc846cc0134a424903f0b4dec",
+  "failureClass": "correlation-race",
+  "phase": "auto3-run-selection",
+  "component": "auto3-handoff",
+  "errorMessage": "wrong AUTO-3 child selected via display_title newest-run fallback ISS-AUTO-003",
+  "logText": "selectCorrelated failed; waiter attached unrelated older AUTO-3 run; handoff missing",
+  "terminalStatus": "FAILED",
+  "recordedUtc": "2026-08-01T06:30:00Z",
+  "forceIncident": true
+}

@@ -1,0 +1,11 @@
+{
+  "workflowName": "Upstream AUTO-3 Deploy",
+  "workflowFamily": "auto3",
+  "runId": "30999999999",
+  "attempt": 1,
+  "terminalStatus": "FAILED",
+  "errorMessage": "completely novel unexplained failure xyzzy-plugh",
+  "logText": "something we have never classified before xyzzy-plugh",
+  "phase": "unknown",
+  "component": "unknown"
+}

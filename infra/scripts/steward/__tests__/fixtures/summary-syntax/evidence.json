@@ -1,0 +1,13 @@
+{
+  "workflowName": "Upstream AUTO-2 Finalize",
+  "workflowFamily": "auto2",
+  "runId": "30695000002",
+  "attempt": 1,
+  "failureClass": "summary-syntax",
+  "phase": "report-summary",
+  "component": "workflow-summary",
+  "errorMessage": "SyntaxError in summary python -c after successful deploy",
+  "logText": "python -c SyntaxError: unterminated string literal in GitHub summary step",
+  "terminalStatus": "FAILED",
+  "forceIncident": true
+}

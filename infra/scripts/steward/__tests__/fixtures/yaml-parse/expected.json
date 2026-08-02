@@ -1,0 +1,11 @@
+{
+  "incident": true,
+  "failureClass": "workflow-yaml-parse",
+  "fingerprintPayload": {
+    "workflow": "auto2",
+    "phase": "workflow-parse",
+    "class": "workflow-yaml-parse",
+    "component": "github-workflows",
+    "terminal": "FAILED"
+  }
+}

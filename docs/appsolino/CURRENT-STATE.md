@@ -2,16 +2,16 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-01T08:40:00Z
+**Last updated UTC:** 2026-08-01T18:15:00Z
 
 | Field | Value |
 | --- | --- |
-| Current `main` SHA | `168d8cbf39c4d9d0a1e05f11daf301223f585908` (PR #54 summary-exit fix) |
-| Active Host D release | `auto3-0.74.0-beta.5-5f1b923bd815` |
-| Source SHA | `5f1b923bd8157f0f4cde8500f4799bda3b868884` |
-| Previous rollback release | `auto3-0.74.0-beta.5-3e6a0ad67262` |
-| Schema ceiling | **0038** |
-| Staging health | `ok` / `0.74.0-beta.5` @ `127.0.0.1:4140` (`enginePaused=true`) |
+| Current `main` SHA | `cce02cc7bc489268af8b722f98ec27628054add1` (PR #58 terminal-marker + version passthrough) |
+| Active Host D release | `auto3-0.74.0-beta.6-16f24ed3b473` |
+| Source SHA | `16f24ed3b47321cc1b5aa693b2fac7e13a00b379` (PR #55 absorb) |
+| Previous rollback release | `auto3-0.74.0-beta.5-5f1b923bd815` |
+| Schema ceiling | **0039** |
+| Staging health | `ok` / `0.74.0-beta.6` @ `127.0.0.1:4140` (`enginePaused=true`) |
 | Host P state | Deferred / untouched (**accessed=NO**) |
 | Legacy production | DEGRADED / FROZEN |
 | Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** |
@@ -19,50 +19,78 @@
 ## Owner priority (2026-08-01)
 
 ```text
-NOW:     Resolve AUTO-1 conflict PR #55 (sensitive: migrations) via normal AUTO-2 approval path
-THEN:    ISS-UI-001 / ISS-GIT-007
-DONE:    AUTO-4 COMPLETE; handoff correlation LIVE-PROVEN
-NOTE:    Engine stays paused. Host P untouched. Do not reopen AUTO-4 / re-merge #47.
+NOW:     Land Reliability Steward S0 (observation) → enable triggers after fixture proof
+DONE:    PR #55 sensitive absorb + Host D beta.6 deploy; PR #58 marker/version fixes
+DONE:    AUTO-4 COMPLETE (pin 71576d953626)
+PARKED:  ISS-UI-001 / PR #28 — product backlog after steward S0
+PARKED:  ISS-GIT-007 — after steward S0 unless owner redirects
+NOTE:    Engine stays paused. Host P untouched. Do not re-merge PR #47.
 ```
+
+## Recent upstream absorb
+
+| Item | Value |
+| --- | --- |
+| PR #55 | Merged — upstream `5786c87eff11` (sensitive; migration 0039; census baseline regenerated) |
+| Merge SHA | `16f24ed3b47321cc1b5aa693b2fac7e13a00b379` |
+| First AUTO-3 child | [30705088925](https://github.com/Appsolino/Fusion/actions/runs/30705088925) → **BLOCKED** (hardcoded beta.5 vs package beta.6) |
+| False parent claim | Parent reported DEPLOYED from first log marker (script source) — fixed in PR #58 |
+| PR #58 | Merged `cce02cc7bc489268af8b722f98ec27628054add1` — last-marker parse + `AUTO3_APPLICATION_VERSION` |
+| Recovery AUTO-3 | [30705532077](https://github.com/Appsolino/Fusion/actions/runs/30705532077) → **DEPLOYED** |
 
 ## AUTO-4 — COMPLETE
 
 | Item | Value |
 | --- | --- |
 | Pinned upstream | `71576d9536267a7835f352922a55831811717896` |
-| Absorb PR | #47 → `3e6a0ad67262152fc846cc0134a424903f0b4dec` |
-| First Host D release | `auto3-0.74.0-beta.5-3e6a0ad67262` |
+| Absorb PR | #47 (merged; do not re-merge) |
+| Merge SHA | `3e6a0ad67262152fc846cc0134a424903f0b4dec` |
 
-## AUTO-3 handoff correlation — LIVE PROVEN
+## AUTO-1 / AUTO-2 / AUTO-3 / Steward
 
-| Item | Value |
+| Lane | Status |
 | --- | --- |
-| Correction | #51 + #53 + #54 |
-| Proof PR | #52 |
-| Handoff ID | `auto2-30691423651-1-5f1b923bd815-5ccedbe0` |
-| Parent finalize | [30691423651](https://github.com/Appsolino/Fusion/actions/runs/30691423651) → JSON `auto-merged-deployed` / DEPLOYED |
-| Selected child | [30691437372](https://github.com/Appsolino/Fusion/actions/runs/30691437372) (ignored older failed `30679116104`) |
-| Active release | `auto3-0.74.0-beta.5-5f1b923bd815` |
-| Host P / engine | NO / paused |
+| AUTO-1 | OPERATIONAL |
+| AUTO-2 | OPERATIONAL — exact `handoff_id` correlation (ISS-AUTO-003) |
+| AUTO-3 | OPERATIONAL — last terminal marker; version passthrough; evidence artifact for S0 |
+| Steward S0 | **Landing** — observation / fingerprint / issues only (see [`reliability/STEWARD-POLICY.md`](reliability/STEWARD-POLICY.md)) |
+| Steward S1+ | NOT AUTHORISED |
 
-## Post-catch-up AUTO-1
+## Provider posture
 
-| Item | Value |
+| Item | Status |
 | --- | --- |
-| Run | [30692061966](https://github.com/Appsolino/Fusion/actions/runs/30692061966) (exit 2 = conflict reported) |
-| Upstream tip | `5786c87eff118231e58bb0877f2cb2252a346a8d` |
-| vs AUTO-4 pin | ahead **29** upstream commits (Appsolino also ahead 93 of merge-base) |
-| Sync PR | [#55 AUTO-1 CONFLICT](https://github.com/Appsolino/Fusion/pull/55) — `automation/upstream-5786c87eff11` |
-| Conflict file | `scripts/lib/lifecycle-column-census-baseline.json` |
-| Migrations | YES → **sensitive** (normal AUTO-2 approval path; do not reopen AUTO-4) |
-| Remaining divergence | **non-zero** (held in #55 until conflict + approval) |
+| Default AI provider | **Cursor CLI** (`cursor-cli` / `composer-2.5`) |
+| `testMode` | `false` |
+| `enginePaused` | `true` |
+
+## Maintenance (non-blocking)
+
+- **app-id → client-id:** When org/repo var `APPSOLINO_AUTOMATION_CLIENT_ID` is available, switch `create-github-app-token@v3` from `app-id` secret to `client-id` var.
+
+## Current blockers
+
+1. **Steward S0 PR** — observation must land before S1 repair agent.
+2. **ISS-GIT-007** — engine merge default-branch fix (parked).
+3. **ISS-UI-001** — PARKED (PR #28).
 
 ## Milestone board
 
 ```text
-AUTO-1/2/3: OPERATIONAL
-AUTO-4: COMPLETE
+G0: COMPLETE
+G1: PASS
+AUTO-1: OPERATIONAL
+AUTO-2: OPERATIONAL
+AUTO-3: OPERATIONAL
+AUTO-4: COMPLETE (pin 71576d953626)
+Steward S0: IN PROGRESS (this mission)
 Mode: CONTINUOUS UPSTREAM MAINTENANCE
-Open absorb: PR #55 (CONFLICT / sensitive)
-Next product: ISS-UI-001 / ISS-GIT-007 after #55 policy path
+ISS-UI-001: PARKED
+ISS-GIT-007: PARKED
 ```
+
+## Next authorised mission
+
+1. Merge Steward S0; confirm fixture-replay + minute-17 schedule on main.
+2. After S0 acceptance: authorise **S1** repair-agent missions (still no Host D deploy from agent).
+3. Product backlog: ISS-UI-001 / ISS-GIT-007 when owner redirects.

@@ -1,0 +1,12 @@
+{
+  "incident": true,
+  "failureClass": "generated-file-conflict",
+  "fingerprintPayload": {
+    "workflow": "auto1",
+    "phase": "auto1-merge",
+    "class": "generated-file-conflict",
+    "error": "generated-file-conflict",
+    "component": "generated-baseline",
+    "terminal": "CONFLICT"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "workflowName": "Upstream AUTO-3 Deploy",
+  "workflowFamily": "auto3",
+  "runId": "30705088925",
+  "attempt": 1,
+  "failureClass": "version-gate-drift",
+  "phase": "trusted-host-d-deploy",
+  "component": "installer",
+  "errorMessage": "package-version-mismatch",
+  "logText": "install-staging-release.sh version mismatch: got 0.74.0-beta.6 expected 0.74.0-beta.5 AUTO3_APPLICATION_VERSION",
+  "terminalStatus": "BLOCKED",
+  "sourceSha": "16f24ed3b47321cc1b5aa693b2fac7e13a00b379",
+  "forceIncident": true
+}
