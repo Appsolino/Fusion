@@ -21,6 +21,9 @@ const agentHeartbeatMobileScreenshotPath = process.env.FUSION_AGENT_HEARTBEAT_MO
 const agentHeartbeatDesktopScreenshotPath = process.env.FUSION_AGENT_HEARTBEAT_DESKTOP_SCREENSHOT;
 const gitManagerBeforeMobileScreenshotPath = process.env.FUSION_GIT_MANAGER_BEFORE_MOBILE_SCREENSHOT;
 const gitManagerAfterMobileScreenshotPath = process.env.FUSION_GIT_MANAGER_AFTER_MOBILE_SCREENSHOT;
+const gitHubImportBeforeMobileScreenshotPath = process.env.FUSION_GITHUB_IMPORT_BEFORE_MOBILE_SCREENSHOT;
+const gitHubImportAfterMobileScreenshotPath = process.env.FUSION_GITHUB_IMPORT_AFTER_MOBILE_SCREENSHOT;
+const gitHubImportAfterShortScreenshotPath = process.env.FUSION_GITHUB_IMPORT_AFTER_SHORT_SCREENSHOT;
 
 function log(message) {
   console.log(`[dashboard-browser-smoke] ${message}`);
@@ -255,6 +258,33 @@ export function createSmokeHtml() {
       </section>
     </section>`;
 
+  /*
+  FNXC:GitHubImport 2026-08-02-02:45:
+  FN-8722 mirrors the standalone FloatingWindow chain rather than a generic overlay so Chromium
+  measures the inherited resize-handle gutter on the real sheet host. The fixture includes the
+  header/close control, controls, populated list, pagination, and footer plus embedded and detail
+  controls; all states must remain horizontally contained without changing their own geometry.
+  */
+  const gitHubImportFixtures = `
+    <section class="floating-window floating-window--github-import" data-smoke="github-import-standalone" style="width: min(1200px, calc(100vw - var(--space-2xl))); height: min(720px, calc(100dvh - var(--space-2xl)));">
+      <div class="floating-window__body" data-smoke="github-import-standalone-body">
+        <section class="modal modal-lg github-import-modal" data-smoke="github-import-standalone-modal">
+          <header class="modal-header github-import-modal__header" data-smoke="github-import-standalone-header"><div><h3>Import from GitHub</h3><p class="github-import-modal__subtitle">Load issues or pull requests from the selected repository.</p></div><button class="modal-close" data-smoke="github-import-standalone-close" type="button" aria-label="Close import modal">×</button></header>
+          <div class="modal-body github-import-modal__body" data-smoke="github-import-standalone-content">
+            <div class="github-import-controls" data-smoke="github-import-standalone-controls"><div class="github-import-provider"><button class="github-import-tab active" type="button">GitHub</button></div><div class="github-import-tabs"><button class="github-import-tab active" type="button">Issues</button><button class="github-import-tab" type="button">Pull requests</button></div><div class="github-import-toolbar"><div class="github-import-toolbar__zone github-import-toolbar__zone--remote"><span class="github-import-remote-pill"><span class="github-import-remote-pill__name">origin</span><span class="github-import-remote-pill__repo">owner/repository</span></span></div><div class="github-import-toolbar__zone github-import-toolbar__zone--filter"><button class="btn github-import-filter-trigger" type="button">Filter</button></div><div class="github-import-toolbar__zone github-import-toolbar__zone--action"><button class="btn btn-primary github-import-load-button" type="button">Load</button></div></div></div>
+            <section class="github-import-list-pane" data-smoke="github-import-standalone-list"><header class="github-import-pane-header"><h4>Issues</h4><button class="modal-close" type="button" aria-label="List action">×</button></header><div class="github-import-pane-content"><div class="issues-list"><button class="issue-item" type="button"><span class="issue-main"><span class="issue-heading-row"><span class="issue-number">#8722</span><span class="issue-title">A deliberately long populated GitHub issue title that must stay inside the import sheet</span></span></span></button><button class="issue-item imported" type="button">Already imported issue</button></div></div></section>
+            <nav class="github-import-pagination" data-smoke="github-import-standalone-pagination"><button class="btn" type="button">Previous</button><button class="btn" type="button">Next</button></nav>
+          </div>
+          <footer class="modal-actions github-import-modal__actions" data-smoke="github-import-standalone-footer"><button class="btn" type="button">Cancel</button><button class="btn btn-primary" type="button">Import as task</button></footer>
+        </section>
+      </div>
+      <i class="floating-window__resize-handle floating-window__resize-handle--se" aria-hidden="true"></i>
+    </section>
+    <section class="github-import-embedded" data-smoke="github-import-embedded-host" style="width: min(320px, calc(100vw - var(--space-lg))); height: 420px;">
+      <section class="modal modal-lg github-import-modal github-import-modal--embedded" data-smoke="github-import-embedded-modal"><header class="github-import-modal__embedded-header" data-smoke="github-import-embedded-header"><h2 class="github-import-modal__embedded-title">Import Tasks</h2></header><div class="github-import-modal__body" data-smoke="github-import-embedded-content"><div class="github-import-state github-import-state--empty">Embedded empty state</div></div></section>
+    </section>
+    <section class="floating-window floating-window--github-import-detail" data-smoke="github-import-detail" style="width: min(760px, calc(100vw - var(--space-2xl))); height: min(680px, calc(100dvh - var(--space-2xl)));"><div class="floating-window__body" data-smoke="github-import-detail-body"><section class="github-import-detail-panel" data-smoke="github-import-detail-panel"><header class="github-import-pane-header"><h4>Issue detail</h4><button class="modal-close" data-smoke="github-import-detail-close" type="button" aria-label="Close detail">×</button></header><div class="github-import-pane-content">Detail control fixture</div></section></div><i class="floating-window__resize-handle floating-window__resize-handle--se" aria-hidden="true"></i></section>`;
+
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -266,6 +296,7 @@ export function createSmokeHtml() {
   <body data-theme="dark">
     <div id="root">
       ${gitManagerFixtures}
+      ${gitHubImportFixtures}
       <div class="header-wrapper">
         <header class="header" data-smoke="header">
           <div class="header-left">
@@ -1276,6 +1307,53 @@ async function runSmokeChecks(page, pageUrl) {
         && gitManagerLayout.standalone.resizeHandleDisplay !== "none"
         && gitManagerLayout.embedded.modal.width < width;
     assertSmokeResult(`Git Manager standalone and embedded geometry at ${width}px`, passed, JSON.stringify(gitManagerLayout));
+  }
+
+  /*
+  FNXC:GitHubImport 2026-08-02-02:45:
+  FN-8722 requires both branches of FloatingWindow's width-or-height sheet predicate. Positive
+  assertions cover the real standalone regions at phone, wide-short, and desktop-short viewports,
+  while non-short 768px/desktop retain the desktop gutter and visible resize handle. Embedded and
+  detail fixtures are controls: they remain contained but receive no standalone-only reset.
+  */
+  for (const [width, height] of [[390, 844], [768, 480], [1024, 480], [768, 844], [1024, 844]]) {
+    const isSheet = width < 768 || height <= 480;
+    await page.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: width < 768 ? 2 : 1, mobile: width < 768 });
+    await evaluate(page, "document.fonts ? document.fonts.ready.then(() => true) : true");
+    const layout = await evaluate(page, `(() => {
+      const viewportWidth = window.innerWidth;
+      const readRect = (selector) => { const rect = document.querySelector(selector).getBoundingClientRect(); return { left: rect.left, right: rect.right, width: rect.width, top: rect.top, bottom: rect.bottom }; };
+      const standalone = document.querySelector('[data-smoke="github-import-standalone"]');
+      const standaloneBody = document.querySelector('[data-smoke="github-import-standalone-body"]');
+      const embeddedHost = document.querySelector('[data-smoke="github-import-embedded-host"]');
+      const detail = document.querySelector('[data-smoke="github-import-detail"]');
+      return { viewportWidth, documentOverflow: document.documentElement.scrollWidth - viewportWidth, standalone: { host: readRect('[data-smoke="github-import-standalone"]'), body: readRect('[data-smoke="github-import-standalone-body"]'), modal: readRect('[data-smoke="github-import-standalone-modal"]'), header: readRect('[data-smoke="github-import-standalone-header"]'), close: readRect('[data-smoke="github-import-standalone-close"]'), controls: readRect('[data-smoke="github-import-standalone-controls"]'), list: readRect('[data-smoke="github-import-standalone-list"]'), pagination: readRect('[data-smoke="github-import-standalone-pagination"]'), footer: readRect('[data-smoke="github-import-standalone-footer"]'), bodyMarginInlineEnd: getComputedStyle(standaloneBody).marginInlineEnd, overflow: standalone.scrollWidth - standalone.clientWidth, resizeHandleDisplay: getComputedStyle(standalone.querySelector('.floating-window__resize-handle')).display }, embedded: { host: readRect('[data-smoke="github-import-embedded-host"]'), modal: readRect('[data-smoke="github-import-embedded-modal"]'), header: readRect('[data-smoke="github-import-embedded-header"]'), content: readRect('[data-smoke="github-import-embedded-content"]'), overflow: embeddedHost.scrollWidth - embeddedHost.clientWidth }, detail: { host: readRect('[data-smoke="github-import-detail"]'), body: readRect('[data-smoke="github-import-detail-body"]'), panel: readRect('[data-smoke="github-import-detail-panel"]'), close: readRect('[data-smoke="github-import-detail-close"]'), overflow: detail.scrollWidth - detail.clientWidth } };
+    })()`);
+    if (width === 390 && gitHubImportBeforeMobileScreenshotPath) {
+      const preFixLayout = await evaluate(page, `(() => { const body = document.querySelector('[data-smoke="github-import-standalone-body"]'); body.style.marginInlineEnd = 'var(--space-lg)'; const rect = body.getBoundingClientRect(); return { right: rect.right, marginInlineEnd: getComputedStyle(body).marginInlineEnd, viewportWidth: window.innerWidth }; })()`);
+      assertSmokeResult("GitHub Import 390px desktop-gutter reproduction", parseFloat(preFixLayout.marginInlineEnd) > 0 && preFixLayout.right < preFixLayout.viewportWidth - 1, JSON.stringify(preFixLayout));
+      const screenshot = await page.send("Page.captureScreenshot", { format: "png" });
+      await writeFile(gitHubImportBeforeMobileScreenshotPath, Buffer.from(screenshot.data, "base64"));
+      await evaluate(page, "document.querySelector('[data-smoke=\"github-import-standalone-body\"]').style.removeProperty('margin-inline-end')");
+      log(`saved GitHub Import before mobile screenshot to ${gitHubImportBeforeMobileScreenshotPath}`);
+    }
+    if (isSheet && ((width === 390 && gitHubImportAfterMobileScreenshotPath) || (width === 768 && height === 480 && gitHubImportAfterShortScreenshotPath))) {
+      const screenshot = await page.send("Page.captureScreenshot", { format: "png" });
+      const target = width === 390 ? gitHubImportAfterMobileScreenshotPath : gitHubImportAfterShortScreenshotPath;
+      await writeFile(target, Buffer.from(screenshot.data, "base64"));
+      log(`saved GitHub Import sheet screenshot to ${target}`);
+    }
+    const standaloneRects = [layout.standalone.body, layout.standalone.modal, layout.standalone.header, layout.standalone.close, layout.standalone.controls, layout.standalone.list, layout.standalone.pagination, layout.standalone.footer];
+    const embeddedRects = [layout.embedded.modal, layout.embedded.header, layout.embedded.content];
+    const detailRects = [layout.detail.body, layout.detail.panel, layout.detail.close];
+    const standaloneContained = standaloneRects.every((rect) => rect.left >= -1 && rect.right <= width + 1);
+    const embeddedContained = embeddedRects.every((rect) => rect.left >= layout.embedded.host.left - 1 && rect.right <= layout.embedded.host.right + 1);
+    const detailContained = detailRects.every((rect) => rect.left >= -1 && rect.right <= width + 1);
+    const common = layout.documentOverflow <= 1 && layout.standalone.overflow <= 1 && layout.embedded.overflow <= 1 && layout.detail.overflow <= 1 && standaloneContained && embeddedContained && detailContained && layout.standalone.close.right <= layout.standalone.header.right + 1 && layout.detail.close.right <= layout.detail.panel.right + 1;
+    const passed = isSheet
+      ? common && Math.abs(layout.standalone.host.left) <= 1 && Math.abs(layout.standalone.host.right - width) <= 1 && Math.abs(layout.standalone.body.right - width) <= 1 && Math.abs(layout.standalone.modal.right - width) <= 1 && layout.standalone.bodyMarginInlineEnd === "0px" && layout.standalone.resizeHandleDisplay === "none"
+      : common && layout.standalone.host.width < width - 1 && parseFloat(layout.standalone.bodyMarginInlineEnd) > 0 && layout.standalone.resizeHandleDisplay !== "none";
+    assertSmokeResult(`GitHub Import standalone, embedded, and detail geometry at ${width}x${height}`, passed, JSON.stringify(layout));
   }
 
   await page.send("Emulation.setDeviceMetricsOverride", {
