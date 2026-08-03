@@ -34,6 +34,11 @@ function ghJson(args) {
   }
 }
 
+function ghText(args) {
+  const r = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
+  return { ok: r.status === 0, stdout: r.stdout || "", stderr: r.stderr || "" };
+}
+
 /**
  * Schedule / manual reconcile body. Does not require a workflow run id.
  * @param {{
@@ -44,6 +49,7 @@ function ghJson(args) {
  *   listRuns?: () => { ok: boolean, data: any },
  *   listAuto3Dispatch?: () => { ok: boolean, data: any },
  *   downloadEvidence?: typeof downloadAuto3EvidenceArtifact,
+ *   fetchRunLog?: (repo: string, runId: string|number) => string,
  * }} opts
  */
 export function executeLiveReconcile(opts) {
@@ -63,6 +69,10 @@ export function executeLiveReconcile(opts) {
         `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?event=workflow_dispatch&per_page=30`,
       ]),
     downloadEvidence = downloadAuto3EvidenceArtifact,
+    fetchRunLog = (r, runId) => {
+      const logs = ghText(["run", "view", String(runId), "--repo", r, "--log"]);
+      return (logs.stdout || "").slice(0, 200_000);
+    },
   } = opts;
   if (!repo) throw new Error("require --repo");
 
@@ -87,10 +97,22 @@ export function executeLiveReconcile(opts) {
     if (ev) evidenceByRunId[String(r.id)] = ev;
   }
 
+  /** @type {Record<string, string>} */
+  const logsByRunId = {};
+  for (const r of auto2Runs.slice(0, 20)) {
+    if (String(r.status) !== "completed") continue;
+    try {
+      logsByRunId[String(r.id)] = fetchRunLog(repo, r.id);
+    } catch {
+      // Log fetch failures must not crash reconcile; action may stay unknown.
+    }
+  }
+
   const handoffs = buildHandoffsFromRuns({
     auto2Runs,
     auto3Runs: mergedAuto3,
     evidenceByRunId,
+    logsByRunId,
     nowMs,
   });
 

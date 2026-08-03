@@ -86,7 +86,7 @@ export function reconcileRuns(input) {
       }));
     }
 
-    if (isSuccessTerminal(parent) && child && !isSuccessTerminal(child)) {
+    if (isDeployClaim(parent) && child && !isSuccessTerminal(child)) {
       pushUnique(candidates, seenOccurrence, normalizeEvidence({
         workflowName: h.parentWorkflowName || "Upstream AUTO-2 Finalize",
         workflowFamily: "auto2",
@@ -105,7 +105,10 @@ export function reconcileRuns(input) {
       continue;
     }
 
-    if (isSuccessTerminal(parent) && !childRunId) {
+    // Missing child only when AUTO-3 was expected AND a handoff / dispatch proof exists.
+    const expectedChild = h.expectedAuto3Child === true
+      || (h.expectedAuto3Child == null && Boolean(h.handoffId) && isDeployClaim(parent));
+    if (expectedChild && h.handoffId && !childRunId) {
       const claimedMs = Date.parse(String(h.claimedAt || ""));
       if (Number.isFinite(claimedMs) && nowMs - claimedMs >= timeoutMs) {
         pushUnique(candidates, seenOccurrence, normalizeEvidence({
@@ -123,6 +126,21 @@ export function reconcileRuns(input) {
           forceIncident: true,
         }));
       }
+    } else if (h.expectedAuto3Child === null && h.finalizeAction && !childRunId) {
+      // Unknown action with no child → needs-triage, never fabricate missing-child.
+      pushUnique(candidates, seenOccurrence, normalizeEvidence({
+        workflowName: h.parentWorkflowName || "Upstream AUTO-2 Finalize",
+        workflowFamily: "auto2",
+        runId: h.parentRunId,
+        attempt: 1,
+        parentRunId: h.parentRunId,
+        parentTerminal: parent,
+        handoffId: h.handoffId,
+        sourceSha: h.sourceSha,
+        failureClass: FAILURE_CLASS.NEEDS_TRIAGE,
+        errorMessage: `unknown finalize action ${h.finalizeAction}`,
+        forceIncident: true,
+      }));
     }
   }
 
@@ -166,6 +184,12 @@ export function mergeCandidatesIdempotent(a, b) {
 function isSuccessTerminal(t) {
   const s = String(t || "").toUpperCase();
   return s === "DEPLOYED" || s === "IDEMPOTENT_NOOP" || s === "SUCCESS";
+}
+
+/** Parent terminals that claim a deploy / child relationship. */
+function isDeployClaim(t) {
+  const s = String(t || "").toUpperCase();
+  return s === "DEPLOYED" || s === "DEPLOY_FAILED" || s === "ROLLED_BACK" || s === "CRITICAL";
 }
 
 function pushUnique(list, seen, normalized) {

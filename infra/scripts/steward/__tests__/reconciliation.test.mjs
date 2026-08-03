@@ -35,6 +35,8 @@ describe("reconciliation", () => {
         {
           parentRunId: "30800000001",
           parentTerminal: "DEPLOYED",
+          expectedAuto3Child: true,
+          handoffId: "auto2-30800000001-1-aaaaaaaa-bbbb",
           childRunId: null,
           childTerminal: null,
           claimedAt: "2026-08-01T16:00:00Z",
@@ -53,11 +55,57 @@ describe("reconciliation", () => {
         {
           parentRunId: "30800000001",
           parentTerminal: "DEPLOYED",
+          expectedAuto3Child: true,
+          handoffId: "auto2-30800000001-1-aaaaaaaa-bbbb",
           claimedAt: "2026-08-01T16:00:00Z",
         },
       ],
     });
     assert.equal(r.candidateCount, 0);
+  });
+
+  it("ignores approval-required and ignored parents (no AUTO-3 expected)", () => {
+    const r = reconcileRuns({
+      nowMs: Date.parse("2026-08-01T17:00:00Z"),
+      missingChildTimeoutMs: 45 * 60 * 1000,
+      handoffs: [
+        {
+          parentRunId: "1",
+          parentTerminal: "APPROVAL_REQUIRED",
+          finalizeAction: "approval-required",
+          expectedAuto3Child: false,
+          childRunId: null,
+          claimedAt: "2026-08-01T16:00:00Z",
+        },
+        {
+          parentRunId: "2",
+          parentTerminal: "IGNORED",
+          finalizeAction: "ignored",
+          expectedAuto3Child: false,
+          childRunId: null,
+          claimedAt: "2026-08-01T16:00:00Z",
+        },
+      ],
+    });
+    assert.equal(r.candidateCount, 0);
+  });
+
+  it("unknown finalize action becomes needs-triage not missing-child", () => {
+    const r = reconcileRuns({
+      nowMs: Date.parse("2026-08-01T17:00:00Z"),
+      handoffs: [
+        {
+          parentRunId: "9",
+          parentTerminal: "UNKNOWN",
+          finalizeAction: "future-action-xyz",
+          expectedAuto3Child: null,
+          childRunId: null,
+          claimedAt: "2026-08-01T16:00:00Z",
+        },
+      ],
+    });
+    assert.equal(r.candidateCount, 1);
+    assert.equal(r.candidates[0].failureClass, "needs-triage");
   });
 
   it("successful recent runs create no incidents", () => {

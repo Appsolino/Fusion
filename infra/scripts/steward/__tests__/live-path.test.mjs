@@ -155,6 +155,15 @@ describe("live-shaped handoff reconciliation", () => {
           updated_at: "2026-08-01T12:01:00Z",
           head_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         },
+        {
+          id: 30800000099,
+          name: "Upstream AUTO-2 Finalize",
+          status: "completed",
+          conclusion: "success",
+          created_at: "2026-08-01T10:00:00Z",
+          updated_at: "2026-08-01T10:01:00Z",
+          head_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
       ],
       auto3Runs: [
         {
@@ -173,7 +182,9 @@ describe("live-shaped handoff reconciliation", () => {
         "30705088925": { terminal: "BLOCKED", sourceSha: "16f24ed3b47321cc1b5aa693b2fac7e13a00b379" },
       },
       logsByRunId: {
-        "30705071215": "handoff=auto2-30705071215-1-16f24ed3b473-abcd run=30705088925",
+        "30705071215": "\"action\": \"auto-merged-deployed\"\nhandoff=auto2-30705071215-1-16f24ed3b473-abcd run=30705088925",
+        "30800000001": "\"action\": \"ignored\"\n\"reason\": \"non-automation / non-proof head ref\"",
+        "30800000099": "\"action\": \"auto-merged-deployed\"\n\"handoffId\": \"auto2-30800000099-1-bbbbbbbb-cccc\"",
       },
     });
 
@@ -181,6 +192,11 @@ describe("live-shaped handoff reconciliation", () => {
     const disagree = handoffs.find((h) => String(h.parentRunId) === "30705071215");
     assert.ok(disagree);
     assert.equal(disagree.childTerminal, "BLOCKED");
+    assert.equal(disagree.expectedAuto3Child, true);
+
+    const ignored = handoffs.find((h) => String(h.parentRunId) === "30800000001");
+    assert.equal(ignored.expectedAuto3Child, false);
+    assert.equal(ignored.parentTerminal, "IGNORED");
 
     const r = reconcileRuns({
       nowMs: Date.parse("2026-08-01T16:00:00Z"),
@@ -189,6 +205,7 @@ describe("live-shaped handoff reconciliation", () => {
     });
     assert.ok(r.candidates.some((c) => c.failureClass === "parent-child-disagreement"));
     assert.ok(r.candidates.some((c) => c.failureClass === "missing-child-timeout"));
+    assert.ok(!r.candidates.some((c) => String(c.instance?.parentRunId) === "30800000001"));
   });
 });
 
