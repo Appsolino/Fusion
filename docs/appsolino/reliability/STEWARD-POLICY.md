@@ -13,7 +13,7 @@ Detect, fingerprint, and record AUTO pipeline failures as durable GitHub Issues 
 | Path | Mechanism |
 | --- | --- |
 | Fast | `workflow_run` on named AUTO-1/2/3 workflows |
-| Authoritative recovery | Hourly schedule at minute **17** (`17 * * * *`) |
+| Authoritative recovery | Hourly schedule at minute **37** (`37 * * * *`) |
 
 Do not build long `workflow_run` chains beyond steward. Later phases resume via explicit dispatch + durable incident state.
 

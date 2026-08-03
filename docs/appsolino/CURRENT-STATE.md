@@ -19,7 +19,7 @@
 ## Owner priority (2026-08-03)
 
 ```text
-NOW:     Land S0 expected-state classification repair → re-reconcile → :17 → then S1A decision
+NOW:     Land cron :37 re-registration → prove schedule → then S1A decision
 HOLD:    S1A Expert Advisory Mode
 DONE:    PR #66 fingerprint dedup; App Issues write; observe+upsert green
 DONE:    AUTO-4 COMPLETE (pin 71576d953626)
@@ -32,11 +32,11 @@ NOTE:    Engine stays paused. Host P untouched.
 
 | Item | Value |
 | --- | --- |
-| Status | **ENABLED** — observe/upsert/dedup green; **expected-state classifier repair landing** |
-| Issue #67 | **FALSE POSITIVE** — skipped AUTO-2 validate on ineligible branch (close after repair merge) |
-| Issue #64 | **FALSE POSITIVE (classifier)** — `ignored` / `approval-required` mapped to missing-child (close after repair) |
+| Status | **ENABLED** — observe/upsert/dedup green; **expected-state classifier repaired (PR #70)** |
+| Issue #67 | **FALSE POSITIVE** — skipped AUTO-2 validate on ineligible branch (classifier fixed; close after clean reconcile) |
+| Issue #64 | **FALSE POSITIVE (classifier)** — `ignored` / `approval-required` mapped to missing-child (classifier fixed; close after clean reconcile) |
 | Issue #65 | Closed duplicate of #64 |
-| Scheduled `:17` | Still unproven on current main lineage |
+| Scheduled `:37` | Cron re-registration pending merge; unproven on current main lineage |
 
 ## AUTO-1 / AUTO-2 / AUTO-3 / Steward
 
