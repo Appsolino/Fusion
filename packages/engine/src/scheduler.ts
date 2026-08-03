@@ -1103,6 +1103,42 @@ export class Scheduler {
         }
       }
 
+      /*
+      FNXC:SchedulerDispatchOscillation 2026-08-02-17:20:
+      The settle-window ledger (`recentEngineTodoRequeues`) and the dispatch-oscillation reset are
+      CONSUMED SYNCHRONOUSLY, so they must stay in the emitter tick with the rest of the synchronous
+      prologue — reading the sync, emitter-lane-aware `parked`, never the async `resolvedParked`.
+      FN-8656 moved these two arms behind `await resolveTaskParkedColumns` while converting lane
+      lookups; that broke the ordering against the synchronous `task:deleted`/`task:updated`
+      handlers, which also mutate `recentEngineTodoRequeues`/oscillation state. Concretely: a card
+      requeued to hold then deleted in the same tick had its settle-window SET run a microtask AFTER
+      the delete's synchronous CLEAR, so the guard survived deletion and the card never re-dispatched
+      (todo-inprogress-flapping.test.ts "clears the settle-window guard when the task is deleted" and
+      "resets dispatch oscillation state on forward transition to in-review"). This obeys FN-8656's
+      own stated rule: convert to the async resolver ONLY where the answer is consumed asynchronously.
+      Production emitters carry lanes, so `parked` resolves renamed hold/wip/review columns here too;
+      the lane-less SQLite polling emitters retain the legacy fallback exactly as before.
+      */
+      if (from === parked.wip && to === parked.hold) {
+        if (source === "engine") {
+          this.recentEngineTodoRequeues.set(task.id, task.columnMovedAt ?? new Date().toISOString());
+        } else {
+          this.recentEngineTodoRequeues.delete(task.id);
+        }
+      } else if (to === parked.review || parked.terminal.has(to)) {
+        this.recentEngineTodoRequeues.delete(task.id);
+        if (task.dispatchStormCount != null || task.lastDispatchAt != null || task.executeRequeueLoopCount != null || task.executeRequeueLoopSignature != null) {
+          void this.store.updateTask(task.id, {
+            dispatchStormCount: null,
+            lastDispatchAt: null,
+            executeRequeueLoopCount: null,
+            executeRequeueLoopSignature: null,
+          }).catch((error) => {
+            schedulerLog.warn(`Failed to reset dispatch oscillation state for ${task.id} on move to ${to}: ${error instanceof Error ? error.message : String(error)}`);
+          });
+        }
+      }
+
       const resolvedParked = mergeParkedColumns(await resolveTaskParkedColumns(this.store, task.id), lanes);
 
       // FN-3895/FN-3924: complement periodic stale-blockedBy self-healing with immediate
@@ -1178,26 +1214,6 @@ export class Scheduler {
           }
         } catch (error) {
           schedulerLog.error(`Failed event-driven blocker reconciliation for ${task.id}`, error);
-        }
-      }
-
-      if (from === resolvedParked.wip && to === resolvedParked.hold) {
-        if (source === "engine") {
-          this.recentEngineTodoRequeues.set(task.id, task.columnMovedAt ?? new Date().toISOString());
-        } else {
-          this.recentEngineTodoRequeues.delete(task.id);
-        }
-      } else if (to === resolvedParked.review || resolvedParked.terminal.has(to)) {
-        this.recentEngineTodoRequeues.delete(task.id);
-        if (task.dispatchStormCount != null || task.lastDispatchAt != null || task.executeRequeueLoopCount != null || task.executeRequeueLoopSignature != null) {
-          void this.store.updateTask(task.id, {
-            dispatchStormCount: null,
-            lastDispatchAt: null,
-            executeRequeueLoopCount: null,
-            executeRequeueLoopSignature: null,
-          }).catch((error) => {
-            schedulerLog.warn(`Failed to reset dispatch oscillation state for ${task.id} on move to ${to}: ${error instanceof Error ? error.message : String(error)}`);
-          });
         }
       }
 
