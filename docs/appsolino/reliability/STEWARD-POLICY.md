@@ -106,6 +106,8 @@ Parse the AUTO-1 JSON / `outcome=` result **before** generic log signatures. Nev
 
 Regression fixture: `auto1-upstream-merge-conflict-30805433281` (correlation-noise must not override `outcome=conflict`).
 
+Hourly reconcile re-evaluates recent completed AUTO-1 runs from structured outcome (not handoff-only), so a misclassified conflict can be recovered without re-running AUTO-1.
+
 ## Agent runtime contract (defined for S1A/S1B; not executed while S0-only)
 
 ```text
