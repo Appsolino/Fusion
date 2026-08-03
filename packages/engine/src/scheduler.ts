@@ -1000,7 +1000,12 @@ export class Scheduler {
     this.store.on("task:created", (task) => {
       this.lastAutoClaimFingerprint.set(task.id, computeAutoClaimFingerprint(task));
       this.options.snapshotManager?.invalidate("task:created");
-      schedulerLog.log("Task created — triggering scheduling");
+      /*
+      FNXC:EngineDiagnostics 2026-08-03-05:54:
+      Event-driven schedule triggers fire on every create/done; the card transition is already
+      visible on the board and via task:moved logs. Keep the trigger line debug-only.
+      */
+      schedulerLog.debug("Task created — triggering scheduling");
       this.schedule();
     });
 
@@ -1221,7 +1226,11 @@ export class Scheduler {
       // trigger scheduling immediately so waiting tasks can start without waiting
       // for the next poll interval (up to 15 seconds).
       if (resolvedParked.terminal.has(to) || to === resolvedParked.hold) {
-        schedulerLog.log(`Task moved to ${to} — triggering scheduling`);
+        /*
+        FNXC:EngineDiagnostics 2026-08-03-05:54:
+        Duplicate of the column-move lifecycle line; schedule side-effect is not operator-facing.
+        */
+        schedulerLog.debug(`Task moved to ${to} — triggering scheduling`);
         this.schedule();
       }
     });
@@ -3092,7 +3101,12 @@ export class Scheduler {
 
       const feature = await this.resolveMissionFeatureForTask(missionStore, task);
       if (!feature) {
-        schedulerLog.log(`No linked feature found for task ${taskId} (sliceId=${task.sliceId ?? "none"}) — skipping mission status update`);
+        /*
+        FNXC:EngineDiagnostics 2026-08-03-05:54:
+        Most tasks are not mission-linked. Skipping mission status is the expected steady-state path,
+        not an operator-visible event — keep it off the default TUI unless FUSION_DEBUG=scheduler.
+        */
+        schedulerLog.debug(`No linked feature found for task ${taskId} (sliceId=${task.sliceId ?? "none"}) — skipping mission status update`);
         return;
       }
 

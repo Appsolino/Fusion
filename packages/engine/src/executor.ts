@@ -9292,7 +9292,12 @@ export class TaskExecutor {
         await this.captureBaseCommitSha(task, acquisition.worktreePath, audit, { isResume: false });
       }
       this.options.onStart?.(task, acquisition.worktreePath);
-      executorLog.log(`${task.id}: workflow node '${nodeId}' acquired worktree at ${acquisition.worktreePath}`);
+      /*
+      FNXC:EngineDiagnostics 2026-08-03-05:54:
+      Per-node worktree acquisition is expected graph plumbing once the task has a worktree;
+      Worktree created / Starting lines remain the operator-visible lifecycle events.
+      */
+      executorLog.debug(`${task.id}: workflow node '${nodeId}' acquired worktree at ${acquisition.worktreePath}`);
       return await this.store.getTask(task.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -9871,9 +9876,8 @@ export class TaskExecutor {
     } else if (mode === "prompt") {
       const injected = await this.buildInjectedRuntimeEnv(live.id, worktreePath, executionTarget.branch ?? undefined);
       nodeEnv = injected.env;
-      executorLog.log(
-        `${live.id}: graph node '${node.id}' runtime env injected (${injected.pathEntryCount} PATH entries, ${injected.injectedKeyCount} env keys)`,
-      );
+      // FNXC:EngineDiagnostics 2026-08-03-05:54: per-node PATH/key injection is plumbing, not a lifecycle event.
+      executorLog.debug(`${live.id}: graph node '${node.id}' runtime env injected (${injected.pathEntryCount} PATH entries, ${injected.injectedKeyCount} env keys)`);
     }
 
     // (U3) Genuinely-unattended signal. `unattended` is an explicit opt-in
@@ -13367,9 +13371,8 @@ export class TaskExecutor {
 
       const injected = await this.buildInjectedRuntimeEnv(task.id, worktreePath, acquisition.branch ?? undefined);
       taskEnv = injected.env;
-      executorLog.log(
-        `${task.id}: executor runtime env injected (${injected.pathEntryCount} PATH entries, ${injected.injectedKeyCount} env keys)`,
-      );
+      // FNXC:EngineDiagnostics 2026-08-03-05:54: env injection counts are session setup, not operator state changes.
+      executorLog.debug(`${task.id}: executor runtime env injected (${injected.pathEntryCount} PATH entries, ${injected.injectedKeyCount} env keys)`);
 
       this.options.onStart?.(task, worktreePath);
 
@@ -18383,7 +18386,11 @@ ${scopeGuard}
       }
 
       await this.store.updateTask(task.id, { baseCommitSha });
-      executorLog.log(`${task.id}: captured baseCommitSha ${baseCommitSha.slice(0, 7)}`);
+      /*
+      FNXC:EngineDiagnostics 2026-08-03-05:54:
+      Base-SHA capture is per-task setup bookkeeping (also in run-audit). Worktree created stays info.
+      */
+      executorLog.debug(`${task.id}: captured baseCommitSha ${baseCommitSha.slice(0, 7)}`);
       await audit.git({ type: "commit:create", target: baseCommitSha, metadata: { purpose: "base", preserved: false } });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -21608,9 +21615,8 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
       const ir = await resolveWorkflowIrForTask(this.store, taskId);
       const stepSource = this.resolveTaskStepSource(ir);
       if (stepSource) {
-        executorLog.log(
-          `${taskId}: reconcile step source governed by parse-steps(artifact=${stepSource.artifact}, parser=${stepSource.parser})`,
-        );
+        // FNXC:EngineDiagnostics 2026-08-03-05:54: parse-steps source read-through is diagnostic only.
+        executorLog.debug(`${taskId}: reconcile step source governed by parse-steps(artifact=${stepSource.artifact}, parser=${stepSource.parser})`);
       }
     } catch {
       // Read-through is diagnostic only; never block reconcile on it.
