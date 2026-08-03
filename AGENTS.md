@@ -94,10 +94,11 @@ A linter (`pnpm check:changesets`) validates this format and runs in the PR-chec
 When a human operator does release, use only:
 
 ```bash
-pnpm release --yes
+pnpm release
 ```
 
-`scripts/release.mjs` is the source of truth. Do not substitute with manual `changeset version`, `pnpm publish`, or git tags.
+Confirm interactively when prompted. `scripts/release.mjs` is the source of truth. Do not substitute with manual `changeset version`, `pnpm publish`, or git tags. There is no `--yes` skip.
+
 
 ### Package Structure
 
