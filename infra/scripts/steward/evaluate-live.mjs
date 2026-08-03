@@ -14,6 +14,11 @@ import {
   parseAuto2FinalizeEvidence,
   expectedAuto3ChildForAction,
 } from "./auto2-action-semantics.mjs";
+import {
+  isAuto1Workflow,
+  normalizeInputFromAuto1Result,
+  parseAuto1ResultEvidence,
+} from "./auto1-outcome-semantics.mjs";
 
 /**
  * Compare workflow conclusion, marker, evidence terminal, SHAs, release ids.
@@ -41,6 +46,20 @@ import {
 export function evaluateLiveObservation(input) {
   const logText = input.logText || "";
   const finalize = parseAuto2FinalizeEvidence(logText);
+
+  // Authoritative AUTO-1 structured result precedes AUTO-2/log signatures.
+  if (isAuto1Workflow(input.workflowName, input.workflowFamily)) {
+    const auto1 = parseAuto1ResultEvidence(logText);
+    const mapped = normalizeInputFromAuto1Result(auto1, {
+      workflowName: input.workflowName,
+      runId: input.runId,
+      attempt: input.attempt || 1,
+      conclusion: input.conclusion,
+      logText,
+      sourceSha: input.expectedSourceSha,
+    });
+    if (mapped) return normalizeEvidence(mapped);
+  }
 
   // Expected AUTO-2 control-flow: skipped / cancelled validation must not alert.
   if (isExpectedNonIncidentConclusion(input.conclusion)) {

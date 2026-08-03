@@ -68,6 +68,8 @@ export const FAILURE_CLASS = Object.freeze({
   TERMINAL_MARKER_PARSE: "terminal-marker-parse",
   VERSION_GATE_DRIFT: "version-gate-drift",
   GENERATED_FILE_CONFLICT: "generated-file-conflict",
+  /** AUTO-1 structured outcome=conflict (authoritative sync result). */
+  UPSTREAM_MERGE_CONFLICT: "upstream-merge-conflict",
   PARENT_CHILD_DISAGREEMENT: "parent-child-disagreement",
   TERMINAL_EVIDENCE_DISAGREEMENT: "terminal-evidence-disagreement",
   MISSING_CHILD_TIMEOUT: "missing-child-timeout",

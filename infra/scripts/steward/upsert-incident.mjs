@@ -96,6 +96,21 @@ export function buildNewIssueContent(normalized) {
   if (!fp) throw new Error("cannot build issue without fingerprint");
   const marker = fingerprintMarkerHtml(fp);
   const title = `[steward] ${normalized.failureClass} · ${normalized.workflowFamily}/${normalized.phase}`;
+  const auto1 = normalized.instance?.auto1Result || {};
+  const conflictSection = normalized.failureClass === "upstream-merge-conflict"
+    ? [
+      "",
+      "### AUTO-1 conflict",
+      "",
+      `| Upstream SHA | \`${escapeMarkdown(auto1.upstreamSha || "")}\` |`,
+      `| Sync PR | ${auto1.prUrl ? escapeMarkdown(auto1.prUrl) : ""} |`,
+      `| Conflicted files | ${(auto1.conflictedFiles || []).map((f) => `\`${escapeMarkdown(f)}\``).join(", ")} |`,
+      `| Workflows / migrations / lockfile | ${auto1.touchesWorkflows}/${auto1.touchesMigrations}/${auto1.touchesLockfile} |`,
+      `| mutatedMain | \`${auto1.mutatedMain === false ? "false" : escapeMarkdown(auto1.mutatedMain)}\` |`,
+      `| deployedHostD | \`${auto1.deployedHostD === false ? "false" : escapeMarkdown(auto1.deployedHostD)}\` |`,
+      "",
+    ]
+    : [];
   const body = [
     marker,
     "",
@@ -110,7 +125,7 @@ export function buildNewIssueContent(normalized) {
     `| Component | ${escapeMarkdown(normalized.component)} |`,
     `| Terminal | ${escapeMarkdown(normalized.terminalStatus)} |`,
     `| Error signature | ${escapeMarkdown(normalized.errorSignature)} |`,
-    "",
+    ...conflictSection,
     "### Occurrences",
     "",
     formatOccurrenceBlock(normalized),
@@ -163,6 +178,17 @@ export function formatOccurrenceBlock(normalized) {
     `- recordedUtc: \`${escapeMarkdown(i.recordedUtc)}\``,
     `- parentTerminal: \`${escapeMarkdown(i.parentTerminal)}\``,
     `- childTerminal: \`${escapeMarkdown(i.childTerminal)}\``,
+  ];
+  const a = i.auto1Result && typeof i.auto1Result === "object" ? i.auto1Result : null;
+  if (a && (a.outcome || a.prUrl || a.upstreamSha || (a.conflictedFiles || []).length)) {
+    lines.push(`- auto1.outcome: \`${escapeMarkdown(a.outcome)}\``);
+    lines.push(`- auto1.upstreamSha: \`${escapeMarkdown(a.upstreamSha)}\``);
+    lines.push(`- auto1.prUrl: \`${escapeMarkdown(a.prUrl)}\``);
+    lines.push(`- auto1.conflictedFiles: \`${escapeMarkdown((a.conflictedFiles || []).join(", "))}\``);
+    lines.push(`- auto1.mutatedMain: \`${a.mutatedMain === false ? "false" : escapeMarkdown(a.mutatedMain)}\``);
+    lines.push(`- auto1.deployedHostD: \`${a.deployedHostD === false ? "false" : escapeMarkdown(a.deployedHostD)}\``);
+  }
+  lines.push(
     "",
     "Log excerpt (escaped, untrusted):",
     "",
@@ -171,7 +197,7 @@ export function formatOccurrenceBlock(normalized) {
     "```",
     "",
     `</details>`,
-  ];
+  );
   return lines.join("\n");
 }
 
