@@ -781,6 +781,21 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   const [isRefineMenuOpen, setIsRefineMenuOpen] = useState(false);
   const [mobileWorkspaceTab, setMobileWorkspaceTab] = useState<"question" | "plan">("question");
   /*
+  FNXC:PlanningMode 2026-08-03-09:21:
+  Mobile interviews earn a reversible Plan preview shortcut only after five actual completed
+  question-and-response pairs. Reasoning-only, malformed, and blank response records never
+  advance the threshold; Review plan only selects the already-mounted plan tab, so it neither
+  submits nor clears the operator's current answer and Questions can restore that same form.
+  */
+  const answeredQuestionCount = useMemo(() => conversationHistory.filter((entry) => (
+    typeof entry.question?.id === "string"
+    && entry.question.id.trim().length > 0
+    && entry.response !== null
+    && typeof entry.response === "object"
+    && !Array.isArray(entry.response)
+    && Object.keys(entry.response).length > 0
+  )).length, [conversationHistory]);
+  /*
   FNXC:PlanningMode 2026-07-20-21:50:
   Refine accepts one freeform instruction instead of generated category choices. The instruction
   guides both the regenerated plan and its next questions, resets when canceled, and must contain
@@ -4110,6 +4125,8 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
                       ? conversationHistory.find((entry) => entry.question?.id === editingQuestionId)?.response
                       : undefined}
                     onSubmit={handleSubmitResponse}
+                    showMobilePlanReview={isMobile && answeredQuestionCount >= 5}
+                    onReviewPlan={() => setMobileWorkspaceTab("plan")}
                   />
                 </section>
               )}
@@ -4326,12 +4343,16 @@ interface QuestionFormProps {
   question: PlanningQuestion;
   initialResponse?: QuestionResponse;
   onSubmit: (responses: QuestionResponse) => void;
+  /** Enables the parent-owned mobile Plan preview transition after five completed answers. */
+  showMobilePlanReview?: boolean;
+  /** Changes only the parent-owned workspace tab; it must not submit this form. */
+  onReviewPlan?: () => void;
   projectId?: string;
 }
 
 // FNXC:VoiceInput 2026-07-25-19:20: Export the real interview surface for dictation
 // contract tests instead of substituting a fixture that could drift from this textarea.
-export function QuestionForm({ question: rawQuestion, initialResponse, onSubmit, projectId }: QuestionFormProps) {
+export function QuestionForm({ question: rawQuestion, initialResponse, onSubmit, showMobilePlanReview = false, onReviewPlan, projectId }: QuestionFormProps) {
   const { t } = useTranslation("app");
   const question = normalizeQuestionOptions(rawQuestion);
   const questionOptions = question.options ?? [];
@@ -4680,9 +4701,16 @@ export function QuestionForm({ question: rawQuestion, initialResponse, onSubmit,
           onClick={handleSubmit}
           disabled={!isValid()}
         >
-          {t("planning.nextQuestion", "Next")}
+          {showMobilePlanReview
+            ? t("planning.nextQuestionAction", "Next question")
+            : t("planning.nextQuestion", "Next")}
           <ArrowRight size={16} className="icon-ml-4" />
         </button>
+        {showMobilePlanReview && (
+          <button className="btn" type="button" onClick={onReviewPlan}>
+            {t("planning.reviewPlan", "Review plan")}
+          </button>
+        )}
       </div>
     </div>
   );
