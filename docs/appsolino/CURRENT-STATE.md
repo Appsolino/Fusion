@@ -2,11 +2,11 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-03T07:45:00Z
+**Last updated UTC:** 2026-08-03T08:05:00Z
 
 | Field | Value |
 | --- | --- |
-| Current `main` SHA | `1781538cc21ac54e99b476c850267de4c66eef97` (PR #59 Steward S0 merge) |
+| Current `main` SHA | `da3d6574927d04e2dafa024d79f95b1ff0439381` (PR #61 docs: S0 ENABLED / S1A HOLD) |
 | Active Host D release | `auto3-0.74.0-beta.6-16f24ed3b473` |
 | Source SHA | `16f24ed3b47321cc1b5aa693b2fac7e13a00b379` (PR #55 absorb) |
 | Previous rollback release | `auto3-0.74.0-beta.5-5f1b923bd815` |
@@ -19,14 +19,14 @@
 ## Owner priority (2026-08-03)
 
 ```text
-NOW:     Fix Steward S0 scheduled reconcile (minute-17) — S0 acceptance gap
-HOLD:    S1A Expert Advisory Mode (do not authorise until reconcile PASS)
+NOW:     Land Steward S0 reconcile import-side-effect fix → prove fixture + manual reconcile + :17
+HOLD:    S1A Expert Advisory Mode until schedule reconcile PASS on main
+DONE:    PR #61 docs ledger (S0 ENABLED; schedule red; S1A hold)
 DONE:    PR #59 Steward S0 observation merged + enabled on main
 DONE:    Fixture replay 30732734948 PASS (upsert skipped; zero issues)
-DONE:    PR #55 sensitive absorb + Host D beta.6 deploy; PR #58 marker/version fixes
 DONE:    AUTO-4 COMPLETE (pin 71576d953626)
-PARKED:  ISS-UI-001 / PR #28 — product backlog after steward reconcile green
-PARKED:  ISS-GIT-007 — unless owner redirects
+PARKED:  ISS-UI-001 / PR #28
+PARKED:  ISS-GIT-007
 NOTE:    Engine stays paused. Host P untouched. Do not re-merge PR #47 or #59.
 ```
 
@@ -36,13 +36,13 @@ NOTE:    Engine stays paused. Host P untouched. Do not re-merge PR #47 or #59.
 | --- | --- |
 | Status | **ENABLED** on `main` (observation / fingerprint / issues only) |
 | PR #59 | Merged — approved head `8a3743c7509e6ce167a37aabf439ca4dd58b2203` |
-| Merge SHA | `1781538cc21ac54e99b476c850267de4c66eef97` |
-| Fixture replay | [30732734948](https://github.com/Appsolino/Fusion/actions/runs/30732734948) → **PASS** (observe success; upsert skipped; zero fixture issues) |
-| Fast path `workflow_run` | Running; successful observes observed (upsert skipped when no candidates) |
-| Scheduled reconcile (`17 * * * *`) | **FAILING** — every post-merge schedule run fails in observe; upsert skipped |
-| Latest schedule failure | [30782878193](https://github.com/Appsolino/Fusion/actions/runs/30782878193) — `run-live-event.mjs`: `require --repo and --run-id` on `EVENT_NAME=schedule` |
-| Steward issues opened | **None** (no `appsolino-steward` / `s0-observation` issues found) |
-| False-positive assessment | N/A — no issues to classify; schedule path has not reconciled yet |
+| Docs PR #61 | Merged `da3d6574927d04e2dafa024d79f95b1ff0439381` |
+| Fixture replay | [30732734948](https://github.com/Appsolino/Fusion/actions/runs/30732734948) → **PASS** |
+| Fast path `workflow_run` | Operational when no fall-through |
+| Scheduled reconcile (`17 * * * *`) | **BROKEN on main until this repair merges** — import side effect |
+| Root cause | `run-live-reconcile.mjs` imported `run-live-event.mjs`, whose unconditional `main()` exited with `require --repo and --run-id` on schedule (no `WR_ID`) — confirmed on [30782878193](https://github.com/Appsolino/Fusion/actions/runs/30782878193) |
+| Repair | Extract side-effect-free `live-evidence.mjs`; guard CLI entrypoints with `isMain` |
+| Steward issues opened | **None** while schedule red |
 
 ## Recent upstream absorb
 
@@ -70,9 +70,9 @@ NOTE:    Engine stays paused. Host P untouched. Do not re-merge PR #47 or #59.
 | AUTO-1 | OPERATIONAL |
 | AUTO-2 | OPERATIONAL — exact `handoff_id` correlation (ISS-AUTO-003) |
 | AUTO-3 | OPERATIONAL — last terminal marker; version passthrough; evidence artifact for S0 |
-| Steward S0 | **ENABLED** — fixtures PASS; scheduled reconcile **RED** (acceptance incomplete) |
-| Steward S1A | **NOT AUTHORISED** — advice-only expert (draft only; see policy) |
-| Steward S1B | **NOT AUTHORISED** — repair-PR mode |
+| Steward S0 | **ENABLED** — fixtures PASS; scheduled reconcile repair landing |
+| Steward S1A | **NOT AUTHORISED / HOLD** |
+| Steward S1B | **NOT AUTHORISED** |
 | Steward S2+ | NOT AUTHORISED |
 
 ## Provider posture
@@ -89,8 +89,8 @@ NOTE:    Engine stays paused. Host P untouched. Do not re-merge PR #47 or #59.
 
 ## Current blockers
 
-1. **Steward S0 scheduled reconcile FAILING** — minute-17 observe exits via `run-live-event` without a run id; authoritative recovery path not proven.
-2. **ISS-GIT-007** — engine merge default-branch fix (parked).
+1. **Steward S0 scheduled reconcile** — import side-effect repair must merge + prove (fixture, manual reconcile, minute-17).
+2. **ISS-GIT-007** — parked.
 3. **ISS-UI-001** — PARKED (PR #28).
 
 ## Milestone board
@@ -102,16 +102,14 @@ AUTO-1: OPERATIONAL
 AUTO-2: OPERATIONAL
 AUTO-3: OPERATIONAL
 AUTO-4: COMPLETE (pin 71576d953626)
-Steward S0: ENABLED (fixture PASS; schedule reconcile RED)
-Steward S1A: HOLD — not authorised
+Steward S0: ENABLED (schedule repair in flight)
+Steward S1A: HOLD
 Mode: CONTINUOUS UPSTREAM MAINTENANCE
-ISS-UI-001: PARKED
-ISS-GIT-007: PARKED
 ```
 
 ## Next authorised mission
 
-1. **Diagnose and fix Steward S0 scheduled reconcile** so minute-17 observe succeeds (and optional `workflow_dispatch` `reconcile` matches). Do not change S0 security trust zones.
-2. Confirm at least one green schedule (or manual reconcile) after the fix; classify any newly opened steward issues as legitimate / historical / false positive.
-3. **Only then** request owner authorisation for **S1A Expert Advisory Mode** (advice-only; no repair PRs / deploy / Host P). Draft: [`reliability/S1A-MISSION-DRAFT.md`](reliability/S1A-MISSION-DRAFT.md).
+1. Merge this reconcile import-side-effect repair; run fixture-replay + manual `reconcile` on main.
+2. Confirm one green minute-17 schedule; classify any steward issues (legitimate / historical / false positive).
+3. Only then request owner **AUTHORISE S1A** (draft: [`reliability/S1A-MISSION-DRAFT.md`](reliability/S1A-MISSION-DRAFT.md)).
 4. Product backlog: ISS-UI-001 / ISS-GIT-007 when owner redirects.

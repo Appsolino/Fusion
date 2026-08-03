@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardS0 2026-08-02-04:55:
+ * FNXC:AppsolinoStewardS0 2026-08-03:
  * Live workflow_run observation: fetch logs + AUTO-3 evidence artifact as data,
  * then evaluate parent/child/evidence disagreement (PR #55 class).
+ * CLI entrypoint only — do not import this module for shared helpers.
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { evaluateLiveObservation } from "./evaluate-live.mjs";
 import { extractHandoffIdFromRun, extractSourceShaFromRun, isAuto2ParentWorkflow, isAuto3Workflow } from "./build-handoffs.mjs";
+import { downloadAuto3EvidenceArtifact } from "./live-evidence.mjs";
 
 function parseArgs(argv) {
   /** @type {Record<string, string>} */
@@ -39,54 +42,8 @@ function ghText(args) {
   return { ok: r.status === 0, stdout: r.stdout || "", stderr: r.stderr || "" };
 }
 
-/**
- * Download auto3-evidence-* artifact for a run into destDir; return parsed JSON or null.
- * @param {string} repo
- * @param {string|number} runId
- * @param {string} destDir
- */
-export function downloadAuto3EvidenceArtifact(repo, runId, destDir) {
-  mkdirSync(destDir, { recursive: true });
-  const list = ghJson([
-    "api",
-    `repos/${repo}/actions/runs/${runId}/artifacts?per_page=50`,
-  ]);
-  if (!list.ok || !list.data?.artifacts) return null;
-  const art = (list.data.artifacts || []).find((a) => String(a.name || "").startsWith("auto3-evidence-"));
-  if (!art) return null;
-  const dl = spawnSync(
-    "gh",
-    ["api", `repos/${repo}/actions/artifacts/${art.id}/zip`],
-    { encoding: "buffer", maxBuffer: 20 * 1024 * 1024 },
-  );
-  if (dl.status !== 0 || !dl.stdout?.length) return null;
-  const zipPath = join(destDir, "evidence.zip");
-  writeFileSync(zipPath, dl.stdout);
-  const unzip = spawnSync("unzip", ["-o", zipPath, "-d", destDir], { encoding: "utf8" });
-  if (unzip.status !== 0) return null;
-  const jsonPath = join(destDir, "auto3-evidence.json");
-  if (!existsSync(jsonPath)) {
-    // search one level
-    for (const name of readdirSync(destDir)) {
-      if (name.endsWith(".json")) {
-        try {
-          return JSON.parse(readFileSync(join(destDir, name), "utf8"));
-        } catch {
-          // continue
-        }
-      }
-    }
-    return null;
-  }
-  try {
-    return JSON.parse(readFileSync(jsonPath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+export async function runLiveEventMain(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
   const repo = args.repo || process.env.GITHUB_REPOSITORY;
   const runId = args["run-id"];
   const workflowName = args["workflow-name"] || "";
@@ -121,7 +78,6 @@ async function main() {
     const handoff = logText.match(/\b(auto2-[A-Za-z0-9_-]+)\b/)?.[1] || null;
     const sha = logText.match(/\b([0-9a-f]{40})\b/i)?.[1]?.toLowerCase() || headSha || null;
     expectedSourceSha = sha;
-    // Find correlated AUTO-3 child by handoff in recent runs
     const list = ghJson([
       "api",
       `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?event=workflow_dispatch&per_page=30`,
@@ -134,7 +90,6 @@ async function main() {
     if (!child && sha) {
       child = runs.find((r) => extractSourceShaFromRun(r) === sha) || null;
     }
-    // Also parse explicit run= from finalize reason lines
     const runMatch = logText.match(/\brun=(\d+)\b/);
     if (!child && runMatch) {
       child = runs.find((r) => String(r.id) === runMatch[1]) || null;
@@ -185,9 +140,13 @@ async function main() {
   } else {
     process.stdout.write(`${JSON.stringify({ candidates, result }, null, 2)}\n`);
   }
+  return { candidates, result };
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  runLiveEventMain().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
