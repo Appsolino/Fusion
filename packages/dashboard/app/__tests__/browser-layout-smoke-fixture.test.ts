@@ -84,4 +84,15 @@ describe("browser layout smoke fixture", () => {
       expect(html).toContain(label);
     }
   });
+
+  /*
+  FNXC:ListView 2026-08-03-07:00:
+  The mobile List smoke fixture must carry the production list-view--single-pane marker without coupling the regression to HTML attribute order or spacing.
+  */
+  it("marks the mobile List fixture as the production single-pane surface", () => {
+    const html = createSmokeHtml();
+    const listSectionTag = html.match(/<section\b[^>]*\bdata-smoke="list"[^>]*>/)?.[0];
+    expect(listSectionTag).toBeDefined();
+    expect(listSectionTag).toMatch(/\bclass="[^"]*\blist-view--single-pane\b[^"]*"/);
+  });
 });
