@@ -1,9 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
 import { definePlugin, validatePluginManifest } from "@fusion/plugin-sdk";
-import { applyPrepackTransform } from "../../scripts/prepare-publish-manifest.mjs";
+import {
+  applyPrepackTransform,
+  assertPluginSdkDeclarationExists,
+} from "../../scripts/prepare-publish-manifest.mjs";
 
 const workspaceRoot = join(__dirname, "..", "..", "..", "..");
 
@@ -59,6 +70,28 @@ describe("plugin-sdk export surface", () => {
     expect(transformed.exports["./dist/*"]).toBe("./dist/*");
     expect(transformed.bin).toEqual(pkg.bin);
     expect(transformed.pi).toEqual(pkg.pi);
+  });
+
+  it("refuses to pack a types export without the plugin-sdk declaration", () => {
+    const packageRoot = mkdtempSync(join(tmpdir(), "fusion-plugin-sdk-prepack-"));
+    try {
+      expect(() => assertPluginSdkDeclarationExists(packageRoot)).toThrow(
+        /dist\/plugin-sdk\/index\.d\.ts/,
+      );
+
+      const declarationPath = join(packageRoot, "dist", "plugin-sdk", "index.d.ts");
+      mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(declarationPath, "");
+      expect(() => assertPluginSdkDeclarationExists(packageRoot)).toThrow(
+        /dist\/plugin-sdk\/index\.d\.ts/,
+      );
+
+      writeFileSync(declarationPath, "export declare const definePlugin: unknown;\n");
+
+      expect(() => assertPluginSdkDeclarationExists(packageRoot)).not.toThrow();
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 
   it("declares plugin-sdk tsup build entry with dts and fusion inlining", () => {
@@ -124,6 +157,9 @@ describe("plugin-sdk export surface", () => {
       return;
     }
     const built = readFileSync(distPath, "utf-8");
-    expect(built.includes("@fusion/")).toBe(false);
+    const fusionTypeSpecifiers = executableModuleSpecifiers(built).filter((specifier) =>
+      specifier.startsWith("@fusion/"),
+    );
+    expect(fusionTypeSpecifiers).toEqual([]);
   });
 });
