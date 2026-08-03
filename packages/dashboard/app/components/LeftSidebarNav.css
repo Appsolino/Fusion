@@ -290,8 +290,20 @@ The footer has no top divider; it remains a functional footer cluster but should
   justify-content: center;
 }
 
+/*
+FNXC:ViewportChrome 2026-08-03-00:13:
+Width-only hide was wrong for tablet-class devices in the 601–768 CSS px band: JS mounts the left sidebar (mode=tablet) while this media query hid it and MobileNavBar returned null — operators lost every primary nav surface. Prefer the published viewport mode; keep the width rule as a no-JS/first-paint fallback for true phones.
+*/
 @media (max-width: 768px) {
   .left-sidebar-nav {
     display: none;
   }
+}
+
+html[data-viewport-mode="mobile"] .left-sidebar-nav {
+  display: none;
+}
+
+html:is([data-viewport-mode="tablet"], [data-viewport-mode="desktop"]) .left-sidebar-nav {
+  display: flex;
 }
