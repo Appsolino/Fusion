@@ -170,6 +170,10 @@ importers:
       yaml:
         specifier: ^2.8.3
         version: 2.9.0
+    optionalDependencies:
+      sherpa-onnx-node:
+        specifier: 1.13.4
+        version: 1.13.4
 
   packages/cli-alias:
     dependencies:
@@ -457,7 +461,7 @@ importers:
         version: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@25.9.5)(@vitest/coverage-v8@4.1.10)(happy-dom@20.10.1)(jsdom@29.1.1)(vite@6.4.1(@types/node@25.9.5)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
     optionalDependencies:
       sherpa-onnx-node:
-        specifier: ^1.13.4
+        specifier: 1.13.4
         version: 1.13.4
 
   packages/desktop:
