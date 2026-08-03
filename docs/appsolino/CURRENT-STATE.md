@@ -2,11 +2,11 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-03T08:35:00Z
+**Last updated UTC:** 2026-08-03T09:50:00Z
 
 | Field | Value |
 | --- | --- |
-| Current `main` SHA | `e4a0058c6b3e6a3c059195175e19d2eec71686dd` (PR #62 reconcile import-side-effect fix) |
+| Current `main` SHA | `a527d77c353b6cfe93b715e5217dfe18c8470a61` (PR #63 docs) — dedup fix pending merge |
 | Active Host D release | `auto3-0.74.0-beta.6-16f24ed3b473` |
 | Source SHA | `16f24ed3b47321cc1b5aa693b2fac7e13a00b379` (PR #55 absorb) |
 | Previous rollback release | `auto3-0.74.0-beta.5-5f1b923bd815` |
@@ -19,32 +19,36 @@
 ## Owner priority (2026-08-03)
 
 ```text
-NOW:     Grant Appsolino Automation App Issues write on Appsolino/Fusion; re-run reconcile + confirm :17
-HOLD:    S1A Expert Advisory Mode (observe fixed; issue persistence not yet proven)
-DONE:    PR #62 import-side-effect repair merged on main
-DONE:    Post-merge fixture-replay 30796450732 PASS (upsert skipped; zero fixture issues)
-DONE:    Manual reconcile observe PASS (30796456559) — schedule-shaped path reaches reconcileRuns
-DONE:    PR #61 docs ledger; PR #59 Steward S0 enabled
+NOW:     Land Steward S0 upsert fingerprint dedup → re-reconcile → prove :17
+HOLD:    S1A Expert Advisory Mode
+DONE:    Automation App Issues write granted; manual reconcile upsert succeeds
+DONE:    PR #63 docs; PR #62 import fix; PR #59 S0 enabled
+DONE:    Collapsed duplicate steward #65 into canonical #64
 DONE:    AUTO-4 COMPLETE (pin 71576d953626)
 PARKED:  ISS-UI-001 / PR #28
 PARKED:  ISS-GIT-007
-NOTE:    Engine stays paused. Host P untouched.
+NOTE:    Engine stays paused. Host P untouched. Keep app-id identity until later.
 ```
 
 ## Steward S0 enablement
 
 | Item | Value |
 | --- | --- |
-| Status | **ENABLED** — observation path **GREEN** after PR #62; issue upsert **BLOCKED** (App install perms) |
-| PR #59 | Merged — approved head `8a3743c7509e6ce167a37aabf439ca4dd58b2203` |
-| Docs PR #61 | Merged `da3d6574927d04e2dafa024d79f95b1ff0439381` |
-| Repair PR #62 | Merged `e4a0058c6b3e6a3c059195175e19d2eec71686dd` — `live-evidence.mjs` + `isMain` CLI guards |
-| Import defect | Fixed — no longer executes `run-live-event` CLI when reconcile imports shared helpers |
-| Fixture replay (post-fix) | [30796450732](https://github.com/Appsolino/Fusion/actions/runs/30796450732) → **PASS** (observe success; upsert skipped) |
-| Manual reconcile | [30796456559](https://github.com/Appsolino/Fusion/actions/runs/30796456559) → observe **PASS**; upsert **FAIL** |
-| Upsert failure | App token create: `The permissions requested are not granted to this installation` (requested `permission-issues: write` via `app-id`; warning to prefer `client-id`) |
-| Scheduled `:17` on new main | Not yet observed on `e4a0058…` as of 2026-08-03T08:27Z; waiting for next cron fire |
-| Steward issues opened | **None** — upsert never completed |
+| Status | **ENABLED** — observe + upsert auth **GREEN**; same-batch fingerprint dedup repair landing |
+| PR #59 / #61 / #62 / #63 | Merged on main through `a527d77c353b6cfe93b715e5217dfe18c8470a61` |
+| App Issues permission | **GRANTED** (installation approved) |
+| Manual reconcile (post-permission) | [30798731370](https://github.com/Appsolino/Fusion/actions/runs/30798731370) → observe **PASS**, upsert **PASS** |
+| Dedup defect | Same fingerprint `sha256:09e76df5…` opened #64 and #65 in one batch (Search API lag) — **S0 acceptance fail until fixed** |
+| Collapse | #65 closed as duplicate of #64; both occurrences retained on #64 |
+| Canonical incident | [#64](https://github.com/Appsolino/Fusion/issues/64) `missing-child-timeout` — **historical** (past AUTO-2 waiters without child); keep open until classified closed after review |
+| Scheduled `:17` | No successful schedule on current main lineage as of 2026-08-03T09:41Z (last schedule 07:44Z still on old SHA) |
+
+## Incident classification (2026-08-03)
+
+| Issue | Fingerprint | Classification | Treatment |
+| --- | --- | --- | --- |
+| #64 | `09e76df5…` | Historical / likely resolved handoff waits | Keep open as durable record; do not treat as active deploy incident |
+| #65 | same | Duplicate of #64 (Search lag) | **Closed** |
 
 ## Recent upstream absorb
 
@@ -72,7 +76,7 @@ NOTE:    Engine stays paused. Host P untouched.
 | AUTO-1 | OPERATIONAL |
 | AUTO-2 | OPERATIONAL — exact `handoff_id` correlation (ISS-AUTO-003) |
 | AUTO-3 | OPERATIONAL — last terminal marker; version passthrough; evidence artifact for S0 |
-| Steward S0 | **ENABLED** — observe/reconcile logic green; **issue write blocked** |
+| Steward S0 | **ENABLED** — upsert works; **dedup repair required** before acceptance |
 | Steward S1A | **HOLD / NOT AUTHORISED** |
 | Steward S1B | **NOT AUTHORISED** |
 | Steward S2+ | NOT AUTHORISED |
@@ -85,14 +89,14 @@ NOTE:    Engine stays paused. Host P untouched.
 | `testMode` | `false` |
 | `enginePaused` | `true` |
 
-## Maintenance (non-blocking → blocking for S0 issue path)
+## Maintenance (deferred)
 
-- **Automation App Issues permission (BLOCKING for S0 acceptance):** Installation must grant Issues write so steward upsert can mint `permission-issues: write`. Optionally migrate `create-github-app-token@v3` from deprecated `app-id` secret to org/repo `client-id` var `APPSOLINO_AUTOMATION_CLIENT_ID` once available.
+- **app-id → client-id:** Still deferred. Do not change identity config until S0 acceptance completes.
 
 ## Current blockers
 
-1. **Steward issue upsert App permissions** — observe finds candidates; cannot open/update Issues until installation grants Issues write.
-2. **Minute-17 proof on `e4a0058…`** — pending next schedule fire (manual reconcile already exercised schedule-shaped observe).
+1. **Steward upsert same-batch fingerprint dedup** — this PR; then re-reconcile must not create a second open issue for `09e76df5…`.
+2. **Minute-17 schedule proof** on current main — still outstanding.
 3. **ISS-GIT-007** / **ISS-UI-001** — parked.
 
 ## Milestone board
@@ -103,16 +107,15 @@ G1: PASS
 AUTO-1: OPERATIONAL
 AUTO-2: OPERATIONAL
 AUTO-3: OPERATIONAL
-AUTO-4: COMPLETE (pin 71576d953626)
-Steward S0: ENABLED (observe GREEN; upsert RED — App perms)
+AUTO-4: COMPLETE
+Steward S0: ENABLED (dedup repair in flight; :17 pending)
 Steward S1A: HOLD
 Mode: CONTINUOUS UPSTREAM MAINTENANCE
 ```
 
 ## Next authorised mission
 
-1. **Owner:** Grant Appsolino Automation App **Issues** write on `Appsolino/Fusion` (and prefer `client-id` when the org var exists).
-2. Re-run steward `workflow_dispatch` `mode=reconcile`; confirm upsert succeeds; classify any issues (legitimate / historical / false positive).
-3. Confirm one green minute-17 schedule on current main.
-4. Only then request **AUTHORISE S1A** (draft: [`reliability/S1A-MISSION-DRAFT.md`](reliability/S1A-MISSION-DRAFT.md)).
-5. Product backlog: ISS-UI-001 / ISS-GIT-007 when owner redirects.
+1. Merge this upsert dedup repair; rerun `mode=reconcile`; confirm one open issue per fingerprint.
+2. Confirm one green minute-17 schedule on current main.
+3. Only then request **AUTHORISE S1A**.
+4. Product backlog: ISS-UI-001 / ISS-GIT-007 when owner redirects.
