@@ -7,6 +7,10 @@
  */
 import { selectCorrelatedAuto3Run } from "../auto3-handoff.mjs";
 import { parseLastTerminalMarker } from "./parse-deploy-evidence.mjs";
+import {
+  parseAuto2FinalizeEvidence,
+  parentSemanticTerminalFromAction,
+} from "./auto2-action-semantics.mjs";
 
 const HANDOFF_RE = /\b(auto2-[A-Za-z0-9_-]+)\b/;
 const SHA_RE = /\b([0-9a-f]{40})\b/i;
@@ -70,15 +74,30 @@ export function childTerminalFromRun(child) {
 }
 
 /**
- * Parent that exited 0 after merge+deploy wait claims DEPLOYED (historical false claim included).
- * @param {{ conclusion?: string|null, status?: string, claimedTerminal?: string|null }} parent
+ * Parent terminal from workflow conclusion and optional finalize action evidence.
+ * Do not map bare success → DEPLOYED without deployment action proof.
+ * @param {{
+ *   conclusion?: string|null,
+ *   status?: string,
+ *   claimedTerminal?: string|null,
+ *   finalizeAction?: string|null,
+ *   logText?: string|null,
+ * }} parent
  */
 export function parentTerminalFromRun(parent) {
   if (parent.claimedTerminal) return String(parent.claimedTerminal).toUpperCase();
+  const evidence = parseAuto2FinalizeEvidence(parent.logText || "");
+  const action = parent.finalizeAction || evidence.action;
+  if (action) {
+    return parentSemanticTerminalFromAction(action, parent.conclusion);
+  }
   const status = String(parent.status || "").toLowerCase();
   if (status !== "completed") return "IN_PROGRESS";
   const c = String(parent.conclusion || "").toLowerCase();
-  if (c === "success") return "DEPLOYED";
+  if (c === "skipped" || c === "neutral") return "SKIPPED";
+  if (c === "cancelled") return "CANCELLED";
+  // Bare success without finalize action is not deployment proof.
+  if (c === "success") return "SUCCESS";
   if (c === "failure") return "FAILED";
   return "UNKNOWN";
 }
@@ -114,7 +133,8 @@ export function buildHandoffsFromRuns(input) {
   for (const parent of auto2Runs) {
     if (!isAuto2ParentWorkflow(String(parent.name || parent.display_title || ""))) continue;
     const parentLogs = logsByRunId[String(parent.id)] || "";
-    const handoffFromLog = parentLogs.match(HANDOFF_RE)?.[1] || null;
+    const finalize = parseAuto2FinalizeEvidence(parentLogs);
+    const handoffFromLog = finalize.handoffId || parentLogs.match(HANDOFF_RE)?.[1] || null;
     const sourceSha = extractSourceShaFromRun(parent)
       || (parentLogs.match(SHA_RE)?.[1] || "").toLowerCase()
       || null;
@@ -134,8 +154,8 @@ export function buildHandoffsFromRuns(input) {
         dispatchStartedAtMs,
         sourceSha: sourceSha || undefined,
       });
-    } else if (sourceSha) {
-      // Fallback: unique AUTO-3 child with matching source sha created after parent.
+    } else if (sourceSha && finalize.expectedAuto3Child === true) {
+      // Fallback SHA match only when AUTO-3 was actually expected.
       const parentMs = Date.parse(String(parent.created_at || "")) || 0;
       const matches = auto3Runs.filter((r) => {
         const sha = extractSourceShaFromRun(r);
@@ -153,7 +173,7 @@ export function buildHandoffsFromRuns(input) {
       }
     }
 
-    const childId = child ? String(child.id) : null;
+    const childId = child ? String(child.id) : (finalize.auto3RunId || null);
     const evidence = childId ? evidenceByRunId[childId] : null;
     const childLogs = childId ? logsByRunId[childId] || "" : "";
     const childTerminal = child
@@ -165,14 +185,22 @@ export function buildHandoffsFromRuns(input) {
       })
       : null;
 
+    const expectedAuto3Child = finalize.action != null
+      ? finalize.expectedAuto3Child
+      : (handoffId ? true : false);
+
     handoffs.push({
       parentRunId: parent.id,
       parentWorkflowName: parent.name || parent.display_title || "",
       parentTerminal: parentTerminalFromRun({
         status: String(parent.status || ""),
         conclusion: parent.conclusion ?? null,
+        finalizeAction: finalize.action,
+        logText: parentLogs,
       }),
-      childRunId: childId,
+      finalizeAction: finalize.action,
+      expectedAuto3Child,
+      childRunId: child ? String(child.id) : null,
       childTerminal,
       handoffId,
       sourceSha,

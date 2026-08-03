@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardS0 2026-08-02-04:55:
+ * FNXC:AppsolinoStewardS0 2026-08-03:
  * Live observation helpers: evaluate parent/child/evidence disagreement and
  * download AUTO-3 evidence artifacts (as data) without executing them.
  */
@@ -9,6 +9,11 @@ import { normalizeEvidence } from "./normalize-evidence.mjs";
 import { FAILURE_CLASS } from "./policy.mjs";
 import { parseLastTerminalMarker } from "./parse-deploy-evidence.mjs";
 import { childTerminalFromRun, parentTerminalFromRun } from "./build-handoffs.mjs";
+import {
+  isExpectedNonIncidentConclusion,
+  parseAuto2FinalizeEvidence,
+  expectedAuto3ChildForAction,
+} from "./auto2-action-semantics.mjs";
 
 /**
  * Compare workflow conclusion, marker, evidence terminal, SHAs, release ids.
@@ -34,7 +39,43 @@ import { childTerminalFromRun, parentTerminalFromRun } from "./build-handoffs.mj
  * }} input
  */
 export function evaluateLiveObservation(input) {
-  const marker = parseLastTerminalMarker(input.logText || "");
+  const logText = input.logText || "";
+  const finalize = parseAuto2FinalizeEvidence(logText);
+
+  // Expected AUTO-2 control-flow: skipped / cancelled validation must not alert.
+  if (isExpectedNonIncidentConclusion(input.conclusion)) {
+    return normalizeEvidence({
+      workflowName: input.workflowName || "",
+      runId: input.runId,
+      attempt: input.attempt || 1,
+      terminalStatus: "SKIPPED",
+      success: true,
+      sourceSha: input.expectedSourceSha,
+      logText,
+      errorMessage: `expected non-incident conclusion ${input.conclusion}`,
+    });
+  }
+
+  // Documented no-child finalize actions are successes, not incidents.
+  if (finalize.action && expectedAuto3ChildForAction(finalize.action) === false && !input.childRunId) {
+    return normalizeEvidence({
+      workflowName: input.workflowName || "",
+      runId: input.runId,
+      attempt: input.attempt || 1,
+      terminalStatus: parentTerminalFromRun({
+        conclusion: input.conclusion,
+        status: "completed",
+        finalizeAction: finalize.action,
+        logText,
+      }),
+      success: true,
+      sourceSha: input.expectedSourceSha,
+      logText,
+      errorMessage: `expected no-child finalize action ${finalize.action}`,
+    });
+  }
+
+  const marker = parseLastTerminalMarker(logText);
   const evidence = input.evidenceArtifact || null;
   const evidenceTerminal = evidence?.terminal ? String(evidence.terminal).toUpperCase() : null;
 
@@ -42,6 +83,8 @@ export function evaluateLiveObservation(input) {
     ? parentTerminalFromRun({
       status: "completed",
       conclusion: input.parentConclusion ?? input.conclusion,
+      finalizeAction: finalize.action,
+      logText,
     })
     : null;
 
@@ -50,19 +93,21 @@ export function evaluateLiveObservation(input) {
       status: input.childStatus || "completed",
       conclusion: input.childConclusion ?? null,
       evidenceTerminal,
-      logText: input.logText || "",
+      logText,
     })
     : (evidenceTerminal || marker || (
-      String(input.conclusion || "").toLowerCase() === "success" ? "DEPLOYED" : "FAILED"
+      String(input.conclusion || "").toLowerCase() === "success" ? "SUCCESS" : "FAILED"
     ));
 
-  // Historical PR #55 class: parent success / child BLOCKED
+  // Historical PR #55 class: parent deploy claim / child BLOCKED
   if (
     parentTerminal
     && (parentTerminal === "DEPLOYED" || parentTerminal === "SUCCESS")
+    && input.childRunId
     && childTerminal
     && childTerminal !== "DEPLOYED"
     && childTerminal !== "IDEMPOTENT_NOOP"
+    && childTerminal !== "SUCCESS"
   ) {
     return normalizeEvidence({
       workflowName: input.workflowName || "Upstream AUTO-2 Approve Sensitive",
@@ -79,7 +124,7 @@ export function evaluateLiveObservation(input) {
       terminalStatus: childTerminal,
       forceIncident: true,
       evidenceArtifact: evidence,
-      logText: input.logText || "",
+      logText,
     });
   }
 
@@ -95,7 +140,7 @@ export function evaluateLiveObservation(input) {
       terminalStatus: evidenceTerminal,
       forceIncident: true,
       evidenceArtifact: evidence,
-      logText: input.logText || "",
+      logText,
     });
   }
 
@@ -143,6 +188,28 @@ export function evaluateLiveObservation(input) {
   const evidenceOk = !evidenceTerminal
     || evidenceTerminal === "DEPLOYED"
     || evidenceTerminal === "IDEMPOTENT_NOOP";
+
+  // Unknown finalize action with insufficient evidence → needs-triage (not fake success/FAILED).
+  if (finalize.action && expectedAuto3ChildForAction(finalize.action) === null) {
+    return normalizeEvidence({
+      workflowName: input.workflowName || "",
+      runId: input.runId,
+      attempt: input.attempt || 1,
+      terminalStatus: "UNKNOWN",
+      success: false,
+      failureClass: FAILURE_CLASS.NEEDS_TRIAGE,
+      forceIncident: true,
+      logText,
+      errorMessage: `unknown finalize action ${finalize.action}`,
+      evidenceArtifact: evidence,
+      parentRunId: input.parentRunId,
+      childRunId: input.childRunId,
+      parentTerminal,
+      childTerminal,
+      sourceSha: input.expectedSourceSha,
+    });
+  }
+
   if (conclusionSuccess && evidenceOk && !parentTerminal) {
     return normalizeEvidence({
       workflowName: input.workflowName || "",
@@ -156,7 +223,7 @@ export function evaluateLiveObservation(input) {
     });
   }
 
-  if (conclusionSuccess && evidenceOk && parentTerminal && isSuccess(childTerminal)) {
+  if (conclusionSuccess && evidenceOk && parentTerminal && isSuccess(childTerminal) && input.childRunId) {
     return normalizeEvidence({
       workflowName: input.workflowName || "",
       runId: input.runId,
@@ -176,7 +243,7 @@ export function evaluateLiveObservation(input) {
     attempt: input.attempt || 1,
     terminalStatus: evidenceTerminal || marker || (conclusionSuccess ? "SUCCESS" : "FAILED"),
     success: false,
-    logText: input.logText || "",
+    logText,
     errorMessage: conclusionSuccess ? "inconclusive success without agreeing evidence" : `workflow conclusion ${input.conclusion}`,
     evidenceArtifact: evidence,
     parentRunId: input.parentRunId,
@@ -191,3 +258,4 @@ function isSuccess(t) {
   const s = String(t || "").toUpperCase();
   return s === "DEPLOYED" || s === "IDEMPOTENT_NOOP" || s === "SUCCESS";
 }
+
