@@ -83,12 +83,16 @@ describe("evidence normalization", () => {
       "terminal-marker",
       "version-drift",
       "generated-file-conflict",
+      "auto1-upstream-merge-conflict-30805433281",
       "success",
     ]) {
       const { normalized, expected } = collectFromFixture(join(FIXTURES, name));
       assert.ok(expected, name);
       if (expected.incident === false) assert.equal(normalized.openIncident, false);
       else assert.equal(normalized.openIncident, true, name);
+      if (expected.failureClass) {
+        assert.equal(normalized.failureClass, expected.failureClass, name);
+      }
     }
   });
 });

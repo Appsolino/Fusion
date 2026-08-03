@@ -1,0 +1,9 @@
+{
+  "workflowName": "Upstream AUTO-1 Sync",
+  "workflowFamily": "auto1",
+  "runId": "30805433281",
+  "attempt": 1,
+  "terminalStatus": "FAILED",
+  "sourceSha": "b83fd0eda83b1760b441454f852b8564f954bdf4",
+  "logText": "Prepare upstream sync branch + PR\noutcome=conflict\n{\n  \"outcome\": \"conflict\",\n  \"integrationBranch\": \"main\",\n  \"appsolinoSha\": \"b83fd0eda83b1760b441454f852b8564f954bdf4\",\n  \"upstreamSha\": \"71ba437cfe41cc6c05f6f80a31a46c53d5b59cd4\",\n  \"mergeBase\": \"5786c87eff118231e58bb0877f2cb2252a346a8d\",\n  \"ahead\": 112,\n  \"behind\": 88,\n  \"changedFiles\": [\n    \".changeset/ce-review-handoff-step-projection.md\",\n    \".changeset/planning-handoff-outcome.md\",\n    \"packages/engine/src/executor.ts\",\n    \"scripts/lib/lifecycle-column-census-baseline.json\"\n  ],\n  \"syncBranch\": \"automation/upstream-sync\",\n  \"conflict\": true,\n  \"conflictedFiles\": [\n    \"packages/engine/src/executor.ts\",\n    \"scripts/lib/lifecycle-column-census-baseline.json\"\n  ],\n  \"prUrl\": \"https://github.com/Appsolino/Fusion/pull/68\",\n  \"mutatedMain\": false,\n  \"deployedHostD\": false\n}\nUnrelated noise: newest-run display_title handoff selectCorrelated wrong-auto3-child-selected ISS-AUTO-003\n"
+}

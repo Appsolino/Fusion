@@ -1,0 +1,15 @@
+{
+  "incident": true,
+  "failureClass": "upstream-merge-conflict",
+  "workflowFamily": "auto1",
+  "phase": "auto1-merge",
+  "component": "upstream-sync",
+  "fingerprintPayload": {
+    "workflow": "auto1",
+    "phase": "auto1-merge",
+    "class": "upstream-merge-conflict",
+    "error": "upstream-merge-conflict",
+    "component": "upstream-sync",
+    "terminal": "CONFLICT"
+  }
+}

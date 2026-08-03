@@ -88,9 +88,23 @@ Historical fixtures (no deliberate live failures):
 - false `DEPLOYED` marker  
 - package-version drift  
 - generated census conflict  
+- AUTO-1 structured `outcome=conflict` → `upstream-merge-conflict`  
 - success / no-change  
 
 Also: needs-triage unknown; parent/child disagreement; missing child after timeout; idempotent reconciliation.
+
+## AUTO-1 structured outcome (authoritative)
+
+Parse the AUTO-1 JSON / `outcome=` result **before** generic log signatures. Never classify AUTO-1 as `correlation-race` without explicit handoff/child-selection evidence (bare substring `handoff` in paths is not evidence).
+
+| AUTO-1 `outcome` | Steward treatment |
+| --- | --- |
+| `no-change` | No incident |
+| `merged` | No incident |
+| `conflict` | `upstream-merge-conflict` (retain upstream SHA, sync PR, conflicted files, `mutatedMain=false`, `deployedHostD=false`) |
+| unknown / missing with failed conclusion | `needs-triage` |
+
+Regression fixture: `auto1-upstream-merge-conflict-30805433281` (correlation-noise must not override `outcome=conflict`).
 
 ## Agent runtime contract (defined for S1A/S1B; not executed while S0-only)
 

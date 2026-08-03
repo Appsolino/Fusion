@@ -15,6 +15,12 @@ import {
   workflowFamilyFromName,
 } from "./policy.mjs";
 import { buildFingerprintPayload, fingerprintIncident, normalizeErrorSignature } from "./fingerprint-incident.mjs";
+import {
+  hasExplicitAuto3HandoffEvidence,
+  isAuto1Workflow,
+  parseAuto1ResultEvidence,
+  treatmentForAuto1Outcome,
+} from "./auto1-outcome-semantics.mjs";
 
 /**
  * @typedef {import("./fingerprint-incident.mjs").FingerprintPayload} FingerprintPayload
@@ -52,6 +58,28 @@ export function classifyFailure(raw) {
   const log = `${raw.logText || ""}\n${raw.errorMessage || ""}`;
   const parent = String(raw.parentTerminal || "").toUpperCase();
   const child = String(raw.childTerminal || "").toUpperCase();
+  const family = String(raw.workflowFamily || workflowFamilyFromName(raw.workflowName) || "");
+  const auto1 = isAuto1Workflow(raw.workflowName, family);
+  const auto1Result = parseAuto1ResultEvidence(log);
+  const auto1Treatment = treatmentForAuto1Outcome(auto1Result.outcome);
+
+  // Authoritative AUTO-1 structured outcome precedes any generic log signature.
+  if (auto1Treatment === "upstream-merge-conflict") {
+    return {
+      failureClass: FAILURE_CLASS.UPSTREAM_MERGE_CONFLICT,
+      component: "upstream-sync",
+      phase: "auto1-merge",
+      errorSignature: normalizeErrorSignature("upstream-merge-conflict"),
+    };
+  }
+  if (auto1Treatment === "needs-triage" && auto1) {
+    return {
+      failureClass: FAILURE_CLASS.NEEDS_TRIAGE,
+      component: "upstream-sync",
+      phase: "auto1-result",
+      errorSignature: normalizeErrorSignature(`unknown auto1 outcome ${auto1Result.outcome}`),
+    };
+  }
 
   if (raw.missingChild) {
     return {
@@ -108,7 +136,20 @@ export function classifyFailure(raw) {
     };
   }
 
-  if (/selectCorrelated|wrong.?child|newest-run|display_title|handoff|ISS-AUTO-003|unrelated older/i.test(log)) {
+  // Never classify AUTO-1 as correlation-race without explicit handoff evidence.
+  // Bare "handoff" / display_title match changeset paths and must not win over structure.
+  if (
+    !auto1
+    && hasExplicitAuto3HandoffEvidence(log)
+  ) {
+    return {
+      failureClass: FAILURE_CLASS.CORRELATION_RACE,
+      component: "auto3-handoff",
+      phase: "auto3-run-selection",
+      errorSignature: normalizeErrorSignature("wrong-auto3-child-selected"),
+    };
+  }
+  if (auto1 && hasExplicitAuto3HandoffEvidence(log) && auto1Treatment == null) {
     return {
       failureClass: FAILURE_CLASS.CORRELATION_RACE,
       component: "auto3-handoff",
@@ -119,6 +160,15 @@ export function classifyFailure(raw) {
 
   if (/lifecycle-column-census-baseline|CONFLICT|generated.?file|Both modified/i.test(log)
     || (raw.conflictPaths || []).some((p) => /census-baseline|generated/i.test(p))) {
+    // Prefer structured upstream-merge-conflict when AUTO-1 already declared conflict.
+    if (auto1 && auto1Result.conflict === true) {
+      return {
+        failureClass: FAILURE_CLASS.UPSTREAM_MERGE_CONFLICT,
+        component: "upstream-sync",
+        phase: "auto1-merge",
+        errorSignature: normalizeErrorSignature("upstream-merge-conflict"),
+      };
+    }
     return {
       failureClass: FAILURE_CLASS.GENERATED_FILE_CONFLICT,
       component: "generated-baseline",
@@ -145,7 +195,16 @@ export function normalizeEvidence(rawEvidence) {
   const workflowFamily =
     String(raw.workflowFamily || "") || workflowFamilyFromName(workflowName) || WORKFLOW_FAMILY.unknown;
 
-  if (raw.success === true) {
+  const logText = String(raw.logText || "");
+  const auto1Result = raw.auto1Result && typeof raw.auto1Result === "object"
+    ? raw.auto1Result
+    : parseAuto1ResultEvidence(`${logText}\n${raw.errorMessage || ""}`);
+  const auto1Treatment = isAuto1Workflow(workflowName, workflowFamily)
+    ? treatmentForAuto1Outcome(auto1Result.outcome)
+    : null;
+
+  // AUTO-1 no-change / merged are non-incidents even if conclusion is odd.
+  if (raw.success === true || auto1Treatment === "no-incident") {
     const runId = raw.runId ?? raw.workflowRunId ?? "0";
     const attempt = raw.attempt ?? raw.runAttempt ?? 1;
     return {
@@ -154,7 +213,10 @@ export function normalizeEvidence(rawEvidence) {
       failureClass: "none",
       errorSignature: "none",
       component: "none",
-      terminalStatus: String(raw.terminalStatus || TERMINAL_STATUS.SUCCESS).toUpperCase(),
+      terminalStatus: String(
+        raw.terminalStatus
+          || (auto1Result.outcome === "no-change" ? TERMINAL_STATUS.IDEMPOTENT_NOOP : TERMINAL_STATUS.SUCCESS),
+      ).toUpperCase(),
       openIncident: false,
       instance: {
         occurrenceId: String(raw.occurrenceId || buildOccurrenceId(runId, attempt)),
@@ -172,6 +234,7 @@ export function normalizeEvidence(rawEvidence) {
         evidenceArtifact: null,
         logExcerpt: "",
         workflowName: escapeMarkdown(workflowName),
+        auto1Result,
       },
       fingerprintPayload: null,
       fingerprint: null,
@@ -187,16 +250,20 @@ export function normalizeEvidence(rawEvidence) {
     terminalStatus: raw.terminalStatus ? String(raw.terminalStatus) : undefined,
     parentTerminal: raw.parentTerminal != null ? String(raw.parentTerminal) : null,
     childTerminal: raw.childTerminal != null ? String(raw.childTerminal) : null,
-    logText: String(raw.logText || ""),
+    logText,
     errorMessage: String(raw.errorMessage || ""),
     component: raw.component ? String(raw.component) : undefined,
     missingChild: raw.missingChild === true,
-    conflictPaths: Array.isArray(raw.conflictPaths) ? raw.conflictPaths.map(String) : [],
+    conflictPaths: Array.isArray(raw.conflictPaths)
+      ? raw.conflictPaths.map(String)
+      : (auto1Result.conflictedFiles || []),
   });
 
-  const terminalStatus = String(
-    raw.terminalStatus || raw.childTerminal || raw.parentTerminal || TERMINAL_STATUS.UNKNOWN,
-  ).toUpperCase();
+  const terminalStatus = classified.failureClass === FAILURE_CLASS.UPSTREAM_MERGE_CONFLICT
+    ? TERMINAL_STATUS.CONFLICT
+    : String(
+      raw.terminalStatus || raw.childTerminal || raw.parentTerminal || TERMINAL_STATUS.UNKNOWN,
+    ).toUpperCase();
 
   const runId = raw.runId ?? raw.workflowRunId ?? "0";
   const attempt = raw.attempt ?? raw.runAttempt ?? 1;
@@ -228,6 +295,7 @@ export function normalizeEvidence(rawEvidence) {
       : null,
     logExcerpt: escapeMarkdown(String(raw.logText || raw.errorMessage || "").slice(0, 1500)),
     workflowName: escapeMarkdown(workflowName),
+    auto1Result,
   };
 
   const normalized = {
@@ -277,6 +345,7 @@ export function shouldOpenIncident(opts) {
       FAILURE_CLASS.WORKFLOW_YAML_PARSE,
       FAILURE_CLASS.SUMMARY_SYNTAX,
       FAILURE_CLASS.GENERATED_FILE_CONFLICT,
+      FAILURE_CLASS.UPSTREAM_MERGE_CONFLICT,
       FAILURE_CLASS.PARENT_CHILD_DISAGREEMENT,
       FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT,
       FAILURE_CLASS.MISSING_CHILD_TIMEOUT,
@@ -299,6 +368,7 @@ function componentForClass(c) {
     [FAILURE_CLASS.TERMINAL_MARKER_PARSE]: "terminal-marker-parser",
     [FAILURE_CLASS.VERSION_GATE_DRIFT]: "installer",
     [FAILURE_CLASS.GENERATED_FILE_CONFLICT]: "generated-baseline",
+    [FAILURE_CLASS.UPSTREAM_MERGE_CONFLICT]: "upstream-sync",
     [FAILURE_CLASS.PARENT_CHILD_DISAGREEMENT]: "auto2-auto3-correlation",
     [FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT]: "auto3-evidence",
     [FAILURE_CLASS.MISSING_CHILD_TIMEOUT]: "auto2-waiter",
@@ -316,6 +386,7 @@ function phaseForClass(c) {
     [FAILURE_CLASS.TERMINAL_MARKER_PARSE]: "auto3-terminal-parse",
     [FAILURE_CLASS.VERSION_GATE_DRIFT]: "trusted-host-d-deploy",
     [FAILURE_CLASS.GENERATED_FILE_CONFLICT]: "auto1-merge",
+    [FAILURE_CLASS.UPSTREAM_MERGE_CONFLICT]: "auto1-merge",
     [FAILURE_CLASS.PARENT_CHILD_DISAGREEMENT]: "parent-child-reconcile",
     [FAILURE_CLASS.TERMINAL_EVIDENCE_DISAGREEMENT]: "evidence-reconcile",
     [FAILURE_CLASS.MISSING_CHILD_TIMEOUT]: "auto3-handoff-wait",
