@@ -10551,7 +10551,9 @@ export class TaskExecutor {
     const groupId = live.branchContext?.groupId?.trim();
     // FNXC:PostgresCutover 2026-07-10: getBranchGroup is async on the PG branch.
     const branchGroup = groupId ? await this.store.getBranchGroup(groupId) : null;
-    return isLiveSharedBranchGroupMemberIntegration(live, branchGroup);
+    const settings = await this.store.getSettings();
+    const projectDefaultBranch = await resolveIntegrationBranch(this.rootDir, settings);
+    return isLiveSharedBranchGroupMemberIntegration(live, branchGroup, projectDefaultBranch);
   }
 
   private async routeRetryableRemediationGraphFailureToPreMergeFix(
