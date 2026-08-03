@@ -176,16 +176,61 @@ export function formatOccurrenceBlock(normalized) {
 }
 
 /**
+ * In-process fingerprint lock for one upsert batch / steward run.
+ * Avoids GitHub Search eventual-consistency creating a second issue for
+ * the same fingerprint when multiple candidates share a digest.
+ * @returns {{ byFingerprint: Map<string, IssueLike> }}
+ */
+export function createUpsertSession() {
+  return { byFingerprint: new Map() };
+}
+
+/**
+ * @param {{ byFingerprint: Map<string, IssueLike> } | null | undefined} session
+ * @param {string} fingerprint
+ * @param {IssueLike[]} remote
+ */
+function resolveExistingIssues(session, fingerprint, remote) {
+  const fp = String(fingerprint || "").toLowerCase();
+  /** @type {IssueLike[]} */
+  const out = [];
+  const seen = new Set();
+  const cached = session?.byFingerprint?.get(fp);
+  if (cached) {
+    out.push(cached);
+    seen.add(cached.number);
+  }
+  for (const issue of remote || []) {
+    if (seen.has(issue.number)) continue;
+    out.push(issue);
+    seen.add(issue.number);
+  }
+  return out;
+}
+
+/**
+ * @param {{ byFingerprint: Map<string, IssueLike> } | null | undefined} session
+ * @param {string} fingerprint
+ * @param {IssueLike} issue
+ */
+function rememberSessionIssue(session, fingerprint, issue) {
+  if (!session?.byFingerprint || !issue) return;
+  session.byFingerprint.set(String(fingerprint || "").toLowerCase(), issue);
+}
+
+/**
  * Execute upsert against an IssueClient (real gh API or in-memory fake).
  * @param {IssueClient} client
  * @param {ReturnType<import("./normalize-evidence.mjs").normalizeEvidence>} normalized
+ * @param {{ byFingerprint: Map<string, IssueLike> } | null} [session]
  */
-export async function upsertIncident(client, normalized) {
+export async function upsertIncident(client, normalized, session = null) {
   if (!normalized.openIncident || !normalized.fingerprint) {
     return { ok: true, action: "skip-no-incident", issueNumber: null };
   }
 
-  const existing = await client.searchIssuesByMarker(normalized.fingerprint);
+  const remote = await client.searchIssuesByMarker(normalized.fingerprint);
+  const existing = resolveExistingIssues(session, normalized.fingerprint, remote);
   const plan = planUpsert({
     fingerprint: normalized.fingerprint,
     existingIssues: existing,
@@ -194,7 +239,8 @@ export async function upsertIncident(client, normalized) {
 
   if (plan.action === "create") {
     // FNXC:AppsolinoStewardS0 2026-08-02-04:55: Re-search immediately before create to shrink duplicate races.
-    const raced = await client.searchIssuesByMarker(normalized.fingerprint);
+    const racedRemote = await client.searchIssuesByMarker(normalized.fingerprint);
+    const raced = resolveExistingIssues(session, normalized.fingerprint, racedRemote);
     const racedPlan = planUpsert({
       fingerprint: normalized.fingerprint,
       existingIssues: raced,
@@ -202,6 +248,8 @@ export async function upsertIncident(client, normalized) {
     });
     if (racedPlan.action !== "create") {
       if (racedPlan.action === "noop-duplicate-occurrence") {
+        const kept = raced.find((i) => i.number === racedPlan.issueNumber) || raced[0];
+        rememberSessionIssue(session, normalized.fingerprint, kept);
         return { ok: true, action: racedPlan.action, issueNumber: racedPlan.issueNumber, plan: racedPlan };
       }
       const current = raced.find((i) => i.number === racedPlan.issueNumber) || raced[0];
@@ -209,6 +257,7 @@ export async function upsertIncident(client, normalized) {
       const patch = { body };
       if (racedPlan.action === "reopen-and-append") patch.state = "open";
       const updated = await client.updateIssue(racedPlan.issueNumber, patch);
+      rememberSessionIssue(session, normalized.fingerprint, updated);
       return {
         ok: true,
         action: racedPlan.action,
@@ -219,10 +268,13 @@ export async function upsertIncident(client, normalized) {
     }
     const content = buildNewIssueContent(normalized);
     const created = await client.createIssue(content);
+    rememberSessionIssue(session, normalized.fingerprint, created);
     return { ok: true, action: "create", issueNumber: created.number, plan };
   }
 
   if (plan.action === "noop-duplicate-occurrence") {
+    const kept = existing.find((i) => i.number === plan.issueNumber) || existing[0];
+    rememberSessionIssue(session, normalized.fingerprint, kept);
     return { ok: true, action: plan.action, issueNumber: plan.issueNumber, plan };
   }
 
@@ -233,6 +285,7 @@ export async function upsertIncident(client, normalized) {
     patch.state = "open";
   }
   const updated = await client.updateIssue(plan.issueNumber, patch);
+  rememberSessionIssue(session, normalized.fingerprint, updated);
   return {
     ok: true,
     action: plan.action,
