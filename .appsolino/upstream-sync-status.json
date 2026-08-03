@@ -1,22 +1,17 @@
 {
-  "outcome": "merged",
-  "recordedAt": "2026-08-01T13:29:48Z",
+  "outcome": "conflict",
+  "recordedAt": "2026-08-03T10:24:47.801Z",
   "integrationBranch": "main",
-  "appsolinoSha": "168d8cbf39c4d9d0a1e05f11daf301223f585908",
-  "upstreamSha": "5786c87eff118231e58bb0877f2cb2252a346a8d",
-  "mergeBase": "71576d9536267a7835f352922a55831811717896",
-  "ahead": 93,
-  "behind": 29,
-  "conflictedFiles": [],
-  "resolvedConflicts": [
-    {
-      "file": "scripts/lib/lifecycle-column-census-baseline.json",
-      "resolution": "regenerated-from-merged-tree",
-      "note": "Regenerated with node scripts/lifecycle-column-census.mjs --strict --update-baseline after upstream merge"
-    }
+  "appsolinoSha": "b83fd0eda83b1760b441454f852b8564f954bdf4",
+  "upstreamSha": "71ba437cfe41cc6c05f6f80a31a46c53d5b59cd4",
+  "mergeBase": "5786c87eff118231e58bb0877f2cb2252a346a8d",
+  "ahead": 112,
+  "behind": 88,
+  "conflictedFiles": [
+    "packages/engine/src/executor.ts",
+    "scripts/lib/lifecycle-column-census-baseline.json"
   ],
-  "touchesWorkflows": false,
+  "touchesWorkflows": true,
   "touchesMigrations": true,
-  "touchesLockfile": false,
-  "mutatesAppsolinoMain": false
+  "touchesLockfile": true
 }
