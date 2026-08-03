@@ -350,8 +350,8 @@ importers:
         specifier: ^8.2.1
         version: 8.2.1
       i18next-resources-to-backend:
-        specifier: ^1.2.1
-        version: 1.2.1
+        specifier: ^1.2.2
+        version: 1.2.2
       ioredis:
         specifier: ^5.6.0
         version: 5.10.1
@@ -5542,8 +5542,8 @@ packages:
     resolution: {integrity: sha512-n5UexwEVt0OoIAhG2MWpSnAVJW1U8mQrQTmXyxc5DMAx+NLhcLZhSMJo/FnUsA5JQ3obTYqTgB7YIuZKWpDgow==}
     hasBin: true
 
-  i18next-resources-to-backend@1.2.1:
-    resolution: {integrity: sha512-okHbVA+HZ7n1/76MsfhPqDou0fptl2dAlhRDu2ideXloRRduzHsqDOznJBef+R3DFZnbvWoBW+KxJ7fnFjd6Yw==}
+  i18next-resources-to-backend@1.2.2:
+    resolution: {integrity: sha512-1qDy4c67qurkyLKXoFncMBB0XmXJE0GHoPCx7ONbDoq9R3puhjOpfUERbtWcwfulbXvxwdqWRmB4DIud+nLpuw==}
 
   i18next@26.3.1:
     resolution: {integrity: sha512-txQqd5EULsqEh9OJqRH15aCaOuy/nLJyhw5EHCSKLKJE1aBbb3Zve2+uQIxgWhPm1QqUQoWyQBm2kfmmIrzkcQ==}
@@ -12998,7 +12998,7 @@ snapshots:
     transitivePeerDependencies:
       - '@swc/helpers'
 
-  i18next-resources-to-backend@1.2.1:
+  i18next-resources-to-backend@1.2.2:
     dependencies:
       '@babel/runtime': 7.29.7
 
