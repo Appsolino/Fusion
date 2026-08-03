@@ -1,12 +1,12 @@
 # Upstream Reliability Steward — policy
 
-**Phase:** S0 (observation only)  
+**Phase:** S0 (observation only) — enabled on `main`  
 **Authority:** Complements AUTO-1/2/3; does not replace them.  
 **Status ledger:** [`../CURRENT-STATE.md`](../CURRENT-STATE.md)
 
 ## Purpose
 
-Detect, fingerprint, and record AUTO pipeline failures as durable GitHub Issues so S1 can later assign an engineer agent. S0 does **not** repair code, open repair PRs, dispatch workflows, merge, or deploy.
+Detect, fingerprint, and record AUTO pipeline failures as durable GitHub Issues so S1A can later assign an advisory expert (and S1B a repair agent, only after authorisation). S0 does **not** diagnose as an expert, repair code, open repair PRs, dispatch workflows, merge, or deploy.
 
 ## Detection
 
@@ -92,7 +92,7 @@ Historical fixtures (no deliberate live failures):
 
 Also: needs-triage unknown; parent/child disagreement; missing child after timeout; idempotent reconciliation.
 
-## Agent runtime contract (defined for S1; not executed in S0)
+## Agent runtime contract (defined for S1A/S1B; not executed while S0-only)
 
 ```text
 Account: fusion
@@ -103,17 +103,18 @@ GitHub identity: Appsolino Automation App
 Deployment authority: none
 ```
 
-Record: configuredProvider/Model, actualProvider/Model, missionId, incidentFingerprint, worktree, baseSha, repairHeadSha.
+Record: configuredProvider/Model, actualProvider/Model, missionId, incidentFingerprint, worktree, baseSha, repairHeadSha (S1B only).
 
-## Reviewer independence (S1+)
+## Reviewer independence (S1A+)
 
-Engineer receives evidence and writes the patch. Reviewer receives original evidence + diff + tests — **not** engineer reasoning as authority — and returns ACCEPT/REJECT. Low-risk auto-remediation requires classifier LOW ∧ tests ∧ reviewer ACCEPT ∧ checks ∧ exact head.
+Engineer receives evidence and produces advice (S1A) or a patch (S1B). Reviewer receives original evidence + diagnosis and, for S1B, diff + tests — **not** engineer reasoning as authority — and returns ACCEPT / REJECT / NEEDS_MORE_EVIDENCE. Low-risk auto-remediation (S2) requires classifier LOW ∧ tests ∧ reviewer ACCEPT ∧ checks ∧ exact head.
 
 ## Phase gates
 
 | Phase | Status |
 | --- | --- |
-| S0 observation | This document |
-| S1 repair agent | After S0 fixture proof |
+| S0 observation | Enabled on `main` — fixture PASS; scheduled reconcile must be green before S1A |
+| S1A expert advisory | **Not authorised** — draft only: [`S1A-MISSION-DRAFT.md`](S1A-MISSION-DRAFT.md) |
+| S1B repair PR agent | **Not authorised** — after S1A proves useful |
 | S2 low-risk auto-merge | Not authorised |
 | S3 sensitive assist | Not authorised |
