@@ -185,3 +185,28 @@ describe("reconcile recovers AUTO-1 conflicts", () => {
     assert.equal(payload.candidates[0].instance.auto1Result.prUrl, "https://github.com/Appsolino/Fusion/pull/68");
   });
 });
+
+describe("log clip keeps AUTO-1 result tail", () => {
+  it("preserves prUrl when head-only truncation would drop it", async () => {
+    const { clipLogTextKeepTail } = await import("../live-evidence.mjs");
+    const prefix = "x".repeat(150_000);
+    const json = JSON.stringify({
+      outcome: "conflict",
+      upstreamSha: "71ba437cfe41cc6c05f6f80a31a46c53d5b59cd4",
+      conflictedFiles: ["packages/engine/src/executor.ts", "scripts/lib/lifecycle-column-census-baseline.json"],
+      prUrl: "https://github.com/Appsolino/Fusion/pull/68",
+      mutatedMain: false,
+      deployedHostD: false,
+    });
+    const clipped = clipLogTextKeepTail(prefix + "\n" + json);
+    const r = parseAuto1ResultEvidence(clipped);
+    assert.equal(r.outcome, "conflict");
+    assert.equal(r.prUrl, "https://github.com/Appsolino/Fusion/pull/68");
+    assert.equal(r.mutatedMain, false);
+    assert.equal(r.deployedHostD, false);
+    assert.deepEqual(r.conflictedFiles, [
+      "packages/engine/src/executor.ts",
+      "scripts/lib/lifecycle-column-census-baseline.json",
+    ]);
+  });
+});

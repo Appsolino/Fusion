@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { buildHandoffsFromRuns, isAuto2ParentWorkflow, isAuto3Workflow } from "./build-handoffs.mjs";
 import { mergeCandidatesIdempotent, reconcileRuns } from "./reconcile-runs.mjs";
-import { downloadAuto3EvidenceArtifact } from "./live-evidence.mjs";
+import { downloadAuto3EvidenceArtifact, fetchWorkflowRunLogText } from "./live-evidence.mjs";
 import { evaluateLiveObservation } from "./evaluate-live.mjs";
 import { isAuto1Workflow } from "./auto1-outcome-semantics.mjs";
 
@@ -71,10 +71,7 @@ export function executeLiveReconcile(opts) {
         `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?event=workflow_dispatch&per_page=30`,
       ]),
     downloadEvidence = downloadAuto3EvidenceArtifact,
-    fetchRunLog = (r, runId) => {
-      const logs = ghText(["run", "view", String(runId), "--repo", r, "--log"]);
-      return (logs.stdout || "").slice(0, 200_000);
-    },
+    fetchRunLog = (r, runId) => fetchWorkflowRunLogText(r, runId),
   } = opts;
   if (!repo) throw new Error("require --repo");
 
