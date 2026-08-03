@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { evaluateLiveObservation } from "./evaluate-live.mjs";
 import { extractHandoffIdFromRun, extractSourceShaFromRun, isAuto2ParentWorkflow, isAuto3Workflow } from "./build-handoffs.mjs";
-import { downloadAuto3EvidenceArtifact } from "./live-evidence.mjs";
+import { downloadAuto3EvidenceArtifact, fetchWorkflowRunLogText } from "./live-evidence.mjs";
 
 function parseArgs(argv) {
   /** @type {Record<string, string>} */
@@ -55,8 +55,7 @@ export async function runLiveEventMain(argv = process.argv.slice(2)) {
   const work = join(tmpdir(), `steward-event-${runId}`);
   mkdirSync(work, { recursive: true });
 
-  const logs = ghText(["run", "view", String(runId), "--repo", repo, "--log"]);
-  const logText = (logs.stdout || "").slice(0, 200_000);
+  const logText = fetchWorkflowRunLogText(repo, runId);
 
   let evidence = null;
   let childRunId = null;

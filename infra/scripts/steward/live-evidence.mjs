@@ -65,3 +65,55 @@ export function downloadAuto3EvidenceArtifact(repo, runId, destDir) {
     return null;
   }
 }
+
+/**
+ * Cap untrusted workflow logs while keeping head + tail.
+ * AUTO-1 structured results (outcome/prUrl/conflictedFiles) are emitted near
+ * the end after a large changedFiles dump; head-only truncation drops them.
+ * @param {string} text
+ * @param {{ maxTotal?: number, head?: number, tail?: number }} [opts]
+ */
+export function clipLogTextKeepTail(text, opts = {}) {
+  const src = String(text || "");
+  const maxTotal = Number(opts.maxTotal ?? 200_000);
+  const head = Number(opts.head ?? 80_000);
+  const tail = Number(opts.tail ?? 120_000);
+  if (src.length <= maxTotal) return src;
+  const h = Math.max(0, head);
+  const t = Math.max(0, tail);
+  if (h + t >= src.length) return src;
+  return `${src.slice(0, h)}\n/* …steward log truncated… */\n${src.slice(-t)}`;
+}
+
+/**
+ * Fetch workflow run logs as text. Prefer `gh run view --log`; fall back to
+ * per-job archive logs when the view path is empty (common for older runs).
+ * @param {string} repo
+ * @param {string|number} runId
+ */
+export function fetchWorkflowRunLogText(repo, runId) {
+  const view = spawnSync(
+    "gh",
+    ["run", "view", String(runId), "--repo", repo, "--log"],
+    { encoding: "utf8", maxBuffer: 40 * 1024 * 1024 },
+  );
+  let text = view.stdout || "";
+  if (text.length < 1024) {
+    const jobs = ghJson([
+      "api",
+      `repos/${repo}/actions/runs/${runId}/jobs?per_page=30`,
+    ]);
+    /** @type {string[]} */
+    const parts = [];
+    for (const job of jobs.data?.jobs || []) {
+      const lr = spawnSync(
+        "gh",
+        ["api", `repos/${repo}/actions/jobs/${job.id}/logs`],
+        { encoding: "utf8", maxBuffer: 40 * 1024 * 1024 },
+      );
+      if (lr.status === 0 && lr.stdout) parts.push(lr.stdout);
+    }
+    if (parts.length) text = parts.join("\n");
+  }
+  return clipLogTextKeepTail(text);
+}

@@ -300,6 +300,24 @@ export async function upsertIncident(client, normalized, session = null) {
 
   if (plan.action === "noop-duplicate-occurrence") {
     const kept = existing.find((i) => i.number === plan.issueNumber) || existing[0];
+    const auto1 = normalized.instance?.auto1Result;
+    const prUrl = auto1?.prUrl ? String(auto1.prUrl) : "";
+    const body = kept?.body || "";
+    const missingConflictDetail = Boolean(prUrl) && !body.includes(prUrl);
+    if (missingConflictDetail) {
+      const content = buildNewIssueContent(normalized);
+      const updated = await client.updateIssue(plan.issueNumber, {
+        title: content.title,
+        body: content.body,
+      });
+      rememberSessionIssue(session, normalized.fingerprint, updated);
+      return {
+        ok: true,
+        action: "enrich-auto1-conflict-fields",
+        issueNumber: updated.number,
+        plan,
+      };
+    }
     rememberSessionIssue(session, normalized.fingerprint, kept);
     return { ok: true, action: plan.action, issueNumber: plan.issueNumber, plan };
   }
