@@ -2,6 +2,23 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.74.0-beta.8
+
+### Highlights
+
+- Tasks no longer park blocked on open GitHub PRs touching their files
+- Board blockers are now other board tasks only, and legacy PR-blocked cards recover on their own
+- Requeued task deleted at the same moment no longer strands without re-dispatch
+- Planner retries fallback or unchanged output before handing off to Plan Review
+- Terminal close control stays put after New terminal at every screen size
+
+### Fixed
+
+- Tasks are no longer parked as blocked because an open GitHub PR touches the same files. Blocking references are board tasks only, and rows previously parked by a file claim recover through the normal paths.
+- Fixed a rare stall where a task requeued and deleted in the same moment never re-dispatched.
+- Planning finalization now retries when the planner falls back or returns unchanged output, instead of sending that attempt straight to Plan Review.
+- The terminal close control stays in place after New terminal at every screen size.
+
 ## 0.74.0-beta.7
 
 ### Highlights

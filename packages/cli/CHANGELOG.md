@@ -1,5 +1,22 @@
 # @runfusion/fusion
 
+## 0.74.0-beta.8
+
+### Patch Changes
+
+- 6d8492b: summary: Fix a rare stall where a requeued task deleted in the same moment never re-dispatched.
+  category: fix
+  dev: Scheduler `task:moved` now updates the `recentEngineTodoRequeues` settle-window ledger and the dispatch-oscillation reset synchronously in the emitter prologue (sync `parked` lanes) instead of behind `await resolveTaskParkedColumns`. FN-8656 had moved them behind the await, racing the synchronous `task:deleted`/`task:updated` handlers so a hold requeue immediately followed by a delete could re-set the guard after the clear and strand the card. Restores the two failing `todo-inprogress-flapping.test.ts` invariants.
+- 6cc687d: summary: Retry fallback or unchanged planner output before Plan Review.
+  category: fix
+  dev: Planning finalization now requires a changed, settled, fallback-free attempt artifact.
+- 4d933b1: summary: Keep the terminal close control after New terminal at every screen size.
+  category: fix
+  dev: Unifies the non-embedded TerminalModal close render site and adds responsive ordering coverage.
+- 1e7f510: summary: Tasks no longer park blocked on open GitHub PRs touching their files; blockers are board tasks only.
+  category: fix
+  dev: Removes the FN-8700 PR/file-claim blocking mechanism — the AGENTS.md claim-check rule, `scripts/check-file-claimed.mjs`, `pr:N` blockedBy refs, file-claim classification in `execution-block-classifier.ts`, the session-log BLOCKED promotion, and the `reconcile-external-pr-blockers` self-healing sweep. Legacy file-claim parks are no longer honored by `isDurableBlockedTask`, so previously PR-blocked rows recover via normal paths.
+
 ## 0.74.0-beta.7
 
 ### Minor Changes
