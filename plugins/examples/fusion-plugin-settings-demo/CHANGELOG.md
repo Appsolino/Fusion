@@ -1,5 +1,11 @@
 # @fusion-plugin-examples/settings-demo
 
+## 0.2.82
+
+### Patch Changes
+
+- @fusion/plugin-sdk@0.74.0
+
 ## 0.2.82-beta.9
 
 ### Patch Changes
