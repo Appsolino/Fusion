@@ -106,6 +106,18 @@ export function resetPlanningAutoRetryAttemptsForTests(): void {
 
 const MAX_PLANNING_CREATE_CLAIM_RETRIES = 20;
 
+const DUPLICATE_RESPONSE_GENERATION_MESSAGE = "Generation already in progress for this response";
+
+/**
+ * FNXC:PlanningTurnReconciliation 2026-08-03-07:27:
+ * The duplicate-response turn conflict means another request already owns this exact answer,
+ * not that the operator's plan failed. Rehydrate its durable question or generation progress
+ * silently; all other submission failures remain actionable in the shared error banner.
+ */
+function isDuplicateResponseGenerationConflict(error: unknown): boolean {
+  return getErrorMessage(error) === DUPLICATE_RESPONSE_GENERATION_MESSAGE;
+}
+
 function isPlanningCreateClaimConflict(error: unknown): boolean {
   return typeof error === "object"
     && error !== null
@@ -2845,6 +2857,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
         }
       } catch (err) {
         const errorMessage = getErrorMessage(err) || t("planning.failedSubmitResponse", "Failed to submit response");
+        const isDuplicateResponseConflict = isDuplicateResponseGenerationConflict(err);
         /*
         FNXC:PlanningTurnReconciliation 2026-07-20-10:36:
         A rejected HTTP response is ambiguous: the server may have accepted the answer before
@@ -2876,7 +2889,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
               .map((entry) => entry.response)
               .filter((response): response is QuestionResponse => Boolean(response && typeof response === "object" && !Array.isArray(response))));
             setRunningSummary(summary);
-            setError(errorMessage);
+            setError(isDuplicateResponseConflict ? null : errorMessage);
             setWorkspaceQuestion(currentQuestion);
             setView({ type: "question", session: { sessionId, currentQuestion, summary } });
             return;
@@ -2890,7 +2903,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
             runningSummaryRef.current = summary;
             setConversationHistory(history);
             setRunningSummary(summary);
-            setError(errorMessage);
+            setError(isDuplicateResponseConflict ? null : errorMessage);
             setView({ type: "loading" });
             return;
           }

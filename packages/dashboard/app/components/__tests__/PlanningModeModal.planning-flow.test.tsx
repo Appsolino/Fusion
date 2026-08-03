@@ -845,6 +845,88 @@ describe("PlanningModeModal sequential flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close history" }));
   });
 
+  it.each([
+    { viewport: "desktop", status: "awaiting_input", label: "a durable next question" },
+    { viewport: "mobile", status: "awaiting_input", label: "a durable next question" },
+    { viewport: "desktop", status: "generating", label: "generation progress" },
+    { viewport: "mobile", status: "generating", label: "generation progress" },
+  ] as const)("silently reconciles duplicate-response generation conflicts on $viewport with $label", async ({ viewport, status }) => {
+    mockViewportMode.mockReturnValue(viewport);
+    const submittedQuestion = {
+      id: "q-submitted",
+      type: "single_select",
+      question: "Which outcome matters most?",
+      options: [{ id: "secure", label: "Secure defaults" }],
+    };
+    const durableQuestion = {
+      id: "q-durable",
+      type: "text",
+      question: "What should the durable session ask next?",
+    };
+    let requestWasRejected = false;
+    mockFetchAiSession.mockImplementation(async () => ({
+      ...base,
+      status: requestWasRejected ? status : "awaiting_input",
+      currentQuestion: requestWasRejected && status === "generating"
+        ? null
+        : JSON.stringify(requestWasRejected ? durableQuestion : submittedQuestion),
+      result: JSON.stringify(summaryWithRefinements),
+      conversationHistory: "[]",
+      inputPayload: JSON.stringify({ generationPurpose: "plan_update" }),
+    }));
+    mockRespondToPlanning.mockImplementation(async () => {
+      requestWasRejected = true;
+      throw new Error("Generation already in progress for this response");
+    });
+
+    renderSession();
+    fireEvent.click(await screen.findByLabelText("Secure defaults"));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    if (status === "awaiting_input") {
+      expect(await screen.findByText("What should the durable session ask next?")).toBeInTheDocument();
+    } else {
+      expect(await screen.findByText("Generating plan…")).toBeInTheDocument();
+    }
+    expect(screen.queryByText("Generation already in progress for this response")).toBeNull();
+    expect(document.querySelector(".planning-error")).toBeNull();
+  });
+
+  it("retains an actionable response error after durable question reconciliation", async () => {
+    const submittedQuestion = {
+      id: "q-submitted",
+      type: "single_select",
+      question: "Which outcome matters most?",
+      options: [{ id: "secure", label: "Secure defaults" }],
+    };
+    const durableQuestion = {
+      id: "q-durable",
+      type: "text",
+      question: "What should the durable session ask next?",
+    };
+    let requestWasRejected = false;
+    mockFetchAiSession.mockImplementation(async () => ({
+      ...base,
+      status: "awaiting_input",
+      currentQuestion: JSON.stringify(requestWasRejected ? durableQuestion : submittedQuestion),
+      result: JSON.stringify(summaryWithRefinements),
+      conversationHistory: "[]",
+      inputPayload: "{}",
+    }));
+    mockRespondToPlanning.mockImplementation(async () => {
+      requestWasRejected = true;
+      throw new Error("Response submission timed out");
+    });
+
+    renderSession();
+    fireEvent.click(await screen.findByLabelText("Secure defaults"));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    expect(await screen.findByText("What should the durable session ask next?")).toBeInTheDocument();
+    expect(screen.getByText("Response submission timed out")).toBeInTheDocument();
+    expect(document.querySelector(".planning-error")).toBeInTheDocument();
+  });
+
   it("keeps both panes visible under a generating-plan overlay after Next", async () => {
     mockFetchAiSession.mockResolvedValue({
       ...base,
