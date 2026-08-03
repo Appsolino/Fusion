@@ -2395,3 +2395,7 @@ per-modal geometry coverage.
 ### Reverted task resolution
 
 When a completed task is successfully reverted, Fusion removes it from ordinary Done collections. It remains discoverable in the **Reverted Tasks** resolution section in Board, List, and the right dock. Open the task for provenance, choose **Delete** to use the existing guarded deletion flow, or choose **Revise** to open New Task with the original description prefilled.
+
+### Todo Lists plugin enablement
+
+Todo Lists is an optional first-party plugin. Enable `fusion-plugin-todos` for a project in the Plugins settings to make its plugin-discovered Todos destination and `/api/plugins/fusion-plugin-todos/todos/*` API available for that project. Disabled or uninstalled projects expose neither route nor navigation entry; enablement is per project and replaces the former experimental Todo setting.
