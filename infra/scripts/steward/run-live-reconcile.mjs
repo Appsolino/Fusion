@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardS0 2026-08-02-04:55:
+ * FNXC:AppsolinoStewardS0 2026-08-03:
  * Hourly/live reconciliation with real handoff relationships (not handoffs:[]).
+ * CLI entrypoint only — shared evidence helpers live in live-evidence.mjs.
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { buildHandoffsFromRuns, isAuto2ParentWorkflow, isAuto3Workflow } from "./build-handoffs.mjs";
 import { reconcileRuns } from "./reconcile-runs.mjs";
-import { downloadAuto3EvidenceArtifact } from "./run-live-event.mjs";
+import { downloadAuto3EvidenceArtifact } from "./live-evidence.mjs";
 
 function parseArgs(argv) {
   /** @type {Record<string, string>} */
@@ -32,36 +34,56 @@ function ghJson(args) {
   }
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const repo = args.repo || process.env.GITHUB_REPOSITORY;
+/**
+ * Schedule / manual reconcile body. Does not require a workflow run id.
+ * @param {{
+ *   repo: string,
+ *   out?: string,
+ *   upsertOut?: string,
+ *   nowMs?: number,
+ *   listRuns?: () => { ok: boolean, data: any },
+ *   listAuto3Dispatch?: () => { ok: boolean, data: any },
+ *   downloadEvidence?: typeof downloadAuto3EvidenceArtifact,
+ * }} opts
+ */
+export function executeLiveReconcile(opts) {
+  const {
+    repo,
+    out,
+    upsertOut,
+    nowMs = Date.now(),
+    listRuns = () =>
+      ghJson([
+        "api",
+        `repos/${repo}/actions/runs?per_page=50`,
+      ]),
+    listAuto3Dispatch = () =>
+      ghJson([
+        "api",
+        `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?event=workflow_dispatch&per_page=30`,
+      ]),
+    downloadEvidence = downloadAuto3EvidenceArtifact,
+  } = opts;
   if (!repo) throw new Error("require --repo");
 
-  const runsResp = ghJson([
-    "api",
-    `repos/${repo}/actions/runs?per_page=50`,
-  ]);
+  const runsResp = listRuns();
   const all = runsResp.data?.workflow_runs || [];
   const auto2Runs = all.filter((r) => isAuto2ParentWorkflow(r.name || ""));
   const auto3Runs = all.filter((r) => isAuto3Workflow(r.name || ""));
 
-  // Also pull AUTO-3 workflow_dispatch runs specifically (handoff in run-name).
-  const auto3Dispatch = ghJson([
-    "api",
-    `repos/${repo}/actions/workflows/upstream-auto3-deploy.yml/runs?event=workflow_dispatch&per_page=30`,
-  ]);
+  const auto3Dispatch = listAuto3Dispatch();
   const mergedAuto3 = [...auto3Runs];
   for (const r of auto3Dispatch.data?.workflow_runs || []) {
     if (!mergedAuto3.some((x) => String(x.id) === String(r.id))) mergedAuto3.push(r);
   }
 
-  const work = join(tmpdir(), `steward-reconcile-${Date.now()}`);
+  const work = join(tmpdir(), `steward-reconcile-${nowMs}`);
   mkdirSync(work, { recursive: true });
   /** @type {Record<string, object>} */
   const evidenceByRunId = {};
   for (const r of mergedAuto3.slice(0, 15)) {
     if (String(r.status) !== "completed") continue;
-    const ev = downloadAuto3EvidenceArtifact(repo, r.id, join(work, String(r.id)));
+    const ev = downloadEvidence(repo, r.id, join(work, String(r.id)));
     if (ev) evidenceByRunId[String(r.id)] = ev;
   }
 
@@ -69,11 +91,11 @@ async function main() {
     auto2Runs,
     auto3Runs: mergedAuto3,
     evidenceByRunId,
-    nowMs: Date.now(),
+    nowMs,
   });
 
   const once = reconcileRuns({
-    nowMs: Date.now(),
+    nowMs,
     handoffs,
     recentRuns: all,
   });
@@ -86,19 +108,39 @@ async function main() {
     candidates: once.candidates,
   };
 
-  if (args.out) {
-    mkdirSync(dirname(args.out), { recursive: true });
-    writeFileSync(args.out, `${JSON.stringify(payload, null, 2)}\n`);
+  if (out) {
+    mkdirSync(dirname(out), { recursive: true });
+    writeFileSync(out, `${JSON.stringify(payload, null, 2)}\n`);
   }
-  if (args["upsert-out"]) {
-    mkdirSync(dirname(args["upsert-out"]), { recursive: true });
-    writeFileSync(args["upsert-out"], `${JSON.stringify({ candidates: once.candidates }, null, 2)}\n`);
-  } else {
-    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  if (upsertOut) {
+    mkdirSync(dirname(upsertOut), { recursive: true });
+    writeFileSync(upsertOut, `${JSON.stringify({ candidates: once.candidates }, null, 2)}\n`);
   }
+
+  return payload;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+export async function runLiveReconcileMain(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
+  const repo = args.repo || process.env.GITHUB_REPOSITORY;
+  if (!repo) throw new Error("require --repo");
+
+  const payload = executeLiveReconcile({
+    repo,
+    out: args.out,
+    upsertOut: args["upsert-out"],
+  });
+
+  if (!args.out && !args["upsert-out"]) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  }
+  return payload;
+}
+
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  runLiveReconcileMain().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
