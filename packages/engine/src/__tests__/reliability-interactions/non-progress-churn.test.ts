@@ -4,7 +4,8 @@ import "../executor-test-helpers.js";
 import type { Task, TaskStore } from "@fusion/core";
 import { TaskExecutor } from "../../executor.js";
 import { SelfHealingManager } from "../../self-healing.js";
-import { StuckTaskDetector } from "../../stuck-task-detector.js";
+import { isRunnableQueuedOverlapCandidate } from "../../scheduler.js";
+import { StuckTaskDetector } from "../../healing/stuck-task-detector.js";
 
 type MockTaskStore = TaskStore & EventEmitter & {
   getSettings: ReturnType<typeof vi.fn>;

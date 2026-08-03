@@ -7,7 +7,7 @@
  * instance as its first parameter and performs byte-identical work.
  */
 import {TaskStore, storeLog, RECONCILE_ORPHAN_TASK_DIR_MAX_AGE_MS, WORKFLOW_COMPILED_STEP_TEMPLATE_PREFIX} from "../store.js";
-import {planLegacyAdoption} from "../legacy-adoption.js";
+import {planLegacyAdoption} from "../db/legacy-adoption.js";
 import {and, eq, sql} from "drizzle-orm";
 import {
   MIGRATION_BOOKKEEPING_TABLE,
@@ -18,21 +18,21 @@ import {mkdir, readdir, readFile, stat} from "node:fs/promises";
 import {join} from "node:path";
 import {existsSync, type Dirent} from "node:fs";
 import type {Task, AgentLogEntry, GlobalSettings} from "../types.js";
-import {MOVED_SETTINGS_KEYS, SETTINGS_MIGRATION_VERSION, SETTINGS_MIGRATION_MARKER_KEY} from "../moved-settings.js";
-import {stepsToWorkflowIr, stepToFragmentIr, layoutForIr} from "../workflow-steps-to-ir.js";
-import {getTraitRegistry} from "../trait-registry.js";
-import {registerDefaultWorkflowHooks} from "../default-workflow-hooks.js";
-import {clearTransitionPending, readTransitionPending, reconcileHooksRemaining} from "../transition-pending.js";
-import {clearTransitionPendingAsync, listTransitionPendingTaskIdsAsync, readTransitionPendingAsync} from "./async-transition-pending.js";
-import type {WorkflowSettingDefinition} from "../workflow-ir-types.js";
-import {validateSettingValuePatch} from "../workflow-settings.js";
+import {MOVED_SETTINGS_KEYS, SETTINGS_MIGRATION_VERSION, SETTINGS_MIGRATION_MARKER_KEY} from "../config/moved-settings.js";
+import {stepsToWorkflowIr, stepToFragmentIr, layoutForIr} from "../workflows/workflow-steps-to-ir.js";
+import {getTraitRegistry} from "../workflows/trait-registry.js";
+import {registerDefaultWorkflowHooks} from "../workflows/default-workflow-hooks.js";
+import {clearTransitionPending, readTransitionPending, reconcileHooksRemaining} from "../tasks/transition-pending.js";
+import {clearTransitionPendingAsync, listTransitionPendingTaskIdsAsync, readTransitionPendingAsync} from "./async/async-transition-pending.js";
+import type {WorkflowSettingDefinition} from "../workflows/workflow-ir-types.js";
+import {validateSettingValuePatch} from "../workflows/workflow-settings.js";
 import "../builtin-traits.js";
-import {appendAgentLogEntriesSync} from "../agent-log-file-store.js";
-import {getErrorMessage} from "../error-message.js";
+import {appendAgentLogEntriesSync} from "../agents/agent-log-file-store.js";
+import {getErrorMessage} from "../process/error-message.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
-import {reconcileTaskIdStateAsync} from "../task-store/async-allocator.js";
-import {ACTIVE_TASK_FILTER, insertTaskRowInTransaction, isTaskIdConflictError as isPgTaskIdConflictError, readTaskRow} from "./async-persistence.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
+import {reconcileTaskIdStateAsync} from "../task-store/async/async-allocator.js";
+import {ACTIVE_TASK_FILTER, insertTaskRowInTransaction, isTaskIdConflictError as isPgTaskIdConflictError, readTaskRow} from "./async/async-persistence.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
 import {recordRunAuditEventWithinTransaction} from "../postgres/data-layer.js";
 import * as schema from "../postgres/schema/index.js";
 

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CentralClaimStore, Task, TaskStore } from "@fusion/core";
 import { Scheduler } from "../../scheduler.js";
 import { SelfHealingManager } from "../../self-healing.js";
-import { MeshLeaseManager } from "../../mesh-lease-manager.js";
+import { MeshLeaseManager } from "../../project/mesh-lease-manager.js";
 
 /*
 FNXC:PlanReviewStep 2026-07-26-17:10:

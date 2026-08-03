@@ -7,17 +7,17 @@
  * instance as its first parameter and performs byte-identical work.
  */
 import {TaskStore} from "../store.js";
-import {resolveTaskLifecycleColumns, columnsWithFlag} from "../workflow-lifecycle-traits.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
-import type {WorkflowIr} from "../workflow-ir-types.js";
+import {resolveTaskLifecycleColumns, columnsWithFlag} from "../workflows/workflow-lifecycle-traits.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
+import type {WorkflowIr} from "../workflows/workflow-ir-types.js";
 import type {Task, ColumnId, ArtifactType, ArtifactWithTask, InboxTask, TaskLogEntry, RunMutationContext, Agent} from "../types.js";
-import {runReconciliationAbort} from "../workflow-reconciliation.js";
+import {runReconciliationAbort} from "../workflows/workflow-reconciliation.js";
 import "../builtin-traits.js";
-import {evaluateImplementationTaskBind} from "../agent-role-policy.js";
-import {isNearDuplicateCanonicalInactive} from "../near-duplicate-canonical.js";
-import {resolveColumnFlags} from "../trait-registry.js";
+import {evaluateImplementationTaskBind} from "../agents/agent-role-policy.js";
+import {isNearDuplicateCanonicalInactive} from "../duplicates/near-duplicate-canonical.js";
+import {resolveColumnFlags} from "../workflows/trait-registry.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
-import {listArtifacts as listArtifactsAsync} from "./async-comments-attachments.js";
+import {listArtifacts as listArtifactsAsync} from "./async/async-comments-attachments.js";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import * as schema from "../postgres/schema/index.js";
 import { resolveProjectColumnsForRoles } from "../project-lane-vocabulary.js";

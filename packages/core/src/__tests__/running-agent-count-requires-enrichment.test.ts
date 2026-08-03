@@ -21,8 +21,8 @@ behind project/central-store machinery, and standing that up would be a mock-the
 */
 import { describe, expect, it } from "vitest";
 import "../builtin-traits.js";
-import type { WorkflowIr } from "../workflow-ir-types.js";
-import { countRunningAgentTasks, enrichRunningAgentTaskShape } from "../live-agent-count.js";
+import type { WorkflowIr } from "../workflows/workflow-ir-types.js";
+import { countRunningAgentTasks, enrichRunningAgentTaskShape } from "../agents/live-agent-count.js";
 
 /** A workflow whose wip column is `building` — no legacy id anywhere. */
 const RENAMED_IR = {

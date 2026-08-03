@@ -21,14 +21,14 @@ import {
   resolveValidatorFallbackThinkingLevel,
   createResolvedAgentSession,
   wrapCustomToolsForPluginRuntime,
-} from "../agent-session-helpers.js";
+} from "../agents/agent-session-helpers.js";
 
 const { resolveRuntimeMock } = vi.hoisted(() => ({
   resolveRuntimeMock: vi.fn(),
 }));
 
-vi.mock("../runtime-resolution.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime-resolution.js")>("../runtime-resolution.js");
+vi.mock("../execution/runtime-resolution.js", async () => {
+  const actual = await vi.importActual<typeof import("../execution/runtime-resolution.js")>("../execution/runtime-resolution.js");
   return {
     ...actual,
     resolveRuntime: resolveRuntimeMock,
@@ -675,7 +675,7 @@ describe("createResolvedAgentSession", () => {
       wasConfigured: false,
     });
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     const taskEnv = { PATH: "/tmp/bin", FUSION_TEST_VAR: "value" };
     await createResolvedAgentSession({
@@ -710,7 +710,7 @@ describe("createResolvedAgentSession", () => {
       wasConfigured: false,
     });
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
     const additionalSkillPaths = ["/tmp/plugin-skills/foo", "/tmp/plugin-skills"];
     await createResolvedAgentSession({
       sessionPurpose: "executor",
@@ -752,7 +752,7 @@ describe("createResolvedAgentSession", () => {
       wasConfigured: false,
     });
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await createResolvedAgentSession({
       sessionPurpose: "merger",
@@ -773,7 +773,7 @@ describe("createResolvedAgentSession", () => {
     const createSessionMock = vi.fn().mockResolvedValue({ session: mockSession });
     const auditDatabaseMock = vi.fn().mockResolvedValue(undefined);
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await createResolvedAgentSession({
       sessionPurpose: "executor",
@@ -817,7 +817,7 @@ describe("createResolvedAgentSession", () => {
       runtimeId: "grok",
       wasConfigured: true,
     });
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await createResolvedAgentSession({
       sessionPurpose: "triage",
@@ -857,7 +857,7 @@ describe("createResolvedAgentSession", () => {
       wasConfigured: false,
     });
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await expect(createResolvedAgentSession({
       sessionPurpose: "executor",
@@ -882,7 +882,7 @@ describe("createResolvedAgentSession", () => {
     });
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await expect(createResolvedAgentSession({
       sessionPurpose: "executor",
@@ -937,7 +937,7 @@ describe("createResolvedAgentSession", () => {
       },
     };
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
     await createResolvedAgentSession({
       sessionPurpose: "executor",
       cwd: "/tmp/project",
@@ -996,7 +996,7 @@ describe("createResolvedAgentSession", () => {
       execute,
     };
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
     await createResolvedAgentSession({
       sessionPurpose: "executor",
       cwd: "/tmp/project",

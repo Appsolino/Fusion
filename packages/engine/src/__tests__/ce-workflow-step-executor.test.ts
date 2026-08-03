@@ -30,9 +30,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILTIN_WORKFLOWS, type WorkflowIr } from "@fusion/core";
 import "./executor-test-helpers.js";
 import { TaskExecutor } from "../executor.js";
-import type { PluginRunner } from "../plugin-runner.js";
-import { WorkflowGraphExecutor } from "../workflow-graph-executor.js";
-import { WorktreeBaseRefreshError } from "../worktree-acquisition.js";
+import type { PluginRunner } from "../plugins/plugin-runner.js";
+import { WorkflowGraphExecutor } from "../workflows/workflow-graph-executor.js";
+import { WorktreeBaseRefreshError } from "../worktree/worktree-acquisition.js";
 import {
   createMockStore,
   mockedCreateFnAgent,
@@ -175,7 +175,7 @@ async function expectCapturedSkillBody(
   distinctiveBody: string,
 ) {
   const { DefaultResourceLoader } = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>("@earendil-works/pi-coding-agent");
-  const { createSkillsOverrideFromSelection, resolveSessionSkills } = await vi.importActual<typeof import("../skill-resolver.js")>("../skill-resolver.js");
+  const { createSkillsOverrideFromSelection, resolveSessionSkills } = await vi.importActual<typeof import("../cli-runtime/skill-resolver.js")>("../skill-resolver.js");
   const requestedSkillNames = cap.last?.skillSelection?.requestedSkillNames;
   const selection = resolveSessionSkills({ projectRootDir, requestedSkillNames, sessionPurpose: "executor" });
   const loader = new DefaultResourceLoader({

@@ -18,9 +18,9 @@ Behavior is byte-identical to the method it replaces — this is a move, not a r
 import type { Task, TaskStore, WorkflowWorkItemState } from "@fusion/core";
 import { ACTIVE_WORKFLOW_WORK_ITEM_STATES } from "@fusion/core";
 
-import { createStoreIrPinPersistence, type WorkflowIrPinStoreSurface } from "./workflow-column-boundary.js";
-import type { WorkflowColumnBoundaryHooks } from "./workflow-graph-task-runner.js";
-import { generateSyntheticRunId } from "./run-audit.js";
+import { createStoreIrPinPersistence, type WorkflowIrPinStoreSurface } from "./workflows/workflow-column-boundary.js";
+import type { WorkflowColumnBoundaryHooks } from "./workflows/workflow-graph-task-runner.js";
+import { generateSyntheticRunId } from "./util/run-audit.js";
 
 export interface ExecutorColumnBoundaryHooksDeps {
   store: TaskStore;

@@ -7,22 +7,22 @@
  * instance as its first parameter and performs byte-identical work.
  */
 import {TaskStore, storeLog, type TaskDependencyMutation} from "../store.js";
-import {toTaskMoveLanes} from "../workflow-lifecycle-traits.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
-import {buildRefinementSeedPrompt} from "../mesh-task-replication.js";
+import {buildRefinementSeedPrompt} from "../mesh/mesh-task-replication.js";
+import {toTaskMoveLanes} from "../workflows/workflow-lifecycle-traits.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
 import {SelfDefeatingDependencyError, detectSelfDefeatingDependency} from "./errors.js";
-import {resolveTaskLifecycleColumns} from "../workflow-lifecycle-traits.js";
+import {resolveTaskLifecycleColumns} from "../workflows/workflow-lifecycle-traits.js";
 import {resolveWorkflowIntakeFacts} from "./task-creation.js";
-import type {WorkflowIr} from "../workflow-ir-types.js";
+import type {WorkflowIr} from "../workflows/workflow-ir-types.js";
 import {mkdir, readFile, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {existsSync} from "node:fs";
 import type {Task, Column, RunMutationContext, RunAuditEventInput} from "../types.js";
 import "../builtin-traits.js";
-import {normalizeTaskPriority} from "../task-priority.js";
-import {extractTaskIdTokens, normalizeTitleForTaskId} from "../task-title-id-drift.js";
-import {deriveFallbackTaskTitle} from "../ai-summarize.js";
-import {generateTaskLineageId} from "../task-lineage.js";
+import {normalizeTaskPriority} from "../tasks/task-priority.js";
+import {extractTaskIdTokens, normalizeTitleForTaskId} from "../tasks/task-title-id-drift.js";
+import {generateTaskLineageId} from "../tasks/task-lineage.js";
+import {deriveFallbackTaskTitle} from "../ai/ai-summarize.js";
 import {sanitizeFileScopeInPromptContent} from "../task-store/file-scope.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
 

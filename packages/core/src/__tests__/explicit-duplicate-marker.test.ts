@@ -5,7 +5,7 @@ import {
   parseDuplicateMarkerFromSessionText,
   isDuplicateRedirectOnlyPrompt,
   nonExecutableDuplicateRedirectReason,
-} from "../explicit-duplicate-marker.js";
+} from "../duplicates/explicit-duplicate-marker.js";
 
 const FULL_PROMPT = `# Task: FN-5211 - Example
 

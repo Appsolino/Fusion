@@ -9,7 +9,7 @@
  * A deletion that commits after the compare-and-set but before projection must retain deleted-task semantics instead of returning a stale successful resolution.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { WEDGE_RENOTIFY_COOLDOWN_MS } from "../../types/task-core.js";
+import { WEDGE_RENOTIFY_COOLDOWN_MS } from "../../types/task/task-core.js";
 import {
   createSharedPgTaskStoreTestHarness,
   pgDescribe,

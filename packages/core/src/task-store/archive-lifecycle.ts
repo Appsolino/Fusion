@@ -12,10 +12,10 @@ import {isWorkspaceTask, type Task, type GithubIssueAction, type TaskDeleteClosu
 import {type TaskDeleteAuditContext} from "../task-delete-attribution.js";
 import "../builtin-traits.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
-import {toJson} from "../db-helpers.js";
-import {getErrorMessage} from "../error-message.js";
-import {ArchiveWorkspaceDisposalError, ArchiveWorkspaceDisposalIncompleteError, ArchiveWorkspaceWorktreeDisposerMissingError, getArchiveWorkspaceWorktreeDisposer, getArchiveWorktreeDisposer, type ArchiveWorkspaceDisposalResult, type WorkspaceDisposalPlanEntry} from "../archive-worktree-disposer.js";
-import {acquireWorktreePathReservation, canonicalizeWorktreePath} from "../worktree-path-reservation.js";
+import {toJson} from "../db/db-helpers.js";
+import {getErrorMessage} from "../process/error-message.js";
+import {ArchiveWorkspaceDisposalError, ArchiveWorkspaceDisposalIncompleteError, ArchiveWorkspaceWorktreeDisposerMissingError, getArchiveWorkspaceWorktreeDisposer, getArchiveWorktreeDisposer, type ArchiveWorkspaceDisposalResult, type WorkspaceDisposalPlanEntry} from "../db/archive-worktree-disposer.js";
+import {acquireWorktreePathReservation, canonicalizeWorktreePath} from "../tasks/worktree-path-reservation.js";
 import {basename, join, resolve} from "node:path";
 import {homedir} from "node:os";
 

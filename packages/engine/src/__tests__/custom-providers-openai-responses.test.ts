@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { customProviderRegistryKey, type CustomProvider } from "@fusion/core";
-import { readCustomProviders } from "../custom-providers.js";
+import { readCustomProviders } from "../auth/custom-providers.js";
 import { createInMemoryModelRegistry, warmSharedModelRuntime } from "./_model-runtime-fixture.js";
 
 beforeAll(async () => {

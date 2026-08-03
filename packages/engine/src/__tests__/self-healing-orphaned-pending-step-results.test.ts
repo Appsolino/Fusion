@@ -6,7 +6,7 @@ const { recordRunAuditEventMock } = vi.hoisted(() => ({
   recordRunAuditEventMock: vi.fn(async () => undefined),
 }));
 vi.mock("../run-audit.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../run-audit.js")>();
+  const actual = await importOriginal<typeof import("../util/run-audit.js")>();
   return {
     ...actual,
     createRunAuditor: vi.fn(() => ({ database: recordRunAuditEventMock, git: vi.fn(), filesystem: vi.fn(), sandbox: vi.fn() })),
@@ -14,7 +14,7 @@ vi.mock("../run-audit.js", async (importOriginal) => {
 });
 
 import { SelfHealingManager } from "../self-healing.js";
-import { activeSessionRegistry, executingTaskLock } from "../active-session-registry.js";
+import { activeSessionRegistry, executingTaskLock } from "../agents/active-session-registry.js";
 
 /*
 FNXC:OrphanedPendingSteps 2026-07-22-16:20 (FN-8492 incident):

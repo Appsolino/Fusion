@@ -15,7 +15,7 @@ import {
   hasPreHeldExecutorSlot,
   projectAdmissionCoordinator,
   registerPreHeldExecutorSlot,
-} from "../concurrency.js";
+} from "../concurrency/concurrency.js";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile, rm, mkdtemp } from "node:fs/promises";
@@ -34,7 +34,7 @@ const STANDARD_PLANNING_PROMPT = builtinSeamPrompt("planning");
 const FAST_PLANNING_PROMPT = builtinSeamPrompt("planning-fast");
 const RENDERED_TRIAGE_POLICY_PROMPT = renderTriagePolicyPlaceholders(TRIAGE_POLICY_PROMPT, {});
 
-vi.mock("../reviewer.js", () => ({
+vi.mock("../execution/reviewer.js", () => ({
   reviewStep: mockReviewStep,
 }));
 
@@ -7104,7 +7104,7 @@ describe("TriageProcessor skillSelection regression (FN-1511)", () => {
         },
       });
 
-      const { evaluateAgentActionGate } = await import("../agent-action-gate.js");
+      const { evaluateAgentActionGate } = await import("../agents/agent-action-gate.js");
       expect(args.actionGateContext).toBeDefined();
       expect(args.permanentAgentGating).toBeDefined();
       expect(evaluateAgentActionGate({

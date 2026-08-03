@@ -1,8 +1,8 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import type { Settings, Task, TaskStore } from "@fusion/core";
-import { resolveIntegrationBranch } from "./integration-branch.js";
-import type { GitAuditInput } from "./run-audit.js";
+import { resolveIntegrationBranch } from "./merge/integration-branch.js";
+import type { GitAuditInput } from "./util/run-audit.js";
 
 const execAsync = promisify(exec);
 const GIT_TIMEOUT_MS = 120_000;

@@ -7,16 +7,16 @@
  * instance as its first parameter and performs byte-identical work.
  */
 import {TaskStore} from "../store.js";
-import type {Task, TaskDetail, TaskLogEntry, RunMutationContext} from "../types.js";
-import {findWorkflowColumn} from "../plugin-gate-verdict.js";
-import {getTraitRegistry} from "../trait-registry.js";
-import {makeTransitionPending} from "../transition-types.js";
-import {writeTransitionPendingAsync} from "./async-transition-pending.js";
-import type {WorkflowIr} from "../workflow-ir-types.js";
+import type { Task, TaskDetail, TaskLogEntry, RunMutationContext } from "../types.js";
+import {findWorkflowColumn} from "../plugins/plugin-gate-verdict.js";
+import {getTraitRegistry} from "../workflows/trait-registry.js";
+import {makeTransitionPending} from "../tasks/transition-types.js";
+import {writeTransitionPendingAsync} from "./async/async-transition-pending.js";
+import type {WorkflowIr} from "../workflows/workflow-ir-types.js";
 import "../builtin-traits.js";
 import {__setTaskActivityLogLimitsForTesting, truncateTaskLogOutcome, getTaskActivityLogEntryLimit} from "../task-store/comments.js";
-import {readTaskRow, updateTaskColumns} from "../task-store/async-persistence.js";
-import { getLiveTaskColumn } from "./async-comments-attachments.js";
+import {readTaskRow, updateTaskColumns} from "../task-store/async/async-persistence.js";
+import { getLiveTaskColumn } from "./async/async-comments-attachments.js";
 import { resolveArchivedLanes } from "../project-lane-vocabulary.js";
 
 export async function runPluginColumnTransitionHooksImpl(store: TaskStore, taskId: string, workflowIr: WorkflowIr, fromColumn: string, toColumn: string,): Promise<void> {

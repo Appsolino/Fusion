@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { TaskStore } from "../store.js";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../process/logger.js";
 import { recordRunAuditEvent } from "../postgres/data-layer.js";
 import * as schema from "../postgres/schema/index.js";
 import {
