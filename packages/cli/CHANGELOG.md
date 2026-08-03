@@ -1,5 +1,25 @@
 # @runfusion/fusion
 
+## 0.74.0-beta.9
+
+### Minor Changes
+
+- 5931e10: summary: Add the Midnight deep-navy dashboard theme with light and dark modes.
+  category: feature
+  dev: Registers the persisted theme across dashboard and Electron first-paint validation.
+
+### Patch Changes
+
+- da17a57: summary: Keep Task Detail Plan content current while planning and Plan Review run.
+  category: fix
+  dev: Refreshes the visible Definition/Plan prompt through the scoped task-detail endpoint.
+- 4a67883: summary: Fix main full-suite failures from schema bookkeeping, Missions hooks, and dependency re-spec events.
+  category: fix
+  dev: MissionManager hooks above isActive return; task-update only emits real lane moves; ledger/schema tests track 0041/0042 and worktree capacity readers.
+- 0e69ed9: summary: Stop reclaim log spam for done-task squash branches and delete them after completion.
+  category: fix
+  dev: reclaimStaleActiveBranches force-deletes complete-lane leftovers with unique commits; clearCompletionBranchIfSubsumed force-deletes post-done (squash-safe).
+
 ## 0.74.0-beta.8
 
 ### Patch Changes

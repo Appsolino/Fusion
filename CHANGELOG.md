@@ -2,6 +2,25 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.74.0-beta.9
+
+### Highlights
+
+- Midnight deep-navy dashboard theme lands with both light and dark modes
+- Task Detail keeps Plan content current while planning and Plan Review run
+- Done-task squash branches stop spamming reclaim logs and get deleted after completion
+- Main full-suite is green again after schema, Missions hooks, and re-spec event fixes
+
+### New
+
+- Dashboard: Midnight, a deep-navy theme available in both light and dark modes, persisted across the dashboard and validated on Electron first paint.
+
+### Fixed
+
+- Task detail: the Definition/Plan prompt now refreshes while planning and Plan Review are running, so you are not reading a stale plan.
+- Engine: stale-active-branch reclaim no longer floods the log for done-task squash leftovers, and those completion branches are deleted once the task finishes.
+- Engine: Missions lifecycle hooks fire correctly, task updates only emit real lane moves instead of phantom dependency re-spec events, and schema/ledger bookkeeping tracks the current migrations and worktree capacity readers.
+
 ## 0.74.0-beta.8
 
 ### Highlights
