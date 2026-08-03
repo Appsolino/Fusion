@@ -11,8 +11,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { buildHandoffsFromRuns, isAuto2ParentWorkflow, isAuto3Workflow } from "./build-handoffs.mjs";
-import { reconcileRuns } from "./reconcile-runs.mjs";
+import { mergeCandidatesIdempotent, reconcileRuns } from "./reconcile-runs.mjs";
 import { downloadAuto3EvidenceArtifact } from "./live-evidence.mjs";
+import { evaluateLiveObservation } from "./evaluate-live.mjs";
+import { isAuto1Workflow } from "./auto1-outcome-semantics.mjs";
 
 function parseArgs(argv) {
   /** @type {Record<string, string>} */
@@ -122,12 +124,42 @@ export function executeLiveReconcile(opts) {
     recentRuns: all,
   });
 
+  // AUTO-1 is not handoff-based: re-evaluate recent completed runs from
+  // structured outcome so misclassified conflicts are recovered hourly.
+  /** @type {ReturnType<typeof evaluateLiveObservation>[]} */
+  const auto1Candidates = [];
+  const auto1Runs = all.filter((r) => isAuto1Workflow(r.name || "", null));
+  for (const r of auto1Runs.slice(0, 15)) {
+    if (String(r.status) !== "completed") continue;
+    let logText = "";
+    try {
+      logText = fetchRunLog(repo, r.id);
+    } catch {
+      logText = "";
+    }
+    const n = evaluateLiveObservation({
+      workflowName: r.name || "Upstream AUTO-1 Sync",
+      runId: r.id,
+      attempt: r.run_attempt || 1,
+      conclusion: r.conclusion,
+      expectedSourceSha: r.head_sha || null,
+      logText,
+    });
+    if (n.openIncident) auto1Candidates.push(n);
+  }
+
+  const candidates = mergeCandidatesIdempotent(once.candidates, auto1Candidates);
   const payload = {
     source: "live-reconcile",
     handoffCount: handoffs.length,
     handoffs,
-    once,
-    candidates: once.candidates,
+    once: {
+      ...once,
+      candidates,
+      candidateCount: candidates.length,
+      auto1CandidateCount: auto1Candidates.length,
+    },
+    candidates,
   };
 
   if (out) {
@@ -136,7 +168,7 @@ export function executeLiveReconcile(opts) {
   }
   if (upsertOut) {
     mkdirSync(dirname(upsertOut), { recursive: true });
-    writeFileSync(upsertOut, `${JSON.stringify({ candidates: once.candidates }, null, 2)}\n`);
+    writeFileSync(upsertOut, `${JSON.stringify({ candidates }, null, 2)}\n`);
   }
 
   return payload;

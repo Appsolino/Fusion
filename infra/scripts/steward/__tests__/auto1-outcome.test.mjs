@@ -141,3 +141,47 @@ describe("parseAuto1ResultEvidence", () => {
     assert.equal(r.conflictedFiles.length, 2);
   });
 });
+
+describe("reconcile recovers AUTO-1 conflicts", () => {
+  it("evaluateLiveObservation on failed AUTO-1 with outcome=conflict is candidate-shaped", async () => {
+    const { executeLiveReconcile } = await import("../run-live-reconcile.mjs");
+    const conflictLog = JSON.stringify({
+      outcome: "conflict",
+      conflict: true,
+      upstreamSha: "71ba437cfe41cc6c05f6f80a31a46c53d5b59cd4",
+      conflictedFiles: [
+        "packages/engine/src/executor.ts",
+        "scripts/lib/lifecycle-column-census-baseline.json",
+      ],
+      prUrl: "https://github.com/Appsolino/Fusion/pull/68",
+      mutatedMain: false,
+      deployedHostD: false,
+    });
+    const payload = executeLiveReconcile({
+      repo: "Appsolino/Fusion",
+      nowMs: Date.parse("2026-08-03T12:00:00Z"),
+      listRuns: () => ({
+        ok: true,
+        data: {
+          workflow_runs: [
+            {
+              id: 30805433281,
+              name: "Upstream AUTO-1 Sync",
+              status: "completed",
+              conclusion: "failure",
+              head_sha: "b83fd0eda83b1760b441454f852b8564f954bdf4",
+              run_attempt: 1,
+            },
+          ],
+        },
+      }),
+      listAuto3Dispatch: () => ({ ok: true, data: { workflow_runs: [] } }),
+      downloadEvidence: () => null,
+      fetchRunLog: () => conflictLog,
+    });
+    assert.equal(payload.once.auto1CandidateCount, 1);
+    assert.equal(payload.candidates.length, 1);
+    assert.equal(payload.candidates[0].failureClass, "upstream-merge-conflict");
+    assert.equal(payload.candidates[0].instance.auto1Result.prUrl, "https://github.com/Appsolino/Fusion/pull/68");
+  });
+});
