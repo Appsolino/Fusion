@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardS0 2026-08-01-21:10:
+ * FNXC:AppsolinoStewardS0 2026-08-03:
  * Live issue upsert from observation JSON using Appsolino Automation App token.
  * Read-only evidence already collected; this process only mutates Issues.
+ *
+ * Lookup lists steward-labeled issues (authoritative) instead of Search API
+ * (eventually consistent). An in-process fingerprint session collapses
+ * same-batch duplicates that previously produced #64/#65.
  */
 import { readFileSync } from "node:fs";
-import { upsertIncident } from "./upsert-incident.mjs";
+import { fileURLToPath } from "node:url";
+import { createUpsertSession, upsertIncident } from "./upsert-incident.mjs";
 import { extractFingerprintFromIssueBody } from "./policy.mjs";
 
 function parseArgs(argv) {
@@ -23,7 +28,7 @@ function parseArgs(argv) {
  * @param {string} token
  * @param {string} repo
  */
-function createGithubIssueClient(token, repo) {
+export function createGithubIssueClient(token, repo) {
   async function gh(path, init = {}) {
     const res = await fetch(`https://api.github.com${path}`, {
       ...init,
@@ -43,20 +48,39 @@ function createGithubIssueClient(token, repo) {
     return res.json();
   }
 
+  /**
+   * Authoritative lookup: list steward-labeled issues and match the marker.
+   * @param {string} fingerprint
+   */
+  async function listStewardIssuesByMarker(fingerprint) {
+    const fp = String(fingerprint || "").toLowerCase();
+    /** @type {import("./upsert-incident.mjs").IssueLike[]} */
+    const out = [];
+    const seen = new Set();
+    for (const state of ["open", "closed"]) {
+      let page = 1;
+      while (page <= 5) {
+        const batch = await gh(
+          `/repos/${repo}/issues?state=${state}&labels=${encodeURIComponent("appsolino-steward")}&per_page=100&page=${page}`,
+        );
+        if (!Array.isArray(batch) || batch.length === 0) break;
+        for (const it of batch) {
+          if (it.pull_request) continue;
+          if (extractFingerprintFromIssueBody(it.body || "") !== fp) continue;
+          if (seen.has(it.number)) continue;
+          seen.add(it.number);
+          out.push(it);
+        }
+        if (batch.length < 100) break;
+        page += 1;
+      }
+    }
+    return out;
+  }
+
   return {
     async searchIssuesByMarker(fingerprint) {
-      const q = encodeURIComponent(
-        `repo:${repo} in:body "appsolino-steward-fingerprint: sha256:${fingerprint}"`,
-      );
-      const data = await gh(`/search/issues?q=${q}&per_page=10`);
-      const out = [];
-      for (const it of data.items || []) {
-        const full = await gh(`/repos/${repo}/issues/${it.number}`);
-        if (extractFingerprintFromIssueBody(full.body || "") === fingerprint) {
-          out.push(full);
-        }
-      }
-      return out;
+      return listStewardIssuesByMarker(fingerprint);
     },
     async createIssue({ title, body, labels }) {
       return gh(`/repos/${repo}/issues`, {
@@ -73,6 +97,14 @@ function createGithubIssueClient(token, repo) {
   };
 }
 
+export async function upsertFromCandidates(client, candidates, session = createUpsertSession()) {
+  const results = [];
+  for (const n of candidates || []) {
+    results.push(await upsertIncident(client, n, session));
+  }
+  return results;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const inputPath = args.input;
@@ -83,14 +115,14 @@ async function main() {
   }
   const input = JSON.parse(readFileSync(inputPath, "utf8"));
   const client = createGithubIssueClient(token, repo);
-  const results = [];
-  for (const n of input.candidates || []) {
-    results.push(await upsertIncident(client, n));
-  }
+  const results = await upsertFromCandidates(client, input.candidates || []);
   process.stdout.write(`${JSON.stringify({ results }, null, 2)}\n`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
