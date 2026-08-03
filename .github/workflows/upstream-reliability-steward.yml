@@ -1,7 +1,7 @@
 # FNXC:AppsolinoStewardS0 2026-08-02-04:55:
 # Upstream Reliability Steward S0 — observation only (corrected trust zones).
 # Fast path: workflow_run on named AUTO workflows.
-# Recovery path: hourly reconciliation at minute 17 (authoritative; real handoffs).
+# Recovery path: hourly reconciliation at minute 37 (authoritative; real handoffs).
 # Checkout trusted main only. Never execute candidate code.
 # Never reference Host D/P deploy secrets. Never dispatch/rerun/merge/deploy.
 # Observe job: read-only GITHUB_TOKEN. Upsert job: App token + serialized concurrency.
@@ -18,7 +18,7 @@ on:
       - Upstream AUTO-3 Deploy
     types: [completed]
   schedule:
-    - cron: "17 * * * *"
+    - cron: "37 * * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           f=.github/workflows/upstream-reliability-steward.yml
-          grep -Fq 'cron: "17 * * * *"' "$f"
+          grep -Fq 'cron: "37 * * * *"' "$f"
           grep -q 'ref: main' "$f"
           ! grep -q 'gh workflow run' "$f"
           ! grep -q 'gh run rerun' "$f"
