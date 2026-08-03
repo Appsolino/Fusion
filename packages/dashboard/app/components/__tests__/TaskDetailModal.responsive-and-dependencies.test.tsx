@@ -24,6 +24,7 @@ import {
   setupTaskDetailModalHooks,
 } from "./TaskDetailModal.test-helpers";
 import { TaskDetailModal, TaskDetailContent } from "../TaskDetailModal";
+import { FloatingWindow } from "../FloatingWindow";
 import {
   assertModalGeometryRecoveryAndSheetContracts,
   assertRenderedModalTouchGeometry,
@@ -854,6 +855,63 @@ describe("TaskDetailModal", () => {
         expect(declarations, `${selector} mobile right inset`).not.toMatch(/\bpadding-(?:inline-end|right)\s*:/);
         expect(declarations, `${selector} mobile asymmetric padding`).not.toMatch(/\bpadding\s*:/);
       }
+    });
+
+    it("keeps the floating task header symmetric without sacrificing its resize targets", () => {
+      const floatingCss = readFileSync(resolve(__dirname, "../FloatingWindow.css"), "utf8");
+      const desktopTaskSelector = ".floating-window--task-detail:not(.floating-window--tablet-viewport)";
+      const taskPopupBody = getExactCssRuleBlock(floatingCss, `${desktopTaskSelector} .floating-window__body`);
+      const sharedBody = getExactCssRuleBlock(floatingCss, ".floating-window__body");
+      const header = getExactCssRuleBlock(readDashboardStylesSource(), ".modal-header");
+      const eastResize = getExactCssRuleBlock(floatingCss, `${desktopTaskSelector} .floating-window__resize-handle--e`);
+      const northEastResize = getExactCssRuleBlock(floatingCss, `${desktopTaskSelector} .floating-window__resize-handle--ne`);
+      const southEastResize = getExactCssRuleBlock(floatingCss, `${desktopTaskSelector} .floating-window__resize-handle--se`);
+      const onRequestClose = vi.fn();
+
+      /*
+      FNXC:TaskDetailLayout 2026-08-03-19:36:
+      The shared body reserves desktop scrollbar clearance. Task Detail moves only its resize
+      hit areas outboard, so the embedded header retains matching tokenized edges.
+      */
+      expect(sharedBody).toContain("margin-inline-end: var(--space-lg);");
+      expect(taskPopupBody).toContain("margin-inline-end: 0;");
+      expect(header).toContain("padding: var(--modal-padding);");
+      expect(eastResize).toContain("right: calc(var(--space-sm) * -1);");
+      expect(northEastResize).toContain("right: calc(var(--space-lg) * -1);");
+      expect(southEastResize).toContain("right: calc(var(--space-lg) * -1);");
+
+      const { baseElement, unmount } = render(
+        <FloatingWindow
+          windowKey="task-detail-inset"
+          title="FN-8766"
+          onClose={onRequestClose}
+          hideHeader
+          dragHandleSelector=".task-detail-content--embedded > .modal-header"
+          className="floating-window--task-detail"
+          layer="task-detail"
+        >
+          <TaskDetailContent
+            task={makeTask({ id: "FN-8766", title: "A task title long enough to exercise header alignment" })}
+            onMoveTask={noopMove}
+            onDeleteTask={noopDelete}
+            onMergeTask={noopMerge}
+            onOpenDetail={noopOpenDetail}
+            addToast={noop}
+            embedded
+            onRequestClose={onRequestClose}
+          />
+        </FloatingWindow>,
+      );
+
+      const popup = baseElement.querySelector("[data-testid='floating-window-task-detail-inset']");
+      const close = screen.getByRole("button", { name: "Close" });
+      expect(popup).toHaveClass("floating-window--task-detail");
+      expect(popup?.querySelector(".task-detail-content--embedded > .modal-header")).toContainElement(close);
+      expect(close).toHaveClass("task-detail-floating-close");
+      expect(popup?.querySelectorAll(".floating-window__resize-handle")).toHaveLength(8);
+      fireEvent.click(close);
+      expect(onRequestClose).toHaveBeenCalledTimes(1);
+      unmount();
     });
 
     it("uses production FloatingWindow geometry for touch drag, eight-direction resize, recovery, and sheets", () => {
