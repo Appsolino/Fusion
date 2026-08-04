@@ -1,5 +1,13 @@
 # @fusion/desktop
 
+## 0.75.0
+
+### Patch Changes
+
+- @fusion/core@0.75.0
+- @fusion/dashboard@0.75.0
+- @fusion/engine@0.75.0
+
 ## 0.75.0-beta.2
 
 ### Patch Changes

@@ -2,6 +2,46 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.75.0
+
+### Highlights
+
+- Planning Mode approvals no longer stall — approved and rejected plans release their tasks
+- Planning Mode tasks keep every interview decision and get scheduled into their workflow lane
+- Todo Lists ships as an optional per-project plugin instead of a hardcoded dashboard view
+- Voice Input can be enabled on supported installs, with dictation scoped to the selected project
+- pnpm dev:watch rebuilds and restarts the engine after draining active agents
+
+### New
+
+- Todo Lists is now an optional per-project first-party plugin, with its backend route and dashboard view owned by the plugin rather than the host.
+- Editable file editors gain undo and redo controls.
+- List task details adapt to the available content width, routing to a split detail view when there is room; an explicit popup preference still wins.
+- Mobile Planning Mode gains a shortcut to review the evolving plan after five answers, without submitting the current response.
+- `pnpm dev:watch` watches development sources and restarts the engine safely: it closes new admission, drains active agents, rebuilds, and respawns.
+
+### Fixed
+
+- Manually approved or rejected plans now release their tasks so work can continue.
+- Approved plans resume immediately once Plan Review exhausts its revision budget, recorded as an audited human bypass.
+- Planning Mode tasks retain the complete set of interview decisions across single, CLI, and multi-task creation.
+- Planning Mode tasks are scheduled promptly in their selected workflow lanes.
+- Planning Mode can create another task from the same plan without requiring an edit first.
+- Planning finalization no longer crashes after PROMPT.md writes.
+- Plans reseeded by dependency changes stay recoverable instead of being silently stranded.
+- Stale plan approvals are prevented, with stronger planning and review completeness checks and serialized approvals.
+- Planning and review prompts converge faster: planning gathers repository evidence before drafting, Plan Review batches independent blockers, and code review traces changed invariants through consumers and tests.
+- Executor credential resolution now self-heals so custom providers and renamed providers match what chat uses.
+- Supported installations can enable Voice Input once its model is ready, with stable readiness reporting.
+- Voice dictation create, transcription, and cleanup stay scoped to the selected project.
+- Duplicate detection ignores completed and archived tasks while still protecting active work.
+- Task Detail Activity thinking blocks expand by default and keep per-block collapse state while reasoning streams in.
+- The floating Task Detail popup close control lines up with its header edge.
+- Dependency and file-scope queue entries no longer repeat for unchanged blockers.
+- Default-branch mission group merges go through the normal manual release gate via a dedicated mission integration branch.
+- Plugin SDK declarations and Todo Lists CLI packaging are restored.
+- Project escalation model and voice input settings strings are back in every supported secondary locale.
+
 ## 0.75.0-beta.2
 
 ### Highlights
