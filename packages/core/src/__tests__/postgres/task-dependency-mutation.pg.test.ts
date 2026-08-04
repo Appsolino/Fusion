@@ -17,6 +17,7 @@ import {
   type SharedPgTaskStoreHarness,
 } from "../../__test-utils__/pg-test-harness.js";
 import type { TaskStore } from "../../store.js";
+import { BUILTIN_CODING_WORKFLOW_IR } from "../../workflows/builtin-coding-workflow-ir.js";
 
 const pgTest = pgDescribe;
 
@@ -125,6 +126,144 @@ pgTest("TaskStore dependency mutations (PostgreSQL)", () => {
     expect((await store.getTask(dependent.id)).status).toBe("needs-replan");
     expect((await store.getWorkflowWorkItem(pending.id))?.state).toBe("cancelled");
   });
+
+  it("keeps invalidation and continuation cancellation authoritative in a combined updateTask patch", async () => {
+    const prerequisite = await store.createTask({ description: "combined prerequisite", column: "done" });
+    const dependent = await store.createTask({ description: "combined dependent", column: "todo" });
+    const pending = await store.replaceActiveTaskWorkflowContinuation({
+      runId: `${dependent.id}:continuation:0`, taskId: dependent.id, nodeId: "plan-review",
+      kind: "task", state: "runnable", stableWorkflowRunId: `${dependent.id}:workflow`,
+      continuationSequence: 0, waitReason: "planning", sourceColumn: "todo", targetColumn: "todo", irHash: "ir-v1",
+    });
+
+    await store.updateTask(dependent.id, {
+      dependencies: [prerequisite.id],
+      status: null,
+      approvedPlanFingerprint: "sha256:current",
+      awaitingApprovalReason: "plan-review-replan-cap",
+      workflowStepResults: [{
+        workflowStepId: "plan-review",
+        workflowStepName: "Plan Review",
+        status: "passed",
+        completedAt: "2026-08-04T02:00:00.000Z",
+      }],
+    });
+
+    const updated = await store.getTask(dependent.id);
+    expect(updated.status).toBe("needs-replan");
+    expect(updated.approvedPlanFingerprint).toBeUndefined();
+    expect(updated.awaitingApprovalReason).toBeUndefined();
+    expect(updated.workflowStepResults).toEqual([
+      expect.objectContaining({
+        workflowStepId: "plan-review",
+        status: "passed",
+        supersededAt: expect.any(String),
+        supersededReason: "dependency-change",
+      }),
+    ]);
+    expect((await store.getWorkflowWorkItem(pending.id))?.state).toBe("cancelled");
+  });
+
+  it.each(["dedicated", "generic"] as const)(
+    "preserves but supersedes Plan Review approval through the %s dependency API",
+    async (api) => {
+      const prerequisite = await store.createTask({ description: `${api} prerequisite`, column: "done" });
+      const dependent = await store.createTask({ description: `${api} dependent`, column: "todo" });
+      await store.updateTask(dependent.id, {
+        workflowStepResults: [{
+          workflowStepId: "plan-review",
+          workflowStepName: "Plan Review",
+          status: "passed",
+          completedAt: "2026-08-04T01:00:00.000Z",
+        }],
+      });
+      const pending = await store.replaceActiveTaskWorkflowContinuation({
+        runId: `${dependent.id}:continuation:0`, taskId: dependent.id, nodeId: "plan-review",
+        kind: "task", state: "runnable", stableWorkflowRunId: `${dependent.id}:workflow`,
+        continuationSequence: 0, waitReason: "planning", sourceColumn: "todo", targetColumn: "todo", irHash: "ir-v1",
+      });
+
+      if (api === "dedicated") {
+        await store.updateTaskDependencies(dependent.id, { operation: "add", dependency: prerequisite.id });
+      } else {
+        await store.updateTask(dependent.id, { dependencies: [prerequisite.id] });
+      }
+
+      const updated = await store.getTask(dependent.id);
+      expect(updated.status).toBe("needs-replan");
+      expect(updated.workflowStepResults).toEqual([
+        expect.objectContaining({
+          workflowStepId: "plan-review",
+          status: "passed",
+          supersededAt: expect.any(String),
+          supersededReason: "dependency-change",
+        }),
+      ]);
+      expect((await store.getWorkflowWorkItem(pending.id))?.state).toBe("cancelled");
+    },
+  );
+
+  it.each(["dedicated", "generic"] as const)(
+    "invalidates and rehomes an exhausted split-column Plan Review through the %s dependency API",
+    async (api) => {
+      const definition = await store.createWorkflowDefinition({
+        name: `split review dependency ${api}`,
+        ir: {
+          ...BUILTIN_CODING_WORKFLOW_IR,
+          id: `split-review-dependency-${api}`,
+          nodes: BUILTIN_CODING_WORKFLOW_IR.nodes.map((node) =>
+            node.id === "plan-review" ? { ...node, column: "in-review" } : node
+          ),
+        },
+      });
+      const prerequisite = await store.createTask({
+        description: `${api} prerequisite`,
+        column: "done",
+        workflowId: definition.id,
+      } as never);
+      const dependent = await store.createTask({
+        description: `${api} dependent`,
+        workflowId: definition.id,
+      } as never);
+      const intakeColumn = dependent.column;
+      await store.moveTask(dependent.id, "in-review", {
+        moveSource: "engine",
+        recoveryRehome: true,
+        bypassGuards: true,
+      });
+      await store.updateTask(dependent.id, {
+        status: "awaiting-approval",
+        awaitingApprovalReason: "plan-review-replan-cap",
+        approvedPlanFingerprint: "sha256:stale",
+        workflowStepResults: [{
+          workflowStepId: "plan-review",
+          workflowStepName: "Plan Review",
+          status: "failed",
+          verdict: "REVISE",
+          completedAt: "2026-08-04T05:00:00.000Z",
+        }],
+      } as never);
+
+      if (api === "dedicated") {
+        await store.updateTaskDependencies(dependent.id, {
+          operation: "add",
+          dependency: prerequisite.id,
+        });
+      } else {
+        await store.updateTask(dependent.id, { dependencies: [prerequisite.id] });
+      }
+
+      const updated = await store.getTask(dependent.id);
+      expect(updated.column).toBe(intakeColumn);
+      expect(updated.status).toBe("needs-replan");
+      expect(updated.awaitingApprovalReason).toBeUndefined();
+      expect(updated.approvedPlanFingerprint).toBeUndefined();
+      expect(updated.workflowStepResults).toContainEqual(expect.objectContaining({
+        workflowStepId: "plan-review",
+        supersededReason: "dependency-change",
+      }));
+    },
+  );
 
   /*
   FNXC:WorkflowLifecycleColumns 2026-07-31-02:05 (PR #2720 review — greptile):

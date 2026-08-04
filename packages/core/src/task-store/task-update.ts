@@ -32,6 +32,8 @@ import {applyOriginalDescription} from "../tasks/original-description-policy.js"
 import {normalizeTaskReviewState} from "../task-store/review-state.js";
 import {hasOwnDeclaredSymbols, normalizeDeclaredSymbols, extractDeclaredSymbolsFromPrompt, resolveTaskSymbolsForTask} from "../tasks/task-symbol-resolution.js";
 import {assertValidProviderInstanceId} from "../provider-instance.js";
+import {supersedePlanReviewResults} from "../planner/plan-approval.js";
+import {PLAN_REVIEW_GROUP_ID} from "../workflows/builtin-plan-review-group.js";
 
 export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updates: Parameters<TaskStore["updateTask"]>[1], runContext?: RunMutationContext,): Promise<Task> {
   /* FNXC:CredentialInstanceSelection 2026-08-01-05:43: validate task authoring input before persistence; ids are stored but runtime credential resolution remains unchanged. */
@@ -53,6 +55,9 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
       const dir = store.taskDir(id);
       const task = await store.readTaskJson(dir);
       const wasFailed = task.status === "failed";
+      const preUpdatePlanReviewResults = task.workflowStepResults?.filter(
+        (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID,
+      );
 
       // Capture title/description before mutation so the PROMPT.md stub
       // detector below can compare against the exact wrapper bytes that the
@@ -162,11 +167,12 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
       if (updates.workspaceWorktrees !== undefined) {
         task.workspaceWorktrees = updates.workspaceWorktrees;
       }
-      // Detect new dependencies being added to a hold-lane task → re-seed for re-specification
+      // New dependencies re-seed hold-lane tasks and exhausted Plan Review cap parks.
       let movedToTriage = false;
       let respecifyFromColumn: string | undefined;
       let respecifyMoveLanes: TaskMoveLanes | undefined;
       let previousDependencies: string[] | undefined;
+      let planningInvalidatedAt: string | undefined;
       if (updates.dependencies !== undefined) {
         previousDependencies = (task.dependencies ?? []).map((dependency) => dependency.trim()).filter(Boolean);
         const oldDeps = new Set(previousDependencies);
@@ -212,7 +218,11 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
         /* DELIBERATE-LITERAL — the unresolvable-workflow default for the SOURCE lane only; the
            destination below never falls back to a literal. Reviewed 2026-07-31-02:40. */
         const holdLane = depLanes === undefined ? "todo" : depLanes.hold;
-        if (hasNewDeps && holdLane !== undefined && task.column === holdLane) {
+        const isPlanReviewCapPark = task.status === "awaiting-approval"
+          && task.awaitingApprovalReason === "plan-review-replan-cap";
+        const shouldRespecify = hasNewDeps
+          && ((holdLane !== undefined && task.column === holdLane) || isPlanReviewCapPark);
+        if (shouldRespecify) {
           const intakeLane = depLanes?.intake;
           respecifyFromColumn = task.column;
           const relocating = intakeLane !== undefined && intakeLane !== task.column;
@@ -221,23 +231,16 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
             task.columnMovedAt = new Date().toISOString();
           }
           /*
-          FNXC:PlanningDependencyReseed 2026-08-04-00:30:
-          A new dependency invalidates a plan that is still in the hold lane.  The
+          FNXC:PlanningDependencyReseed 2026-08-04-06:35:
+          A new dependency invalidates a plan that is still in the hold lane or parked after
+          exhausting Plan Review in a distinct review column. The
           prior null reset raced an in-flight planner after it wrote PROMPT.md but
           before its final handoff, leaving a real specification that neither
           planning discovery nor release could claim.  `needs-replan` is the
           graph-owned durable re-entry signal: it preserves prompt authority and
           makes the interrupted planner's stale finalizer harmless.
           */
-          task.status = "needs-replan";
-          /*
-          FNXC:PlanningDependencyReseed 2026-08-04-00:54:
-          Both dependency mutation APIs invalidate the same pre-execution plan
-          handoff. Clearing manual-approval evidence here prevents a newly added
-          blocker from inheriting approval for the superseded specification.
-          */
-          task.approvedPlanFingerprint = undefined;
-          task.awaitingApprovalReason = undefined;
+          planningInvalidatedAt = new Date().toISOString();
           const depLogEntry: TaskLogEntry = {
             timestamp: new Date().toISOString(),
             action: relocating
@@ -833,6 +836,37 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
         task.workflowStepResults = undefined;
       } else if (updates.workflowStepResults !== undefined) {
         task.workflowStepResults = updates.workflowStepResults;
+      }
+      if (planningInvalidatedAt !== undefined) {
+        /*
+        FNXC:PlanningDependencyReseed 2026-08-04-06:35:
+        Dependency invalidation is authoritative over every field in the same
+        generic updateTask patch. Apply it after the ordinary status, approval,
+        and workflow-result merge so a dashboard PATCH containing dependencies
+        plus stale current-episode fields cannot undo the replan fence. The
+        persistence transaction below also retires the pending continuation.
+
+        Preserve the pre-patch Plan Review projection when that same patch clears
+        or replaces workflowStepResults without a Plan Review row. Dropping that
+        audit projection lets the graph reconstruct the old pass from its durable
+        completion log and incorrectly release the newly invalidated plan.
+        */
+        task.status = "needs-replan";
+        task.approvedPlanFingerprint = undefined;
+        task.awaitingApprovalReason = undefined;
+        const patchedResultsRetainPlanReview = task.workflowStepResults?.some(
+          (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID,
+        ) === true;
+        const resultsWithPriorPlanReview = patchedResultsRetainPlanReview
+          ? (task.workflowStepResults ?? [])
+          : [
+              ...(task.workflowStepResults ?? []),
+              ...(preUpdatePlanReviewResults ?? []),
+            ];
+        task.workflowStepResults = supersedePlanReviewResults(
+          resultsWithPriorPlanReview.length > 0 ? resultsWithPriorPlanReview : undefined,
+          planningInvalidatedAt,
+        );
       }
       if (updates.mergeDetails === null) {
         task.mergeDetails = undefined;

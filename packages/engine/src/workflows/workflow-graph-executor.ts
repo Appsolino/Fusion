@@ -814,8 +814,8 @@ export class WorkflowGraphExecutor {
             ? node.config.name.trim()
             : node.id;
           /*
-          FNXC:PlanReview 2026-06-29-02:40:
-          Triage runs Plan Review before releasing a task to execution so the task stays in the triage column during review. When the execution graph later reaches the same optional group, treat an existing passed Plan Review result as satisfied and do not launch a duplicate reviewer session.
+          FNXC:PlanReview 2026-08-04-06:35:
+          Triage runs Plan Review before releasing a task to execution so the task stays in the triage column during review. When the execution graph later reaches the same optional group, only an unsuperseded projection may satisfy, repair, or hold the gate; old-episode evidence must never suppress the current reviewer session.
           */
           if (
             node.id === PLAN_REVIEW_GROUP_ID
@@ -825,7 +825,10 @@ export class WorkflowGraphExecutor {
             this.deps.logTaskEntry?.("[pre-merge] Workflow step already satisfied: Plan Review");
             return await traverseChildren(node, { outcome: "success", value: "already-passed" });
           }
-          const repairedPlanReview = node.id === PLAN_REVIEW_GROUP_ID
+          const hasPlanReviewProjection = task.workflowStepResults?.some(
+            (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID,
+          ) === true;
+          const repairedPlanReview = node.id === PLAN_REVIEW_GROUP_ID && !hasPlanReviewProjection
             ? recoverPassedPlanReviewFromLatestLog(task)
             : undefined;
           if (repairedPlanReview) {
@@ -855,7 +858,7 @@ export class WorkflowGraphExecutor {
               );
             }
             const lease = classifyReviewLease(
-              task.workflowStepResults,
+              task.workflowStepResults?.filter((result) => result.supersededAt == null),
               node.id,
               this.deps.runLoopNowForTests?.() ?? Date.now(),
             );
