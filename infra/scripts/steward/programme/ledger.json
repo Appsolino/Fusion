@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "programme": "full-autonomy-completion",
+  "trackingIssue": 78,
+  "repository": "Appsolino/Fusion",
+  "startMainSha": "1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0",
+  "s1aImplementationBaselineSha": "be0aeee7710aba632a267d34737fd18cdeb0f2db",
+  "documentationClosureMergeSha": "1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0",
+  "hostP": "PROHIBITED",
+  "updatedAtUtc": "2026-08-04T12:00:00Z",
+  "activePhase": "2-cursor-dual-review",
+  "phases": {
+    "1-control-plane": {
+      "status": "CI_PENDING_CORRECTIVE_HEAD",
+      "prs": [
+        80
+      ],
+      "heads": [
+        "b30a65a158bfe3d721d1ace69532dc6a543b3be0"
+      ],
+      "merges": [],
+      "notes": "PR #80 control plane — Cursor dual-review with full evidence, model probe, writer recompute, gates OFF; bootstrap owner merge only"
+    },
+    "2-grok-review": {
+      "status": "SUPERSEDED",
+      "notes": "Owner removed xAI/Grok; Cursor dual-review replaces this phase",
+      "replacement": "2-cursor-dual-review"
+    },
+    "3-s1a-auto": {
+      "status": "PENDING",
+      "gateA": "PENDING",
+      "gateB": "PENDING",
+      "prs": []
+    },
+    "4-s1b": {
+      "status": "IN_PROGRESS",
+      "prs": [],
+      "notes": "policy+plan+run dry-run; live spawn deferred"
+    },
+    "5-s2": {
+      "status": "IN_PROGRESS",
+      "prs": [],
+      "notes": "policy+playbooks implemented; gate OFF"
+    },
+    "6-s3": {
+      "status": "IN_PROGRESS",
+      "prs": [],
+      "notes": "policy implemented; gate OFF"
+    },
+    "7-upstream-74": {
+      "status": "IN_PROGRESS",
+      "issue": 74,
+      "pr": 82,
+      "supersededPrs": [
+        81,
+        68,
+        57,
+        60
+      ],
+      "upstreamSha": "993a2f9d866d0951c1775d9423875ce8d6aeb8f4",
+      "head": "16e0650c9c21616e160e1d8c9475b93b356c440c"
+    },
+    "8-e2e-proof": {
+      "status": "PENDING"
+    },
+    "9-closure": {
+      "status": "PENDING"
+    },
+    "2-cursor-dual-review": {
+      "status": "IN_PROGRESS",
+      "prs": [
+        80
+      ],
+      "notes": "Full diff evidence to both roles; model probe; writer recomputes digests; no s2/s3 overrides; no XAI"
+    }
+  },
+  "openOwnerActions": [],
+  "providerPins": {
+    "cursor": {
+      "configuredProvider": "cursor-cli",
+      "configuredModel": "composer-2.5",
+      "roles": [
+        "implementer",
+        "reviewer",
+        "approver"
+      ]
+    }
+  }
+}

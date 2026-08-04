@@ -1,0 +1,167 @@
+# FNXC:AppsolinoStewardReview 2026-08-04:
+# Dual Cursor review + approver on a PR exact head (trusted main checkout only).
+# Review job: Cursor agent, no App write / Host secrets; receives full diff evidence.
+# Writer job: App token; independently recomputes head/diff/checks + enforces gates.
+# Candidate branch cannot alter the writer — workflow always checks out Appsolino main.
+# No XAI_API_KEY. Activation gates must be ON for merge (default OFF).
+
+name: Steward Cursor Dual Approve
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number on Appsolino/Fusion"
+        required: true
+        type: string
+      risk:
+        description: "LOW | SENSITIVE"
+        required: true
+        type: choice
+        options: [LOW, SENSITIVE]
+        default: SENSITIVE
+      merge:
+        description: "If true, exact-head merge after dual APPROVE (requires activation gates)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: steward-cursor-dual-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  cursor-review-approve:
+    name: Cursor reviewer then independent approver
+    runs-on: [self-hosted, appsolino-fusion]
+    outputs:
+      head_sha: ${{ steps.run.outputs.head_sha }}
+      action: ${{ steps.run.outputs.action }}
+      artifact_ready: ${{ steps.run.outputs.artifact_ready }}
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Dual Cursor review (no merge)
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          RISK: ${{ inputs.risk }}
+          CURSOR_API_KEY: ${{ secrets.S1A_CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${APPSOLINO_AUTOMATION_APP_PRIVATE_KEY:-}" || -n "${HOST_D_DEPLOY_SSH_KEY:-}" ]]; then
+            echo "::error::review job must not receive App or Host credentials"
+            exit 1
+          fi
+          node <<'NODE'
+          import { writeFileSync } from "node:fs";
+          import { runDualCursorApproveMaybeMerge } from "./infra/scripts/steward/review/run-dual-approve.mjs";
+          const result = await runDualCursorApproveMaybeMerge({
+            prNumber: Number(process.env.PR_NUMBER),
+            risk: process.env.RISK,
+            rollbackPlan: "revert exact-head merge commit; Host D AUTO-3 rollback to previous release id",
+            missionExcerpt: "full-autonomy-completion dual Cursor exact-head path",
+            policyExcerpt: "STEWARD-POLICY: dual Cursor; full diff evidence; writer recomputes digests; gates OFF until proof",
+            merge: false,
+            dryRun: true,
+          });
+          writeFileSync("/tmp/cursor-dual.json", JSON.stringify(result, null, 2));
+          console.log(JSON.stringify({
+            action: result.action,
+            headSha: result.headSha,
+            reviewerSession: result.reviewer?.sessionId,
+            approverSession: result.approver?.sessionId,
+            configuredModel: result.reviewer?.configuredModel,
+            actualModel: result.reviewer?.actualModel,
+            modelFingerprint: result.reviewer?.modelFingerprint,
+            evidencePayloadFields: result.evidencePayloadFields,
+            changedFiles: result.changedFiles,
+          }, null, 2));
+          if (!["approved-ready", "reviewer-rejected", "approver-rejected", "merge-blocked"].includes(result.action)) {
+            process.exit(1);
+          }
+          NODE
+          echo "action=$(python3 -c 'import json;print(json.load(open("/tmp/cursor-dual.json"))["action"])')" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(python3 -c 'import json;print(json.load(open("/tmp/cursor-dual.json")).get("headSha") or "")')" >> "$GITHUB_OUTPUT"
+          echo "artifact_ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload dual-approval artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cursor-dual-${{ inputs.pr_number }}
+          path: /tmp/cursor-dual.json
+          if-no-files-found: error
+
+  writer-exact-head-merge:
+    name: App writer revalidate + optional exact-head merge
+    needs: cursor-review-approve
+    if: ${{ inputs.merge && needs.cursor-review-approve.outputs.action == 'approved-ready' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout trusted main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cursor-dual-${{ inputs.pr_number }}
+          path: /tmp/cursor-dual
+
+      - name: Recompute digests, enforce gates, exact-head merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECT_HEAD: ${{ needs.cursor-review-approve.outputs.head_sha }}
+          RISK: ${{ inputs.risk }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { writerRevalidateAndMaybeMerge } from "./infra/scripts/steward/review/writer.mjs";
+          const art = JSON.parse(readFileSync("/tmp/cursor-dual/cursor-dual.json", "utf8"));
+          const result = writerRevalidateAndMaybeMerge({
+            prNumber: Number(process.env.PR_NUMBER),
+            risk: process.env.RISK,
+            expectHead: process.env.EXPECT_HEAD,
+            artifact: {
+              reviewer: art.reviewer,
+              approver: art.approver,
+              headSha: art.headSha,
+              diffSha256: art.diffSha256,
+              testsSha256: art.testsSha256,
+            },
+            merge: true,
+            dryRun: false,
+            appToken: process.env.GH_TOKEN,
+          });
+          writeFileSync("/tmp/writer-result.json", JSON.stringify(result, null, 2));
+          console.log(JSON.stringify(result, null, 2));
+          if (result.action !== "merged") process.exit(1);
+          if (!result.writerRecomputed) throw new Error("writer did not recompute digests");
+          NODE

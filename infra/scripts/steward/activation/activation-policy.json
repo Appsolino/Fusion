@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "description": "Version-controlled Steward autonomy activation gates. killSwitch overrides all enables.",
+  "killSwitch": false,
+  "gates": {
+    "s1aAutoHandoff": {
+      "enabled": false,
+      "envOverride": "S1A_AUTO_HANDOFF",
+      "description": "Allow labeled steward/needs-expert events to launch S1A live analyze"
+    },
+    "s0HandoffS1a": {
+      "enabled": false,
+      "envOverride": "STEWARD_S0_HANDOFF_S1A",
+      "envTrueValue": "1",
+      "description": "Allow S0 to attach steward/needs-expert on new incidents"
+    },
+    "s1bEnabled": {
+      "enabled": false,
+      "envOverride": "STEWARD_S1B_ENABLED",
+      "description": "Allow S1B repair-PR generation"
+    },
+    "s2Enabled": {
+      "enabled": false,
+      "envOverride": "STEWARD_S2_ENABLED",
+      "description": "Allow S2 low-risk exact-head auto-merge"
+    },
+    "s3Enabled": {
+      "enabled": false,
+      "envOverride": "STEWARD_S3_ENABLED",
+      "description": "Allow S3 sensitive assist (Appsolino+Host D only)"
+    }
+  },
+  "emergency": {
+    "killSwitchFile": "infra/scripts/steward/activation/KILL",
+    "note": "Presence of KILL file or killSwitch=true disables every gate"
+  }
+}

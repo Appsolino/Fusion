@@ -2,11 +2,16 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-04T07:40:00Z
+**Last updated UTC:** 2026-08-04T11:00:00Z
 
 | Field | Value |
 | --- | --- |
-| Current `main` SHA | `be0aeee7710aba632a267d34737fd18cdeb0f2db` (PR #76 S1A merge) |
+| S1A implementation baseline SHA | `be0aeee7710aba632a267d34737fd18cdeb0f2db` (PR #76) |
+| Documentation closure merge SHA | `1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0` (PR #77) |
+| Programme tracking | Issue [#78](https://github.com/Appsolino/Fusion/issues/78) · ledger `infra/scripts/steward/programme/ledger.json` |
+| Live `main` SHA | **Resolve dynamically** (`git fetch origin && git rev-parse origin/main`) — not stored here |
+| Active upstream sync | [PR #82](https://github.com/Appsolino/Fusion/pull/82) (`993a2f9d866d`) — supersedes closed #81/#68/#57/#60 |
+| Owner gate #79 | **CLOSED (not_planned / SUPERSEDED)** — Cursor-only dual review; no xAI key |
 | Active Host D release | `auto3-0.74.0-beta.6-16f24ed3b473` |
 | Source SHA | `16f24ed3b47321cc1b5aa693b2fac7e13a00b379` (PR #55 absorb) |
 | Previous rollback release | `auto3-0.74.0-beta.5-5f1b923bd815` |
@@ -14,22 +19,18 @@
 | Staging health | `ok` / `0.74.0-beta.6` @ `127.0.0.1:4140` (`enginePaused=true`) |
 | Host P state | Deferred / untouched (**accessed=NO** — **prohibited**) |
 | Legacy production | DEGRADED / FROZEN |
-| Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** |
+| Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** · PR #80 Cursor dual-review control plane (gates OFF) |
 
 ## Owner priority
 
-S1A live engine: `cursor-cli` / `composer-2.5` on self-hosted `appsolino-fusion` (analyze) + GitHub-hosted writer.
- (2026-08-04)
-
 ```text
-NOW:     Close S1A activation docs/label state; keep automatic handoff OFF
-NEXT:    Separate decision: controlled S1A_AUTO_HANDOFF activation (then optional STEWARD_S0_HANDOFF_S1A)
-HOLD:    S1B repair PR agent — NOT AUTHORISED
-DONE:    S0 observation ACCEPTED (fingerprint, upsert, AUTO-1 conflict classification)
-DONE:    S1A IMPLEMENTED + MANUAL LIVE PROOF PASS on issue #74 (PR #76 / be0aeee77)
-DONE:    AUTO-4 COMPLETE (pin 71576d953626)
-PARKED:  ISS-UI-001 / PR #28
-PARKED:  ISS-GIT-007
+NOW:     Bootstrap-owner-merge PR #80 after corrective dual-review head is green
+NEXT:    Prove Cursor dual-review on main → Gate A/B → S1B/S2/S3 → merge #82 → AUTO-3
+HOLD:    Host P / production — PROHIBITED
+DONE:    S0 ACCEPTED; S1A MANUAL LIVE PROOF PASS (issue #74)
+DONE:    Owner chose Cursor-only review; #79 closed not_planned
+DONE:    One active upstream sync: PR #82 only
+NOTE:    Activation gates remain OFF; PR #80 itself is bootstrap owner merge
 NOTE:    Engine stays paused. Host P untouched / prohibited.
 ```
 
@@ -37,10 +38,12 @@ NOTE:    Engine stays paused. Host P untouched / prohibited.
 
 | Item | Value |
 | --- | --- |
-| S0 status | **ACCEPTED** — observation / upsert / reconcile on `main` |
-| S1A status | **IMPLEMENTED / MANUAL LIVE PROOF PASS** — advice only; see [`reliability/S1A-EXPERT-ADVISORY.md`](reliability/S1A-EXPERT-ADVISORY.md) |
-| S1B status | **NOT AUTHORISED** |
-| Automatic S1A handoff | **OFF** pending separate activation (`S1A_AUTO_HANDOFF` / `STEWARD_S0_HANDOFF_S1A`) |
+| S0 status | **ACCEPTED** |
+| S1A status | **IMPLEMENTED / MANUAL ACTIVE** — auto handoff gated OFF until programme Gate A/B |
+| S1B status | **IMPLEMENTING** (programme #78) — not yet activated |
+| S2 / S3 | **IMPLEMENTING** under programme — not yet activated |
+| Automatic S1A handoff | **OFF** (`activation-policy.json` + optional env overrides) |
+| Dual review | **CURSOR-ONLY** (implementer/reviewer/approver) — no xAI |
 | Engine | **paused** |
 | Host P | **prohibited** |
 
@@ -52,12 +55,12 @@ NOTE:    Engine stays paused. Host P untouched / prohibited.
 | AUTO-2 | OPERATIONAL |
 | AUTO-3 | OPERATIONAL |
 | Steward S0 | **ACCEPTED** |
-| Steward S1A | **IMPLEMENTED / MANUAL MODE ACTIVE** (advice only) |
-| Steward S1B | **NOT AUTHORISED** |
+| Steward S1A | **MANUAL ACTIVE** (auto pending programme) |
+| Steward S1B+ | **PROGRAMME IN PROGRESS** |
 
 ## Next authorised mission
 
-1. Keep **manual** S1A `workflow_dispatch` available for eligible Steward incidents.  
-2. Automatic handoff remains **OFF** until a separate controlled activation.  
-3. Do **not** authorise S1B, repair branches, Host D/P, or AUTO redispatch from Steward.  
-4. Issue #74 advice is advisory only — S1B must not be authorised solely from that assessment.  
+1. Land PR #80 Cursor dual-review control plane.  
+2. S1A Gate A then Gate B automatic activation proofs.  
+3. S1B → S2 → S3; merge #82; AUTO-1/2/3 Host D E2E proof.  
+4. Never access Host P from this programme.  

@@ -94,7 +94,7 @@ jobs:
           node infra/scripts/steward/s1a/guard-authority.mjs --workflow="$f"
           echo "yaml-parse-ok"
 
-      - name: Gate triggers (auto handoff OFF until proof)
+      - name: Gate triggers (activation policy + kill switch)
         id: gate
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -109,6 +109,11 @@ jobs:
           SKIP=""
           SHOULD="false"
 
+          # Version-controlled policy + emergency KILL file (killSwitch wins).
+          ACT="$(node -e 'import("./infra/scripts/steward/activation/resolve-activation.mjs").then(m=>{const s=m.summarizeActivation(); process.stdout.write(JSON.stringify({kill:s.killSwitch,on:s.effective.s1aAutoHandoff}))}')"
+          echo "activation=${ACT}"
+          AUTO_ON="$(node -e 'const a=JSON.parse(process.argv[1]); process.stdout.write(a.on&&!a.kill?"true":"false")' "${ACT}")"
+
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             ISSUE="${ISSUE_NUMBER_INPUT}"
             MODE="live"
@@ -119,10 +124,10 @@ jobs:
             if [[ "${LABEL_NAME}" != "steward/needs-expert" ]]; then
               SKIP="label-not-needs-expert"
               SHOULD="false"
-            elif [[ "${S1A_AUTO_HANDOFF}" != "true" ]]; then
+            elif [[ "${AUTO_ON}" != "true" ]]; then
               SKIP="auto-handoff-disabled"
               SHOULD="false"
-              echo "S1A labeled event skipped (S1A_AUTO_HANDOFF!=true)"
+              echo "S1A labeled event skipped (activation gate s1aAutoHandoff off or killSwitch)"
             else
               SHOULD="true"
             fi
