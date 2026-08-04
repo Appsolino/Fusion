@@ -2,20 +2,19 @@
 /* eslint-env node */
 /**
  * FNXC:AppsolinoStewardReview 2026-08-04:
- * Dual Cursor review → approver → exact-head merge evaluation.
- * No XAI_API_KEY. Writer (App token) revalidates digests.
+ * Dual Cursor review orchestrator — full evidence; no gate overrides.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { runCursorReviewer } from "./reviewer.mjs";
-import { runCursorApprover, assertApprovalsStillValid } from "./approver.mjs";
+import { runCursorApprover } from "./approver.mjs";
 import { assertNoXaiRequirement } from "./policy.mjs";
+import { buildEvidenceBundle } from "./evidence.mjs";
 import {
   evaluateDualApprovalMerge,
   exactHeadMergeArgv,
   ALLOWED_REPO,
 } from "../merge/exact-head.mjs";
-import { sha256Text } from "./verdict.mjs";
 
 /**
  * @param {string[]} args
@@ -43,6 +42,9 @@ function ghJson(args, opts = {}) {
  *   dryRun?: boolean,
  *   appToken?: string,
  *   engine?: Function,
+ *   spawnFn?: Function,
+ *   modelProbe?: object,
+ *   activationOpts?: object,
  * }} input
  */
 export async function runDualCursorApproveMaybeMerge(input) {
@@ -64,7 +66,7 @@ export async function runDualCursorApproveMaybeMerge(input) {
   );
   const headSha = String(pr.headRefOid || "");
   const baseSha = String(pr.baseRefOid || "");
-  const diffText = spawnSync(
+  const diffProc = spawnSync(
     "gh",
     ["pr", "diff", String(input.prNumber), "--repo", repo],
     {
@@ -73,37 +75,39 @@ export async function runDualCursorApproveMaybeMerge(input) {
       maxBuffer: 50 * 1024 * 1024,
     },
   );
-  if (diffText.status !== 0) {
-    throw new Error(`gh pr diff failed: ${(diffText.stderr || "").slice(0, 300)}`);
+  if (diffProc.status !== 0) {
+    throw new Error(`gh pr diff failed: ${(diffProc.stderr || "").slice(0, 300)}`);
   }
-  const testsLog = JSON.stringify(
-    (pr.statusCheckRollup || []).map((c) => ({
-      name: c.name,
-      status: c.status,
-      conclusion: c.conclusion,
-    })),
-  );
-  const checksOk = (pr.statusCheckRollup || [])
-    .filter((c) => /^(Lint|Typecheck|Build|Gate|Desktop packaging)$/.test(String(c.name || "")))
-    .every((c) => String(c.conclusion || "").toUpperCase() === "SUCCESS");
-  const checksConclusion = checksOk ? "success" : "pending";
 
-  const evidenceBase = {
+  const evidenceBase = buildEvidenceBundle({
     repository: repo,
     baseSha,
     headSha,
-    diffText: diffText.stdout || "",
-    testsLog,
+    diffText: diffProc.stdout || "",
+    statusCheckRollup: pr.statusCheckRollup || [],
     risk: input.risk,
     rollbackPlan: input.rollbackPlan,
     mission: input.missionExcerpt,
     policyExcerpts: input.policyExcerpt,
-    changedFiles: [],
-  };
+  });
+
+  if (!evidenceBase.checksOk) {
+    return {
+      action: "merge-blocked",
+      reasons: evidenceBase.checkReasons,
+      headSha,
+      evidence: {
+        changedFiles: evidenceBase.changedFiles,
+        classifiedFiles: evidenceBase.classifiedFiles,
+      },
+    };
+  }
 
   const reviewer = await runCursorReviewer({
     evidence: evidenceBase,
     engine: input.engine,
+    spawnFn: input.spawnFn,
+    modelProbe: input.modelProbe,
   });
   if (reviewer.verdict !== "APPROVE") {
     return { action: "reviewer-rejected", reviewer, headSha };
@@ -117,37 +121,37 @@ export async function runDualCursorApproveMaybeMerge(input) {
       reviewerVerdictRaw: reviewer,
     },
     engine: input.engine,
+    spawnFn: input.spawnFn,
+    modelProbe: input.modelProbe,
   });
   if (approver.verdict !== "APPROVE") {
     return { action: "approver-rejected", reviewer, approver, headSha };
   }
 
-  const diffSha256 = sha256Text(evidenceBase.diffText);
-  const testsSha256 = sha256Text(testsLog);
-  assertApprovalsStillValid({
-    reviewer,
-    approver,
-    currentHeadSha: headSha,
-    currentDiffSha256: diffSha256,
-    currentTestsSha256: testsSha256,
-  });
-
+  // Evaluation uses live activation policy gates — never hardcode s2/s3 true.
   const verdict = evaluateDualApprovalMerge({
     repository: repo,
     risk: input.risk,
     reviewer,
     approver,
     currentHeadSha: headSha,
-    currentDiffSha256: diffSha256,
-    currentTestsSha256: testsSha256,
-    checksConclusion,
+    currentDiffSha256: evidenceBase.diffSha256,
+    currentTestsSha256: evidenceBase.testsSha256,
+    checksConclusion: evidenceBase.checksConclusion,
     prState: pr.state,
-    s2Gate: String(input.risk).toUpperCase() === "LOW" ? true : undefined,
-    s3Gate: String(input.risk).toUpperCase() === "SENSITIVE" ? true : undefined,
+    activationOpts: input.activationOpts,
   });
 
   if (!verdict.ok) {
-    return { action: "merge-blocked", reasons: verdict.reasons, reviewer, approver, headSha };
+    return {
+      action: "merge-blocked",
+      reasons: verdict.reasons,
+      reviewer,
+      approver,
+      headSha,
+      diffSha256: evidenceBase.diffSha256,
+      testsSha256: evidenceBase.testsSha256,
+    };
   }
 
   if (input.dryRun || !input.merge) {
@@ -156,34 +160,30 @@ export async function runDualCursorApproveMaybeMerge(input) {
       reviewer,
       approver,
       headSha,
-      diffSha256,
-      testsSha256,
+      baseSha,
+      diffSha256: evidenceBase.diffSha256,
+      testsSha256: evidenceBase.testsSha256,
+      changedFiles: evidenceBase.changedFiles,
+      classifiedFiles: evidenceBase.classifiedFiles,
+      evidencePayloadFields: [
+        "changedFiles",
+        "classifiedFiles",
+        "diffText",
+        "requiredCheckResults",
+        "testsLog",
+        "mission",
+        "policyExcerpts",
+        "rollbackPlan",
+      ],
       mergeArgv: exactHeadMergeArgv({ prNumber: input.prNumber, repo, headSha }),
+      digest: createHash("sha256")
+        .update(`${headSha}:${evidenceBase.diffSha256}:${evidenceBase.testsSha256}`)
+        .digest("hex"),
     };
   }
 
-  const merge = spawnSync("gh", exactHeadMergeArgv({ prNumber: input.prNumber, repo, headSha }), {
-    encoding: "utf8",
-    env: { ...process.env, GH_TOKEN: input.appToken || process.env.GH_TOKEN || "" },
-  });
-  if (merge.status !== 0) {
-    return {
-      action: "merge-failed",
-      stderr: (merge.stderr || merge.stdout || "").slice(0, 500),
-      reviewer,
-      approver,
-      headSha,
-    };
-  }
-  return {
-    action: "merged",
-    headSha,
-    reviewerRequestId: reviewer.requestId,
-    approverRequestId: approver.requestId,
-    reviewerSessionId: reviewer.sessionId,
-    approverSessionId: approver.sessionId,
-    digest: createHash("sha256")
-      .update(`${headSha}:${diffSha256}:${testsSha256}`)
-      .digest("hex"),
-  };
+  // Live merge must go through writer.mjs (recomputes digests). Fail closed here.
+  throw new Error(
+    "runDualCursorApproveMaybeMerge refuses direct merge — use writerRevalidateAndMaybeMerge",
+  );
 }

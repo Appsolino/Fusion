@@ -2,31 +2,21 @@
 /* eslint-env node */
 /**
  * FNXC:AppsolinoStewardReview 2026-08-04:
- * Independent Cursor reviewer — fresh session; no implementer transcript; no write token.
+ * Independent Cursor reviewer — fresh session; receives actual patch evidence.
  */
 import { randomUUID } from "node:crypto";
 import { REVIEW_MODEL, REVIEW_PROVIDER, assertNoXaiRequirement } from "./policy.mjs";
 import { invokeCursorReviewRole } from "./spawn.mjs";
-import { sha256Text, validateVerdict } from "./verdict.mjs";
+import { buildRoleEvidencePayload } from "./evidence.mjs";
+import { validateVerdict } from "./verdict.mjs";
 
 /**
  * @param {{
- *   evidence: {
- *     mission?: string,
- *     policyExcerpts?: string,
- *     repository: string,
- *     baseSha: string,
- *     headSha: string,
- *     diffText: string,
- *     changedFiles?: string[],
- *     testsLog: string,
- *     risk: string,
- *     rollbackPlan?: string,
- *     physicalHostD?: object|null,
- *   },
+ *   evidence: import("./evidence.mjs").buildEvidenceBundle extends Function ? any : object,
  *   apiKey?: string,
  *   engine?: Function,
  *   spawnFn?: Function,
+ *   modelProbe?: object,
  *   nowMs?: number,
  *   sessionId?: string,
  * }} input
@@ -34,35 +24,26 @@ import { sha256Text, validateVerdict } from "./verdict.mjs";
 export async function runCursorReviewer(input) {
   assertNoXaiRequirement();
   const e = input.evidence;
-  const diffSha256 = sha256Text(e.diffText);
-  const testsSha256 = sha256Text(e.testsLog);
+  if (!e?.diffText || !e?.changedFiles?.length) {
+    throw new Error("reviewer requires diffText and changedFiles");
+  }
   const sessionId = input.sessionId || randomUUID();
+  const payload = buildRoleEvidencePayload(e, "reviewer", { sessionId });
 
   const system = [
     "You are CURSOR REVIEWER for Appsolino/Fusion Steward.",
     "Fresh session. You do NOT receive the implementer conversation.",
     "You have no GitHub write access and must not invent Host P actions.",
+    "Review the COMPLETE diffText and requiredCheckResults before deciding.",
     "Return ONLY JSON: schemaVersion=1 role=reviewer verdict APPROVE|REQUEST_CHANGES|BLOCK|NEEDS_OWNER.",
     "authorityCheck.hostP/production/destructiveData/secretExpansion must be false.",
-    `configuredProvider/actualProvider must be ${REVIEW_PROVIDER}; configuredModel/actualModel must be ${REVIEW_MODEL}.`,
+    `configuredProvider must be ${REVIEW_PROVIDER}; configuredModel must be ${REVIEW_MODEL}.`,
+    "Set actualProvider/actualModel to the model you actually ran.",
     "Include sessionId matching this invocation and a unique requestId.",
+    "evidenceChecked must list what you examined (include diffText and requiredCheckResults).",
   ].join(" ");
 
-  const user = JSON.stringify({
-    role: "reviewer",
-    mission: e.mission || "",
-    policyExcerpts: e.policyExcerpts || "",
-    repository: e.repository,
-    baseSha: e.baseSha,
-    headSha: e.headSha,
-    diffSha256,
-    testsSha256,
-    changedFiles: e.changedFiles || [],
-    risk: e.risk,
-    rollbackPlan: e.rollbackPlan || "",
-    physicalHostD: e.physicalHostD ?? null,
-    sessionId,
-  });
+  const user = JSON.stringify(payload);
 
   const result = await invokeCursorReviewRole({
     role: "reviewer",
@@ -72,6 +53,7 @@ export async function runCursorReviewer(input) {
     apiKey: input.apiKey,
     engine: input.engine,
     spawnFn: input.spawnFn,
+    modelProbe: input.modelProbe,
   });
 
   const art = {
@@ -81,16 +63,18 @@ export async function runCursorReviewer(input) {
     repository: e.repository,
     baseSha: e.baseSha,
     headSha: e.headSha,
-    diffSha256,
-    testsSha256,
+    diffSha256: e.diffSha256,
+    testsSha256: e.testsSha256,
     configuredProvider: REVIEW_PROVIDER,
     configuredModel: REVIEW_MODEL,
-    actualProvider: REVIEW_PROVIDER,
-    actualModel: REVIEW_MODEL,
-    modelFingerprint: REVIEW_MODEL,
+    // From probe/execution evidence — not static overwrite of probe truth.
+    actualProvider: result.actualProvider,
+    actualModel: result.actualModel,
+    modelFingerprint: result.modelFingerprint,
     requestId: result.requestId,
     sessionId: result.sessionId,
     elapsedMs: result.elapsedMs,
+    evidencePayloadHasDiffText: user.includes('"diffText"') && user.includes(e.diffText.slice(0, 32)),
     expiresAt:
       result.parsed.expiresAt ||
       new Date(Date.now() + 6 * 3600_000).toISOString(),
@@ -99,8 +83,10 @@ export async function runCursorReviewer(input) {
   return validateVerdict(art, {
     expectModel: REVIEW_MODEL,
     expectHeadSha: e.headSha,
-    expectDiffSha256: diffSha256,
-    expectTestsSha256: testsSha256,
+    expectDiffSha256: e.diffSha256,
+    expectTestsSha256: e.testsSha256,
     nowMs: input.nowMs ?? Date.now(),
   });
 }
+
+export { buildRoleEvidencePayload };

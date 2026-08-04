@@ -3,6 +3,7 @@
 /**
  * FNXC:AppsolinoStewardReview 2026-08-04:
  * Fresh cursor-agent ask-mode invocation per role (isolated sessionId).
+ * Always probes models with sanitized env; actual model comes from probe evidence.
  */
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -14,6 +15,7 @@ import {
   reviewChildEnv,
 } from "./policy.mjs";
 import { parseLastJsonObject } from "./verdict.mjs";
+import { probeCursorModel } from "./model-probe.mjs";
 
 /**
  * @param {{
@@ -26,6 +28,8 @@ import { parseLastJsonObject } from "./verdict.mjs";
  *   model?: string,
  *   spawnFn?: typeof spawn,
  *   timeoutMs?: number,
+ *   skipModelProbe?: boolean,
+ *   modelProbe?: object,
  *   engine?: (input: object) => Promise<object>|object,
  * }} input
  */
@@ -45,6 +49,28 @@ export async function invokeCursorReviewRole(input) {
   assertNoWriteCreds(env);
 
   const started = Date.now();
+  const bin = input.cursorBin || process.env.STEWARD_CURSOR_AGENT_BIN || CURSOR_AGENT_BIN;
+  const spawnFn = input.spawnFn || spawn;
+
+  let modelEvidence = input.modelProbe || null;
+  if (!modelEvidence && !input.skipModelProbe) {
+    modelEvidence = await probeCursorModel({
+      bin,
+      model,
+      apiKey: input.apiKey,
+      sessionId: `${sessionId}-probe`,
+      role: input.role,
+      spawnFn,
+    });
+  }
+  if (!modelEvidence) {
+    throw new Error("model evidence missing (fail closed)");
+  }
+  if (modelEvidence.actualModel !== REVIEW_MODEL) {
+    throw new Error(
+      `actual model drift: expected ${REVIEW_MODEL} got ${modelEvidence.actualModel}`,
+    );
+  }
 
   if (typeof input.engine === "function") {
     const parsed = await input.engine({
@@ -53,6 +79,9 @@ export async function invokeCursorReviewRole(input) {
       user: input.user,
       sessionId,
       model,
+      modelEvidence,
+      envKeys: Object.keys(env).sort(),
+      spawnArgsPreview: ["--mode", "ask", "--model", model],
     });
     return {
       parsed,
@@ -60,18 +89,21 @@ export async function invokeCursorReviewRole(input) {
       requestId: String(parsed?.requestId || `${input.role}-${sessionId}`),
       configuredProvider: REVIEW_PROVIDER,
       configuredModel: REVIEW_MODEL,
-      actualProvider: REVIEW_PROVIDER,
-      actualModel: REVIEW_MODEL,
+      actualProvider: modelEvidence.actualProvider,
+      actualModel: modelEvidence.actualModel,
+      modelFingerprint: modelEvidence.modelFingerprint,
+      modelEvidence,
       elapsedMs: Date.now() - started,
       stdout: "",
+      childEnvKeys: Object.keys(env).sort(),
     };
   }
 
-  const bin = input.cursorBin || process.env.STEWARD_CURSOR_AGENT_BIN || CURSOR_AGENT_BIN;
   const prompt = [
     input.system,
     "",
     "Return ONLY one fenced ```json object matching the required schema.",
+    "Your JSON must set actualProvider/actualModel to the model you are running.",
     "",
     input.user,
   ].join("\n");
@@ -88,7 +120,6 @@ export async function invokeCursorReviewRole(input) {
     prompt,
   ];
 
-  const spawnFn = input.spawnFn || spawn;
   const timeoutMs = input.timeoutMs || 600_000;
   const stdout = await new Promise((resolve, reject) => {
     let child;
@@ -143,15 +174,28 @@ export async function invokeCursorReviewRole(input) {
     throw new Error(`cursor review malformed JSON (${input.role})`);
   }
 
+  // Prefer provider-reported model when present; still fail closed on mismatch vs probe.
+  const reported =
+    parsed.actualModel || parsed.model || modelEvidence.actualModel;
+  if (reported !== REVIEW_MODEL) {
+    throw new Error(
+      `execution model mismatch: probe/configured ${REVIEW_MODEL} reported ${reported}`,
+    );
+  }
+
   return {
     parsed,
     sessionId,
     requestId: String(parsed.requestId || `${input.role}-${sessionId}`),
     configuredProvider: REVIEW_PROVIDER,
     configuredModel: REVIEW_MODEL,
-    actualProvider: REVIEW_PROVIDER,
-    actualModel: REVIEW_MODEL,
+    actualProvider: modelEvidence.actualProvider,
+    actualModel: reported,
+    modelFingerprint: modelEvidence.modelFingerprint,
+    modelEvidence,
     elapsedMs: Date.now() - started,
     stdout,
+    childEnvKeys: Object.keys(env).sort(),
+    spawnArgs: args.filter((a) => a !== prompt),
   };
 }

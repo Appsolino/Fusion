@@ -1,9 +1,9 @@
 # FNXC:AppsolinoStewardReview 2026-08-04:
 # Dual Cursor review + approver on a PR exact head (trusted main checkout only).
-# Split trust: review job has Cursor agent access and no App write;
-# writer job has App token and never imports review engines for secret access.
+# Review job: Cursor agent, no App write / Host secrets; receives full diff evidence.
+# Writer job: App token; independently recomputes head/diff/checks + enforces gates.
 # Candidate branch cannot alter the writer — workflow always checks out Appsolino main.
-# No XAI_API_KEY. No Host D/P secrets.
+# No XAI_API_KEY. Activation gates must be ON for merge (default OFF).
 
 name: Steward Cursor Dual Approve
 
@@ -60,7 +60,6 @@ jobs:
           CURSOR_API_KEY: ${{ secrets.S1A_CURSOR_API_KEY }}
         run: |
           set -euo pipefail
-          # Fail closed if write secrets leaked into this job via unexpected wiring.
           if [[ -n "${APPSOLINO_AUTOMATION_APP_PRIVATE_KEY:-}" || -n "${HOST_D_DEPLOY_SSH_KEY:-}" ]]; then
             echo "::error::review job must not receive App or Host credentials"
             exit 1
@@ -73,7 +72,7 @@ jobs:
             risk: process.env.RISK,
             rollbackPlan: "revert exact-head merge commit; Host D AUTO-3 rollback to previous release id",
             missionExcerpt: "full-autonomy-completion dual Cursor exact-head path",
-            policyExcerpt: "STEWARD-POLICY: dual Cursor; no Host P; writer revalidates",
+            policyExcerpt: "STEWARD-POLICY: dual Cursor; full diff evidence; writer recomputes digests; gates OFF until proof",
             merge: false,
             dryRun: true,
           });
@@ -85,6 +84,9 @@ jobs:
             approverSession: result.approver?.sessionId,
             configuredModel: result.reviewer?.configuredModel,
             actualModel: result.reviewer?.actualModel,
+            modelFingerprint: result.reviewer?.modelFingerprint,
+            evidencePayloadFields: result.evidencePayloadFields,
+            changedFiles: result.changedFiles,
           }, null, 2));
           if (!["approved-ready", "reviewer-rejected", "approver-rejected", "merge-blocked"].includes(result.action)) {
             process.exit(1);
@@ -131,32 +133,35 @@ jobs:
           name: cursor-dual-${{ inputs.pr_number }}
           path: /tmp/cursor-dual
 
-      - name: Revalidate and exact-head merge
+      - name: Recompute digests, enforce gates, exact-head merge
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           EXPECT_HEAD: ${{ needs.cursor-review-approve.outputs.head_sha }}
+          RISK: ${{ inputs.risk }}
         run: |
           set -euo pipefail
           node <<'NODE'
-          import { readFileSync } from "node:fs";
-          import { spawnSync } from "node:child_process";
-          import { assertApprovalsStillValid } from "./infra/scripts/steward/review/approver.mjs";
-          import { exactHeadMergeArgv } from "./infra/scripts/steward/merge/exact-head.mjs";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { writerRevalidateAndMaybeMerge } from "./infra/scripts/steward/review/writer.mjs";
           const art = JSON.parse(readFileSync("/tmp/cursor-dual/cursor-dual.json", "utf8"));
-          const pr = JSON.parse(spawnSync("gh", ["pr","view",process.env.PR_NUMBER,"--repo","Appsolino/Fusion","--json","headRefOid,state"], {encoding:"utf8", env:process.env}).stdout);
-          if (pr.headRefOid !== process.env.EXPECT_HEAD || pr.headRefOid !== art.headSha) {
-            throw new Error("stale head — refusing merge");
-          }
-          assertApprovalsStillValid({
-            reviewer: art.reviewer,
-            approver: art.approver,
-            currentHeadSha: pr.headRefOid,
-            currentDiffSha256: art.diffSha256,
-            currentTestsSha256: art.testsSha256,
+          const result = writerRevalidateAndMaybeMerge({
+            prNumber: Number(process.env.PR_NUMBER),
+            risk: process.env.RISK,
+            expectHead: process.env.EXPECT_HEAD,
+            artifact: {
+              reviewer: art.reviewer,
+              approver: art.approver,
+              headSha: art.headSha,
+              diffSha256: art.diffSha256,
+              testsSha256: art.testsSha256,
+            },
+            merge: true,
+            dryRun: false,
+            appToken: process.env.GH_TOKEN,
           });
-          const argv = exactHeadMergeArgv({ prNumber: Number(process.env.PR_NUMBER), headSha: pr.headRefOid });
-          const m = spawnSync("gh", argv, { encoding: "utf8", env: process.env });
-          if (m.status !== 0) throw new Error(m.stderr || m.stdout || "merge failed");
-          console.log("merged", pr.headRefOid);
+          writeFileSync("/tmp/writer-result.json", JSON.stringify(result, null, 2));
+          console.log(JSON.stringify(result, null, 2));
+          if (result.action !== "merged") process.exit(1);
+          if (!result.writerRecomputed) throw new Error("writer did not recompute digests");
           NODE

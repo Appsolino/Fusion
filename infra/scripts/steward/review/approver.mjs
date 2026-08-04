@@ -2,31 +2,21 @@
 /* eslint-env node */
 /**
  * FNXC:AppsolinoStewardReview 2026-08-04:
- * Independent Cursor approver — new session after reviewer APPROVE.
- * Must not trust reviewer conclusions without re-checking digests.
+ * Independent Cursor approver — receives original evidence, not only reviewerClaims.
  */
 import { randomUUID } from "node:crypto";
 import { REVIEW_MODEL, REVIEW_PROVIDER, assertNoXaiRequirement } from "./policy.mjs";
 import { invokeCursorReviewRole } from "./spawn.mjs";
-import { sha256Text, validateVerdict } from "./verdict.mjs";
+import { buildRoleEvidencePayload } from "./evidence.mjs";
+import { validateVerdict } from "./verdict.mjs";
 
 /**
  * @param {{
- *   evidence: {
- *     repository: string,
- *     baseSha: string,
- *     headSha: string,
- *     diffText: string,
- *     testsLog: string,
- *     risk: string,
- *     rollbackPlan: string,
- *     reviewerRequestId: string,
- *     reviewerSessionId: string,
- *     reviewerVerdictRaw: object,
- *   },
+ *   evidence: object,
  *   apiKey?: string,
  *   engine?: Function,
  *   spawnFn?: Function,
+ *   modelProbe?: object,
  *   nowMs?: number,
  *   sessionId?: string,
  * }} input
@@ -37,15 +27,16 @@ export async function runCursorApprover(input) {
   if (e.reviewerVerdictRaw?.verdict !== "APPROVE") {
     throw new Error("approver requires prior reviewer APPROVE");
   }
-  const diffSha256 = sha256Text(e.diffText);
-  const testsSha256 = sha256Text(e.testsLog);
+  if (!e?.diffText || !e?.changedFiles?.length) {
+    throw new Error("approver requires independent diffText and changedFiles");
+  }
   if (e.reviewerVerdictRaw.headSha !== e.headSha) {
     throw new Error("stale head rejected (reviewer head ≠ current)");
   }
-  if (e.reviewerVerdictRaw.diffSha256 !== diffSha256) {
+  if (e.reviewerVerdictRaw.diffSha256 !== e.diffSha256) {
     throw new Error("changed diff rejected vs reviewer");
   }
-  if (e.reviewerVerdictRaw.testsSha256 !== testsSha256) {
+  if (e.reviewerVerdictRaw.testsSha256 !== e.testsSha256) {
     throw new Error("changed tests rejected vs reviewer");
   }
 
@@ -54,35 +45,32 @@ export async function runCursorApprover(input) {
     throw new Error("approver must use a different sessionId than reviewer");
   }
 
-  const system = [
-    "You are CURSOR APPROVER for Appsolino/Fusion Steward.",
-    "Fresh session separate from implementer and reviewer.",
-    "Independently validate exact head, digests, authority, and rollback.",
-    "Do not approve solely because the reviewer approved.",
-    "Return ONLY JSON: schemaVersion=1 role=approver.",
-    "authorityCheck.hostP/production/destructiveData/secretExpansion must be false.",
-    `configuredProvider/actualProvider must be ${REVIEW_PROVIDER}; model must be ${REVIEW_MODEL}.`,
-  ].join(" ");
-
-  const user = JSON.stringify({
-    role: "approver",
-    repository: e.repository,
-    baseSha: e.baseSha,
-    headSha: e.headSha,
-    diffSha256,
-    testsSha256,
-    risk: e.risk,
-    rollbackPlan: e.rollbackPlan,
+  const payload = buildRoleEvidencePayload(e, "approver", {
+    sessionId,
     reviewerRequestId: e.reviewerRequestId,
     reviewerSessionId: e.reviewerSessionId,
+    // Thin review metadata only — original evidence is included independently above.
     reviewerClaims: {
       verdict: e.reviewerVerdictRaw.verdict,
       risk: e.reviewerVerdictRaw.risk,
       blockingFindings: e.reviewerVerdictRaw.blockingFindings,
       evidenceChecked: e.reviewerVerdictRaw.evidenceChecked,
+      requestId: e.reviewerVerdictRaw.requestId,
     },
-    sessionId,
   });
+
+  const system = [
+    "You are CURSOR APPROVER for Appsolino/Fusion Steward.",
+    "Fresh session separate from implementer and reviewer.",
+    "Independently re-read diffText and requiredCheckResults.",
+    "Do not approve solely because the reviewer approved.",
+    "Return ONLY JSON: schemaVersion=1 role=approver.",
+    "authorityCheck.hostP/production/destructiveData/secretExpansion must be false.",
+    `configuredProvider must be ${REVIEW_PROVIDER}; configuredModel must be ${REVIEW_MODEL}.`,
+    "Set actualProvider/actualModel to the model you actually ran.",
+  ].join(" ");
+
+  const user = JSON.stringify(payload);
 
   const result = await invokeCursorReviewRole({
     role: "approver",
@@ -92,6 +80,7 @@ export async function runCursorApprover(input) {
     apiKey: input.apiKey,
     engine: input.engine,
     spawnFn: input.spawnFn,
+    modelProbe: input.modelProbe,
   });
 
   const art = {
@@ -101,16 +90,17 @@ export async function runCursorApprover(input) {
     repository: e.repository,
     baseSha: e.baseSha,
     headSha: e.headSha,
-    diffSha256,
-    testsSha256,
+    diffSha256: e.diffSha256,
+    testsSha256: e.testsSha256,
     configuredProvider: REVIEW_PROVIDER,
     configuredModel: REVIEW_MODEL,
-    actualProvider: REVIEW_PROVIDER,
-    actualModel: REVIEW_MODEL,
-    modelFingerprint: REVIEW_MODEL,
+    actualProvider: result.actualProvider,
+    actualModel: result.actualModel,
+    modelFingerprint: result.modelFingerprint,
     requestId: result.requestId,
     sessionId: result.sessionId,
     elapsedMs: result.elapsedMs,
+    evidencePayloadHasDiffText: user.includes('"diffText"') && user.includes(e.diffText.slice(0, 32)),
     expiresAt:
       result.parsed.expiresAt ||
       new Date(Date.now() + 6 * 3600_000).toISOString(),
@@ -119,14 +109,14 @@ export async function runCursorApprover(input) {
   return validateVerdict(art, {
     expectModel: REVIEW_MODEL,
     expectHeadSha: e.headSha,
-    expectDiffSha256: diffSha256,
-    expectTestsSha256: testsSha256,
+    expectDiffSha256: e.diffSha256,
+    expectTestsSha256: e.testsSha256,
     nowMs: input.nowMs ?? Date.now(),
   });
 }
 
 /**
- * Writer-side revalidation before exact-head merge (App token path).
+ * Writer-side approval pairing check (digests must already be recomputed by writer).
  * @param {{
  *   reviewer: object,
  *   approver: object,

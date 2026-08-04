@@ -31,7 +31,7 @@ export function loadActivationPolicy(opts = {}) {
 export function isGateEnabled(gateKey, opts = {}) {
   const env = opts.env || process.env;
   const killPath = opts.killPath || KILL_FILE_PATH;
-  const policy = opts.policy || loadActivationPolicy();
+  const policy = opts.policy || loadActivationPolicy(opts);
   if (policy.killSwitch === true) return false;
   if (existsSync(killPath)) return false;
 

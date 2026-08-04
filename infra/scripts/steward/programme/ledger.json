@@ -7,19 +7,19 @@
   "s1aImplementationBaselineSha": "be0aeee7710aba632a267d34737fd18cdeb0f2db",
   "documentationClosureMergeSha": "1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0",
   "hostP": "PROHIBITED",
-  "updatedAtUtc": "2026-08-04T10:21:40Z",
+  "updatedAtUtc": "2026-08-04T12:00:00Z",
   "activePhase": "2-cursor-dual-review",
   "phases": {
     "1-control-plane": {
-      "status": "CI_GREEN_AWAITING_MERGE",
+      "status": "CI_PENDING_CORRECTIVE_HEAD",
       "prs": [
         80
       ],
       "heads": [
-        "4660f2fca2a6df81c3fbcfe18180341825f63422"
+        "pending-push"
       ],
       "merges": [],
-      "notes": "PR #80 \u2014 control plane + activation + Cursor dual-review + s1b/s2/s3 scaffolding"
+      "notes": "PR #80 control plane — Cursor dual-review with full evidence, model probe, writer recompute, gates OFF; bootstrap owner merge only"
     },
     "2-grok-review": {
       "status": "SUPERSEDED",
@@ -71,7 +71,7 @@
       "prs": [
         80
       ],
-      "notes": "Cursor implementer/reviewer/approver \u2014 no XAI_API_KEY"
+      "notes": "Full diff evidence to both roles; model probe; writer recomputes digests; no s2/s3 overrides; no XAI"
     }
   },
   "openOwnerActions": [],

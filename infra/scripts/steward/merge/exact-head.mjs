@@ -3,12 +3,13 @@
 /**
  * FNXC:AppsolinoStewardExactHead 2026-08-04:
  * Trusted exact-head merge helpers. Candidate branches never call this with App secrets.
- * Dual Cursor approval path revalidates digests before `gh pr merge --match-head-commit`.
  */
 import { assertApprovalsStillValid } from "../review/approver.mjs";
-import { isGateEnabled } from "../activation/resolve-activation.mjs";
+import { isGateEnabled, summarizeActivation } from "../activation/resolve-activation.mjs";
+import { REQUIRED_CHECK_NAMES } from "../review/evidence.mjs";
 
 export const ALLOWED_REPO = "Appsolino/Fusion";
+export { REQUIRED_CHECK_NAMES };
 
 /**
  * @param {{
@@ -24,8 +25,7 @@ export const ALLOWED_REPO = "Appsolino/Fusion";
  *   hostP?: boolean,
  *   production?: boolean,
  *   nowMs?: number,
- *   s2Gate?: boolean,
- *   s3Gate?: boolean,
+ *   activationOpts?: { policyPath?: string, killPath?: string, env?: NodeJS.ProcessEnv, policy?: object },
  * }} input
  */
 export function evaluateDualApprovalMerge(input) {
@@ -36,14 +36,20 @@ export function evaluateDualApprovalMerge(input) {
   if (input.hostP === true || input.production === true) {
     reasons.push("hostP-or-production-forbidden");
   }
+
+  const act = summarizeActivation(input.activationOpts || {});
+  if (act.killSwitch) reasons.push("kill-switch-or-KILL-file");
+
   const risk = String(input.risk || "").toUpperCase();
   if (risk === "CRITICAL") reasons.push("critical-forbidden");
   if (risk === "LOW") {
-    const s2 = input.s2Gate ?? isGateEnabled("s2Enabled");
-    if (!s2) reasons.push("s2-gate-disabled");
+    if (!isGateEnabled("s2Enabled", input.activationOpts || {})) {
+      reasons.push("s2-gate-disabled");
+    }
   } else if (risk === "SENSITIVE") {
-    const s3 = input.s3Gate ?? isGateEnabled("s3Enabled");
-    if (!s3) reasons.push("s3-gate-disabled");
+    if (!isGateEnabled("s3Enabled", input.activationOpts || {})) {
+      reasons.push("s3-gate-disabled");
+    }
   } else if (risk !== "LOW" && risk !== "SENSITIVE") {
     reasons.push(`unsupported-risk:${risk || "missing"}`);
   }
@@ -81,14 +87,14 @@ export function evaluateDualApprovalMerge(input) {
     idempotentMerged: false,
     reasons: uniq,
     matchHeadCommit: input.currentHeadSha,
+    activation: act,
   };
 }
 
-/** @deprecated Use evaluateDualApprovalMerge */
+/** @deprecated */
 export const evaluateGrokDualApprovalMerge = evaluateDualApprovalMerge;
 
 /**
- * Build gh argv for exact-head merge (caller supplies App token env).
  * @param {{ prNumber: number, repo?: string, headSha: string }} input
  */
 export function exactHeadMergeArgv(input) {
