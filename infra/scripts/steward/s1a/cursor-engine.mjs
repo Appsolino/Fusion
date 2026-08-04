@@ -161,13 +161,22 @@ function buildPrompt({ evidencePackPath, attempt, priorRejection }) {
  * @param {string} bin
  * @param {string} model
  * @param {typeof spawn} [spawnFn]
+ * @param {NodeJS.ProcessEnv} [env]
  */
-export async function assertModelAvailable(bin, model, spawnFn = spawn) {
+export async function assertModelAvailable(
+  bin,
+  model,
+  spawnFn = spawn,
+  env = cursorChildEnv(),
+) {
   const list = await new Promise((resolve, reject) => {
     let child;
     try {
       child = /** @type {any} */ (
-        spawnFn(bin, ["models"], { stdio: ["ignore", "pipe", "pipe"] })
+        spawnFn(bin, ["models"], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env,
+        })
       );
     } catch (err) {
       reject(new Error(`cursor-engine models probe spawn failed: ${err.message}`));
@@ -250,8 +259,15 @@ export async function runCursorEngine(evidencePack, opts = {}) {
   }
 
   const spawnFn = opts.spawnFn || spawn;
+  const childEnv = cursorChildEnv({
+    apiKey:
+      process.env.S1A_CURSOR_API_KEY ||
+      process.env.CURSOR_API_KEY ||
+      process.env.CURSOR_AGENT_API_KEY ||
+      "",
+  });
   if (!opts.skipModelProbe) {
-    await assertModelAvailable(bin, model, spawnFn);
+    await assertModelAvailable(bin, model, spawnFn, childEnv);
   }
 
   const prompt = buildPrompt({
@@ -283,13 +299,7 @@ export async function runCursorEngine(evidencePack, opts = {}) {
     try {
       child = /** @type {any} */ (
         spawnFn(bin, args, {
-          env: cursorChildEnv({
-            apiKey:
-              process.env.S1A_CURSOR_API_KEY ||
-              process.env.CURSOR_API_KEY ||
-              process.env.CURSOR_AGENT_API_KEY ||
-              "",
-          }),
+          env: childEnv,
           stdio: ["ignore", "pipe", "pipe"],
         })
       );

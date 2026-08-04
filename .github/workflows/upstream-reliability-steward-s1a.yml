@@ -48,6 +48,11 @@ jobs:
     # Documented override: set repo var S1A_ANALYZE_RUNS_ON and edit this job to use it;
     # do NOT retarget live to fixture/deterministic on ubuntu-latest.
     runs-on: [self-hosted, appsolino-fusion]
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      issues: read
     if: |
       (github.event_name == 'workflow_dispatch' && inputs.mode == 'live') ||
       (github.event_name == 'issues' && github.event.label.name == 'steward/needs-expert')
@@ -201,6 +206,8 @@ jobs:
   fixture-replay:
     name: Fixture engine self-check (no upsert)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'fixture-replay'
     steps:
       - name: Checkout trusted main only
@@ -253,6 +260,9 @@ jobs:
       needs.observe-analyze.outputs.artifact_ready == 'true' &&
       needs.observe-analyze.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     concurrency:
       group: steward-s1a-upsert-${{ needs.observe-analyze.outputs.issue_number }}
       cancel-in-progress: false

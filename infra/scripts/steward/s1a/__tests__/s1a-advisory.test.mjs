@@ -558,6 +558,8 @@ describe("S1A guard authority", () => {
     assert.ok(!/gh\s+workflow\s+run/.test(wf));
     assert.ok(!/gh\s+run\s+rerun/.test(wf));
     assert.ok(!/^[\t ]*issues:[\t ]*write[\t ]*$/m.test(wf));
+    // Live analyze must grant issues: read (top-level omit → none).
+    assert.match(wf, /observe-analyze:[\s\S]*?permissions:[\s\S]*?issues:\s*read/);
     assert.ok(/self-hosted/.test(wf));
     assert.ok(/appsolino-fusion/.test(wf));
     assert.ok(/cursor-cli/.test(wf));
@@ -567,6 +569,24 @@ describe("S1A guard authority", () => {
 
     const auth = assertS1aAuthority({ workflowPath: WORKFLOW });
     assert.equal(auth.ok, true, JSON.stringify(auth.violations, null, 2));
+  });
+
+  it("live read client permission contract includes issue/comments reads", () => {
+    const src = readFileSync(join(HERE, "..", "live-clients.mjs"), "utf8");
+    assert.match(src, /\/repos\/\$\{repo\}\/issues\/\$\{number\}/);
+    assert.match(src, /\/repos\/\$\{repo\}\/issues\/\$\{number\}\/comments/);
+    assert.match(src, /kind:\s*["']read["']/);
+    const wf = readFileSync(WORKFLOW, "utf8");
+    const analyzeStart = wf.search(/^  observe-analyze:/m);
+    const fixtureStart = wf.search(/^  fixture-replay:/m);
+    const upsertStart = wf.search(/^  upsert-advice:/m);
+    assert.ok(analyzeStart >= 0 && fixtureStart > analyzeStart);
+    const analyzeBlock = wf.slice(analyzeStart, fixtureStart);
+    assert.match(analyzeBlock, /issues:\s*read/);
+    assert.match(analyzeBlock, /run-s1a-analyze\.mjs/);
+    const upsertBlock = wf.slice(upsertStart);
+    assert.doesNotMatch(upsertBlock, /^[\t ]*issues:[\t ]*write[\t ]*$/m);
+    assert.match(upsertBlock, /permission-issues:\s*write/); // App token only
   });
 });
 
@@ -891,6 +911,113 @@ describe("S1A child process credential allowlists", () => {
       assert.equal(cur.GH_TOKEN, undefined);
       assert.equal(cur.S1A_CURSOR_API_KEY, undefined);
       assert.ok(REVIEWER_PROC_SRC.includes("reviewerChildEnv"));
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
+  it("model probe receives sanitized env; assessment Cursor process remains sanitized", async () => {
+    const { assertModelAvailable, runCursorEngine } = await import(
+      "../cursor-engine.mjs"
+    );
+    const prev = {
+      GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+      GH_TOKEN: process.env.GH_TOKEN,
+      S1A_CURSOR_API_KEY: process.env.S1A_CURSOR_API_KEY,
+      CURSOR_API_KEY: process.env.CURSOR_API_KEY,
+      CURSOR_AGENT_API_KEY: process.env.CURSOR_AGENT_API_KEY,
+      S1A_MODEL: process.env.S1A_MODEL,
+      S1A_PROVIDER: process.env.S1A_PROVIDER,
+    };
+    process.env.GITHUB_TOKEN = "gh-secret";
+    process.env.GH_TOKEN = "gh2";
+    process.env.S1A_CURSOR_API_KEY = "cursor-from-s1a";
+    process.env.CURSOR_API_KEY = "cursor-default";
+    process.env.CURSOR_AGENT_API_KEY = "cursor-agent-key";
+    process.env.S1A_MODEL = LIVE_MODEL;
+    process.env.S1A_PROVIDER = LIVE_PROVIDER;
+
+    /** @type {Array<{ args: any[], opts: any }> } */
+    const calls = [];
+    function mockSpawn(bin, args, opts = {}) {
+      calls.push({ args, opts });
+      const ee = new EventEmitter();
+      ee.stdout = new EventEmitter();
+      ee.stderr = new EventEmitter();
+      ee.kill = () => {};
+      globalThis.queueMicrotask(() => {
+        if (args[0] === "models") {
+          ee.stdout.emit("data", Buffer.from(`${LIVE_MODEL}\n`));
+          ee.emit("close", 0);
+          return;
+        }
+        ee.stdout.emit(
+          "data",
+          Buffer.from(
+            "```json\n" +
+              JSON.stringify({
+                summary: "mock",
+                rootCause: "mock",
+                recommendedSolution: "mock",
+                confidence: "HIGH",
+                risk: "SENSITIVE",
+                files: [],
+                validation: ["t"],
+                ownerDecision: "none",
+                repairRecommended: false,
+                needsMoreEvidence: false,
+                criticalFreeze: false,
+                evidenceGaps: [],
+              }) +
+              "\n```\n",
+          ),
+        );
+        ee.emit("close", 0);
+      });
+      return ee;
+    }
+
+    try {
+      const probeEnv = cursorChildEnv({
+        apiKey: process.env.S1A_CURSOR_API_KEY,
+        src: process.env,
+      });
+      await assertModelAvailable("/mock/cursor-agent", LIVE_MODEL, mockSpawn, probeEnv);
+      assert.equal(calls.length, 1);
+      assert.deepEqual(calls[0].args, ["models"]);
+      const probeSpawnEnv = calls[0].opts.env;
+      assert.ok(probeSpawnEnv, "model probe must receive explicit env");
+      assert.equal(probeSpawnEnv.GITHUB_TOKEN, undefined);
+      assert.equal(probeSpawnEnv.GH_TOKEN, undefined);
+      assert.equal(probeSpawnEnv.S1A_CURSOR_API_KEY, undefined);
+      assert.equal(probeSpawnEnv.CURSOR_AGENT_API_KEY, undefined);
+      assert.equal(probeSpawnEnv.CURSOR_API_KEY, "cursor-from-s1a");
+      assertNoCredentialLeak(probeSpawnEnv, { allowCursorKey: true });
+
+      const { issue, relatedPr } = loadFixturePack();
+      const pack = buildEvidencePack({ issue, relatedPr });
+      calls.length = 0;
+      await runCursorEngine(pack, {
+        spawnFn: mockSpawn,
+        cursorBin: "/mock/cursor-agent",
+        worktreePath: mkdtempSync(join(tmpdir(), "s1a-probe-")),
+      });
+      assert.equal(calls.length, 2); // models + ask
+      assert.deepEqual(calls[0].args, ["models"]);
+      for (const c of calls) {
+        assert.ok(c.opts.env, "Cursor spawn must pass explicit env");
+        assert.equal(c.opts.env.GITHUB_TOKEN, undefined);
+        assert.equal(c.opts.env.GH_TOKEN, undefined);
+        assert.equal(c.opts.env.S1A_CURSOR_API_KEY, undefined);
+        assert.equal(c.opts.env.CURSOR_AGENT_API_KEY, undefined);
+        assert.equal(c.opts.env.CURSOR_API_KEY, "cursor-from-s1a");
+        assertNoCredentialLeak(c.opts.env, { allowCursorKey: true });
+      }
+      // Same sanitized env object family for probe and assessment.
+      assert.equal(calls[0].opts.env.CURSOR_API_KEY, calls[1].opts.env.CURSOR_API_KEY);
     } finally {
       for (const [k, v] of Object.entries(prev)) {
         if (v === undefined) delete process.env[k];
