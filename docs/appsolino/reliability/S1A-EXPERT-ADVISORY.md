@@ -1,6 +1,6 @@
 # Steward S1A — Expert Advisory Mode
 
-**Status:** **APPROVED / AUTHORISED** (advice only) — implementation rewrite in PR #76  
+**Status:** **IMPLEMENTED / MANUAL LIVE PROOF PASS** (advice only) — merged via PR #76 (`be0aeee77`)  
 **Ledger:** [`../CURRENT-STATE.md`](../CURRENT-STATE.md)  
 **Parent policy:** [`STEWARD-POLICY.md`](STEWARD-POLICY.md)
 
@@ -58,7 +58,7 @@ Unknown physical fields remain JSON `null` (`enginePaused`, `hostPAccessed`, `he
 | `steward/expert-running` | Writer (transient) |
 | `steward/advice-ready` / `needs-evidence` / `repair-recommended` / `owner-required` / `expert-failed` | Writer after review |
 
-Automatic handoff: `S1A_AUTO_HANDOFF` and `STEWARD_S0_HANDOFF_S1A` remain **OFF** until post-merge controlled proof on issue #74.
+Automatic handoff: `S1A_AUTO_HANDOFF` and `STEWARD_S0_HANDOFF_S1A` remain **OFF**. Manual `workflow_dispatch` is authorised; enabling auto handoff requires a separate activation after the #74 proof.
 
 ## Explicit non-goals
 
