@@ -2,7 +2,7 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-04T08:30:00Z
+**Last updated UTC:** 2026-08-04T09:00:00Z
 
 | Field | Value |
 | --- | --- |
@@ -10,6 +10,8 @@
 | Documentation closure merge SHA | `1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0` (PR #77) |
 | Programme tracking | Issue [#78](https://github.com/Appsolino/Fusion/issues/78) · ledger `infra/scripts/steward/programme/ledger.json` |
 | Live `main` SHA | **Resolve dynamically** (`git fetch origin && git rev-parse origin/main`) — not stored here |
+| Active upstream sync | [PR #81](https://github.com/Appsolino/Fusion/pull/81) (`ad2cb6958ec1`) — supersedes closed #68 |
+| Owner gate | [#79](https://github.com/Appsolino/Fusion/issues/79) `XAI_API_KEY` — blocks live Grok + exact-head auto-merge |
 | Active Host D release | `auto3-0.74.0-beta.6-16f24ed3b473` |
 | Source SHA | `16f24ed3b47321cc1b5aa693b2fac7e13a00b379` (PR #55 absorb) |
 | Previous rollback release | `auto3-0.74.0-beta.5-5f1b923bd815` |
@@ -17,16 +19,17 @@
 | Staging health | `ok` / `0.74.0-beta.6` @ `127.0.0.1:4140` (`enginePaused=true`) |
 | Host P state | Deferred / untouched (**accessed=NO** — **prohibited**) |
 | Legacy production | DEGRADED / FROZEN |
-| Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** · full-autonomy programme IN PROGRESS |
+| Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** · full-autonomy programme **BLOCKED on #79** |
 
 ## Owner priority
 
 ```text
-NOW:     Full Host-D autonomy programme (#78): control plane → Grok → S1A auto → S1B/S2/S3 → #74 → E2E
-NEXT:    Owner must add Actions secret XAI_API_KEY before Grok live approvals can run
+NOW:     Owner-only: add Actions secret XAI_API_KEY (#79), then resume Grok dual-approve merges
+NEXT:    Land PR #80 → Gate A/B → enable S1B/S2/S3 → merge #81 → AUTO-3 Host D → E2E
 HOLD:    Host P / production — PROHIBITED
 DONE:    S0 ACCEPTED; S1A MANUAL LIVE PROOF PASS (issue #74)
 DONE:    AUTO-4 COMPLETE (pin 71576d953626)
+DONE:    PR #68 superseded/closed; active sync is PR #81 (ad2cb6958ec1)
 NOTE:    Activation gates version-controlled in activation-policy.json (killSwitch + KILL file)
 NOTE:    Engine stays paused. Host P untouched / prohibited.
 ```

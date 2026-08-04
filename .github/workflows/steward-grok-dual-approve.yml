@@ -1,0 +1,164 @@
+# FNXC:AppsolinoStewardGrok 2026-08-04:
+# Dual Grok review + approver on a PR exact head (trusted main checkout only).
+# Split trust: grok job has XAI_API_KEY and no App write; writer job has App token and no XAI.
+# Candidate branch cannot alter the writer — workflow always checks out Appsolino main.
+# Fail closed when XAI_API_KEY missing (opens/updates durable owner-action).
+
+name: Steward Grok Dual Approve
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number on Appsolino/Fusion"
+        required: true
+        type: string
+      risk:
+        description: "LOW | SENSITIVE"
+        required: true
+        type: choice
+        options: [LOW, SENSITIVE]
+        default: SENSITIVE
+      merge:
+        description: "If true, exact-head merge after dual APPROVE (requires activation gates)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: steward-grok-dual-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  grok-review-approve:
+    name: Grok reviewer then independent approver
+    runs-on: ubuntu-latest
+    outputs:
+      head_sha: ${{ steps.run.outputs.head_sha }}
+      action: ${{ steps.run.outputs.action }}
+      artifact_ready: ${{ steps.run.outputs.artifact_ready }}
+    steps:
+      # Trust isolation: this job must never reference App or Host secrets
+      # (referencing them would inject the values into the job environment).
+
+      - name: Require XAI_API_KEY
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${XAI_API_KEY}" ]]; then
+            echo "::error::XAI_API_KEY missing — fail closed (owner-action #79)"
+            exit 1
+          fi
+
+      - name: Checkout trusted main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Dual Grok (no merge)
+        id: run
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          RISK: ${{ inputs.risk }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          import { writeFileSync } from "node:fs";
+          import { runDualGrokApproveMaybeMerge } from "./infra/scripts/steward/grok/run-dual-approve.mjs";
+          const result = await runDualGrokApproveMaybeMerge({
+            prNumber: Number(process.env.PR_NUMBER),
+            risk: process.env.RISK,
+            rollbackPlan: "revert exact-head merge commit; Host D AUTO-3 rollback to previous release id",
+            missionExcerpt: "full-autonomy-completion dual Grok exact-head path",
+            policyExcerpt: "STEWARD-POLICY: dual Grok; no Host P; writer revalidates",
+            merge: false,
+            dryRun: true,
+          });
+          writeFileSync("/tmp/grok-dual.json", JSON.stringify(result, null, 2));
+          console.log(JSON.stringify({ action: result.action, headSha: result.headSha }, null, 2));
+          if (!["approved-ready", "reviewer-rejected", "approver-rejected", "merge-blocked"].includes(result.action)) {
+            process.exit(1);
+          }
+          NODE
+          echo "action=$(python3 -c 'import json;print(json.load(open("/tmp/grok-dual.json"))["action"])')" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(python3 -c 'import json;print(json.load(open("/tmp/grok-dual.json")).get("headSha") or "")')" >> "$GITHUB_OUTPUT"
+          echo "artifact_ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload dual-approval artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-dual-${{ inputs.pr_number }}
+          path: /tmp/grok-dual.json
+          if-no-files-found: error
+
+  writer-exact-head-merge:
+    name: App writer revalidate + optional exact-head merge
+    needs: grok-review-approve
+    if: ${{ inputs.merge && needs.grok-review-approve.outputs.action == 'approved-ready' }}
+    runs-on: ubuntu-latest
+    steps:
+      # Trust isolation: this job must never reference XAI_API_KEY.
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Checkout trusted main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: grok-dual-${{ inputs.pr_number }}
+          path: /tmp/grok-dual
+
+      - name: Revalidate and exact-head merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECT_HEAD: ${{ needs.grok-review-approve.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { spawnSync } from "node:child_process";
+          import { assertApprovalsStillValid } from "./infra/scripts/steward/grok/approver.mjs";
+          import { exactHeadMergeArgv } from "./infra/scripts/steward/merge/exact-head.mjs";
+          const art = JSON.parse(readFileSync("/tmp/grok-dual/grok-dual.json", "utf8"));
+          const pr = JSON.parse(spawnSync("gh", ["pr","view",process.env.PR_NUMBER,"--repo","Appsolino/Fusion","--json","headRefOid,state"], {encoding:"utf8", env:process.env}).stdout);
+          if (pr.headRefOid !== process.env.EXPECT_HEAD || pr.headRefOid !== art.headSha) {
+            throw new Error("stale head — refusing merge");
+          }
+          assertApprovalsStillValid({
+            reviewer: art.reviewer,
+            approver: art.approver,
+            currentHeadSha: pr.headRefOid,
+            currentDiffSha256: art.diffSha256,
+            currentTestsSha256: art.testsSha256,
+          });
+          const argv = exactHeadMergeArgv({ prNumber: Number(process.env.PR_NUMBER), headSha: pr.headRefOid });
+          const m = spawnSync("gh", argv, { encoding: "utf8", env: process.env });
+          if (m.status !== 0) throw new Error(m.stderr || m.stdout || "merge failed");
+          console.log("merged", pr.headRefOid);
+          NODE
