@@ -59,6 +59,7 @@ import {
   type WorkflowIrV2,
   type WorkflowIrColumn,
 } from "@fusion/core";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { schedulerLog } from "../logger.js";
 import { getPromptPath } from "./spec-staleness.js";
@@ -172,6 +173,48 @@ export function resolvePreReleasePlanReviewNode(ir: WorkflowIr): WorkflowIrNode 
   // Post-release gate (plan-review lives in a wip column): do not hold release.
   if (resolveColumnFlags(column).countsTowardWip === true) return undefined;
   return planReviewNode;
+}
+
+/*
+FNXC:PlanningDependencyReseed 2026-08-04-02:14:
+A release refusal is otherwise invisible after scheduler dispatch returns early.
+Hash only durable state that changes the planning/Plan-Review episode; the core
+store atomically claims this project/task episode and appends one task-log entry.
+*/
+export async function checkAndRecordUnplannedExecutionBlock(
+  store: TaskStore,
+  task: Task,
+  ir: WorkflowIr,
+): Promise<void> {
+  const recorder = (store as Partial<Pick<TaskStore, "checkAndRecordUnplannedExecutionBlock">>).checkAndRecordUnplannedExecutionBlock;
+  if (!recorder) return;
+  const planReviewNode = resolvePreReleasePlanReviewNode(ir)?.id ?? "none";
+  let promptContent = typeof task.prompt === "string" ? task.prompt : "";
+  const tasksDir = typeof store.getTasksDir === "function" ? store.getTasksDir() : undefined;
+  if (tasksDir) {
+    try {
+      promptContent = await readFile(getPromptPath(tasksDir, task.id), "utf8");
+    } catch {
+      promptContent = "";
+    }
+  }
+  const promptMarker = promptContent.length > 0
+    ? createHash("sha256").update(promptContent).digest("hex")
+    : "missing";
+  const dependencies = [...(task.dependencies ?? [])].sort();
+  const episode = createHash("sha256").update(JSON.stringify({
+    planReviewNode,
+    promptMarker,
+    dependencies,
+    status: task.status ?? null,
+    handoffFingerprint: task.approvedPlanFingerprint ?? null,
+  })).digest("hex");
+  try {
+    await recorder.call(store, task.id, episode);
+  } catch (error) {
+    // The gate is safety-critical; its diagnostic must not turn an otherwise-safe refusal into a dispatch failure.
+    schedulerLog.warn(`Could not persist unplanned dispatch refusal for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export async function isUnplannedForExecution(store: TaskStore, task: Task, ir: WorkflowIr): Promise<boolean> {
@@ -722,6 +765,7 @@ async function issueRelease(
   }
 
   if (targetIsProcessing && !options.allowUnplanned && (await isUnplannedForExecution(store, task, ir))) {
+    await checkAndRecordUnplannedExecutionBlock(store, task, ir);
     /*
     FNXC:StrandedHoldContinuation 2026-07-26-14:15:
     Before FN-8592 this was an undeduplicated `schedulerLog.log`, not debug.
@@ -883,6 +927,7 @@ export async function promoteHeldTask(
     : false;
   const unplanned = targetIsProcessing && (await isUnplannedForExecution(store, task, ir));
   if (unplanned && options.force !== true) {
+    await checkAndRecordUnplannedExecutionBlock(store, task, ir);
     return { released: false, rejection: "unplanned-for-execution", toColumn: target };
   }
 

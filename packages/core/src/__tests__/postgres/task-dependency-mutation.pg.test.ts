@@ -54,7 +54,8 @@ pgTest("TaskStore dependency mutations (PostgreSQL)", () => {
 
     expect(updated.dependencies).toEqual([canonical.id]);
     expect(updated.blockedBy).toBeUndefined();
-    expect(updated.status).toBeUndefined();
+    // A newly introduced prerequisite invalidates any in-flight planning handoff.
+    expect(updated.status).toBe("needs-replan");
     /*
     FNXC:WorkflowLifecycleColumns 2026-08-02-03:20 (fleet — this assertion pinned a live bug):
     THE RE-SPECIFICATION TARGET IS THE BOARD'S INTAKE COLUMN, and on today's default lineage that is
@@ -83,8 +84,46 @@ pgTest("TaskStore dependency mutations (PostgreSQL)", () => {
     ) as { dependencies: string[]; blockedBy?: string; column: string; status?: string };
     expect(taskJson.dependencies).toEqual([canonical.id]);
     expect(taskJson.blockedBy).toBeUndefined();
+    expect(taskJson.status).toBe("needs-replan");
     // Same reasoning as above: the intake column of the default lineage is `todo` post-U11.
     expect(taskJson.column).toBe("todo");
+  });
+
+  /*
+  FNXC:PlanningDependencyReseed 2026-08-04-01:57:
+  A dependency re-seed commits its task fence and pending continuation retirement
+  in one transaction for both public dependency APIs. A list-then-transition
+  implementation could otherwise cancel a worker after it claimed the
+  continuation between those independent writes.
+  */
+  it("atomically fences the task and cancels only its pending continuation", async () => {
+    const prerequisite = await store.createTask({ description: "new prerequisite", column: "done" });
+    const dependent = await store.createTask({ description: "dependent", column: "todo" });
+    const pending = await store.replaceActiveTaskWorkflowContinuation({
+      runId: `${dependent.id}:continuation:0`, taskId: dependent.id, nodeId: "plan-review",
+      kind: "task", state: "runnable", stableWorkflowRunId: `${dependent.id}:workflow`,
+      continuationSequence: 0, waitReason: "planning", sourceColumn: "todo", targetColumn: "todo", irHash: "ir-v1",
+    });
+
+    await store.updateTaskDependencies(dependent.id, { operation: "add", dependency: prerequisite.id });
+
+    expect((await store.getTask(dependent.id)).status).toBe("needs-replan");
+    expect((await store.getWorkflowWorkItem(pending.id))?.state).toBe("cancelled");
+  });
+
+  it("uses the same atomic invalidation for updateTask dependency patches", async () => {
+    const prerequisite = await store.createTask({ description: "patch prerequisite", column: "done" });
+    const dependent = await store.createTask({ description: "patch dependent", column: "todo" });
+    const pending = await store.replaceActiveTaskWorkflowContinuation({
+      runId: `${dependent.id}:continuation:0`, taskId: dependent.id, nodeId: "plan-review",
+      kind: "task", state: "held", stableWorkflowRunId: `${dependent.id}:workflow`,
+      continuationSequence: 0, waitReason: "planning", sourceColumn: "todo", targetColumn: "todo", irHash: "ir-v1",
+    });
+
+    await store.updateTask(dependent.id, { dependencies: [prerequisite.id] });
+
+    expect((await store.getTask(dependent.id)).status).toBe("needs-replan");
+    expect((await store.getWorkflowWorkItem(pending.id))?.state).toBe("cancelled");
   });
 
   /*
@@ -131,6 +170,7 @@ pgTest("TaskStore dependency mutations (PostgreSQL)", () => {
     } as never);
 
     expect(updated.column).toBe("inbox");
+    expect(updated.status).toBe("needs-replan");
     // A real move, so the move timestamp advances.
     expect(updated.columnMovedAt).not.toBe(before.columnMovedAt);
   });

@@ -218,6 +218,10 @@ export async function refineTaskImpl(store: TaskStore, id: string, feedback: str
   }
 
 export async function updateTaskDependenciesImpl(store: TaskStore, id: string, mutation: TaskDependencyMutation, runContext?: RunMutationContext,): Promise<Task> {
+  return store.withPlanningLifecycleLock(id, () => updateTaskDependenciesWithTaskLockImpl(store, id, mutation, runContext));
+}
+
+async function updateTaskDependenciesWithTaskLockImpl(store: TaskStore, id: string, mutation: TaskDependencyMutation, runContext?: RunMutationContext,): Promise<Task> {
     return store.withTaskLock(id, async () => {
       const dir = store.taskDir(id);
       const task = await store.readTaskJson(dir);
@@ -449,10 +453,28 @@ export async function updateTaskDependenciesImpl(store: TaskStore, id: string, m
       const holdColumn = respecifyLifecycle?.hold ?? "todo";
       const intakeColumn = respecifyLifecycle?.intake;
       const respecifyFromColumn = task.column;
+      /*
+      FNXC:PlanningDependencyReseed 2026-08-04-00:43:
+      A new dependency invalidates every pre-execution approval artifact even
+      when merged intake/hold lanes make this a same-column transition. Leaving
+      the old fingerprint would let an unchanged prompt bypass manual approval.
+      */
+      if (hasNewDependencies && task.column === holdColumn) {
+        task.status = "needs-replan";
+        task.approvedPlanFingerprint = undefined;
+        task.awaitingApprovalReason = undefined;
+      }
       if (hasNewDependencies && task.column === holdColumn && intakeColumn !== undefined) {
         task.column = intakeColumn;
         movedToTriage = true;
-        task.status = undefined;
+        /*
+        FNXC:PlanningDependencyReseed 2026-08-04-00:30:
+        Dependency mutation shares updateTask's re-specification invariant. A
+        real new dependency must leave a durable `needs-replan` claim, never a
+        clean status that can strand a persisted plan between planning and the
+        pre-release graph gate.
+        */
+        task.status = "needs-replan";
         /*
         FNXC:WorkflowLifecycleColumns 2026-07-31-02:05 (PR #2720 review — greptile):
         `columnMovedAt` IS THE MOVE TIMESTAMP, so it may only move when the column does. On the default
@@ -495,7 +517,11 @@ export async function updateTaskDependenciesImpl(store: TaskStore, id: string, m
           blockedBy: task.blockedBy ?? null,
         },
       };
-      await store.atomicWriteTaskJsonWithAudit(dir, task, auditEvent);
+      await store.atomicWriteTaskJsonWithAudit(dir, task, auditEvent,
+        hasNewDependencies && task.status === "needs-replan"
+          ? {expectedCurrentDependencies: normalizedCurrent}
+          : undefined,
+      );
       // FNXC:BoardConsistency 2026-06-21-08:31: updateTaskDependencies' todo→triage re-spec move can also carry title/blocker changes, and leaving taskCache on the pre-move row made watch/SSE/board consumers surface one task ID in two columns (FN-6851/FN-6812). Sync the cache after the authoritative write like sibling mutation paths.
       if (store.isWatching) store.taskCache.set(id, { ...task });
       /*

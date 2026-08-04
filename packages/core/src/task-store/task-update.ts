@@ -166,8 +166,10 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
       let movedToTriage = false;
       let respecifyFromColumn: string | undefined;
       let respecifyMoveLanes: TaskMoveLanes | undefined;
+      let previousDependencies: string[] | undefined;
       if (updates.dependencies !== undefined) {
-        const oldDeps = new Set((task.dependencies ?? []).map((dependency) => dependency.trim()).filter(Boolean));
+        previousDependencies = (task.dependencies ?? []).map((dependency) => dependency.trim()).filter(Boolean);
+        const oldDeps = new Set(previousDependencies);
         const normalizedDependencies = updates.dependencies.map((dependency) => dependency.trim()).filter(Boolean);
         const hasNewDeps = normalizedDependencies.some((d) => !oldDeps.has(d));
         task.dependencies = normalizedDependencies;
@@ -218,7 +220,24 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
             task.column = intakeLane;
             task.columnMovedAt = new Date().toISOString();
           }
-          task.status = undefined;
+          /*
+          FNXC:PlanningDependencyReseed 2026-08-04-00:30:
+          A new dependency invalidates a plan that is still in the hold lane.  The
+          prior null reset raced an in-flight planner after it wrote PROMPT.md but
+          before its final handoff, leaving a real specification that neither
+          planning discovery nor release could claim.  `needs-replan` is the
+          graph-owned durable re-entry signal: it preserves prompt authority and
+          makes the interrupted planner's stale finalizer harmless.
+          */
+          task.status = "needs-replan";
+          /*
+          FNXC:PlanningDependencyReseed 2026-08-04-00:54:
+          Both dependency mutation APIs invalidate the same pre-execution plan
+          handoff. Clearing manual-approval evidence here prevents a newly added
+          blocker from inheriting approval for the superseded specification.
+          */
+          task.approvedPlanFingerprint = undefined;
+          task.awaitingApprovalReason = undefined;
           const depLogEntry: TaskLogEntry = {
             timestamp: new Date().toISOString(),
             action: relocating
@@ -929,6 +948,9 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
       }
 
       // When runContext is provided, record audit event atomically with task mutation
+      const planningInvalidation = movedToTriage
+        ? {expectedCurrentDependencies: previousDependencies ?? []}
+        : undefined;
       if (runContext) {
         await store.atomicWriteTaskJsonWithAudit(dir, task, {
           taskId: task.id,
@@ -941,9 +963,9 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
             updatedFields: Object.keys(updates).filter((k) => (updates as Record<string, unknown>)[k] !== undefined),
             ...(titleNormalized ? { titleNormalized: true } : {}),
           },
-        });
+        }, planningInvalidation);
       } else {
-        await store.atomicWriteTaskJson(dir, task);
+        await store.atomicWriteTaskJsonWithAudit(dir, task, undefined, planningInvalidation);
       }
 
       /*

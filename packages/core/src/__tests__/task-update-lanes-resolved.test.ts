@@ -118,13 +118,29 @@ describe("adding a dependency never parks a card in a deleted column", () => {
   });
 
   it("still records the re-specification when the card does not move", async () => {
-    // The status reset and log entry are the operator-visible signal; only the teleport is dropped.
+    // A durable replan claim and log entry make an interrupted planner rediscoverable; only the teleport is dropped.
     const { store, row } = harness({ column: "todo", dependencies: [], status: "queued" }, DEFAULT_IR);
 
     await run(store, { dependencies: ["FN-2"] });
 
-    expect(row.status).toBeUndefined();
+    expect(row.status).toBe("needs-replan");
     expect(row.log.some((e) => e.action.includes("re-specification"))).toBe(true);
+  });
+
+  it("clears approval evidence when a new dependency supersedes the plan", async () => {
+    const { store, row } = harness({
+      column: "todo",
+      dependencies: [],
+      status: "awaiting-approval",
+      approvedPlanFingerprint: "sha256:stale",
+      awaitingApprovalReason: "plan-review-replan-cap",
+    }, DEFAULT_IR);
+
+    await run(store, { dependencies: ["FN-2"] });
+
+    expect(row.status).toBe("needs-replan");
+    expect(row.approvedPlanFingerprint).toBeUndefined();
+    expect(row.awaitingApprovalReason).toBeUndefined();
   });
 
   it("moves a RENAMED board's hold card to its own intake lane", async () => {

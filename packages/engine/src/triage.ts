@@ -1280,9 +1280,47 @@ export class TriageProcessor {
    * Do not recover `needs-replan` / `plan-review-unavailable`.
    */
   async recoverApprovedTask(task: Task): Promise<boolean> {
+    /*
+    FNXC:PlanningDependencyReseed 2026-08-04-00:30:
+    A dependency reseed from older writers could clear status after the planner
+    persisted a valid PROMPT.md but before this handoff ran.  It has neither a
+    fingerprint nor graph evidence, so ordinary discovery considers it planned
+    while release considers it unplanned. Claim this narrow legacy shape here;
+    the validation below still rejects seeds/partial plans and finalization
+    evaluates manual approval before graph continuation.
+    */
+    const hasNoPlanningHandoffEvidence = task.approvedPlanFingerprint == null
+      && !(task.workflowStepResults?.length);
+    /*
+    FNXC:PlanningDependencyReseed 2026-08-04-01:04:
+    Null status alone is not a planning handoff. Claim the legacy reseed hole
+    only after its original planner is gone, its row has aged past the normal
+    stuck-processing grace, and no approval or graph continuation evidence
+    exists. This keeps ordinary null-status cards from being re-finalized.
+    */
+    const continuationReader = (this.store as Partial<Pick<TaskStore, "listWorkflowWorkItemsForTask">>).listWorkflowWorkItemsForTask;
+    const stepInstanceReader = (this.store as Partial<Pick<TaskStore, "hasWorkflowRunStepInstancesForTask">>).hasWorkflowRunStepInstancesForTask;
+    const legacyNullStatusCandidate = task.status == null
+      && hasNoPlanningHandoffEvidence
+      && !task.awaitingApprovalReason
+      && !this.hasLivePlanningWork(task.id)
+      // FNXC:PlanningDependencyReseed 2026-08-04-01:04: Legacy unit fixtures
+      // have no graph-work-item reader; production always applies this fence.
+      && (!continuationReader || (
+        Date.now() - new Date(task.updatedAt).getTime() >= TriageProcessor.STALE_PROCESSING_THRESHOLD_MS
+        && (await continuationReader.call(this.store, task.id)).length === 0
+        /*
+        FNXC:PlanningDependencyReseed 2026-08-04-02:10:
+        A graph run can persist foreach step-instance rows before it creates a
+        result or continuation. That is still graph handoff evidence, so a
+        legacy null-status repair must defer instead of duplicating finalization.
+        Older narrow unit-store adapters lack this reader; production requires it.
+        */
+        && (!stepInstanceReader || !(await stepInstanceReader.call(this.store, task.id)))
+      ));
     const recoverableStatus =
       task.status === "planning"
-      || (task.status == null && this.hasSatisfiedPlanReview(task));
+      || (task.status == null && (this.hasSatisfiedPlanReview(task) || legacyNullStatusCandidate));
     /* FNXC:WorkflowLifecycleColumns 2026-07-29-09:05 (U11): the INTAKE lane, not
        the literal. Converting only the `todo` sites left this one rejecting every
        card whose workflow renames its planner column, so the release below was
@@ -4054,13 +4092,54 @@ export class TriageProcessor {
     so this plumbing is inert everywhere except the two sites explicitly marked
     below. Adding a state to an exit is then a deliberate, reviewable act.
     */
-    const report: PlanningHandoffReport = { outcome: "parked" };
+    const finalizeUnderLock = async () => {
+      /*
+      FNXC:PlanningDependencyReseed 2026-08-04-00:43:
+      Finalization publishes approval and graph-continuation handoff state under
+      the same cross-process advisory lock as dependency invalidation. A stale
+      planner therefore cannot recreate approval evidence after a reseed.
+      */
+      const report: PlanningHandoffReport = { outcome: "parked" };
+      this.finalizing.add(task.id);
+      try {
+        /*
+        FNXC:PlanningDependencyReseed 2026-08-04-00:54:
+        The snapshot held by a planner predates the outer lifecycle lock. Re-read
+        after acquiring it so a dependency invalidation committed first fences this
+        stale finalizer before it can restore approval or continuation handoff data.
+        */
+        const reRead = await Promise.resolve(this.store.getTask(task.id)).catch(() => null);
+        // Older pure unit-test adapters expose a no-op getTask; production returns
+        // a Task or rejects. Preserve that fixture seam without treating a failed
+        // production read as permission to publish a stale handoff.
+        if (reRead === null) return report;
+        const live = reRead ?? task;
+        if (live.status === "needs-replan") return report;
+        await this.finalizeApprovedTaskBody(live, writtenInput, settings, options, report);
+      } finally {
+        this.finalizing.delete(task.id);
+      }
+      return report;
+    };
+    // Minimal fixture stores predate the lifecycle-lock surface. Production
+    // TaskStore always supplies it; retaining this compatibility seam keeps
+    // pure triage unit tests from impersonating a PostgreSQL process.
+    const lifecycleLock = (this.store as Partial<TaskStore>).withPlanningLifecycleLock as
+      | (<T>(id: string, callback: () => Promise<T>) => Promise<T>)
+      | undefined;
+    /*
+    FNXC:PlanningDependencyReseed 2026-08-04-01:18:
+    A fail-closed direct-session transport can reject before it invokes the
+    callback. Keep the outer finalizing marker exception-safe so that rejection
+    remains diagnosable and retryable rather than permanently owning the task.
+    */
     try {
-      await this.finalizeApprovedTaskBody(task, writtenInput, settings, options, report);
+      return lifecycleLock
+        ? await lifecycleLock(task.id, finalizeUnderLock)
+        : await finalizeUnderLock();
     } finally {
       this.finalizing.delete(task.id);
     }
-    return report;
   }
 
   /*

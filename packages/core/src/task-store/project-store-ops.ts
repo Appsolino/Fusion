@@ -13,7 +13,7 @@ import { resolveCapacityPoolId } from "../workflows/workflow-capacity.js";
 import {resolveWorkflowIntakeFacts} from "./task-creation.js";
 import {TransitionRejectionError} from "./errors.js";
 import * as schema from "../postgres/schema/index.js";
-import {and, eq, isNull, ne, or, sql} from "drizzle-orm";
+import {and, eq, inArray, isNull, ne, or, sql} from "drizzle-orm";
 import {mkdir, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import type {Task, ColumnId, CheckoutClaimPrecondition, ActivityLogEntry, RunAuditEvent, RunAuditEventInput, RunAuditEventFilter, GoalCitation, GoalCitationFilter} from "../types.js";
@@ -104,7 +104,17 @@ export async function listGoalCitationsImpl(store: TaskStore, filter: GoalCitati
     return listGoalCitationsAsync(layer.db, filter);
 }
 
-export async function atomicWriteTaskJsonWithAuditImpl(store: TaskStore, dir: string, task: Task, auditInput?: RunAuditEventInput,): Promise<void> {
+export type PlanningDependencyInvalidation = {
+  /** Dependencies observed before this mutation; protects against stale snapshots. */
+  expectedCurrentDependencies: readonly string[];
+};
+
+function sameDependencySet(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length
+    && actual.every((dependency, index) => dependency === expected[index]);
+}
+
+export async function atomicWriteTaskJsonWithAuditImpl(store: TaskStore, dir: string, task: Task, auditInput?: RunAuditEventInput, planningInvalidation?: PlanningDependencyInvalidation,): Promise<void> {
     const id = store.getTaskIdFromDir(dir);
     // FNXC:RuntimeTaskOrchestrationAsync 2026-06-24-14:10:
     // Backend mode: upsert the task row + audit event in one async Drizzle
@@ -138,6 +148,12 @@ export async function atomicWriteTaskJsonWithAuditImpl(store: TaskStore, dir: st
       */
       if (row) {
         const existing = store.pgRowToTaskRow(row);
+        if (planningInvalidation && !sameDependencySet(
+          store.rowToTask(existing).dependencies ?? [],
+          planningInvalidation.expectedCurrentDependencies,
+        )) {
+          throw new Error(`Planning dependency invalidation conflict for ${id}: dependencies changed before the lifecycle mutation committed`);
+        }
         preserveResolvedTaskWedgeEpisode(existing, task);
         const changedColumns = store.getChangedTaskColumns(existing, task);
         if (changedColumns.size > 0) {
@@ -164,19 +180,42 @@ export async function atomicWriteTaskJsonWithAuditImpl(store: TaskStore, dir: st
         const context = store.createTaskPersistSerializationContext(task);
         await upsertTaskRowInTransaction(tx, task as unknown as Record<string, unknown>, context, layer.projectId);
       }
+      if (planningInvalidation) {
+        /*
+        FNXC:PlanningDependencyReseed 2026-08-04-01:57:
+        A dependency mutation supersedes a plan handoff only while its graph
+        continuation is still pending. Persist the new dependencies, replan
+        fence, and retirement together under the workflow serialization lock:
+        a worker that wins the lock first becomes `running` and is preserved;
+        a pending item cannot be claimed between this query and cancellation.
+        */
+        const workItemConditions = [
+          eq(schema.project.workflowWorkItems.taskId, id),
+          eq(schema.project.workflowWorkItems.kind, "task"),
+          inArray(schema.project.workflowWorkItems.state, ["runnable", "held", "retrying"]),
+        ];
+        if (layer.projectId) workItemConditions.push(eq(schema.project.workflowWorkItems.projectId, layer.projectId));
+        await tx.update(schema.project.workflowWorkItems).set({
+          state: "cancelled",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          lastError: "cancelled-by-planning-dependency-reseed",
+          updatedAt: task.updatedAt,
+        }).where(and(...workItemConditions));
+      }
       if (auditInput) {
         await recordRunAuditEventWithinTransaction(tx, auditInput);
       }
       return undefined;
       };
       /*
-      FNXC:WorkflowSerialization 2026-07-26-15:30:
-      FN-8592 makes the persisted plan-review passed edge share the exact
-      per-task advisory transaction lock used by conditional continuation
-      seeding. This prevents a pass from committing between that repair's
-      locked predicate reads and its insert.
+      FNXC:PlanningDependencyReseed 2026-08-04-01:57:
+      Planning invalidation shares this task-scoped transaction lock with
+      claim/continuation writers. The former plan-review-result condition is
+      retained because that persisted graph edge has the same serialization
+      requirement.
       */
-      if (task.workflowStepResults?.some(isPlanReviewSatisfied)) {
+if (planningInvalidation || task.workflowStepResults?.some(isPlanReviewSatisfied)) {
         return withTaskWorkflowSerialization(tx, layer.projectId, id, persist);
       }
       return persist();

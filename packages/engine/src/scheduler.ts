@@ -46,7 +46,7 @@ import type { TaskMoveLanes } from "@fusion/core";
 import { resolveProjectColumnsForRoles, resolveWorkflowIrForTask, resolveWorkflowIrById, resolveColumnFlags, resolveWorktreeCapacityLimit, resolveLifecycleColumns, isWipColumnRole, isReviewColumnRole, isCompleteColumnRole, columnsWithFlag } from "@fusion/core";
 import type { ColumnRoleTraitFlags } from "@fusion/core";
 import type { WorkflowIr, WorkflowIrV2 } from "@fusion/core";
-import { runHoldReleaseSweep, isUnplannedForExecution, type SlotReservation } from "./execution/hold-release.js";
+import { checkAndRecordUnplannedExecutionBlock, runHoldReleaseSweep, isUnplannedForExecution, type SlotReservation } from "./execution/hold-release.js";
 import { moveTaskToReplanColumn } from "./execution/replan-target.js";
 import { evaluateParkedAgentTaskLink } from "./agents/task-agent-sync.js";
 import { decideMissionSymbolAdmission, resolveMissionFeatureForTask } from "./missions/mission-symbol-admission.js";
@@ -2388,6 +2388,7 @@ export class Scheduler {
           try {
             const ir = await resolveWorkflowIrForTask(this.store, task.id);
             if (await isUnplannedForExecution(this.store, task, ir)) {
+              await checkAndRecordUnplannedExecutionBlock(this.store, task, ir);
               return null;
             }
           } catch {
