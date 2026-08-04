@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardGrok 2026-08-04:
- * Trusted dual Grok review → approver → exact-head merge evaluation.
- * Writer (App token) revalidates; this module never assumes Host credentials.
- * Fail closed when XAI_API_KEY missing.
+ * FNXC:AppsolinoStewardReview 2026-08-04:
+ * Dual Cursor review → approver → exact-head merge evaluation.
+ * No XAI_API_KEY. Writer (App token) revalidates digests.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { runGrokReviewer } from "./reviewer.mjs";
-import { runGrokApprover, assertApprovalsStillValid } from "./approver.mjs";
-import { requireXaiApiKey } from "./client.mjs";
-import { evaluateGrokDualApprovalMerge, exactHeadMergeArgv, ALLOWED_REPO } from "../merge/exact-head.mjs";
+import { runCursorReviewer } from "./reviewer.mjs";
+import { runCursorApprover, assertApprovalsStillValid } from "./approver.mjs";
+import { assertNoXaiRequirement } from "./policy.mjs";
+import {
+  evaluateDualApprovalMerge,
+  exactHeadMergeArgv,
+  ALLOWED_REPO,
+} from "../merge/exact-head.mjs";
 import { sha256Text } from "./verdict.mjs";
 
 /**
@@ -39,11 +42,11 @@ function ghJson(args, opts = {}) {
  *   merge?: boolean,
  *   dryRun?: boolean,
  *   appToken?: string,
- *   fetchImpl?: typeof fetch,
+ *   engine?: Function,
  * }} input
  */
-export async function runDualGrokApproveMaybeMerge(input) {
-  requireXaiApiKey({ apiKey: process.env.XAI_API_KEY });
+export async function runDualCursorApproveMaybeMerge(input) {
+  assertNoXaiRequirement();
   const repo = input.repository || ALLOWED_REPO;
   if (repo !== ALLOWED_REPO) throw new Error("cross-repository target rejected");
 
@@ -98,21 +101,22 @@ export async function runDualGrokApproveMaybeMerge(input) {
     changedFiles: [],
   };
 
-  const reviewer = await runGrokReviewer({
+  const reviewer = await runCursorReviewer({
     evidence: evidenceBase,
-    fetchImpl: input.fetchImpl,
+    engine: input.engine,
   });
   if (reviewer.verdict !== "APPROVE") {
     return { action: "reviewer-rejected", reviewer, headSha };
   }
 
-  const approver = await runGrokApprover({
+  const approver = await runCursorApprover({
     evidence: {
       ...evidenceBase,
       reviewerRequestId: reviewer.requestId,
+      reviewerSessionId: reviewer.sessionId,
       reviewerVerdictRaw: reviewer,
     },
-    fetchImpl: input.fetchImpl,
+    engine: input.engine,
   });
   if (approver.verdict !== "APPROVE") {
     return { action: "approver-rejected", reviewer, approver, headSha };
@@ -128,7 +132,7 @@ export async function runDualGrokApproveMaybeMerge(input) {
     currentTestsSha256: testsSha256,
   });
 
-  const verdict = evaluateGrokDualApprovalMerge({
+  const verdict = evaluateDualApprovalMerge({
     repository: repo,
     risk: input.risk,
     reviewer,
@@ -176,6 +180,10 @@ export async function runDualGrokApproveMaybeMerge(input) {
     headSha,
     reviewerRequestId: reviewer.requestId,
     approverRequestId: approver.requestId,
-    digest: createHash("sha256").update(`${headSha}:${diffSha256}:${testsSha256}`).digest("hex"),
+    reviewerSessionId: reviewer.sessionId,
+    approverSessionId: approver.sessionId,
+    digest: createHash("sha256")
+      .update(`${headSha}:${diffSha256}:${testsSha256}`)
+      .digest("hex"),
   };
 }

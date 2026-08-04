@@ -1,6 +1,6 @@
 # Steward S2 — Low-risk autonomy
 
-**Status:** IMPLEMENTED (gate OFF) — awaiting Phase 3 proofs + `XAI_API_KEY`  
+**Status:** IMPLEMENTED (gate OFF) — awaiting Phase 3 proofs + Cursor dual-review on main  
 **Parent:** [`STEWARD-POLICY.md`](STEWARD-POLICY.md)
 
 ## Flow

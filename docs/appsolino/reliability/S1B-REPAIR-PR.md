@@ -28,7 +28,7 @@ killSwitch / activation/KILL overrides all enables
 - Worktree: `/srv/appsolino-fusion/phase-1/worktrees/repair-<issue>-<occurrence>`
 - Branch: `repair/steward-<issue>-<fingerprint12>`
 - One PR per occurrence
-- Grok reviewer + approver required before exact-head merge
+- Cursor dual reviewer + approver (separate sessions) required before exact-head merge
 - Automation App push identity only
 
 ## Forbidden

@@ -2,7 +2,7 @@
 /* eslint-env node */
 /**
  * FNXC:AppsolinoStewardS3 2026-08-04:
- * Sensitive-change assistance — dual Grok APPROVE, Appsolino + Host D only.
+ * Sensitive-change assistance — dual Cursor APPROVE, Appsolino + Host D only.
  */
 import { isGateEnabled } from "../activation/resolve-activation.mjs";
 
@@ -57,7 +57,7 @@ export function evaluateS3Eligibility(input) {
       "repair-in-branch",
       "level-b-or-c-validation",
       "create-pr",
-      "dual-grok-approve",
+      "dual-cursor-approve",
       "exact-head-merge-appsolino-main",
       "deploy-host-d-via-auto3",
     ],

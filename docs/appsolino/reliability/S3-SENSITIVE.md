@@ -5,7 +5,7 @@
 
 ## May
 
-Investigate · repair in branch · Level B/C validation · PR · dual Grok APPROVE ·
+Investigate · repair in branch · Level B/C validation · PR · dual Cursor APPROVE ·
 exact-head merge to Appsolino main · AUTO-3 Host D deploy.
 
 ## Must not

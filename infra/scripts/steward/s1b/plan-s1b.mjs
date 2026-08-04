@@ -40,7 +40,7 @@ export function planS1bRepair(input) {
           "cursor-cli composer-2.5 repair in worktree only",
           "run affected tests",
           "push repair branch via Automation App",
-          "open one PR; invoke Grok reviewer+approver",
+          "open one PR; invoke Cursor reviewer+approver (separate sessions)",
           "exact-head merge only after risk controls",
         ]
       : [],

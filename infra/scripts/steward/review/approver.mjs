@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardGrok 2026-08-04:
- * Independent Grok approver — new request/clean context after reviewer APPROVE.
+ * FNXC:AppsolinoStewardReview 2026-08-04:
+ * Independent Cursor approver — new session after reviewer APPROVE.
  * Must not trust reviewer conclusions without re-checking digests.
  */
-import { resolveGrokModel, xaiJsonCompletion } from "./client.mjs";
-import { GROK_PROVIDER, assertNoWriteCreds, grokChildEnv } from "./policy.mjs";
+import { randomUUID } from "node:crypto";
+import { REVIEW_MODEL, REVIEW_PROVIDER, assertNoXaiRequirement } from "./policy.mjs";
+import { invokeCursorReviewRole } from "./spawn.mjs";
 import { sha256Text, validateVerdict } from "./verdict.mjs";
 
 /**
@@ -20,24 +21,22 @@ import { sha256Text, validateVerdict } from "./verdict.mjs";
  *     risk: string,
  *     rollbackPlan: string,
  *     reviewerRequestId: string,
+ *     reviewerSessionId: string,
  *     reviewerVerdictRaw: object,
  *   },
  *   apiKey?: string,
- *   fetchImpl?: typeof fetch,
+ *   engine?: Function,
+ *   spawnFn?: Function,
  *   nowMs?: number,
+ *   sessionId?: string,
  * }} input
  */
-export async function runGrokApprover(input) {
-  assertNoWriteCreds(grokChildEnv({ apiKey: input.apiKey }));
-  const pin = await resolveGrokModel({
-    apiKey: input.apiKey,
-    fetchImpl: input.fetchImpl,
-  });
+export async function runCursorApprover(input) {
+  assertNoXaiRequirement();
   const e = input.evidence;
   if (e.reviewerVerdictRaw?.verdict !== "APPROVE") {
     throw new Error("approver requires prior reviewer APPROVE");
   }
-  // Approver must not import hidden implementation reasoning — only digests + claims.
   const diffSha256 = sha256Text(e.diffText);
   const testsSha256 = sha256Text(e.testsLog);
   if (e.reviewerVerdictRaw.headSha !== e.headSha) {
@@ -50,13 +49,19 @@ export async function runGrokApprover(input) {
     throw new Error("changed tests rejected vs reviewer");
   }
 
+  const sessionId = input.sessionId || randomUUID();
+  if (sessionId === e.reviewerSessionId) {
+    throw new Error("approver must use a different sessionId than reviewer");
+  }
+
   const system = [
-    "You are GROK APPROVER for Appsolino/Fusion Steward.",
-    "Return ONLY a JSON object matching schemaVersion=1 role=approver.",
+    "You are CURSOR APPROVER for Appsolino/Fusion Steward.",
+    "Fresh session separate from implementer and reviewer.",
     "Independently validate exact head, digests, authority, and rollback.",
     "Do not approve solely because the reviewer approved.",
+    "Return ONLY JSON: schemaVersion=1 role=approver.",
     "authorityCheck.hostP/production/destructiveData/secretExpansion must be false.",
-    `configuredProvider must be ${GROK_PROVIDER}; configuredModel must be ${pin.actualModel}.`,
+    `configuredProvider/actualProvider must be ${REVIEW_PROVIDER}; model must be ${REVIEW_MODEL}.`,
   ].join(" ");
 
   const user = JSON.stringify({
@@ -69,20 +74,24 @@ export async function runGrokApprover(input) {
     risk: e.risk,
     rollbackPlan: e.rollbackPlan,
     reviewerRequestId: e.reviewerRequestId,
+    reviewerSessionId: e.reviewerSessionId,
     reviewerClaims: {
       verdict: e.reviewerVerdictRaw.verdict,
       risk: e.reviewerVerdictRaw.risk,
       blockingFindings: e.reviewerVerdictRaw.blockingFindings,
       evidenceChecked: e.reviewerVerdictRaw.evidenceChecked,
     },
+    sessionId,
   });
 
-  const result = await xaiJsonCompletion({
-    apiKey: input.apiKey,
-    fetchImpl: input.fetchImpl,
-    model: pin.actualModel,
+  const result = await invokeCursorReviewRole({
+    role: "approver",
     system,
     user,
+    sessionId,
+    apiKey: input.apiKey,
+    engine: input.engine,
+    spawnFn: input.spawnFn,
   });
 
   const art = {
@@ -94,19 +103,21 @@ export async function runGrokApprover(input) {
     headSha: e.headSha,
     diffSha256,
     testsSha256,
-    configuredProvider: GROK_PROVIDER,
-    configuredModel: pin.actualModel,
-    actualProvider: GROK_PROVIDER,
-    actualModel: pin.actualModel,
-    modelFingerprint: pin.modelFingerprint,
+    configuredProvider: REVIEW_PROVIDER,
+    configuredModel: REVIEW_MODEL,
+    actualProvider: REVIEW_PROVIDER,
+    actualModel: REVIEW_MODEL,
+    modelFingerprint: REVIEW_MODEL,
     requestId: result.requestId,
+    sessionId: result.sessionId,
+    elapsedMs: result.elapsedMs,
     expiresAt:
       result.parsed.expiresAt ||
       new Date(Date.now() + 6 * 3600_000).toISOString(),
   };
 
   return validateVerdict(art, {
-    expectModel: pin.actualModel,
+    expectModel: REVIEW_MODEL,
     expectHeadSha: e.headSha,
     expectDiffSha256: diffSha256,
     expectTestsSha256: testsSha256,
@@ -116,7 +127,6 @@ export async function runGrokApprover(input) {
 
 /**
  * Writer-side revalidation before exact-head merge (App token path).
- * Candidate code must never perform this with its own secrets.
  * @param {{
  *   reviewer: object,
  *   approver: object,
@@ -143,6 +153,9 @@ export function assertApprovalsStillValid(input) {
   if (approver.verdict !== "APPROVE") throw new Error("approver not APPROVE");
   if (reviewer.requestId === approver.requestId) {
     throw new Error("candidate cannot self-approve (identical request IDs)");
+  }
+  if (reviewer.sessionId === approver.sessionId) {
+    throw new Error("candidate cannot self-approve (identical session IDs)");
   }
   if (reviewer.role !== "reviewer" || approver.role !== "approver") {
     throw new Error("reviewer and approver roles must be distinct");

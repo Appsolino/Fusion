@@ -2,7 +2,7 @@
 /* eslint-env node */
 /**
  * FNXC:AppsolinoStewardS2 2026-08-04:
- * Low-risk automatic completion after dual Grok APPROVE + exact-head merge.
+ * Low-risk automatic completion after dual Cursor APPROVE + exact-head merge.
  */
 import { isGateEnabled } from "../activation/resolve-activation.mjs";
 

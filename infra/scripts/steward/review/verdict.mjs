@@ -1,19 +1,26 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardGrok 2026-08-04:
- * Verdict schema validation — fail closed on malformed / drifted responses.
+ * FNXC:AppsolinoStewardReview 2026-08-04:
+ * Structured dual-approval verdict validation.
  */
 import { createHash } from "node:crypto";
 import {
   ALLOWED_REPO,
-  GROK_PROVIDER,
+  REVIEW_PROVIDER,
   RISKS,
   VERDICTS,
 } from "./policy.mjs";
 
 /**
  * @param {unknown} v
+ * @param {{
+ *   expectModel?: string,
+ *   expectHeadSha?: string,
+ *   expectDiffSha256?: string,
+ *   expectTestsSha256?: string,
+ *   nowMs?: number,
+ * }} [opts]
  */
 export function validateVerdict(v, opts = {}) {
   if (!v || typeof v !== "object") throw new Error("verdict missing");
@@ -45,17 +52,13 @@ export function validateVerdict(v, opts = {}) {
   if (!/^[0-9a-f]{64}$/.test(String(art.testsSha256 || ""))) {
     throw new Error("testsSha256 must be sha256 hex");
   }
-  if (!Array.isArray(art.blockingFindings)) {
-    throw new Error("blockingFindings must be array");
-  }
-  if (!Array.isArray(art.nonBlockingFindings)) {
-    throw new Error("nonBlockingFindings must be array");
-  }
-  if (!Array.isArray(art.requiredChanges)) {
-    throw new Error("requiredChanges must be array");
-  }
-  if (!Array.isArray(art.evidenceChecked)) {
-    throw new Error("evidenceChecked must be array");
+  for (const k of [
+    "blockingFindings",
+    "nonBlockingFindings",
+    "requiredChanges",
+    "evidenceChecked",
+  ]) {
+    if (!Array.isArray(art[k])) throw new Error(`${k} must be array`);
   }
   if (!art.authorityCheck || typeof art.authorityCheck !== "object") {
     throw new Error("authorityCheck missing");
@@ -65,8 +68,11 @@ export function validateVerdict(v, opts = {}) {
       throw new Error(`authorityCheck.${k} must be false`);
     }
   }
-  if (art.configuredProvider !== GROK_PROVIDER || art.actualProvider !== GROK_PROVIDER) {
-    throw new Error("provider must be xai (silent fallback forbidden)");
+  if (
+    art.configuredProvider !== REVIEW_PROVIDER ||
+    art.actualProvider !== REVIEW_PROVIDER
+  ) {
+    throw new Error("provider must be cursor-cli (silent fallback forbidden)");
   }
   if (
     !art.configuredModel ||
@@ -81,6 +87,7 @@ export function validateVerdict(v, opts = {}) {
     );
   }
   if (!art.requestId) throw new Error("requestId missing");
+  if (!art.sessionId) throw new Error("sessionId missing");
   if (!art.expiresAt) throw new Error("expiresAt missing");
   if (opts.nowMs != null) {
     const exp = Date.parse(String(art.expiresAt));
@@ -100,9 +107,37 @@ export function validateVerdict(v, opts = {}) {
   return /** @type {typeof art} */ (art);
 }
 
-/**
- * @param {string} text
- */
+/** @param {string} text */
 export function sha256Text(text) {
   return createHash("sha256").update(String(text || ""), "utf8").digest("hex");
+}
+
+/**
+ * Parse last JSON object from cursor-agent print output.
+ * @param {string} text
+ */
+export function parseLastJsonObject(text) {
+  const s = String(text || "");
+  const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let m;
+  /** @type {string[]} */
+  const blocks = [];
+  while ((m = fenceRe.exec(s)) !== null) blocks.push(m[1]);
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    try {
+      return JSON.parse(blocks[i].trim());
+    } catch {
+      /* next */
+    }
+  }
+  const start = s.lastIndexOf("{");
+  if (start < 0) return null;
+  for (let end = s.length; end > start; end--) {
+    try {
+      return JSON.parse(s.slice(start, end));
+    } catch {
+      /* shrink */
+    }
+  }
+  return null;
 }

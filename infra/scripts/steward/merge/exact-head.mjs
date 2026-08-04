@@ -3,9 +3,9 @@
 /**
  * FNXC:AppsolinoStewardExactHead 2026-08-04:
  * Trusted exact-head merge helpers. Candidate branches never call this with App secrets.
- * Grok dual-approval path revalidates digests before `gh pr merge --match-head-commit`.
+ * Dual Cursor approval path revalidates digests before `gh pr merge --match-head-commit`.
  */
-import { assertApprovalsStillValid } from "../grok/approver.mjs";
+import { assertApprovalsStillValid } from "../review/approver.mjs";
 import { isGateEnabled } from "../activation/resolve-activation.mjs";
 
 export const ALLOWED_REPO = "Appsolino/Fusion";
@@ -28,7 +28,7 @@ export const ALLOWED_REPO = "Appsolino/Fusion";
  *   s3Gate?: boolean,
  * }} input
  */
-export function evaluateGrokDualApprovalMerge(input) {
+export function evaluateDualApprovalMerge(input) {
   const reasons = [];
   if (input.repository !== ALLOWED_REPO) {
     reasons.push("cross-repository-target-rejected");
@@ -83,6 +83,9 @@ export function evaluateGrokDualApprovalMerge(input) {
     matchHeadCommit: input.currentHeadSha,
   };
 }
+
+/** @deprecated Use evaluateDualApprovalMerge */
+export const evaluateGrokDualApprovalMerge = evaluateDualApprovalMerge;
 
 /**
  * Build gh argv for exact-head merge (caller supplies App token env).

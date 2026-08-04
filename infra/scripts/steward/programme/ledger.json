@@ -7,8 +7,8 @@
   "s1aImplementationBaselineSha": "be0aeee7710aba632a267d34737fd18cdeb0f2db",
   "documentationClosureMergeSha": "1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0",
   "hostP": "PROHIBITED",
-  "updatedAtUtc": "2026-08-04T08:52:28Z",
-  "activePhase": "1-control-plane",
+  "updatedAtUtc": "2026-08-04T10:21:40Z",
+  "activePhase": "2-cursor-dual-review",
   "phases": {
     "1-control-plane": {
       "status": "CI_GREEN_AWAITING_MERGE",
@@ -19,15 +19,12 @@
         "4660f2fca2a6df81c3fbcfe18180341825f63422"
       ],
       "merges": [],
-      "notes": "PR #80 — control plane + activation + grok + s1b/s2/s3 scaffolding"
+      "notes": "PR #80 \u2014 control plane + activation + Cursor dual-review + s1b/s2/s3 scaffolding"
     },
     "2-grok-review": {
-      "status": "BLOCKED",
-      "blocker": "XAI_API_KEY missing (#79)",
-      "prs": [
-        80
-      ],
-      "notes": "Adapter + tests present; live approvals blocked"
+      "status": "SUPERSEDED",
+      "notes": "Owner removed xAI/Grok; Cursor dual-review replaces this phase",
+      "replacement": "2-cursor-dual-review"
     },
     "3-s1a-auto": {
       "status": "PENDING",
@@ -53,39 +50,40 @@
     "7-upstream-74": {
       "status": "IN_PROGRESS",
       "issue": 74,
-      "pr": 81,
-      "upstreamShaHint": "71ba437cfe41cc6c05f6f80a31a46c53d5b59cd4",
-      "notes": "upstream tip c10a880f… (+24 beyond prior 71ba437c); PR #68 may need supersede",
-      "supersededPr": 68,
-      "upstreamSha": "ad2cb6958ec1dd1390b8597e468e39bde7682769",
-      "head": "32ac99f1bbdf440ce98f1e0652b46a87edc2c82b"
+      "pr": 82,
+      "supersededPrs": [
+        81,
+        68,
+        57,
+        60
+      ],
+      "upstreamSha": "993a2f9d866d0951c1775d9423875ce8d6aeb8f4",
+      "head": "16e0650c9c21616e160e1d8c9475b93b356c440c"
     },
     "8-e2e-proof": {
       "status": "PENDING"
     },
     "9-closure": {
       "status": "PENDING"
+    },
+    "2-cursor-dual-review": {
+      "status": "IN_PROGRESS",
+      "prs": [
+        80
+      ],
+      "notes": "Cursor implementer/reviewer/approver \u2014 no XAI_API_KEY"
     }
   },
-  "openOwnerActions": [
-    {
-      "id": "xai-api-key",
-      "title": "Add Actions secret XAI_API_KEY",
-      "issue": 79,
-      "kind": "secret-creation",
-      "openedAtUtc": "2026-08-04T08:30:59Z"
-    }
-  ],
+  "openOwnerActions": [],
   "providerPins": {
     "cursor": {
       "configuredProvider": "cursor-cli",
-      "configuredModel": "composer-2.5"
-    },
-    "grok": {
-      "configuredProvider": "xai",
-      "configuredAlias": "grok-4.5",
-      "reasoningEffort": "high",
-      "resolvedModel": null
+      "configuredModel": "composer-2.5",
+      "roles": [
+        "implementer",
+        "reviewer",
+        "approver"
+      ]
     }
   }
 }
