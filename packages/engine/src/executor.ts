@@ -12664,13 +12664,15 @@ export class TaskExecutor {
         recoveryRehome: true,
       });
     }
-    await this.store.updateTask(liveTask.id, { status: "queued", blockedBy: unmetDeps[0] }, this.getRunContextFor(liveTask.id));
-    await this.store.logEntry(
-      liveTask.id,
-      `queued — unmet dependencies: ${unmetDeps.join(", ")}`,
-      "Executor pre-dispatch dependency gate blocked workflow/authoritative execution.",
-      this.getRunContextFor(liveTask.id),
-    );
+    const normalizedUnmetDeps = [...new Set(unmetDeps)].sort();
+    await this.store.transitionQueuedEpisode(liveTask.id, {
+      signature: `dependency:${normalizedUnmetDeps.join(",")}`,
+      blockedBy: unmetDeps[0] ?? null,
+      overlapBlockedBy: liveTask.overlapBlockedBy ?? null,
+      action: `queued — unmet dependencies: ${unmetDeps.join(", ")}`,
+      outcome: "Executor pre-dispatch dependency gate blocked workflow/authoritative execution.",
+      runContext: this.getRunContextFor(liveTask.id),
+    });
     executorLog.log(`${liveTask.id}: executor dispatch blocked by unmet dependencies: ${unmetDeps.join(", ")}`);
     return true;
   }

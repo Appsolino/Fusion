@@ -1617,6 +1617,13 @@ export class Scheduler {
     }
   }
 
+  private async transitionQueuedEpisode(
+    task: Task,
+    input: { signature: string; blockedBy: string | null; overlapBlockedBy: string | null; action: string },
+  ): Promise<boolean> {
+    return (await this.store.transitionQueuedEpisode(task.id, input)).appended;
+  }
+
   private async logDispatchQueuedReason(taskId: string, reason: string, memoKey?: string): Promise<boolean> {
     const key = `${taskId}:${memoKey ?? reason}`;
     if (this.wasDispatchQueuedReasonLogged.has(key)) {
@@ -2398,11 +2405,13 @@ export class Scheduler {
 
           const unmetDeps = getUnmetSchedulingDependencies(task, tasks, schedulingDependencyOptions);
           if (unmetDeps.length > 0) {
-            await this.store.updateTask(task.id, {
-              status: "queued",
-              blockedBy: unmetDeps[0],
+            const normalizedUnmetDeps = [...new Set(unmetDeps)].sort();
+            await this.transitionQueuedEpisode(task, {
+              signature: `dependency:${normalizedUnmetDeps.join(",")}`,
+              blockedBy: unmetDeps[0] ?? null,
+              overlapBlockedBy: task.overlapBlockedBy ?? null,
+              action: `queued — unmet dependencies: ${unmetDeps.join(", ")}`,
             });
-            await this.logDispatchQueuedReason(task.id, `queued — unmet dependencies: ${unmetDeps.join(", ")}`);
             this.options.onBlocked?.(task, unmetDeps);
             return null;
           }
@@ -2876,16 +2885,13 @@ export class Scheduler {
 
               if (overlappingTaskId) {
                 const activeLeaseColumn = activeScopeColumns.get(overlappingTaskId) ?? "in-progress";
-                await this.store.updateTask(task.id, {
-                  status: "queued",
+                await this.transitionQueuedEpisode(task, {
+                  signature: `file-scope:${overlappingTaskId}`,
                   blockedBy: null,
                   overlapBlockedBy: overlappingTaskId,
+                  action: `queued — blocked by active file-scope lease ${overlappingTaskId} (column=${activeLeaseColumn})`,
                 });
                 await this.rollbackRunningAgentsForQueuedTodoTask(task.id);
-                await this.logDispatchQueuedReason(
-                  task.id,
-                  `queued — blocked by active file-scope lease ${overlappingTaskId} (column=${activeLeaseColumn})`,
-                );
                 return null;
               }
 
