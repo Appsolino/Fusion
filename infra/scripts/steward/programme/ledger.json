@@ -7,15 +7,17 @@
   "s1aImplementationBaselineSha": "be0aeee7710aba632a267d34737fd18cdeb0f2db",
   "documentationClosureMergeSha": "1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0",
   "hostP": "PROHIBITED",
-  "updatedAtUtc": "2026-08-04T08:30:59Z",
+  "updatedAtUtc": "2026-08-04T08:39:54Z",
   "activePhase": "1-control-plane",
   "phases": {
     "1-control-plane": {
       "status": "IN_PROGRESS",
-      "prs": [],
+      "prs": [
+        80
+      ],
       "heads": [],
       "merges": [],
-      "notes": "PR pending for control plane + grok adapter + activation policy"
+      "notes": "PR #80 — control plane + activation + grok + s1b/s2/s3 scaffolding"
     },
     "2-grok-review": {
       "status": "BLOCKED",
@@ -30,22 +32,26 @@
       "prs": []
     },
     "4-s1b": {
-      "status": "PENDING",
-      "prs": []
+      "status": "IN_PROGRESS",
+      "prs": [],
+      "notes": "policy+plan+run dry-run; live spawn deferred"
     },
     "5-s2": {
-      "status": "PENDING",
-      "prs": []
+      "status": "IN_PROGRESS",
+      "prs": [],
+      "notes": "policy+playbooks implemented; gate OFF"
     },
     "6-s3": {
-      "status": "PENDING",
-      "prs": []
+      "status": "IN_PROGRESS",
+      "prs": [],
+      "notes": "policy implemented; gate OFF"
     },
     "7-upstream-74": {
       "status": "PENDING",
       "issue": 74,
       "pr": 68,
-      "upstreamShaHint": "71ba437cfe41cc6c05f6f80a31a46c53d5b59cd4"
+      "upstreamShaHint": "71ba437cfe41cc6c05f6f80a31a46c53d5b59cd4",
+      "notes": "upstream tip c10a880f… (+24 beyond prior 71ba437c); PR #68 may need supersede"
     },
     "8-e2e-proof": {
       "status": "PENDING"

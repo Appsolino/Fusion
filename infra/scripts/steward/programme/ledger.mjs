@@ -33,11 +33,14 @@ export function saveLedger(ledger, path = LEDGER_PATH) {
 export function resolveLiveMainSha(opts = {}) {
   const cwd = opts.cwd || process.cwd();
   const remote = opts.remote || "origin";
-  spawnSync("git", ["fetch", "--no-tags", remote, "main"], {
+  // Avoid dubious-ownership failures when the runner uid ≠ worktree owner
+  // without mutating global git config.
+  const gitSafe = ["-c", "safe.directory=*"];
+  spawnSync("git", [...gitSafe, "fetch", "--no-tags", remote, "main"], {
     cwd,
     encoding: "utf8",
   });
-  const r = spawnSync("git", ["rev-parse", `${remote}/main`], {
+  const r = spawnSync("git", [...gitSafe, "rev-parse", `${remote}/main`], {
     cwd,
     encoding: "utf8",
   });
