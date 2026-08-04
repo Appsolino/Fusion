@@ -2,41 +2,43 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-03T11:00:00Z
+**Last updated UTC:** 2026-08-04T03:55:00Z
 
 | Field | Value |
 | --- | --- |
-| Current `main` SHA | `b83fd0eda83b1760b441454f852b8564f954bdf4` (PR #66 dedup) — classification fix landing |
+| Current `main` SHA | `aec894035` (lineage from origin/main at S1A branch cut) |
 | Active Host D release | `auto3-0.74.0-beta.6-16f24ed3b473` |
 | Source SHA | `16f24ed3b47321cc1b5aa693b2fac7e13a00b379` (PR #55 absorb) |
 | Previous rollback release | `auto3-0.74.0-beta.5-5f1b923bd815` |
 | Schema ceiling | **0039** |
 | Staging health | `ok` / `0.74.0-beta.6` @ `127.0.0.1:4140` (`enginePaused=true`) |
-| Host P state | Deferred / untouched (**accessed=NO**) |
+| Host P state | Deferred / untouched (**accessed=NO** — **prohibited**) |
 | Legacy production | DEGRADED / FROZEN |
 | Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** |
 
-## Owner priority (2026-08-03)
+## Owner priority (2026-08-04)
 
 ```text
-NOW:     Land cron :37 re-registration → prove schedule → then S1A decision
-HOLD:    S1A Expert Advisory Mode
-DONE:    PR #66 fingerprint dedup; App Issues write; observe+upsert green
+NOW:     Implement + prove Steward S1A (advice only) on fixture + one watched live issue
+NEXT:    Decide whether to enable S1A_AUTO_HANDOFF / STEWARD_S0_HANDOFF_S1A after proof
+HOLD:    S1B repair PR agent — NOT AUTHORISED
+DONE:    S0 observation ACCEPTED (fingerprint, upsert, AUTO-1 conflict classification)
 DONE:    AUTO-4 COMPLETE (pin 71576d953626)
 PARKED:  ISS-UI-001 / PR #28
 PARKED:  ISS-GIT-007
-NOTE:    Engine stays paused. Host P untouched.
+NOTE:    Engine stays paused. Host P untouched / prohibited.
 ```
 
-## Steward S0 enablement
+## Steward enablement
 
 | Item | Value |
 | --- | --- |
-| Status | **ENABLED** — observe/upsert/dedup green; **expected-state classifier repaired (PR #70)** |
-| Issue #67 | **FALSE POSITIVE** — skipped AUTO-2 validate on ineligible branch (classifier fixed; close after clean reconcile) |
-| Issue #64 | **FALSE POSITIVE (classifier)** — `ignored` / `approval-required` mapped to missing-child (classifier fixed; close after clean reconcile) |
-| Issue #65 | Closed duplicate of #64 |
-| Scheduled `:37` | Cron re-registration pending merge; unproven on current main lineage |
+| S0 status | **ACCEPTED** — observation / upsert / reconcile path on `main` lineage `aec894035` |
+| S1A status | **AUTHORISED / IMPLEMENTING** — advice only; see [`reliability/S1A-EXPERT-ADVISORY.md`](reliability/S1A-EXPERT-ADVISORY.md) |
+| S1B status | **NOT AUTHORISED** |
+| Automatic S1A handoff | **OFF** until after proof (`S1A_AUTO_HANDOFF` / `STEWARD_S0_HANDOFF_S1A`) |
+| Engine | **paused** |
+| Host P | **prohibited** |
 
 ## AUTO-1 / AUTO-2 / AUTO-3 / Steward
 
@@ -45,11 +47,13 @@ NOTE:    Engine stays paused. Host P untouched.
 | AUTO-1 | OPERATIONAL |
 | AUTO-2 | OPERATIONAL |
 | AUTO-3 | OPERATIONAL |
-| Steward S0 | **ENABLED** — classification repair in flight |
-| Steward S1A | **HOLD / NOT AUTHORISED** |
+| Steward S0 | **ACCEPTED** |
+| Steward S1A | **AUTHORISED / IMPLEMENTING** (advice only) |
+| Steward S1B | **NOT AUTHORISED** |
 
 ## Next authorised mission
 
-1. Merge expected-state classification repair; close #64/#67 with evidence; re-reconcile.
-2. Confirm no recreated FP issues; prove minute-17.
-3. Only then **AUTHORISE S1A**.
+1. Land S1A package + workflow; fixture tests green.  
+2. Owner-watched live `workflow_dispatch` on one eligible incident.  
+3. Keep automatic handoff OFF until proof.  
+4. Do **not** authorise S1B, repair branches, Host D/P, or AUTO redispatch from Steward.  

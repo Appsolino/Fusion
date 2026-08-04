@@ -1,14 +1,16 @@
 # Upstream Reliability Steward — policy
 
-**Phase:** S0 (observation only) — enabled on `main`  
+**Phase:** S0 ACCEPTED · S1A AUTHORISED (advice) · S1B NOT AUTHORISED  
 **Authority:** Complements AUTO-1/2/3; does not replace them.  
 **Status ledger:** [`../CURRENT-STATE.md`](../CURRENT-STATE.md)
 
 ## Purpose
 
-Detect, fingerprint, and record AUTO pipeline failures as durable GitHub Issues so S1A can later assign an advisory expert (and S1B a repair agent, only after authorisation). S0 does **not** diagnose as an expert, repair code, open repair PRs, dispatch workflows, merge, or deploy.
+Detect, fingerprint, and record AUTO pipeline failures as durable GitHub Issues (S0).  
+When authorised, assign an advisory expert (S1A) that posts structured root-cause advice.  
+S1B (repair PR agent) is **not** authorised. Steward does **not** merge, deploy, or access Host P.
 
-## Detection
+## Detection (S0)
 
 | Path | Mechanism |
 | --- | --- |
@@ -40,7 +42,7 @@ Hidden issue marker:
 
 Occurrence id (evidence only): `workflow-run:<run-id>:attempt:<attempt>`
 
-## Issue behaviour
+## Issue behaviour (S0)
 
 | Case | Action |
 | --- | --- |
@@ -49,16 +51,24 @@ Occurrence id (evidence only): `workflow-run:<run-id>:attempt:<attempt>`
 | Closed fingerprint recurring | Reopen + append |
 | Same occurrence twice | No-op |
 
-## Trust / security (S0)
+### Optional S0 → S1A handoff label
+
+When creating open incidents, S0 may **optionally** attach `steward/needs-expert` **only if** env `STEWARD_S0_HANDOFF_S1A=1`.  
+**Default: OFF** — automatic handoff stays disabled until after S1A proof.
+
+Labeled-event auto-launch for S1A additionally requires repository variable / env `S1A_AUTO_HANDOFF=true`. If not `true`, labeled events exit 0 with skip.
+
+## Trust / security
 
 - Checkout **trusted `main` only**
 - Never checkout failing PR head
 - Never execute candidate scripts or artifact code
 - Treat logs, artifacts, PR fields as **untrusted**; escape Markdown
 - Workflow `permissions` are read-only (`contents`/`actions`/`pull-requests`). **No** workflow-level `issues: write`.
-- Issue upsert: Appsolino Automation App token only (`permission-issues: write`), under `steward-s0-issue-upsert` concurrency
-- Steward workflow must **never reference** Host D/P secret expressions (static YAML guard)
-- Unavailable physical fields are JSON `null` — never invented safe values (`enginePaused`/`hostPAccessed`)
+- Issue / comment upsert: Appsolino Automation App token only (`permission-issues: write`)
+- Steward workflows must **never reference** Host D/P secret expressions (static YAML guard)
+- Never `gh workflow run` / `gh run rerun` from Steward
+- Unavailable physical fields in S0 are JSON `null` — never invented. S1A advisory packs may apply documented defaults (`mutatedMain=false`, `deployedHostD=false`, `hostPAccessed=false`, `enginePaused=true`) when unknown for advice rendering only.
 
 ## Physical evidence (without deploy access)
 
@@ -72,30 +82,42 @@ Compare when available:
 
 Evidence artifact fields: `sourceSha`, `releaseId`, `applicationVersion`, `terminal`, `highestMigration`, `health`, `enginePaused`, `hostPAccessed`, `previousRelease`, `recordedUtc`.
 
-A future read-only `auto3-status` Host D probe may strengthen live verification; it must not install or switch releases.
-
 ## S0 forbidden
 
 repair-code-generation · repair-branch · workflow-dispatch (of AUTO) · workflow-rerun · auto-merge · auto3-deploy · host-d-ssh-install · host-p-access · candidate-checkout · candidate-script-execution · owner-oauth-as-routine-identity
 
-## S0 acceptance (fixture-based)
+## S1A authorised (advice only)
 
-Historical fixtures (no deliberate live failures):
+Package: `infra/scripts/steward/s1a/` · Policy doc: [`S1A-EXPERT-ADVISORY.md`](S1A-EXPERT-ADVISORY.md)
 
-- wrong AUTO-3 child correlation  
-- workflow YAML parse  
-- summary SyntaxError  
-- false `DEPLOYED` marker  
-- package-version drift  
-- generated census conflict  
-- AUTO-1 structured `outcome=conflict` → `upstream-merge-conflict`  
-- success / no-change  
+### Labels
 
-Also: needs-triage unknown; parent/child disagreement; missing child after timeout; idempotent reconciliation.
+`steward/needs-expert` · `steward/expert-running` · `steward/advice-ready` · `steward/needs-evidence` · `steward/repair-recommended` · `steward/owner-required` · `steward/expert-failed`
+
+Owner may create these labels; live upsert may ensure they exist via API.
+
+### Idempotency
+
+Assessment comments are keyed by hidden marker `fingerprint` + `occurrence`. Same key → no duplicate assessment. New occurrence → new assessment comment. One engineer revision after reviewer REJECT.
+
+### Runtime bounds
+
+`maxAttempts=2` · `maxRuntimeMs=600000` · `maxTokens=0` (deterministic) · `assessment-version=1`
+
+Pinned provider/model: `appsolino-s1a-deterministic` / `appsolino-s1a-deterministic-v1`.  
+`S1A_ENGINE=cursor` without API key **fails closed** — no silent fallback to deterministic.
+
+### S1A forbidden (inherits S0 +)
+
+repair-pr · silent-provider-fallback · Host P · AUTO dispatch/rerun · repair branch push
+
+## S1B prohibited
+
+No repair code for conflict resolution committed under S1A. No `repair/<incident-id>` branch push. No hidden S1B. Await separate owner authorisation.
 
 ## AUTO-1 structured outcome (authoritative)
 
-Parse the AUTO-1 JSON / `outcome=` result **before** generic log signatures. Never classify AUTO-1 as `correlation-race` without explicit handoff/child-selection evidence (bare substring `handoff` in paths is not evidence).
+Parse the AUTO-1 JSON / `outcome=` result **before** generic log signatures. Never classify AUTO-1 as `correlation-race` without explicit handoff/child-selection evidence.
 
 | AUTO-1 `outcome` | Steward treatment |
 | --- | --- |
@@ -104,33 +126,31 @@ Parse the AUTO-1 JSON / `outcome=` result **before** generic log signatures. Nev
 | `conflict` | `upstream-merge-conflict` (retain upstream SHA, sync PR, conflicted files, `mutatedMain=false`, `deployedHostD=false`) |
 | unknown / missing with failed conclusion | `needs-triage` |
 
-Regression fixture: `auto1-upstream-merge-conflict-30805433281` (correlation-noise must not override `outcome=conflict`).
-
-Hourly reconcile re-evaluates recent completed AUTO-1 runs from structured outcome (not handoff-only), so a misclassified conflict can be recovered without re-running AUTO-1.
-
-## Agent runtime contract (defined for S1A/S1B; not executed while S0-only)
+## Agent runtime contract
 
 ```text
 Account: fusion
 Worktree: /srv/appsolino-fusion/phase-1/worktrees/repair-<incident-id>
-Provider/model: explicitly pinned; fallback disabled unless policy allows
+          (or $S1A_WORKTREE_ROOT / $RUNNER_TEMP on GHA)
+Provider/model: explicitly pinned; fallback disabled
 Bounds: attempts, runtime, tokens
 GitHub identity: Appsolino Automation App
 Deployment authority: none
 ```
 
-Record: configuredProvider/Model, actualProvider/Model, missionId, incidentFingerprint, worktree, baseSha, repairHeadSha (S1B only).
+Record: configuredProvider/Model, actualProvider/Model, missionId, incidentFingerprint, worktree.  
+`repairHeadSha` is S1B-only (forbidden while S1B not authorised).
 
 ## Reviewer independence (S1A+)
 
-Engineer receives evidence and produces advice (S1A) or a patch (S1B). Reviewer receives original evidence + diagnosis and, for S1B, diff + tests — **not** engineer reasoning as authority — and returns ACCEPT / REJECT / NEEDS_MORE_EVIDENCE. Low-risk auto-remediation (S2) requires classifier LOW ∧ tests ∧ reviewer ACCEPT ∧ checks ∧ exact head.
+Engineer receives evidence and produces advice (S1A). Reviewer receives original evidence + diagnosis only — **not** engineer scratchpads — and returns ACCEPT / REJECT / NEEDS_MORE_EVIDENCE.
 
 ## Phase gates
 
 | Phase | Status |
 | --- | --- |
-| S0 observation | Enabled on `main` — fixture PASS; scheduled reconcile must be green before S1A |
-| S1A expert advisory | **Not authorised** — draft only: [`S1A-MISSION-DRAFT.md`](S1A-MISSION-DRAFT.md) |
-| S1B repair PR agent | **Not authorised** — after S1A proves useful |
+| S0 observation | **ACCEPTED** / enabled on `main` |
+| S1A expert advisory | **AUTHORISED** — [`S1A-EXPERT-ADVISORY.md`](S1A-EXPERT-ADVISORY.md) |
+| S1B repair PR agent | **Not authorised** |
 | S2 low-risk auto-merge | Not authorised |
 | S3 sensitive assist | Not authorised |

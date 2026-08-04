@@ -1,0 +1,14 @@
+{
+  "number": 68,
+  "url": "https://github.com/Appsolino/Fusion/pull/68",
+  "title": "automation/upstream-sync (conflict)",
+  "changedFiles": [
+    "packages/engine/src/executor.ts",
+    "scripts/lib/lifecycle-column-census-baseline.json",
+    ".changeset/ce-review-handoff-step-projection.md",
+    ".changeset/planning-handoff-outcome.md"
+  ],
+  "touchesWorkflows": false,
+  "touchesMigrations": false,
+  "touchesLockfile": false
+}

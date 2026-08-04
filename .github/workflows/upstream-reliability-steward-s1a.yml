@@ -1,0 +1,199 @@
+# FNXC:AppsolinoStewardS1A 2026-08-04:
+# Steward S1A — Expert Advisory Mode (advice only).
+# Posts structured assessment comments; never repairs, merges, deploys, or
+# dispatches AUTO. Checkout trusted main only. No Host D/P secret references.
+# Observe/analyze: read-only GITHUB_TOKEN. Upsert-advice: App token (issues write).
+#
+# Worktree contract (advice-only investigation notes; never push/repair):
+#   preferred: $S1A_WORKTREE_ROOT/repair-<incident-id>
+#   else:      $RUNNER_TEMP/repair-<incident-id>
+
+name: Upstream Reliability Steward S1A
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Incident issue number"
+        required: true
+        type: string
+      mode:
+        description: "fixture-replay (CI) | live (ops)"
+        required: true
+        type: choice
+        options:
+          - fixture-replay
+          - live
+        default: live
+
+# Observe stays read-only. Issue writes use App token in upsert-advice only.
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: steward-s1a-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  observe-analyze:
+    name: Eligibility + evidence + assessment (read-only analyze)
+    runs-on: ubuntu-latest
+    outputs:
+      should_upsert: ${{ steps.gate.outputs.should_upsert }}
+      issue_number: ${{ steps.gate.outputs.issue_number }}
+      mode: ${{ steps.gate.outputs.mode }}
+      skip_reason: ${{ steps.gate.outputs.skip_reason }}
+    steps:
+      - name: Checkout trusted main only
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Guard S1A trust invariants
+        run: |
+          set -euo pipefail
+          f=.github/workflows/upstream-reliability-steward-s1a.yml
+          grep -q 'ref: main' "$f"
+          # Ban real AUTO dispatch/rerun commands (ignore this Guard step's own grep needles).
+          if awk '/gh[[:space:]]+workflow[[:space:]]+run/ && $0 !~ /grep|echo|::error/ { found=1; print } END { exit found?0:1 }' "$f"; then
+            echo "::error::S1A must not dispatch AUTO/other workflows via CLI"
+            exit 1
+          fi
+          if awk '/gh[[:space:]]+run[[:space:]]+rerun/ && $0 !~ /grep|echo|::error/ { found=1; print } END { exit found?0:1 }' "$f"; then
+            echo "::error::S1A must not rerun workflow runs via CLI"
+            exit 1
+          fi
+          if grep -nE '\$\{\{[[:space:]]*secrets\.(HOST_D|HOST_P)_' "$f"; then
+            echo "::error::S1A must not reference Host D/P secrets"
+            exit 1
+          fi
+          if grep -nE '^[[:space:]]*issues:[[:space:]]*write' "$f"; then
+            echo "::error::workflow GITHUB_TOKEN must not have issues:write"
+            exit 1
+          fi
+          node infra/scripts/steward/s1a/guard-authority.mjs --workflow="$f"
+          echo "yaml-parse-ok"
+
+      - name: Gate triggers (auto handoff OFF until proof)
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LABEL_NAME: ${{ github.event.label.name || '' }}
+          ISSUE_NUMBER_EVENT: ${{ github.event.issue.number || '' }}
+          ISSUE_NUMBER_INPUT: ${{ inputs.issue_number || '' }}
+          DISPATCH_MODE: ${{ inputs.mode || '' }}
+          S1A_AUTO_HANDOFF: ${{ vars.S1A_AUTO_HANDOFF || 'false' }}
+        run: |
+          set -euo pipefail
+          MODE="live"
+          ISSUE=""
+          SKIP=""
+          SHOULD="false"
+
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            ISSUE="${ISSUE_NUMBER_INPUT}"
+            MODE="${DISPATCH_MODE:-live}"
+            SHOULD="true"
+          elif [[ "${EVENT_NAME}" == "issues" ]]; then
+            ISSUE="${ISSUE_NUMBER_EVENT}"
+            MODE="live"
+            if [[ "${LABEL_NAME}" != "steward/needs-expert" ]]; then
+              SKIP="label-not-needs-expert"
+              SHOULD="false"
+            elif [[ "${S1A_AUTO_HANDOFF}" != "true" ]]; then
+              # Automatic handoff OFF until after S1A proof.
+              SKIP="auto-handoff-disabled"
+              SHOULD="false"
+              echo "S1A labeled event skipped (S1A_AUTO_HANDOFF!=true)"
+            else
+              SHOULD="true"
+            fi
+          else
+            SKIP="unsupported-event"
+            SHOULD="false"
+          fi
+
+          echo "issue_number=${ISSUE}" >> "$GITHUB_OUTPUT"
+          echo "mode=${MODE}" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=${SKIP}" >> "$GITHUB_OUTPUT"
+          echo "should_upsert=${SHOULD}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${SHOULD}" != "true" ]]; then
+            echo "skip=${SKIP}"
+            exit 0
+          fi
+
+      - name: Fixture-replay self-check (no live writes)
+        if: steps.gate.outputs.should_upsert == 'true' && steps.gate.outputs.mode == 'fixture-replay'
+        env:
+          S1A_WORKTREE_ROOT: ${{ vars.S1A_WORKTREE_ROOT || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/steward-s1a"
+          node infra/scripts/steward/s1a/run-s1a.mjs \
+            --issue="${{ steps.gate.outputs.issue_number }}" \
+            --repo="${{ github.repository }}" \
+            --mode=fixture \
+            > "$RUNNER_TEMP/steward-s1a/fixture-result.json"
+          node --test infra/scripts/steward/s1a/__tests__/*.test.mjs
+          echo "fixture-replay complete (no upsert; upsert-advice skipped for non-live mode)"
+
+      - name: Upload S1A artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: steward-s1a-${{ github.run_id }}
+          path: ${{ runner.temp }}/steward-s1a/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  upsert-advice:
+    name: Upsert assessment comment + labels (App token)
+    needs: observe-analyze
+    if: needs.observe-analyze.outputs.should_upsert == 'true' && needs.observe-analyze.outputs.mode == 'live'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: steward-s1a-upsert-${{ needs.observe-analyze.outputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout trusted main only
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Create GitHub App token (issues write)
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Run S1A live advisory
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          S1A_WORKTREE_ROOT: ${{ vars.S1A_WORKTREE_ROOT || '' }}
+          S1A_ENGINE: deterministic
+          S1A_PROVIDER: appsolino-s1a-deterministic
+          S1A_MODEL: appsolino-s1a-deterministic-v1
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/steward-s1a"
+          node infra/scripts/steward/s1a/run-s1a.mjs \
+            --issue="${{ needs.observe-analyze.outputs.issue_number }}" \
+            --repo="$GITHUB_REPOSITORY" \
+            --mode=live \
+            | tee "$RUNNER_TEMP/steward-s1a/live-result.json"
