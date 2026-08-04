@@ -5,6 +5,7 @@
  * Steward S1A Expert Advisory Mode — policy constants.
  * Advice only: no repair branch, no AUTO dispatch, no Host D/P.
  */
+import { existsSync, statSync } from "node:fs";
 
 /** @typedef {"S0"|"S1A"|"S1B"|"S2"|"S3"} StewardPhase */
 
@@ -20,6 +21,9 @@ export const PHASE_GATE = Object.freeze({
 });
 
 export const ALLOWED_REPO = "Appsolino/Fusion";
+
+/** Canonical host worktree parent (fusion-owned). */
+export const CANONICAL_WORKTREE_ROOT = "/srv/appsolino-fusion/phase-1/worktrees";
 
 export const STEWARD_ISSUE_LABEL = "appsolino-steward";
 
@@ -40,31 +44,42 @@ export const S1A_LABEL_LIST = Object.freeze(Object.values(S1A_LABELS));
 
 /**
  * Hidden assessment comment marker (idempotency key = fingerprint + occurrence).
- * @example
- * <!-- appsolino-s1a-assessment:
- * fingerprint=abc...
- * occurrence=workflow-run:1:attempt:1
- * assessment-version=1 -->
  */
 export const ASSESSMENT_MARKER_PREFIX = "<!-- appsolino-s1a-assessment:";
 
 export const ASSESSMENT_MARKER_RE =
   /<!--\s*appsolino-s1a-assessment:\s*\n\s*fingerprint=([a-f0-9]{64})\s*\n\s*occurrence=([^\n]+?)\s*\n\s*assessment-version=(\d+)\s*-->/i;
 
-/** Runtime bounds (deterministic engine: tokens N/A → 0). */
+/** Runtime bounds. */
 export const S1A_BOUNDS = Object.freeze({
   maxAttempts: 2,
   maxRuntimeMs: 600_000,
   maxTokens: 0,
   assessmentVersion: 1,
+  artifactSchemaVersion: 1,
+  maxWorkflowLogBytes: 256_000,
 });
 
 /**
- * Pinned default provider/model. Explicitly named — NOT a silent fallback.
- * Cursor engine is opt-in via S1A_ENGINE=cursor and fails closed without key.
+ * Live AI provider/model (authorised — no silent fallback).
  */
-export const PINNED_PROVIDER = "appsolino-s1a-deterministic";
-export const PINNED_MODEL = "appsolino-s1a-deterministic-v1";
+export const LIVE_PROVIDER = "cursor-cli";
+export const LIVE_MODEL = "composer-2.5";
+
+/**
+ * Fixture / CI engine ids — NEVER report as AI provider/model in live artifacts.
+ */
+export const FIXTURE_PROVIDER = "appsolino-s1a-fixture";
+export const FIXTURE_MODEL = "appsolino-s1a-fixture-v1";
+
+/** Alias — live pins (not fixture). */
+export const PINNED_PROVIDER = LIVE_PROVIDER;
+export const PINNED_MODEL = LIVE_MODEL;
+
+/** Cursor agent binary. */
+export const CURSOR_AGENT_BIN =
+  process.env.S1A_CURSOR_AGENT_BIN ||
+  "/home/fusion/.local/bin/cursor-agent";
 
 export const REVIEW_VERDICT = Object.freeze({
   ACCEPT: "ACCEPT",
@@ -95,9 +110,6 @@ export const FILE_KIND = Object.freeze({
   OTHER: "other",
 });
 
-/**
- * S1A forbidden capabilities (inherits S0 + mutation).
- */
 export const S1A_FORBIDDEN = Object.freeze([
   "repair-code-generation",
   "repair-branch",
@@ -114,11 +126,56 @@ export const S1A_FORBIDDEN = Object.freeze([
   "silent-provider-fallback",
 ]);
 
-/** Env that enables optional S0 → S1A handoff label on new incidents (default OFF). */
 export const S0_HANDOFF_ENV = "STEWARD_S0_HANDOFF_S1A";
-
-/** Repo variable / env that enables labeled-event auto launch (default OFF). */
 export const S1A_AUTO_HANDOFF_ENV = "S1A_AUTO_HANDOFF";
+
+/**
+ * @param {string} repo
+ */
+export function assertRepoAllowed(repo) {
+  const r = String(repo || "");
+  if (r !== ALLOWED_REPO) {
+    throw new Error(`repo-not-allowed:${r || "(empty)"} (only ${ALLOWED_REPO})`);
+  }
+  return r;
+}
+
+/**
+ * Resolve engine id. Live MUST be cursor-cli; fixture/deterministic forbidden in live.
+ * @param {string} mode
+ * @param {string} [envEngine]
+ * @returns {"fixture"|"cursor-cli"}
+ */
+export function resolveEngineId(mode, envEngine) {
+  const m = String(mode || "").toLowerCase();
+  const e = String(envEngine ?? process.env.S1A_ENGINE ?? "").toLowerCase().trim();
+
+  if (m === "live") {
+    if (!e || e === "cursor-cli" || e === "cursor") return "cursor-cli";
+    if (e === "fixture" || e === "deterministic") {
+      throw new Error(
+        "live mode rejects fixture/deterministic engine (S1A_ENGINE must be cursor-cli)",
+      );
+    }
+    throw new Error(`unsupported live S1A_ENGINE=${e}; require cursor-cli`);
+  }
+
+  // fixture / fixture-replay / test
+  if (!e || e === "fixture" || e === "deterministic") return "fixture";
+  if (e === "cursor-cli" || e === "cursor") return "cursor-cli";
+  throw new Error(`unsupported S1A_ENGINE=${e}`);
+}
+
+/**
+ * Provider/model pins for a resolved engine.
+ * @param {"fixture"|"cursor-cli"} engineId
+ */
+export function pinsForEngine(engineId) {
+  if (engineId === "fixture") {
+    return { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL };
+  }
+  return { provider: LIVE_PROVIDER, model: LIVE_MODEL };
+}
 
 /**
  * @param {string} fingerprint
@@ -156,17 +213,44 @@ export function extractAssessmentMarker(body) {
 }
 
 /**
- * Preferred worktree root for advice-only investigation notes.
+ * Preferred worktree path for advice-only investigation notes.
  * Never used to push or open repair PRs in S1A.
  * @param {string|number} incidentId
- * @param {{ worktreeRoot?: string|null, runnerTemp?: string|null }} [env]
+ * @param {{ worktreeRoot?: string|null, runnerTemp?: string|null, mode?: string }} [env]
  */
 export function resolveWorktreePath(incidentId, env = {}) {
   const id = String(incidentId || "unknown").replace(/[^0-9A-Za-z_-]/g, "") || "unknown";
+  const root = resolveAuthorizedWorktreeRoot(env);
+  return `${root}/repair-${id}`;
+}
+
+/**
+ * Resolve authorised worktree parent.
+ * Live fail-closed unless explicit S1A_WORKTREE_ROOT or canonical fusion root exists.
+ * @param {{ worktreeRoot?: string|null, runnerTemp?: string|null, mode?: string }} [env]
+ */
+export function resolveAuthorizedWorktreeRoot(env = {}) {
+  const mode = String(env.mode || process.env.S1A_MODE || "").toLowerCase();
   const preferred = env.worktreeRoot || process.env.S1A_WORKTREE_ROOT || "";
   if (preferred) {
-    return `${String(preferred).replace(/\/$/, "")}/repair-${id}`;
+    return String(preferred).replace(/\/$/, "");
+  }
+  try {
+    if (existsSync(CANONICAL_WORKTREE_ROOT)) {
+      const st = statSync(CANONICAL_WORKTREE_ROOT);
+      if (st.isDirectory()) {
+        return CANONICAL_WORKTREE_ROOT;
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  if (mode === "live") {
+    throw new Error(
+      "live mode fail-closed: set S1A_WORKTREE_ROOT to an authorised writable root " +
+        `(canonical ${CANONICAL_WORKTREE_ROOT}/repair-<id>)`,
+    );
   }
   const temp = env.runnerTemp || process.env.RUNNER_TEMP || "/tmp";
-  return `${String(temp).replace(/\/$/, "")}/repair-${id}`;
+  return String(temp).replace(/\/$/, "");
 }

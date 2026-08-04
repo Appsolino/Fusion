@@ -16,7 +16,10 @@
 | Legacy production | DEGRADED / FROZEN |
 | Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** |
 
-## Owner priority (2026-08-04)
+## Owner priority
+
+S1A live engine: `cursor-cli` / `composer-2.5` on self-hosted `appsolino-fusion` (analyze) + GitHub-hosted writer.
+ (2026-08-04)
 
 ```text
 NOW:     Implement + prove Steward S1A (advice only) on fixture + one watched live issue

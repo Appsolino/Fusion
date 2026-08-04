@@ -2,11 +2,11 @@
 /* eslint-env node */
 /**
  * FNXC:AppsolinoStewardS1A 2026-08-04:
- * Independent second invocation — receives ONLY {evidencePack, assessment}.
- * No engineer scratchpads. Returns ACCEPT | REJECT | NEEDS_MORE_EVIDENCE.
+ * Independent reviewer — ONLY {evidencePack, assessment}.
+ * Uses path-heuristics only (no fixture-engine / assessment builder import).
  */
 import { FILE_KIND, REVIEW_VERDICT, RISK_LEVEL } from "./policy.mjs";
-import { classifyConflictFile } from "./engineer.mjs";
+import { classifyConflictFile } from "./path-heuristics.mjs";
 
 /**
  * @typedef {{
@@ -49,7 +49,7 @@ function expectedRiskFromEvidence(pack) {
  * Independent review of assessment against evidence.
  * @param {{
  *   evidencePack: import("./evidence-pack.mjs").EvidencePack,
- *   assessment: import("./engineer.mjs").Assessment,
+ *   assessment: import("./fixture-engine.mjs").Assessment,
  * }} input
  * @returns {ReviewResult}
  */
@@ -73,7 +73,6 @@ export function reviewAssessment(input) {
     };
   }
 
-  // Provider/model must match configured===actual (no silent fallback).
   if (
     assessment.configuredProvider !== assessment.actualProvider ||
     assessment.configuredModel !== assessment.actualModel
@@ -93,7 +92,6 @@ export function reviewAssessment(input) {
       ["missing-upstream-sha", "missing-conflicted-files"].includes(g),
     );
     if (criticalGaps.length || assessment.needsMoreEvidence) {
-      // Align with engineer signal; prefer NEEDS_MORE_EVIDENCE over REJECT.
       if (
         !pack.auto1.upstreamSha ||
         (!(pack.auto1.conflictedFiles || []).length &&
@@ -132,7 +130,6 @@ export function reviewAssessment(input) {
     };
   }
 
-  // File kinds in assessment must match recomputation from evidence paths.
   const expectedFiles = (pack.auto1.conflictedFiles || []).map(classifyConflictFile);
   if ((assessment.files || []).length !== expectedFiles.length) {
     details.push(
@@ -165,7 +162,6 @@ export function reviewAssessment(input) {
     };
   }
 
-  // CRITICAL must remain freeze-only.
   if (expectedRisk === RISK_LEVEL.CRITICAL && assessment.repairRecommended) {
     return {
       verdict: REVIEW_VERDICT.REJECT,
@@ -183,15 +179,15 @@ export function reviewAssessment(input) {
 }
 
 /**
+ * In-process reviewer (tests / injected). Prefer runReviewerProcess for analyze.
  * @param {{
  *   evidencePack: import("./evidence-pack.mjs").EvidencePack,
- *   assessment: import("./engineer.mjs").Assessment,
+ *   assessment: import("./fixture-engine.mjs").Assessment,
  *   reviewFn?: typeof reviewAssessment,
  * }} input
  */
 export async function runReviewer(input) {
   const fn = input.reviewFn || reviewAssessment;
-  // Contract: only evidencePack + assessment (no scratchpads).
   return fn({
     evidencePack: input.evidencePack,
     assessment: input.assessment,

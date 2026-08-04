@@ -3,6 +3,7 @@
 /**
  * FNXC:AppsolinoStewardS1A 2026-08-04:
  * Build an S1A evidence pack from a steward incident issue body (+ optional PR fields).
+ * Physical state: NEVER invent safe defaults. Unknown → null.
  */
 import { extractFingerprintFromIssueBody } from "../policy.mjs";
 
@@ -33,23 +34,29 @@ import { extractFingerprintFromIssueBody } from "../policy.mjs";
  *     url: string|null,
  *     title: string|null,
  *     changedFiles: string[],
+ *     patchExcerpt: string|null,
  *     touchesWorkflows: boolean|null,
  *     touchesMigrations: boolean|null,
  *     touchesLockfile: boolean|null,
  *   } | null,
  *   physical: {
- *     mutatedMain: boolean,
- *     deployedHostD: boolean,
- *     hostPAccessed: boolean,
- *     enginePaused: boolean,
+ *     mutatedMain: boolean|null,
+ *     deployedHostD: boolean|null,
+ *     hostPAccessed: boolean|null,
+ *     enginePaused: boolean|null,
  *   },
+ *   comments: Array<{ id?: number, user?: string, bodyExcerpt?: string }>|null,
+ *   workflowLogs: { runId: string|null, excerpt: string|null, truncated: boolean }|null,
+ *   conflictFileSides: Record<string, object>|null,
+ *   gitPathLog: string|null,
+ *   auto3Evidence: object|null,
+ *   worktreePath: string|null,
  *   issueNumber: number|null,
  *   issueTitle: string|null,
  * }} EvidencePack
  */
 
 /**
- * Extract occurrence ids from issue body detail blocks.
  * @param {string} body
  * @returns {string[]}
  */
@@ -80,10 +87,10 @@ function tableField(body, field) {
 
 /**
  * @param {string} body
- * @param {string} key like "auto1.upstreamSha"
+ * @param {string} key
  */
 function bulletField(body, key) {
-  const re = new RegExp(`-\\s*${key.replace(/\./g, "\\.")}:\\s*\`([^\`]*)\``, "i");
+  const re = new RegExp(`-\\s*${key.replace(/\\./g, "\\.")}:\\s*\`([^\`]*)\``, "i");
   const m = String(body || "").match(re);
   return m ? m[1] : null;
 }
@@ -102,7 +109,6 @@ function parseTriBool(raw) {
 }
 
 /**
- * Parse conflicted files from table or bullet.
  * @param {string} body
  * @returns {string[]}
  */
@@ -123,7 +129,6 @@ export function extractConflictedFiles(body) {
 }
 
 /**
- * Infer workflow/migration/lockfile touch flags from file paths when PR metadata absent.
  * @param {string[]} files
  */
 export function inferSensitiveTouches(files) {
@@ -132,7 +137,7 @@ export function inferSensitiveTouches(files) {
   let touchesLockfile = false;
   for (const f of files || []) {
     const p = String(f).replace(/\\/g, "/");
-    if (/(^|\/)\.github\/workflows\//.test(p) || /\.ya?ml$/i.test(p) && p.includes("workflow")) {
+    if (/(^|\/)\.github\/workflows\//.test(p) || (/\.ya?ml$/i.test(p) && p.includes("workflow"))) {
       touchesWorkflows = true;
     }
     if (/migration/i.test(p) || /\/migrations?\//i.test(p) || /schema.*\.sql$/i.test(p)) {
@@ -146,20 +151,26 @@ export function inferSensitiveTouches(files) {
 }
 
 /**
- * Build evidence pack.
+ * Parse workflow run id from occurrence id like workflow-run:30805433281:attempt:1
+ * @param {string|null|undefined} occurrence
+ */
+export function parseRunIdFromOccurrence(occurrence) {
+  const m = String(occurrence || "").match(/workflow-run:(\d+)/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Build evidence pack. Unknown physical → null (never invent).
  * @param {{
  *   issue?: { number?: number, title?: string, body?: string } | null,
- *   relatedPr?: {
- *     number?: number,
- *     url?: string,
- *     title?: string,
- *     changedFiles?: string[],
- *     touchesWorkflows?: boolean|null,
- *     touchesMigrations?: boolean|null,
- *     touchesLockfile?: boolean|null,
- *   } | null,
+ *   relatedPr?: object | null,
  *   physicalOverrides?: Partial<EvidencePack["physical"]>,
- *   allowUnknownNullDefaults?: boolean,
+ *   comments?: EvidencePack["comments"],
+ *   workflowLogs?: EvidencePack["workflowLogs"],
+ *   conflictFileSides?: EvidencePack["conflictFileSides"],
+ *   gitPathLog?: string|null,
+ *   auto3Evidence?: object|null,
+ *   worktreePath?: string|null,
  * }} input
  * @returns {EvidencePack}
  */
@@ -212,6 +223,7 @@ export function buildEvidencePack(input = {}) {
       url: input.relatedPr.url ?? null,
       title: input.relatedPr.title ?? null,
       changedFiles: changed,
+      patchExcerpt: input.relatedPr.patchExcerpt ?? null,
       touchesWorkflows:
         input.relatedPr.touchesWorkflows ?? (prInf.touchesWorkflows ? true : null),
       touchesMigrations:
@@ -224,17 +236,32 @@ export function buildEvidencePack(input = {}) {
     if (relatedPr.touchesLockfile === true) touchesLockfile = true;
   }
 
-  const allowDefaults = input.allowUnknownNullDefaults !== false;
+  // Physical: never invent. hostPAccessed/enginePaused stay null unless authoritative artifact.
+  const auto3 = input.auto3Evidence && typeof input.auto3Evidence === "object"
+    ? input.auto3Evidence
+    : null;
   /** @type {EvidencePack["physical"]} */
   const physical = {
     mutatedMain:
-      input.physicalOverrides?.mutatedMain ??
-      (mutatedMainRaw != null ? mutatedMainRaw : allowDefaults ? false : /** @type {any} */ (null)),
+      input.physicalOverrides?.mutatedMain !== undefined
+        ? input.physicalOverrides.mutatedMain
+        : mutatedMainRaw,
     deployedHostD:
-      input.physicalOverrides?.deployedHostD ??
-      (deployedHostDRaw != null ? deployedHostDRaw : allowDefaults ? false : /** @type {any} */ (null)),
-    hostPAccessed: input.physicalOverrides?.hostPAccessed ?? (allowDefaults ? false : /** @type {any} */ (null)),
-    enginePaused: input.physicalOverrides?.enginePaused ?? (allowDefaults ? true : /** @type {any} */ (null)),
+      input.physicalOverrides?.deployedHostD !== undefined
+        ? input.physicalOverrides.deployedHostD
+        : deployedHostDRaw,
+    hostPAccessed:
+      input.physicalOverrides?.hostPAccessed !== undefined
+        ? input.physicalOverrides.hostPAccessed
+        : auto3 && typeof auto3.hostPAccessed === "boolean"
+          ? auto3.hostPAccessed
+          : null,
+    enginePaused:
+      input.physicalOverrides?.enginePaused !== undefined
+        ? input.physicalOverrides.enginePaused
+        : auto3 && typeof auto3.enginePaused === "boolean"
+          ? auto3.enginePaused
+          : null,
   };
 
   const prUrl =
@@ -267,6 +294,12 @@ export function buildEvidencePack(input = {}) {
     },
     relatedPr,
     physical,
+    comments: input.comments ?? null,
+    workflowLogs: input.workflowLogs ?? null,
+    conflictFileSides: input.conflictFileSides ?? null,
+    gitPathLog: input.gitPathLog ?? null,
+    auto3Evidence: auto3,
+    worktreePath: input.worktreePath ?? null,
     issueNumber: issue.number ?? null,
     issueTitle: issue.title ?? null,
   };

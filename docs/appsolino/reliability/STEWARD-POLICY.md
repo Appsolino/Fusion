@@ -154,3 +154,8 @@ Engineer receives evidence and produces advice (S1A). Reviewer receives original
 | S1B repair PR agent | **Not authorised** |
 | S2 low-risk auto-merge | Not authorised |
 | S3 sensitive assist | Not authorised |
+
+
+## S1A physical null-safety
+
+Unknown physical values remain JSON `null`. Never invent `enginePaused=true` or `hostPAccessed=false` without evidence.

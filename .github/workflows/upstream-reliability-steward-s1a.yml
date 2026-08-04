@@ -1,12 +1,16 @@
 # FNXC:AppsolinoStewardS1A 2026-08-04:
 # Steward S1A — Expert Advisory Mode (advice only).
-# Posts structured assessment comments; never repairs, merges, deploys, or
-# dispatches AUTO. Checkout trusted main only. No Host D/P secret references.
-# Observe/analyze: read-only GITHUB_TOKEN. Upsert-advice: App token (issues write).
+# Trust zones:
+#   observe-analyze (live): self-hosted fusion runner, GITHUB_TOKEN read ONLY
+#   upsert-advice: ubuntu-latest, App token issues:write, artifact upsert ONLY
+#   fixture-replay: ubuntu-latest, fixture engine, no upsert
 #
-# Worktree contract (advice-only investigation notes; never push/repair):
-#   preferred: $S1A_WORKTREE_ROOT/repair-<incident-id>
-#   else:      $RUNNER_TEMP/repair-<incident-id>
+# Worktree (advice-only; never push/repair):
+#   $S1A_WORKTREE_ROOT/repair-<incident-id>
+#   canonical: /srv/appsolino-fusion/phase-1/worktrees/repair-<incident-id>
+#
+# Live engine (fail closed — never deterministic/fixture):
+#   S1A_ENGINE=cursor-cli  S1A_PROVIDER=cursor-cli  S1A_MODEL=composer-2.5
 
 name: Upstream Reliability Steward S1A
 
@@ -28,7 +32,6 @@ on:
           - live
         default: live
 
-# Observe stays read-only. Issue writes use App token in upsert-advice only.
 permissions:
   contents: read
   actions: read
@@ -40,19 +43,26 @@ concurrency:
 
 jobs:
   observe-analyze:
-    name: Eligibility + evidence + assessment (read-only analyze)
-    runs-on: ubuntu-latest
+    name: Eligibility + evidence + expert assess (read-only)
+    # Self-hosted fusion host (labels). If unregistered, job stays queued — OK.
+    # Documented override: set repo var S1A_ANALYZE_RUNS_ON and edit this job to use it;
+    # do NOT retarget live to fixture/deterministic on ubuntu-latest.
+    runs-on: [self-hosted, appsolino-fusion]
+    if: |
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'live') ||
+      (github.event_name == 'issues' && github.event.label.name == 'steward/needs-expert')
     outputs:
       should_upsert: ${{ steps.gate.outputs.should_upsert }}
       issue_number: ${{ steps.gate.outputs.issue_number }}
       mode: ${{ steps.gate.outputs.mode }}
       skip_reason: ${{ steps.gate.outputs.skip_reason }}
+      artifact_ready: ${{ steps.analyze.outputs.artifact_ready }}
     steps:
       - name: Checkout trusted main only
         uses: actions/checkout@v6
         with:
           ref: main
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Guard S1A trust invariants
@@ -60,7 +70,6 @@ jobs:
           set -euo pipefail
           f=.github/workflows/upstream-reliability-steward-s1a.yml
           grep -q 'ref: main' "$f"
-          # Ban real AUTO dispatch/rerun commands (ignore this Guard step's own grep needles).
           if awk '/gh[[:space:]]+workflow[[:space:]]+run/ && $0 !~ /grep|echo|::error/ { found=1; print } END { exit found?0:1 }' "$f"; then
             echo "::error::S1A must not dispatch AUTO/other workflows via CLI"
             exit 1
@@ -87,7 +96,6 @@ jobs:
           LABEL_NAME: ${{ github.event.label.name || '' }}
           ISSUE_NUMBER_EVENT: ${{ github.event.issue.number || '' }}
           ISSUE_NUMBER_INPUT: ${{ inputs.issue_number || '' }}
-          DISPATCH_MODE: ${{ inputs.mode || '' }}
           S1A_AUTO_HANDOFF: ${{ vars.S1A_AUTO_HANDOFF || 'false' }}
         run: |
           set -euo pipefail
@@ -98,7 +106,7 @@ jobs:
 
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             ISSUE="${ISSUE_NUMBER_INPUT}"
-            MODE="${DISPATCH_MODE:-live}"
+            MODE="live"
             SHOULD="true"
           elif [[ "${EVENT_NAME}" == "issues" ]]; then
             ISSUE="${ISSUE_NUMBER_EVENT}"
@@ -107,7 +115,6 @@ jobs:
               SKIP="label-not-needs-expert"
               SHOULD="false"
             elif [[ "${S1A_AUTO_HANDOFF}" != "true" ]]; then
-              # Automatic handoff OFF until after S1A proof.
               SKIP="auto-handoff-disabled"
               SHOULD="false"
               echo "S1A labeled event skipped (S1A_AUTO_HANDOFF!=true)"
@@ -124,27 +131,55 @@ jobs:
           echo "skip_reason=${SKIP}" >> "$GITHUB_OUTPUT"
           echo "should_upsert=${SHOULD}" >> "$GITHUB_OUTPUT"
 
-          if [[ "${SHOULD}" != "true" ]]; then
-            echo "skip=${SKIP}"
-            exit 0
-          fi
-
-      - name: Fixture-replay self-check (no live writes)
-        if: steps.gate.outputs.should_upsert == 'true' && steps.gate.outputs.mode == 'fixture-replay'
+      - name: Live analyze (cursor-cli — GITHUB_TOKEN read only)
+        id: analyze
+        if: steps.gate.outputs.should_upsert == 'true'
         env:
-          S1A_WORKTREE_ROOT: ${{ vars.S1A_WORKTREE_ROOT || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          S1A_ENGINE: cursor-cli
+          S1A_PROVIDER: cursor-cli
+          S1A_MODEL: composer-2.5
+          S1A_MODE: live
+          S1A_WORKTREE_ROOT: ${{ vars.S1A_WORKTREE_ROOT || '/srv/appsolino-fusion/phase-1/worktrees' }}
+          S1A_OUT_DIR: ${{ runner.temp }}/steward-s1a
+          S1A_CURSOR_API_KEY: ${{ secrets.S1A_CURSOR_API_KEY || '' }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY || secrets.S1A_CURSOR_API_KEY || '' }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/steward-s1a"
-          node infra/scripts/steward/s1a/run-s1a.mjs \
+          mkdir -p "$S1A_OUT_DIR"
+          echo "runner.name=${RUNNER_NAME:-}"
+          echo "runner.os=${RUNNER_OS:-}"
+          echo "user=$(whoami)"
+          if [[ "$(whoami)" != "fusion" ]]; then
+            echo "::error::S1A analyze must run as fusion (got $(whoami))"
+            exit 1
+          fi
+          if [[ "${S1A_ENGINE}" == "fixture" || "${S1A_ENGINE}" == "deterministic" ]]; then
+            echo "::error::live analyze rejects fixture/deterministic engine"
+            exit 1
+          fi
+          # Never use App issues token here — only GITHUB_TOKEN read scopes.
+          unset GH_TOKEN || true
+          test -d "$S1A_WORKTREE_ROOT" || {
+            echo "::error::S1A_WORKTREE_ROOT missing: $S1A_WORKTREE_ROOT"
+            exit 1
+          }
+          node infra/scripts/steward/s1a/run-s1a-analyze.mjs \
             --issue="${{ steps.gate.outputs.issue_number }}" \
-            --repo="${{ github.repository }}" \
-            --mode=fixture \
-            > "$RUNNER_TEMP/steward-s1a/fixture-result.json"
-          node --test infra/scripts/steward/s1a/__tests__/*.test.mjs
-          echo "fixture-replay complete (no upsert; upsert-advice skipped for non-live mode)"
+            --repo="$GITHUB_REPOSITORY" \
+            --mode=live \
+            --out="$S1A_OUT_DIR" \
+            | tee "$S1A_OUT_DIR/analyze-result.json"
+          if [[ -f "$S1A_OUT_DIR/assessment-artifact.json" ]]; then
+            echo "artifact_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "artifact_ready=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Cleanup leftover temp under out dir only (worktree cleaned by analyze finally).
+          rm -f "$S1A_OUT_DIR"/evidence-pack.json "$S1A_OUT_DIR"/prompt-*.txt 2>/dev/null || true
 
-      - name: Upload S1A artifact
+      - name: Upload S1A assessment artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -153,10 +188,60 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  fixture-replay:
+    name: Fixture engine self-check (no upsert)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'fixture-replay'
+    steps:
+      - name: Checkout trusted main only
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Guard S1A trust invariants
+        run: |
+          set -euo pipefail
+          f=.github/workflows/upstream-reliability-steward-s1a.yml
+          node infra/scripts/steward/s1a/guard-authority.mjs --workflow="$f"
+
+      - name: Fixture-replay (S1A_ENGINE=fixture — no upsert)
+        env:
+          S1A_ENGINE: fixture
+          S1A_MODE: fixture
+          S1A_PROVIDER: appsolino-s1a-fixture
+          S1A_MODEL: appsolino-s1a-fixture-v1
+          S1A_OUT_DIR: ${{ runner.temp }}/steward-s1a
+        run: |
+          set -euo pipefail
+          mkdir -p "$S1A_OUT_DIR"
+          node infra/scripts/steward/s1a/run-s1a-analyze.mjs \
+            --issue="${{ inputs.issue_number }}" \
+            --repo="${{ github.repository }}" \
+            --mode=fixture \
+            --out="$S1A_OUT_DIR" \
+            > "$S1A_OUT_DIR/fixture-result.json"
+          node --test infra/scripts/steward/s1a/__tests__/*.test.mjs
+          echo "fixture-replay complete (no upsert)"
+
+      - name: Upload fixture artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: steward-s1a-fixture-${{ github.run_id }}
+          path: ${{ runner.temp }}/steward-s1a/
+          if-no-files-found: ignore
+          retention-days: 14
+
   upsert-advice:
     name: Upsert assessment comment + labels (App token)
     needs: observe-analyze
-    if: needs.observe-analyze.outputs.should_upsert == 'true' && needs.observe-analyze.outputs.mode == 'live'
+    if: |
+      needs.observe-analyze.outputs.should_upsert == 'true' &&
+      needs.observe-analyze.outputs.mode == 'live' &&
+      needs.observe-analyze.outputs.artifact_ready == 'true' &&
+      needs.observe-analyze.result == 'success'
     runs-on: ubuntu-latest
     concurrency:
       group: steward-s1a-upsert-${{ needs.observe-analyze.outputs.issue_number }}
@@ -168,6 +253,12 @@ jobs:
           ref: main
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Download assessment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: steward-s1a-${{ github.run_id }}
+          path: ${{ runner.temp }}/steward-s1a
 
       - name: Create GitHub App token (issues write)
         id: app-token
@@ -181,19 +272,20 @@ jobs:
           permission-contents: read
           permission-pull-requests: read
 
-      - name: Run S1A live advisory
+      - name: Upsert advice ONLY (no engineer/reviewer)
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          S1A_WORKTREE_ROOT: ${{ vars.S1A_WORKTREE_ROOT || '' }}
-          S1A_ENGINE: deterministic
-          S1A_PROVIDER: appsolino-s1a-deterministic
-          S1A_MODEL: appsolino-s1a-deterministic-v1
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/steward-s1a"
-          node infra/scripts/steward/s1a/run-s1a.mjs \
-            --issue="${{ needs.observe-analyze.outputs.issue_number }}" \
+          ART="${{ runner.temp }}/steward-s1a/assessment-artifact.json"
+          test -f "$ART"
+          if grep -E '"engine"[[:space:]]*:[[:space:]]*"(fixture|deterministic)"' "$ART"; then
+            echo "::error::refuse live upsert of fixture/deterministic artifact"
+            exit 1
+          fi
+          node infra/scripts/steward/s1a/run-s1a-upsert.mjs \
+            --artifact="$ART" \
             --repo="$GITHUB_REPOSITORY" \
-            --mode=live \
-            | tee "$RUNNER_TEMP/steward-s1a/live-result.json"
+            --expect-mode=live \
+            | tee "${{ runner.temp }}/steward-s1a/upsert-result.json"
