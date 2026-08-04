@@ -16,7 +16,7 @@
         80
       ],
       "heads": [
-        "pending-push"
+        "b30a65a158bfe3d721d1ace69532dc6a543b3be0"
       ],
       "merges": [],
       "notes": "PR #80 control plane — Cursor dual-review with full evidence, model probe, writer recompute, gates OFF; bootstrap owner merge only"
