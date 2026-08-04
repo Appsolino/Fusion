@@ -6,7 +6,7 @@
 ## Flow
 
 ```text
-repair PR → CI green → Grok reviewer APPROVE → Grok approver APPROVE
+repair PR → CI green → Cursor reviewer APPROVE → Cursor approver APPROVE
   → exact-head merge (--match-head-commit) → optional workflow resume
   → terminal verify → close/update incident → programme ledger
 ```
