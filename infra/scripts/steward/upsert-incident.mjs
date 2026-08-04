@@ -137,10 +137,16 @@ export function buildNewIssueContent(normalized) {
     "",
   ].join("\n");
 
+  const labels = ["appsolino-steward", "s0-observation", normalized.failureClass];
+  // Optional S0 → S1A handoff label. Default OFF so automatic handoff stays
+  // disabled until after S1A proof (STEWARD_S0_HANDOFF_S1A=1 to enable).
+  if (String(process.env.STEWARD_S0_HANDOFF_S1A || "") === "1") {
+    labels.push("steward/needs-expert");
+  }
   return {
     title: title.slice(0, 200),
     body,
-    labels: ["appsolino-steward", "s0-observation", normalized.failureClass],
+    labels,
   };
 }
 

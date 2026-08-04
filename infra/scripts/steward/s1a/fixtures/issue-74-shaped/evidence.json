@@ -1,0 +1,14 @@
+{
+  "fingerprint": "ef382b625983f83d8e58b6d5470182cc4e7393e0be3ad0e636740fbe282fb858",
+  "failureClass": "upstream-merge-conflict",
+  "occurrenceId": "workflow-run:30805433281:attempt:1",
+  "upstreamSha": "71ba437cfe41cc6c05f6f80a31a46c53d5b59cd4",
+  "prUrl": "https://github.com/Appsolino/Fusion/pull/68",
+  "conflictedFiles": [
+    "packages/engine/src/executor.ts",
+    "scripts/lib/lifecycle-column-census-baseline.json"
+  ],
+  "sourceSha": "b83fd0eda83b1760b441454f852b8564f954bdf4",
+  "mutatedMain": false,
+  "deployedHostD": false
+}

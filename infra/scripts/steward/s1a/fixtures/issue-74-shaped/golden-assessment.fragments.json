@@ -1,0 +1,31 @@
+{
+  "mustInclude": [
+    "## Steward Expert Assessment",
+    "### Incident",
+    "### What failed",
+    "### Root cause",
+    "### Recommended solution",
+    "### Files",
+    "### Validation",
+    "### Risk",
+    "### System state",
+    "### Owner decision",
+    "fingerprint=ef382b625983f83d8e58b6d5470182cc4e7393e0be3ad0e636740fbe282fb858",
+    "occurrence=workflow-run:30805433281:attempt:1",
+    "assessment-version=1",
+    "generated-baseline",
+    "semantic-source",
+    "regeneration",
+    "history-and-tests",
+    "lifecycle-column-census-baseline.json",
+    "packages/engine/src/executor.ts",
+    "pull/68",
+    "| Risk | SENSITIVE |",
+    "SENSITIVE"
+  ],
+  "riskExpected": "SENSITIVE",
+  "fileKinds": [
+    "semantic-source",
+    "generated-baseline"
+  ]
+}
