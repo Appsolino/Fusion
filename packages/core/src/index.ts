@@ -96,6 +96,7 @@ export type { PromptConditionEvaluationResult } from "./plugins/plugin-prompt-co
 export { computePlanApprovalFingerprint, isPlanReviewSatisfied, resolvePlanApprovalRequired } from "./planner/plan-approval.js";
 export type { PlanApprovalMode } from "./planner/plan-approval.js";
 export { isActiveNearDuplicateColumn, isNearDuplicateCanonicalInactive } from "./duplicates/near-duplicate-canonical.js";
+export { resolveNearDuplicateCanonicalFlags } from "./duplicates/near-duplicate-canonical-flags.js";
 export type { NearDuplicateCanonicalState } from "./duplicates/near-duplicate-canonical.js";
 export { formatGitLabTrackedItemRef, isGitLabTrackingStale } from "./git/gitlab-tracking.js";
 export * from "./planner/planner-intervention.js";
@@ -213,6 +214,7 @@ export * from "./mesh/mesh-task-replication.js";
 export * from "./mesh/shared-mesh-state.js";
 export {
   BUILTIN_AGENT_PROMPTS,
+  buildPlanningDuplicatePolicyInstruction,
   resolveAgentPrompt,
   buildTriageHeartbeatGuidance,
   buildConciseTriageHeartbeatGuidance,

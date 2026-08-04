@@ -31,6 +31,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { type TaskMoveLanes, resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PREFIX, IN_REVIEW_STALL_LOG_PREFIX, IN_REVIEW_STALL_TERMINAL_LOG_PREFIX, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, countRecentIdenticalStallEntries, detectDependencyCycle, detectSelfDefeatingDependency, evaluateNoCommitsNoOpFinalize, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, getInReviewStalledSignal, getInReviewStallReason, getPrimaryPrInfo, getStalePausedReviewSignal, getStalePausedTodoSignal, getTaskHardMergeBlocker, getTaskMergeBlocker, isEphemeralAgent, isMergeRequestContractShadowEnabled, isWorkspaceTask, isSharedBranchGroupMemberIntegration, isNearDuplicateCanonicalInactive, parseExplicitDuplicateMarker, flagTriageDuplicate, isTriageDuplicateKeepAcknowledged, resolveMaxAutoMergeRetries, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, getBuiltinWorkflow, isBuiltinWorkflowId, resolveWorkflowIrForTask, resolveWorkflowIrForTaskWithProvenance, resolveReboundTarget, resolveReboundTargetForTask, resolveArchiveTargetForTask, columnsWithFlag, resolveLifecycleColumns, resolveTaskLifecycleColumns, workflowHasColumn, planLegacyAdoption, resolveOrphanedPendingStepResults, classifyReviewLease, PLAN_REVIEW_LEASE_STALENESS_MS, DEFAULT_MAX_POST_REVIEW_FIXES, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AWAITING_APPROVAL_PAUSE_REASON, type Agent, type AgentStore, type ChatStore, type MessageStore, type TaskStore, type Settings, type Task, type MergeDetails, type TaskPriority, type MergeResult, type WorkflowStepResult, type WorkflowIr,
+  resolveNearDuplicateCanonicalFlags,
   LEGACY_COLUMN_IDS_BY_ROLE,
   TERMINAL_ROLES,
   resolveProjectColumnsForRoles,
@@ -845,34 +846,6 @@ function hasTerminalInvalidDoneTransition(task: Pick<Task, "error">): boolean {
 
 /** Sentinel for a workflow selection whose READ failed, distinct from "no selection". */
 const UNREADABLE_WORKFLOW_SELECTION = "\u0000unreadable-workflow-selection";
-
-/*
-FNXC:WorkflowResolvedColumns 2026-07-30-04:10:
-The canonical's OWN resolved column flags, for `isNearDuplicateCanonicalInactive`.
-
-Omitted, that predicate falls back to the legacy `done`/`archived` ids, so on a renamed board a
-canonical that has SHIPPED reads as still ACTIVE. Every "the canonical is inactive, so clear the
-marker" branch below then fails to fire, and FN-8356's fix — inactive canonicals flow through marker
-cleanup rather than parking the card — is inert. The card keeps its "Needs your decision" badge
-pointing at work that finished days ago, and no decision can ever resolve it.
-
-Module-private rather than shared: `findColumn` is already duplicated this way in hold-release.ts,
-merge-trait.ts, and workflow-capacity.ts, so this follows the established shape instead of adding a
-cross-module helper for it.
-
-`undefined` on any failure is deliberate — it degrades to the legacy id rather than to absent traits
-that match nothing.
-*/
-async function resolveNearDuplicateCanonicalFlags(
-  store: TaskStore,
-  canonical: { id: string; column?: string | null } | null | undefined,
-): Promise<ReturnType<typeof resolveColumnFlags> | undefined> {
-  if (!canonical?.column) return undefined;
-  const ir = await resolveWorkflowIrForTask(store, canonical.id).catch(() => undefined);
-  if (!ir || ir.version !== "v2") return undefined;
-  const column = ir.columns.find((candidate) => candidate.id === canonical.column);
-  return column ? resolveColumnFlags(column) : undefined;
-}
 
 export class SelfHealingManager extends SelfHealingGitEvidence {
   // ── Auto-unpause state ──────────────────────────────────────────────
@@ -14506,16 +14479,12 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
               const priorClearCount = typeof task.sourceMetadata?.duplicateMarkerClearCount === "number"
                 ? task.sourceMetadata.duplicateMarkerClearCount
                 : 0;
-              const alreadyDismissed = isTriageDuplicateKeepAcknowledged(task.sourceMetadata, marker.canonicalId);
-              const exhausted = alreadyDismissed || priorClearCount >= 1;
-              const patch = exhausted
-                ? buildMarkerExhaustedFailedTaskPatch(marker.canonicalId, priorClearCount)
-                : buildMarkerClearedReplanTaskPatch(marker.canonicalId, priorClearCount);
+              const patch = buildMarkerClearedReplanTaskPatch(marker.canonicalId, priorClearCount);
               await this.store.updateTask(task.id, patch);
               if (typeof this.store.logEntry === "function") {
                 await Promise.resolve(this.store.logEntry(
                   task.id,
-                  exhausted ? buildDuplicateReplanExhaustedError(marker.canonicalId) : TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
                   buildInactiveDuplicateClearFeedback(marker.canonicalId),
                 )).catch(() => {});
               }

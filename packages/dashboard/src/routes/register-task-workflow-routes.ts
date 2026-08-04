@@ -52,6 +52,8 @@ import {
   reconcileDeterministicDuplicate,
   extractIntentSignature,
   findNearDuplicates,
+  isNearDuplicateCanonicalInactive,
+  resolveNearDuplicateCanonicalFlags,
   isEphemeralAgent,
   parseExplicitDuplicateMarker,
   resolveWorkflowIrForTask,
@@ -756,6 +758,7 @@ function buildDuplicateQuery(title: string | undefined, description: string): st
 async function computeDuplicateMatches(
   scopedStore: TaskStore,
   input: { title?: string; description: string; limit?: number; threshold?: number },
+  classifyBlocker: (canonical: Pick<Task, "id" | "column" | "deletedAt">) => Promise<boolean>,
 ): Promise<DuplicateMatch[]> {
   const query = buildDuplicateQuery(input.title, input.description);
   if (query.length === 0) {
@@ -767,7 +770,12 @@ async function computeDuplicateMatches(
     includeArchived: false,
     limit: 20,
   });
-  const candidates: DuplicateCandidate[] = results.map((task) => ({
+  const eligibility = await Promise.all(results.map(async (task) => ({
+    task,
+    blocker: await classifyBlocker(task),
+  })));
+  const eligibleResults = eligibility.filter(({ blocker }) => blocker).map(({ task }) => task);
+  const candidates: DuplicateCandidate[] = eligibleResults.map((task) => ({
     id: task.id,
     title: task.title ?? "",
     description: task.description ?? "",
@@ -785,6 +793,14 @@ async function computeDuplicateMatches(
       limit: input.limit ?? 5,
     },
   );
+}
+
+async function isDuplicateBlocker(
+  store: TaskStore,
+  canonical: Pick<Task, "id" | "column" | "deletedAt">,
+): Promise<boolean> {
+  const flags = await resolveNearDuplicateCanonicalFlags(store, canonical);
+  return !isNearDuplicateCanonicalInactive(canonical, flags);
 }
 
 function buildReviewerAgentItemId(input: { index: number; reviewType: "plan" | "code"; step?: number; verdict?: string; createdAt?: string }): string {
@@ -1408,7 +1424,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         description: description.trim(),
         limit,
         threshold,
-      });
+      }, (canonical) => isDuplicateBlocker(scopedStore, canonical));
 
       res.json({ matches });
       return;
@@ -1576,6 +1592,15 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         source && typeof source === "object" && "sourceType" in source && typeof (source as { sourceType?: unknown }).sourceType === "string"
           ? source
           : { sourceType: "api" as const };
+      const duplicateBlockerVerdicts = new Map<string, Promise<boolean>>();
+      const classifyDuplicateBlocker = (canonical: Pick<Task, "id" | "column" | "deletedAt">): Promise<boolean> => {
+        const key = `${canonical.id}:${canonical.column}:${canonical.deletedAt ?? ""}`;
+        const existing = duplicateBlockerVerdicts.get(key);
+        if (existing) return existing;
+        const verdict = isDuplicateBlocker(scopedStore, canonical);
+        duplicateBlockerVerdicts.set(key, verdict);
+        return verdict;
+      };
 
       const requestedBranchMode = getBranchSelectionMode(branchSelection);
       const { branch: normalizedBranch, baseBranch: normalizedBaseBranch, sharedFeatureBranch } =
@@ -1668,7 +1693,11 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
 
       let matchesAfterAckFilter: DuplicateMatch[] = [];
       try {
-        if (deterministicGuard.action === "duplicate" && deterministicGuard.existing) {
+        if (
+          deterministicGuard.action === "duplicate"
+          && deterministicGuard.existing
+          && await classifyDuplicateBlocker(deterministicGuard.existing)
+        ) {
           throw conflict("duplicate_candidates", {
             matches: [{
               id: deterministicGuard.existing.id,
@@ -1686,7 +1715,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
           : await computeDuplicateMatches(scopedStore, {
               title: normalizedTitle,
               description: normalizedDescription,
-            });
+            }, classifyDuplicateBlocker);
         matchesAfterAckFilter = duplicateMatches.filter((match) => !acknowledgedDuplicateIds.includes(match.id));
         if (matchesAfterAckFilter.length > 0) {
           throw conflict("duplicate_candidates", { matches: matchesAfterAckFilter });
@@ -1715,11 +1744,17 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
             const fullRows = await scopedStore.listTasks({ slim: false, includeArchived: false });
             const byId = new Map(fullRows.map((row) => [row.id, row]));
             const candidateMap = new Map<string, NearDuplicateCandidate>();
-            for (const row of candidateRows) {
+            const classifiedRows = await Promise.all(candidateRows.map(async (row) => {
+              const full = byId.get(row.id);
+              return { row, full, blocker: full ? await classifyDuplicateBlocker(full) : true };
+            }));
+            for (const { row, full, blocker } of classifiedRows) {
               if (acknowledgedDuplicateIds.includes(row.id)) {
                 continue;
               }
-              const full = byId.get(row.id);
+              if (!blocker) {
+                continue;
+              }
               candidateMap.set(row.id, {
                 id: row.id,
                 title: row.title ?? "",
@@ -1772,7 +1807,11 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
           (explicitDuplicateMarker ? acknowledgedDuplicateIds.includes(explicitDuplicateMarker.canonicalId) : false);
         if (explicitDuplicateMarker && !explicitMarkerBypassed) {
           const canonical = await scopedStore.getTask(explicitDuplicateMarker.canonicalId).catch(() => null);
-          if (canonical && !canonical.deletedAt) {
+          if (
+            canonical
+            && !canonical.deletedAt
+            && await classifyDuplicateBlocker(canonical)
+          ) {
             try {
               // The intake guard runs before createTask, so there is no new task row yet.
               // Record against the canonical target to leave a traceable audit breadcrumb.
@@ -1898,6 +1937,10 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         fingerprint: bypassDuplicateCheck === true ? null : contentFingerprint,
         windowMs: 60_000,
         logger: runtimeLogger,
+        onDuplicate: async (canonical) =>
+          await classifyDuplicateBlocker(canonical)
+            ? "archive-created"
+            : "keep-created",
       });
         if (deterministicReconcile.outcome === "archived") {
           res.status(200).json(deterministicReconcile.canonical);
