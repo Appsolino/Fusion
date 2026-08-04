@@ -11,26 +11,13 @@ import {
   assertWriterRecomputedDigests,
   buildEvidenceBundle,
 } from "./evidence.mjs";
+import { fetchPullRequestMeta } from "./gh-pr.mjs";
 import {
   evaluateDualApprovalMerge,
   exactHeadMergeArgv,
   ALLOWED_REPO,
 } from "../merge/exact-head.mjs";
 import { summarizeActivation } from "../activation/resolve-activation.mjs";
-
-/**
- * @param {string[]} args
- * @param {{ token?: string }} [opts]
- */
-function defaultGhJson(args, opts = {}) {
-  const env = { ...process.env };
-  if (opts.token) env.GH_TOKEN = opts.token;
-  const r = spawnSync("gh", args, { encoding: "utf8", env });
-  if (r.status !== 0) {
-    throw new Error(`gh ${args.join(" ")} failed: ${(r.stderr || r.stdout || "").slice(0, 400)}`);
-  }
-  return JSON.parse(r.stdout || "null");
-}
 
 /**
  * @param {{
@@ -40,18 +27,7 @@ function defaultGhJson(args, opts = {}) {
  * }} input
  */
 function defaultFetchPr(input) {
-  return defaultGhJson(
-    [
-      "pr",
-      "view",
-      String(input.prNumber),
-      "--repo",
-      input.repo,
-      "--json",
-      "number,state,baseRefOid,headRefOid,baseRefName,headRefName,url,statusCheckRollup",
-    ],
-    { token: input.token },
-  );
+  return fetchPullRequestMeta(input);
 }
 
 /**
