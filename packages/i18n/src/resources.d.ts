@@ -2496,10 +2496,12 @@ export default interface Resources {
       "lineNumber": "Line #",
       "preview": "Preview",
       "previewMode": "Preview mode",
+      "redo": "Redo",
       "toggleAutoSave": "Toggle auto-save",
       "toggleLineNumbers": "Toggle line numbers",
       "toggleOptions": "Toggle editor options",
       "toggleWordWrap": "Toggle word wrap",
+      "undo": "Undo",
       "wrap": "Wrap"
     },
     "fileMention": {
@@ -6564,6 +6566,10 @@ export default interface Resources {
         "delete": " Delete ",
         "edit": " Edit ",
         "executorModel": "Executor model",
+        "executorEscalationModel": "Executor Escalation Model",
+        "executorEscalationModelHelp": "Alternate model used once tool-failure retries are exhausted. No default — unset means no alternate model; configure escalation policy and an optional node target in Scheduling.",
+        "selectExecutorEscalationModel": "Select an escalation model",
+        "noExecutorEscalationModel": "No escalation model",
         "fallsBackTo": " Falls back to: ",
         "loadingAgents": "Loading agents…",
         "loadingAvailableModels": "Loading available models…",

@@ -11,25 +11,25 @@
 
 import { TaskStore } from "../store.js";
 import { resolveProjectColumnsForRoles } from "../project-lane-vocabulary.js";
-import {declaresAnyLifecycleTrait, resolveReviewColumns, resolveTaskLifecycleColumns} from "../workflow-lifecycle-traits.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
-import {toTaskMoveLanes} from "../workflow-lifecycle-traits.js";
-import { countAgentLogEntries, readAgentLogEntries } from "../agent-log-file-store.js";
-import { toJsonNullable } from "../db.js";
+import {declaresAnyLifecycleTrait, resolveReviewColumns, resolveTaskLifecycleColumns} from "../workflows/workflow-lifecycle-traits.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
+import {toTaskMoveLanes} from "../workflows/workflow-lifecycle-traits.js";
+import { countAgentLogEntries, readAgentLogEntries } from "../agents/agent-log-file-store.js";
+import { toJsonNullable } from "../db/db.js";
 import { DbTransaction, recordRunAuditEventWithinTransaction } from "../postgres/data-layer.js";
 import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 import * as schema from "../postgres/schema/index.js";
-import { runCommandAsync } from "../run-command.js";
-import { getStepParser } from "../step-parsers.js";
-import { getTaskMergeBlocker } from "../task-merge.js";
-import { deleteTaskDocument as deleteTaskDocumentAsync, getArtifact as getArtifactAsync, getArtifacts as getArtifactsAsync, getLiveTaskColumn, getTaskDocument as getTaskDocumentAsync, getTaskDocumentRevisions as getTaskDocumentRevisionsAsync, listTaskDocuments as listTaskDocumentsAsync, updateArtifactRow as updateArtifactRowAsync } from "./async-comments-attachments.js";
-import { emitUsageEvent as emitUsageEventAsync, recordPluginActivation as recordPluginActivationAsync } from "./async-events.js";
-import { enqueueMergeQueue as enqueueMergeQueueAsync, peekMergeQueue as peekMergeQueueAsync, peekMergeQueueHead as peekMergeQueueHeadAsync } from "./async-merge-coordination.js";
-import { clearCompletionHandoffMarker as clearCompletionHandoffMarkerAsync, getCompletionHandoffMarker as getCompletionHandoffMarkerAsync } from "./async-workflow-workitems.js";
-import { extractEffectiveWriteScopeFromPrompt } from "../file-scope-classification.js";
+import { runCommandAsync } from "../process/run-command.js";
+import { getStepParser } from "../tasks/step-parsers.js";
+import { getTaskMergeBlocker } from "../merge/task-merge.js";
+import { deleteTaskDocument as deleteTaskDocumentAsync, getArtifact as getArtifactAsync, getArtifacts as getArtifactsAsync, getLiveTaskColumn, getTaskDocument as getTaskDocumentAsync, getTaskDocumentRevisions as getTaskDocumentRevisionsAsync, listTaskDocuments as listTaskDocumentsAsync, updateArtifactRow as updateArtifactRowAsync } from "./async/async-comments-attachments.js";
+import { emitUsageEvent as emitUsageEventAsync, recordPluginActivation as recordPluginActivationAsync } from "./async/async-events.js";
+import { enqueueMergeQueue as enqueueMergeQueueAsync, peekMergeQueue as peekMergeQueueAsync, peekMergeQueueHead as peekMergeQueueHeadAsync } from "./async/async-merge-coordination.js";
+import { clearCompletionHandoffMarker as clearCompletionHandoffMarkerAsync, getCompletionHandoffMarker as getCompletionHandoffMarkerAsync } from "./async/async-workflow-workitems.js";
+import { extractEffectiveWriteScopeFromPrompt } from "../tasks/file-scope-classification.js";
 import { ArtifactRow, WorkflowWorkItemRow } from "./row-types.js";
 import { AgentLogEntry, Artifact, ArtifactCreateInput, Column, CompletionHandoffMarker, MergeQueueEnqueueOptions, MergeQueueEntry, PluginActivation, PluginActivationInput, RunMutationContext, Task, TaskDocument, TaskDocumentRevision, WorkflowWorkItem, WorkflowWorkItemKind, isColumn } from "../types.js";
-import type { UsageEventInput } from "../usage-events.js";
+import type { UsageEventInput } from "../tasks/usage-events.js";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -611,10 +611,6 @@ export function stopWatchingImpl(store: TaskStore): void {
     if (store.watcher) {
       store.watcher.close();
       store.watcher = null;
-    }
-    if (store.pollInterval) {
-      clearInterval(store.pollInterval);
-      store.pollInterval = null;
     }
     for (const timer of store.debounceTimers.values()) {
       clearTimeout(timer);

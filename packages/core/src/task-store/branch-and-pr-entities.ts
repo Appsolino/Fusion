@@ -9,23 +9,21 @@
  */
 
 import { TaskStore } from "../store.js";
-import { filterTasksByBranchGroup } from "../branch-assignment.js";
-import { BUILTIN_WORKFLOW_SETTINGS } from "../builtin-workflow-settings.js";
-import { isBuiltinWorkflowId } from "../builtin-workflows.js";
-import { FINGERPRINT_WINDOW_DEFAULT_MS, FINGERPRINT_WINDOW_MAX_MS } from "../duplicate-guard.js";
+import { filterTasksByBranchGroup } from "../branch/branch-assignment.js";
+import { BUILTIN_WORKFLOW_SETTINGS } from "../workflows/builtin-workflow-settings.js";
+import { isBuiltinWorkflowId } from "../workflows/builtin-workflows.js";
+import { FINGERPRINT_WINDOW_DEFAULT_MS, FINGERPRINT_WINDOW_MAX_MS } from "../duplicates/duplicate-guard.js";
 import * as schema from "../postgres/schema/index.js";
 import { taskProjectScope } from "../postgres/data-layer.js";
-import { ensureBranchGroupForSource as ensureBranchGroupForSourceAsync, ensurePrEntityForSource as ensurePrEntityForSourceAsync, getActivePrEntityBySource as getActivePrEntityBySourceAsync, getBranchGroup as getBranchGroupAsync, getBranchGroupByBranchName as getBranchGroupByBranchNameAsync, getBranchGroupBySource as getBranchGroupBySourceAsync, getPrEntity as getPrEntityAsync, getPrThreadState as getPrThreadStateAsync, listActivePrEntities as listActivePrEntitiesAsync, listBranchGroups as listBranchGroupsAsync, listPrThreadStates as listPrThreadStatesAsync, recordPrThreadOutcome as recordPrThreadOutcomeAsync } from "./async-branch-groups.js";
-import { getWorkflowWorkItem as getWorkflowWorkItemAsync } from "./async-workflow-workitems.js";
+import { ensureBranchGroupForSource as ensureBranchGroupForSourceAsync, ensurePrEntityForSource as ensurePrEntityForSourceAsync, getActivePrEntityBySource as getActivePrEntityBySourceAsync, getBranchGroup as getBranchGroupAsync, getBranchGroupByBranchName as getBranchGroupByBranchNameAsync, getBranchGroupBySource as getBranchGroupBySourceAsync, getPrEntity as getPrEntityAsync, getPrThreadState as getPrThreadStateAsync, listActivePrEntities as listActivePrEntitiesAsync, listBranchGroups as listBranchGroupsAsync, listPrThreadStates as listPrThreadStatesAsync, recordPrThreadOutcome as recordPrThreadOutcomeAsync } from "./async/async-branch-groups.js";
+import { getWorkflowWorkItem as getWorkflowWorkItemAsync } from "./async/async-workflow-workitems.js";
 import { MergeRequestRow, PrEntityRow, WorkflowWorkItemRow } from "./row-types.js";
 import { BranchGroup, BranchGroupCreateInput, ColumnId, MergeRequestRecord, MergeRequestState, PrEntity, PrEntityCreateInput, PrThreadOutcome, PrThreadState, RunMutationContext, Task, TaskLogEntry, TaskPriority, TaskVerificationRequest, TaskVerificationResultSummary, TaskVerificationStatus, WorkflowWorkItem, WorkflowWorkItemKind, WorkflowWorkItemState, WorkflowWorkItemTransitionPatch } from "../types.js";
-import { validateNodeOverrideChange, resolveNodeOverrideLanes } from "../node-override-guard.js";
-import { isTaskTerminalNodeIdAsync } from "../workflow-ir-resolver.js";
-import { WorkflowMovePolicyInput } from "../workflow-extension-types.js";
-import { resolveWorkflowIrById } from "../workflow-ir-resolver.js";
-import { resolveTaskLifecycleColumns } from "../workflow-lifecycle-traits.js";
-import type { WorkflowIr } from "../workflow-ir-types.js";
-import { WorkflowSettingDefinition } from "../workflow-ir-types.js";
+import { validateNodeOverrideChange, resolveNodeOverrideLanes} from "../mesh/node-override-guard.js";
+import { WorkflowMovePolicyInput } from "../workflows/workflow-extension-types.js";
+import { resolveWorkflowIrById, isTaskTerminalNodeIdAsync} from "../workflows/workflow-ir-resolver.js";
+import { WorkflowSettingDefinition, WorkflowIr} from "../workflows/workflow-ir-types.js";
+import { resolveTaskLifecycleColumns } from "../workflows/workflow-lifecycle-traits.js";
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -225,6 +223,25 @@ export async function saveWorkflowRunStepInstanceImpl(store: TaskStore,
     here, guarded so there is no recursion.
     */
         return saveWorkflowRunStepInstanceAsyncImpl(store, state);
+}
+
+/*
+FNXC:PlanningDependencyReseed 2026-08-04-02:10:
+Legacy planning recovery must treat any persisted graph step instance as graph-owned
+handoff evidence. The query intentionally spans run IDs because an abandoned run
+may use a workflow-derived ID that recovery cannot safely reconstruct.
+*/
+export async function hasWorkflowRunStepInstancesForTaskImpl(
+  store: TaskStore,
+  taskId: string,
+): Promise<boolean> {
+  const layer = store.asyncLayer!;
+  const rows = await layer.db
+    .select({ taskId: schema.project.workflowRunStepInstances.taskId })
+    .from(schema.project.workflowRunStepInstances)
+    .where(eq(schema.project.workflowRunStepInstances.taskId, taskId))
+    .limit(1);
+  return rows.length > 0;
 }
 
 export async function loadWorkflowRunStepInstancesImpl(store: TaskStore,
@@ -599,6 +616,17 @@ export async function resetPromptCheckboxesImpl(store: TaskStore, dir: string): 
 }
 
 export async function updateTaskImpl(store: TaskStore,
+    id: string,
+    updates: Parameters<TaskStore["updateTask"]>[1],
+    runContext?: RunMutationContext,
+  ): Promise<Task> {
+  if (updates.dependencies !== undefined) {
+    return store.withPlanningLifecycleLock(id, () => updateTaskWithTaskLockImpl(store, id, updates, runContext));
+  }
+  return updateTaskWithTaskLockImpl(store, id, updates, runContext);
+}
+
+async function updateTaskWithTaskLockImpl(store: TaskStore,
     id: string,
     updates: { title?: string; description?: string; priority?: TaskPriority | null; prompt?: string; worktree?: string | null; workspaceWorktrees?: import("../types.js").Task["workspaceWorktrees"]; status?: string | null; dependencies?: string[]; steps?: import("../types.js").TaskStep[]; customFields?: Record<string, unknown>; currentStep?: number; blockedBy?: string | null; overlapBlockedBy?: string | null; assignedAgentId?: string | null; pausedByAgentId?: string | null; pausedReason?: string | null; tokenBudgetSoftAlertedAt?: string | null; worktrunkFallbackAlertedAt?: string | null; worktrunkFailure?: import("../types.js").Task["worktrunkFailure"] | null; tokenBudgetHardAlertedAt?: string | null; tokenBudgetOverride?: import("../types.js").TaskTokenBudgetOverride | null; dispatchStormCount?: number | null; lastDispatchAt?: string | null; assigneeUserId?: string | null; scopeOverride?: boolean | null; scopeOverrideReason?: string | null; scopeAutoWiden?: string[] | null; nodeId?: string | null; effectiveNodeId?: string | null; effectiveNodeSource?: string | null; checkedOutBy?: string | null; checkedOutAt?: string | null; checkoutNodeId?: string | null; checkoutRunId?: string | null; checkoutLeaseRenewedAt?: string | null; checkoutLeaseEpoch?: number | null; paused?: boolean; baseBranch?: string | null; autoMerge?: boolean | null; branch?: string | null; executionStartBranch?: string | null; baseCommitSha?: string | null; size?: "S" | "M" | "L"; reviewLevel?: number; executionMode?: import("../types.js").ExecutionMode | null; mergeRetries?: number; workflowStepRetries?: number; stuckKillCount?: number | null; resumeLimboCount?: number | null; executeRequeueLoopCount?: number | null; graphResumeRetryCount?: number | null; consecutiveToolFailureRetryCount?: number | null; executorEscalationAttempted?: boolean | null; toolFailureDetectorLogCursor?: number | null; toolFailureRetryExhaustedAuditEmitted?: boolean | null; resumeLimboTipSha?: string | null; resumeLimboStepSignature?: string | null; executeRequeueLoopSignature?: string | null; postReviewFixCount?: number | null; planReviewReplanCount?: number | null; recoveryRetryCount?: number | null; taskDoneRetryCount?: number | null; bulkCompletionRefusalAt?: string | null; workflowIrPin?: string | null; workflowIrPinNodeId?: string | null; workflowIrPinColumnId?: string | null; legacyAdoptedAt?: string | null; worktreeSessionRetryCount?: number | null; completionHandoffLimboRecoveryCount?: number | null; verificationFailureCount?: number | null; mergeConflictBounceCount?: number | null; mergeAuditBounceCount?: number | null; mergeTransientRetryCount?: number | null; branchConflictRecoveryCount?: number | null; reviewerContextRetryCount?: number | null; reviewerFallbackRetryCount?: number | null; nextRecoveryAt?: string | null; enabledWorkflowSteps?: string[]; noCommitsExpected?: boolean | null; modelProvider?: string | null; credentialInstanceId?: string | null; modelId?: string | null; validatorModelProvider?: string | null; validatorCredentialInstanceId?: string | null; validatorModelId?: string | null; planningModelProvider?: string | null; planningCredentialInstanceId?: string | null; planningModelId?: string | null; mergerModelProvider?: string | null; mergerCredentialInstanceId?: string | null; mergerModelId?: string | null; thinkingLevel?: string | null; validatorThinkingLevel?: string | null; planningThinkingLevel?: string | null; mergerThinkingLevel?: string | null; error?: string | null; summary?: string | null; sessionFile?: string | null; firstExecutionAt?: string | null; cumulativeActiveMs?: number | null; executionStartedAt?: string | null; executionCompletedAt?: string | null; review?: import("../types.js").TaskReview | null; reviewState?: import("../types.js").TaskReviewState | null; workflowStepResults?: import("../types.js").WorkflowStepResult[] | null; mergeDetails?: import("../types.js").MergeDetails | null; sourceIssue?: import("../types.js").TaskSourceIssue | null; sourceMetadataPatch?: Record<string, unknown> | null; githubTracking?: import("../types.js").TaskGithubTracking | null; tokenUsage?: import("../types.js").TaskTokenUsage | null; modifiedFiles?: string[] | null; missionId?: string | null; sliceId?: string | null; workflowTransitionNotification?: import("../types.js").WorkflowTransitionNotificationMarker | undefined; sessionAdvisorEnabled?: boolean | null },    runContext?: RunMutationContext,
   ): Promise<Task> {

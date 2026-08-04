@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Column, Task } from "../types.js";
 import type { TaskStore } from "../store.js";
-import { computeContentFingerprint } from "../duplicate-detection.js";
+import { computeContentFingerprint } from "../duplicates/duplicate-detection.js";
 import { resolveFingerprintWindowMs } from "../task-store/branch-and-pr-entities.js";
 import {
   FINGERPRINT_WINDOW_DEFAULT_MS,
@@ -10,7 +10,7 @@ import {
   __getDeterministicGuardMutexSize,
   reconcileDeterministicDuplicate,
   runDeterministicDuplicateGuard,
-} from "../duplicate-guard.js";
+} from "../duplicates/duplicate-guard.js";
 
 function mkTask(overrides: Partial<Task> & { id: string; description: string; column: Column }): Task {
   const now = new Date().toISOString();

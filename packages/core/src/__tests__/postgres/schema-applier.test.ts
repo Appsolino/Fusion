@@ -81,6 +81,11 @@ import {
   CHAT_SESSION_TAGS_VERSION,
   DROP_GLOBAL_CONCURRENCY_VERSION,
   MISSION_TASK_PREFIX_VERSION,
+  CREDENTIAL_INSTANCE_SELECTION_VERSION,
+  TASK_LIFECYCLE_OUTBOX_VERSION,
+  TASK_LIFECYCLE_CONSUMERS_VERSION,
+  VALIDATOR_INPUT_FINGERPRINT_VERSION,
+  UNPLANNED_EXECUTION_BLOCK_DEDUPE_VERSION,
 } from "../../postgres/schema-applier.js";
 import { ProjectPartitionRekeyError, rekeyFallbackProjectPartition } from "../../postgres/migration-stamping.js";
 import type { PluginSchemaInitHook } from "../../postgres/plugin-schema-hook.js";
@@ -95,6 +100,14 @@ const PG_AVAILABLE =
 const pgDescribe = PG_AVAILABLE ? describe : describe.skip;
 
 describe("schema-applier: immutable migration identities", () => {
+  it("registers the task lifecycle outbox after credential selection", () => {
+    expect(TASK_LIFECYCLE_OUTBOX_VERSION).toBe("0040");
+    expect(TASK_LIFECYCLE_CONSUMERS_VERSION).toBe("0041");
+    expect(VALIDATOR_INPUT_FINGERPRINT_VERSION).toBe("0042");
+    expect(UNPLANNED_EXECUTION_BLOCK_DEDUPE_VERSION).toBe("0043");
+    expect(SCHEMA_BASELINE_VERSION).toBe("0043");
+  });
+
   it("keeps monitor and approval isolation assigned to version 0003", () => {
     expect(MONITOR_APPROVAL_ISOLATION_SCHEMA_VERSION).toBe("0003");
     expect(Number(SCHEMA_BASELINE_VERSION))
@@ -362,6 +375,30 @@ The baseline declares symbol_locks but cannot attach its ownership trigger befor
 installation must therefore prove 0025 leaves the final table forced-RLS with
 its policy and trigger, including actual second-project read/write isolation.
 */
+async function assertTaskLifecycleOutboxOwnershipContract(ctx: TestContext): Promise<void> {
+  const catalog = (await ctx.db.execute(sql`
+    SELECT c.relname AS table_name, c.relrowsecurity AS rls, c.relforcerowsecurity AS forced,
+      EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'project' AND tablename = c.relname
+          AND policyname = 'fusion_project_isolation'
+      ) AS policy,
+      EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgrelid = c.oid AND tgname = 'fusion_assign_project_id' AND NOT tgisinternal
+      ) AS trigger
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'project'
+      AND c.relname IN ('task_lifecycle_events', 'task_lifecycle_event_seq')
+    ORDER BY c.relname
+  `)) as unknown as Array<{ table_name: string; rls: boolean; forced: boolean; policy: boolean; trigger: boolean }>;
+  expect(catalog).toEqual([
+    { table_name: 'task_lifecycle_event_seq', rls: true, forced: true, policy: true, trigger: true },
+    { table_name: 'task_lifecycle_events', rls: true, forced: true, policy: true, trigger: true },
+  ]);
+}
+
 async function assertSymbolLocksOwnershipContract(ctx: TestContext): Promise<void> {
   const catalog = (await ctx.db.execute(sql`
     SELECT c.relrowsecurity AS rls, c.relforcerowsecurity AS forced,
@@ -683,7 +720,7 @@ pgDescribe("schema-applier: VAL-SCHEMA-001 final-schema parity (table counts)", 
     ctx = null;
   });
 
-  it("creates all 96 project tables, 17 central tables, 1 archive table", async () => {
+  it("creates all 105 project tables, 17 central tables, 1 archive table", async () => {
     ctx = await setupFreshDb();
     // FNXC:PostgresCutover 2026-07-05-15:55: apply the BASELINE only.
     // applySchemaBaseline now runs the plugin schema-init hooks by default,
@@ -698,14 +735,13 @@ pgDescribe("schema-applier: VAL-SCHEMA-001 final-schema parity (table counts)", 
       GROUP BY table_schema
     `)) as unknown as Array<{ table_schema: string; n: number }>;
     const bySchema = Object.fromEntries(rows.map((r) => [r.table_schema, r.n]));
-    // Project: 87 typed core tables + 2 lossless legacy preservation tables
-    // + 1 import_translation_cache (FNXC:GitHubImportTranslate 2026-07-15-09:30)
-    // + 1 configuration_revisions (FNXC:ConfigVersioning 2026-07-18-14:00)
-    // + 2 ideation_sessions/ideation_candidates (FNXC:Ideation 2026-07-18-13:25 / FN-8295)
-    // + 1 task_verification_requests + 1 durable symbol_locks table (FN-8305)
-    // + 1 mission_lineage_stops (FNXC:MissionLineageBudget FN-8543 / migration 0035).
-    // Plugin tables are added separately by the hook.
-    expect(bySchema.project).toBe(98);
+    /*
+    FNXC:PgSchemaApplier 2026-08-03-02:16:
+    Project table count = historical core baseline plus later migrations. 0040 adds 2 lifecycle
+    outbox tables; 0041 adds 4 lifecycle consumer tables; 0043 adds the durable unplanned-dispatch
+    refusal marker (100 → 105). Plugin tables are added separately by the schema-init hook and are excluded here.
+    */
+    expect(bySchema.project).toBe(105);
     /*
     FNXC:CapacityModel 2026-07-29-08:10 (drop the cross-project cap — table half):
     17, not 18: `central.global_concurrency` is dropped by migration 0037. A fresh
@@ -731,6 +767,40 @@ pgDescribe("schema-applier: VAL-SCHEMA-001 final-schema parity (table counts)", 
     await applySchemaBaseline(ctx.db);
     const second = await applySchemaBaseline(ctx.db);
     expect(second.applied).toBe(false);
+  });
+
+  /*
+  FNXC:LifecycleOutbox 2026-08-01-11:02:
+  Migration discovery is intentionally disabled, so the writer tables require proof at
+  their fresh, upgrade, and manually-repaired re-execution surfaces. Both tables must
+  retain the ownership contract because lifecycle events cross process boundaries.
+  */
+  it("installs lifecycle outbox ownership on fresh databases and re-executes its SQL safely", async () => {
+    ctx = await setupFreshDb();
+    await expect(applySchemaBaseline(ctx.db, { pluginHooks: [] })).resolves.toMatchObject({ applied: true });
+    await assertTaskLifecycleOutboxOwnershipContract(ctx);
+
+    const migrationSql = readFileSync(
+      fileURLToPath(new URL("../../postgres/migrations/0040_fn_8684_task_lifecycle_outbox.sql", import.meta.url)),
+      "utf8",
+    );
+    await expect(ctx.db.execute(sql.raw(migrationSql))).resolves.toBeDefined();
+    await assertTaskLifecycleOutboxOwnershipContract(ctx);
+    await expect(applySchemaBaseline(ctx.db, { pluginHooks: [] })).resolves.toEqual({ applied: false, pluginHooksRun: 0 });
+  });
+
+  it("upgrades a database recorded through 0039 with both lifecycle outbox tables", async () => {
+    ctx = await setupFreshDb();
+    await applySchemaBaseline(ctx.db, { pluginHooks: [] });
+    await ctx.db.execute(sql.raw(`
+      DELETE FROM public.fusion_schema_migrations WHERE version = '0040';
+      DROP TABLE project.task_lifecycle_events;
+      DROP TABLE project.task_lifecycle_event_seq;
+    `));
+
+    await expect(applySchemaBaseline(ctx.db, { pluginHooks: [] })).resolves.toEqual({ applied: true, pluginHooksRun: 0 });
+    expect(await getAppliedMigrations(ctx.db)).toContain(TASK_LIFECYCLE_OUTBOX_VERSION);
+    await assertTaskLifecycleOutboxOwnershipContract(ctx);
   });
 
   /*
@@ -1553,6 +1623,13 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
       /* slice_id required before 0023 research provenance unique index can attach. */
       CREATE TABLE project.mission_features (id text PRIMARY KEY, slice_id text);
       /*
+      FNXC:MissionValidation 2026-08-03-02:01:
+      Migration 0042 (FN-8694) ALTERs project.mission_validator_runs for input_fingerprint.
+      Real 0000 databases have the table (baseline since the PG cutover), so this
+      historical fixture must retain it or upgrade-from-0000 fails with missing relation.
+      */
+      CREATE TABLE project.mission_validator_runs (id text PRIMARY KEY, feature_id text, project_id text);
+      /*
       FNXC:MissionValidation 2026-07-23-21:30:
       Migration 0034 (FN-8542) ALTERs project.mission_contract_assertions and builds
       the derived-milestone partial unique index on (project_id, milestone_id).
@@ -1679,6 +1756,11 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
   CHAT_SESSION_TAGS_VERSION,
       DROP_GLOBAL_CONCURRENCY_VERSION,
       MISSION_TASK_PREFIX_VERSION,
+      CREDENTIAL_INSTANCE_SELECTION_VERSION,
+      TASK_LIFECYCLE_OUTBOX_VERSION,
+      TASK_LIFECYCLE_CONSUMERS_VERSION,
+      VALIDATOR_INPUT_FINGERPRINT_VERSION,
+      UNPLANNED_EXECUTION_BLOCK_DEDUPE_VERSION,
     ]);
     expect((await applySchemaBaseline(ctx.db, { pluginHooks: [] })).applied).toBe(false);
   });
@@ -1743,6 +1825,11 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
   CHAT_SESSION_TAGS_VERSION,
       DROP_GLOBAL_CONCURRENCY_VERSION,
       MISSION_TASK_PREFIX_VERSION,
+      CREDENTIAL_INSTANCE_SELECTION_VERSION,
+      TASK_LIFECYCLE_OUTBOX_VERSION,
+      TASK_LIFECYCLE_CONSUMERS_VERSION,
+      VALIDATOR_INPUT_FINGERPRINT_VERSION,
+      UNPLANNED_EXECUTION_BLOCK_DEDUPE_VERSION,
     ]);
   });
 
@@ -1940,6 +2027,11 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
   CHAT_SESSION_TAGS_VERSION,
       DROP_GLOBAL_CONCURRENCY_VERSION,
       MISSION_TASK_PREFIX_VERSION,
+      CREDENTIAL_INSTANCE_SELECTION_VERSION,
+      TASK_LIFECYCLE_OUTBOX_VERSION,
+      TASK_LIFECYCLE_CONSUMERS_VERSION,
+      VALIDATOR_INPUT_FINGERPRINT_VERSION,
+      UNPLANNED_EXECUTION_BLOCK_DEDUPE_VERSION,
     ]);
   });
 
@@ -2018,6 +2110,11 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
   CHAT_SESSION_TAGS_VERSION,
       DROP_GLOBAL_CONCURRENCY_VERSION,
       MISSION_TASK_PREFIX_VERSION,
+      CREDENTIAL_INSTANCE_SELECTION_VERSION,
+      TASK_LIFECYCLE_OUTBOX_VERSION,
+      TASK_LIFECYCLE_CONSUMERS_VERSION,
+      VALIDATOR_INPUT_FINGERPRINT_VERSION,
+      UNPLANNED_EXECUTION_BLOCK_DEDUPE_VERSION,
     ]);
   });
 
@@ -2096,6 +2193,11 @@ pgDescribe("schema-applier: automation project-isolation upgrade", () => {
   CHAT_SESSION_TAGS_VERSION,
       DROP_GLOBAL_CONCURRENCY_VERSION,
       MISSION_TASK_PREFIX_VERSION,
+      CREDENTIAL_INSTANCE_SELECTION_VERSION,
+      TASK_LIFECYCLE_OUTBOX_VERSION,
+      TASK_LIFECYCLE_CONSUMERS_VERSION,
+      VALIDATOR_INPUT_FINGERPRINT_VERSION,
+      UNPLANNED_EXECUTION_BLOCK_DEDUPE_VERSION,
     ]);
   });
 });

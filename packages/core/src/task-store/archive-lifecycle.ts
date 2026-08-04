@@ -8,14 +8,14 @@
  */
 import {TaskStore, storeLog} from "../store.js";
 import {TaskSelfDeleteError} from "./errors.js";
-import {isWorkspaceTask, type Task, type GithubIssueAction} from "../types.js";
+import {isWorkspaceTask, type Task, type GithubIssueAction, type TaskDeleteClosureContext} from "../types.js";
 import {type TaskDeleteAuditContext} from "../task-delete-attribution.js";
 import "../builtin-traits.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
-import {toJson} from "../db-helpers.js";
-import {getErrorMessage} from "../error-message.js";
-import {ArchiveWorkspaceDisposalError, ArchiveWorkspaceDisposalIncompleteError, ArchiveWorkspaceWorktreeDisposerMissingError, getArchiveWorkspaceWorktreeDisposer, getArchiveWorktreeDisposer, type ArchiveWorkspaceDisposalResult, type WorkspaceDisposalPlanEntry} from "../archive-worktree-disposer.js";
-import {acquireWorktreePathReservation, canonicalizeWorktreePath} from "../worktree-path-reservation.js";
+import {toJson} from "../db/db-helpers.js";
+import {getErrorMessage} from "../process/error-message.js";
+import {ArchiveWorkspaceDisposalError, ArchiveWorkspaceDisposalIncompleteError, ArchiveWorkspaceWorktreeDisposerMissingError, getArchiveWorkspaceWorktreeDisposer, getArchiveWorktreeDisposer, type ArchiveWorkspaceDisposalResult, type WorkspaceDisposalPlanEntry} from "../db/archive-worktree-disposer.js";
+import {acquireWorktreePathReservation, canonicalizeWorktreePath} from "../tasks/worktree-path-reservation.js";
 import {basename, join, resolve} from "node:path";
 import {homedir} from "node:os";
 
@@ -187,7 +187,7 @@ function _scheduleDeleteBranchCleanup(store: TaskStore, task: Task): void {
     })();
   }
 
-export async function deleteTaskImpl(store: TaskStore, id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext; },): Promise<Task> {
+export async function deleteTaskImpl(store: TaskStore, id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; closureContext?: TaskDeleteClosureContext; auditContext?: TaskDeleteAuditContext; },): Promise<Task> {
     // FNXC:RuntimeLifecycleAsync 2026-06-24-12:00:
     // Backend-mode deleteTask: delegate the core async operations (task read,
     // lineage gate, lineage clear, soft-delete, audit) to the async helpers.
@@ -221,7 +221,7 @@ export async function deleteTaskIfImpl(
   store: TaskStore,
   id: string,
   predicate: (live: Task) => boolean | Promise<boolean>,
-  options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext },
+  options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; closureContext?: TaskDeleteClosureContext; auditContext?: TaskDeleteAuditContext },
 ): Promise<DeleteTaskIfResult> {
   if (options?.auditContext?.taskId === id) throw new TaskSelfDeleteError(id);
   /*

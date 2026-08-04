@@ -32,7 +32,7 @@ This module is observability/notification only. It adds no delete-blocking, gati
 logic — an unattributed delete still succeeds, the operator just finds out about it.
 */
 
-import { createLogger } from "./logger.js";
+import { createLogger } from "./process/logger.js";
 import type { TaskStore } from "./store.js";
 import {
   buildDeleteCallerAuditFields,

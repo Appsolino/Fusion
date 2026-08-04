@@ -1,4 +1,4 @@
-import type { TaskMoveLanes } from "./workflow-lifecycle-traits.js";
+import type { TaskMoveLanes } from "./workflows/workflow-lifecycle-traits.js";
 
 export interface TaskLaneCacheOptions {
   ttlMs?: number;

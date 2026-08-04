@@ -57,7 +57,7 @@ the ESM binding is resolved before a spy could replace it.
 */
 const isBranchAheadOfBase = vi.fn(async () => ({ aheadCount: 0 }));
 vi.mock("../self-healing-branch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../self-healing-branch.js")>();
+  const actual = await importOriginal<typeof import("../healing/self-healing-branch.js")>();
   return { ...actual, isBranchAheadOfBase: (...args: unknown[]) => isBranchAheadOfBase(...args as []) };
 });
 
@@ -75,21 +75,21 @@ vi.mock("../logger.js", async (importOriginal) => {
 
 const classifyForeignOnlyContamination = vi.fn(async () => ({ kind: "clean" as const }));
 vi.mock("../branch-conflicts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../branch-conflicts.js")>();
+  const actual = await importOriginal<typeof import("../execution/branch-conflicts.js")>();
   return { ...actual, classifyForeignOnlyContamination: (...args: unknown[]) => classifyForeignOnlyContamination(...args as []) };
 });
 
 vi.mock("../run-audit.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../run-audit.js")>();
+  const actual = await importOriginal<typeof import("../util/run-audit.js")>();
   return {
     ...actual,
     createRunAuditor: vi.fn(() => ({ database: vi.fn(async () => undefined), git: vi.fn(), filesystem: vi.fn(), sandbox: vi.fn() })),
   };
 });
 
-import { createRunAuditor } from "../run-audit.js";
+import { createRunAuditor } from "../util/run-audit.js";
 import { SelfHealingManager } from "../self-healing.js";
-import { executingTaskLock } from "../active-session-registry.js";
+import { executingTaskLock } from "../agents/active-session-registry.js";
 import { RENAMED_VOCAB, lifecycleIr } from "./_workflow-vocabulary-fixture.js";
 
 const RENAMED_IR = lifecycleIr(RENAMED_VOCAB, "self-healing-lifecycle", { mergeOrchestration: true });

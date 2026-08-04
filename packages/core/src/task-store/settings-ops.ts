@@ -9,15 +9,15 @@
 import {TaskStore, storeLog} from "../store.js";
 import type {BoardConfig, Settings, GlobalSettings, ConfigChangedBy} from "../types.js";
 import {DEFAULT_SETTINGS, isGlobalOnlySettingsKey} from "../types.js";
-import {MOVED_SETTINGS_KEYS, stripMovedSettingsKeys, patchContainsMovedKey} from "../moved-settings.js";
+import {MOVED_SETTINGS_KEYS, stripMovedSettingsKeys, patchContainsMovedKey} from "../config/moved-settings.js";
 import "../builtin-traits.js";
-import {validateLocale, assertWorktreeNamingRecycleExclusive} from "../settings-validation.js";
-import {hasSyncPassphraseConfigured} from "../secrets-sync-passphrase.js";
-import {ensureMemoryFileWithBackend} from "../project-memory.js";
+import {validateLocale, assertWorktreeNamingRecycleExclusive} from "../config/settings-validation.js";
+import {hasSyncPassphraseConfigured} from "../secrets/secrets-sync-passphrase.js";
+import {ensureMemoryFileWithBackend} from "../memory/project-memory.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
 import {isPlainObject, deepMergeWithNullDelete} from "../task-store/settings-helpers.js";
-import {readProjectConfig as readProjectConfigAsync, writeProjectConfig as writeProjectConfigAsync} from "../task-store/async-settings.js";
-import {appendConfigurationRevision, createConfigurationRevision} from "../async-configuration-revision-store.js";
+import {readProjectConfig as readProjectConfigAsync, writeProjectConfig as writeProjectConfigAsync} from "../task-store/async/async-settings.js";
+import {appendConfigurationRevision, createConfigurationRevision} from "../async-stores/async-configuration-revision-store.js";
 import {isValidProviderInstanceId} from "../provider-instance.js";
 
 /*

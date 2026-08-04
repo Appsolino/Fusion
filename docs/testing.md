@@ -132,17 +132,16 @@ netted — a wrong classification stays visible instead of silently moving the b
 `scripts/lib/lifecycle-column-census-baseline.json`:
 
 - a **rise** fails hard — that is the ratchet's purpose, "no new guards";
-- a **drop** TIGHTENS the baseline automatically, reports what it lowered, and exits 0.
+- a **drop** reports that the baseline can be tightened and exits 0 without writing it.
 
-<!-- FNXC:LifecycleColumnCensus 2026-08-01-03:05: the drop behaviour was a hard failure and is not any more,
-because the drop is almost never the failing author's to fix. Eleven files dropped in one merge wave, none of
-those PRs re-recorded, and none of their authors did anything wrong; measured three times since CI began
-gating this. A permanently-red gate is a bigger hole than a stale allowance, because it gets ignored and then
-nothing is guarded at all. -->
-The tightened file must be **committed** — in CI the write is discarded with the runner, which is why the gate
-goes green rather than silently passing a stale allowance. `--strict --exact` restores hard failure on a drop,
-for the end state where the count is pinned and any divergence is a real event. `--strict --update-baseline`
-re-records unconditionally and prints `ACCEPTED RISES`, which is the only way to record a rise deliberately.
+<!-- FNXC:LifecycleColumnCensus 2026-08-01-23:23: Plain strict verification must stay read-only. Drops often
+come from another merge and should not redden the gate, but a check that rewrites the baseline turns every
+reader into an uncredited author. `--exact` catches drift at the pinned end state; explicit baseline recording
+keeps the diff attributable to the change that reviewed it. -->
+A dropped baseline must be **deliberately re-recorded and committed** with
+`--strict --update-baseline`. `--strict --exact` restores hard failure on a drop, for the end state where the
+count is pinned and any divergence is a real event. `--strict --update-baseline` re-records unconditionally
+and prints `ACCEPTED RISES`, which is the only way to record a rise deliberately.
 
 The regression suite is `packages/engine/src/__tests__/lifecycle-column-census.test.ts`. It pins
 each form the census must catch (all six ids, non-`column` locals, single quotes, negation,
@@ -208,6 +207,21 @@ wrapper or recombine the jsdom-heavy app/API projects, because the old combined 
 was SIGKILLed by heap pressure under workspace worker budgeting. The top-level
 `pretest` artifact bootstrap runs once before the orchestrator; lane subprocesses must
 not re-run `scripts/ensure-test-artifacts.mjs`.
+
+Use the exact aggregate command below to attempt all 15 app/API lanes, including after
+one or more lanes fail:
+
+```bash
+pnpm --filter @fusion/dashboard test -- --all
+```
+
+pnpm forwards that invocation as `-- --all`; the quality runner deliberately removes
+only the leading package-script separator and still rejects genuine unknown options.
+`--no-fail-fast` is an equivalent aggregate alias. Without either alias, the default is
+fail-fast for quick local feedback: remaining lanes are reported as **NOT RUN** with
+**UNKNOWN** status, never as passing. Aggregate mode attempts every lane exactly once;
+any failed or signal-terminated lane keeps the command nonzero and is named in the
+final failure summary. It must never print an all-passed summary when any lane failed.
 
 <!-- FNXC:TestInfrastructure 2026-06-21-12:21: FN-6854 applies the dashboard heap-runner pattern to the engine affected-package lane because a wide `vitest --changed` fan-out selected hundreds of real-git-heavy engine files and could be OS-SIGKILLed by heap pressure before Vitest returned a verdict. Keep the engine lane isolated, heap-capped, and lower-worker rather than raising concurrency or widening timeouts.
 
@@ -631,6 +645,7 @@ When a test owns a process-wide singleton that has asynchronous owners (timers, 
 - Prefer fake timers over real polling/time waits (FN-2707 pattern: advance timers inside `act(...)`, restore with `afterEach(() => vi.useRealTimers())`).
 - Do **not** mask slowness by raising worker/concurrency knobs (`FUSION_TEST_TOTAL_WORKERS`, `FUSION_TEST_CONCURRENCY`, `VITEST_MAX_WORKERS`, workspace concurrency settings).
 - Do **not** add net-new real-network calls, real-`setTimeout` polling loops, or mock-the-world component shells when a narrower seam exists.
+- Real Pi SDK catalog tests in the engine package must use `src/__tests__/_model-runtime-fixture.ts`: warm its shared runtime in `beforeAll` and request a fresh registry rather than constructing `ModelRuntime` inside timed test bodies.
 - Use the canonical taxonomy in **What NOT to write** and **What TO keep unconditionally** when deciding trim vs keep.
 - See `docs/test-speed-audit-FN-5048.md` for the measured baseline offender list and optimization priorities.
 

@@ -5,8 +5,8 @@ import type { Settings, Task, TaskStore } from "@fusion/core";
 const { recordRunAuditEventMock } = vi.hoisted(() => ({
   recordRunAuditEventMock: vi.fn(async () => undefined),
 }));
-vi.mock("../run-audit.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../run-audit.js")>();
+vi.mock("../util/run-audit.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../util/run-audit.js")>();
   return {
     ...actual,
     createRunAuditor: vi.fn(() => ({ database: recordRunAuditEventMock, git: vi.fn(), filesystem: vi.fn(), sandbox: vi.fn() })),
@@ -105,6 +105,8 @@ describe("FN-8356: reconcile stale duplicate-decision pauses", () => {
       const recovered = await store.getTask(id);
       expect(recovered?.paused).toBe(false);
       expect(recovered?.pausedReason).toBeNull();
+      // needs-replan (not null) so the card cannot look planning-finished without a real PROMPT
+      expect(recovered?.status).toBe("needs-replan");
       expect(recovered?.sourceMetadata?.nearDuplicateDismissed).toBe(true);
       // TaskCard and NotificationService both key their decision affordance on this predicate.
       expect(recovered?.pausedReason === "duplicate-decision-required").toBe(false);
@@ -137,6 +139,7 @@ describe("FN-8356: reconcile stale duplicate-decision pauses", () => {
     const recovered = await store.getTask("FN-1");
     expect(recovered?.paused).toBe(false);
     expect(recovered?.pausedReason).toBeNull();
+    expect(recovered?.status).toBe("needs-replan");
   });
 
   /*

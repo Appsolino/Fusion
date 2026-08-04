@@ -636,8 +636,13 @@ export const registerAuthRoutes: ApiRouteRegistrar = (ctx) => {
     try {
       const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
       const storage = getAuthStorage();
-      const requestedProvider = typeof req.query.provider === "string" ? req.query.provider : undefined;
-      const rawRequestedInstance = typeof req.query.instance === "string" ? req.query.instance : undefined;
+      /*
+      FNXC:ProviderAuth 2026-08-01-19:10:
+      FN-8713: Express normally supplies `req.query`, but direct route consumers can omit it. Treat an absent query as empty while retaining instance validation; a well-formed dangling instance stays unauthenticated below and must never fall back to the provider default.
+      */
+      const query = req.query ?? {};
+      const requestedProvider = typeof query.provider === "string" ? query.provider : undefined;
+      const rawRequestedInstance = typeof query.instance === "string" ? query.instance : undefined;
       if (rawRequestedInstance?.trim() && !requestedProvider) throw badRequest("instance requires provider");
       if (rawRequestedInstance?.trim() && !isValidProviderInstanceId(rawRequestedInstance.trim())) throw badRequest("instance must be a valid provider instance id");
       if (rawRequestedInstance?.trim() && requestedProvider && syntheticCliProviderIds.has(requestedProvider)) throw badRequest("CLI providers do not support credential instances");

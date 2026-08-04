@@ -31,7 +31,7 @@ import { exec } from "node:child_process";
    detector module — it shares a name with the protected method below, and inside
    the class body the bare identifier resolves to this import. That collision
    pre-dates the move and is preserved exactly. */
-import { findAlreadyMergedTaskCommit, getCommitTaskOwnership } from "./already-merged-detector.js";
+import { findAlreadyMergedTaskCommit, getCommitTaskOwnership } from "./merge/already-merged-detector.js";
 import { createLogger } from "./logger.js";
 import type { Task } from "@fusion/core";
 

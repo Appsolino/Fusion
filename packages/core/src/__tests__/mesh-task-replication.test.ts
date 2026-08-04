@@ -12,8 +12,8 @@ import {
   buildRefinementSeedPrompt,
   isTaskAwaitingPlanning,
   isUnplannedSeedPrompt,
-} from "../mesh-task-replication.js";
-import { applyOriginalDescription } from "../original-description-policy.js";
+} from "../mesh/mesh-task-replication.js";
+import { applyOriginalDescription } from "../tasks/original-description-policy.js";
 
 describe("mesh-task-replication", () => {
   it("buildBootstrapPrompt matches task bootstrap format", () => {

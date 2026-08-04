@@ -2,6 +2,59 @@ import { describe, expect, it } from "vitest";
 import { createSmokeHtml } from "../../scripts/browser-layout-smoke.mjs";
 
 describe("browser layout smoke fixture", () => {
+  it("includes standalone and embedded Git Manager shell fixtures", () => {
+    const html = createSmokeHtml();
+    for (const hook of [
+      "git-manager-standalone",
+      "git-manager-standalone-body",
+      "git-manager-standalone-modal",
+      "git-manager-standalone-header",
+      "git-manager-standalone-close",
+      "git-manager-standalone-layout",
+      "git-manager-standalone-content",
+      "git-manager-embedded-host",
+      "git-manager-embedded-modal",
+      "git-manager-embedded-header",
+      "git-manager-embedded-close",
+      "git-manager-embedded-layout",
+      "git-manager-embedded-content",
+    ]) {
+      expect(html).toContain(`data-smoke="${hook}"`);
+    }
+    expect(html).toContain("floating-window--git-manager");
+    expect(html).toContain("gm-modal--embedded");
+  });
+
+  it("includes standalone, embedded, and detail GitHub Import shell fixtures", () => {
+    const html = createSmokeHtml();
+    for (const hook of [
+      "github-import-standalone", "github-import-standalone-body", "github-import-standalone-modal",
+      "github-import-standalone-header", "github-import-standalone-close", "github-import-standalone-controls",
+      "github-import-standalone-list", "github-import-standalone-pagination", "github-import-standalone-footer",
+      "github-import-embedded-host", "github-import-embedded-modal", "github-import-embedded-header",
+      "github-import-embedded-content", "github-import-detail", "github-import-detail-body",
+      "github-import-detail-panel", "github-import-detail-close",
+    ]) {
+      expect(html).toContain(`data-smoke="${hook}"`);
+    }
+    expect(html).toContain("floating-window--github-import");
+    expect(html).toContain("github-import-modal--embedded");
+    expect(html).toContain("floating-window--github-import-detail");
+  });
+
+  /*
+  FNXC:PlanReviewReplan 2026-08-04-06:35 FN-8768:
+  Keep both production approval surfaces in the real-browser fixture; the executable smoke checks
+  their shared responsive containment rather than treating the presence of markup as layout proof.
+  */
+  it("includes the Plan Review replan-cap approval card and detail surfaces", () => {
+    const html = createSmokeHtml();
+    expect(html).toContain('data-smoke="plan-review-replan-cap-approval"');
+    expect(html).toContain("awaiting-approval--plan-review-replan-cap");
+    expect(html).toContain("detail-plan-approval-banner--replan-cap");
+    expect(html).toContain("Plan Review needs approval");
+  });
+
   it("includes PR flow fixture sections and class hooks", () => {
     const html = createSmokeHtml();
     expect(html).toContain('data-smoke="pr-create-modal"');
@@ -43,5 +96,16 @@ describe("browser layout smoke fixture", () => {
     for (const label of ["Save", "Guardar", "Enregistrer", "저장", "保存", "儲存"]) {
       expect(html).toContain(label);
     }
+  });
+
+  /*
+  FNXC:ListView 2026-08-03-07:00:
+  The mobile List smoke fixture must carry the production list-view--single-pane marker without coupling the regression to HTML attribute order or spacing.
+  */
+  it("marks the mobile List fixture as the production single-pane surface", () => {
+    const html = createSmokeHtml();
+    const listSectionTag = html.match(/<section\b[^>]*\bdata-smoke="list"[^>]*>/)?.[0];
+    expect(listSectionTag).toBeDefined();
+    expect(listSectionTag).toMatch(/\bclass="[^"]*\blist-view--single-pane\b[^"]*"/);
   });
 });

@@ -7,24 +7,25 @@
  * instance as its first parameter and performs byte-identical work.
  */
 import {TaskStore, storeLog, type TaskDependencyMutation} from "../store.js";
-import {toTaskMoveLanes} from "../workflow-lifecycle-traits.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
-import {buildRefinementSeedPrompt} from "../mesh-task-replication.js";
+import {buildRefinementSeedPrompt} from "../mesh/mesh-task-replication.js";
+import {toTaskMoveLanes} from "../workflows/workflow-lifecycle-traits.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
 import {SelfDefeatingDependencyError, detectSelfDefeatingDependency} from "./errors.js";
-import {resolveTaskLifecycleColumns} from "../workflow-lifecycle-traits.js";
+import {resolveTaskLifecycleColumns} from "../workflows/workflow-lifecycle-traits.js";
 import {resolveWorkflowIntakeFacts} from "./task-creation.js";
-import type {WorkflowIr} from "../workflow-ir-types.js";
+import type {WorkflowIr} from "../workflows/workflow-ir-types.js";
 import {mkdir, readFile, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {existsSync} from "node:fs";
 import type {Task, Column, RunMutationContext, RunAuditEventInput} from "../types.js";
 import "../builtin-traits.js";
-import {normalizeTaskPriority} from "../task-priority.js";
-import {extractTaskIdTokens, normalizeTitleForTaskId} from "../task-title-id-drift.js";
-import {deriveFallbackTaskTitle} from "../ai-summarize.js";
-import {generateTaskLineageId} from "../task-lineage.js";
+import {normalizeTaskPriority} from "../tasks/task-priority.js";
+import {extractTaskIdTokens, normalizeTitleForTaskId} from "../tasks/task-title-id-drift.js";
+import {generateTaskLineageId} from "../tasks/task-lineage.js";
+import {deriveFallbackTaskTitle} from "../ai/ai-summarize.js";
 import {sanitizeFileScopeInPromptContent} from "../task-store/file-scope.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
+import {supersedePlanReviewResults} from "../planner/plan-approval.js";
 
 export async function refineTaskImpl(store: TaskStore, id: string, feedback: string): Promise<Task> {
     const sourceTask = await store.getTask(id);
@@ -218,6 +219,10 @@ export async function refineTaskImpl(store: TaskStore, id: string, feedback: str
   }
 
 export async function updateTaskDependenciesImpl(store: TaskStore, id: string, mutation: TaskDependencyMutation, runContext?: RunMutationContext,): Promise<Task> {
+  return store.withPlanningLifecycleLock(id, () => updateTaskDependenciesWithTaskLockImpl(store, id, mutation, runContext));
+}
+
+async function updateTaskDependenciesWithTaskLockImpl(store: TaskStore, id: string, mutation: TaskDependencyMutation, runContext?: RunMutationContext,): Promise<Task> {
     return store.withTaskLock(id, async () => {
       const dir = store.taskDir(id);
       const task = await store.readTaskJson(dir);
@@ -436,9 +441,10 @@ export async function updateTaskDependenciesImpl(store: TaskStore, id: string, m
       task.log ??= [];
       let movedToTriage = false;
       /*
-      FNXC:WorkflowLifecycleColumns 2026-08-02-02:30 (fleet — GUARD AND DESTINATION together):
-      A new dependency on a card still resting in the HOLD lane sends it back to INTAKE for
-      re-specification. Both ends were literals, so this never fired on a renamed board — and converting
+      FNXC:WorkflowLifecycleColumns 2026-08-04-06:35 (FN-8768 — GUARD AND DESTINATION together):
+      A new dependency on a card still resting in the HOLD lane, or parked after exhausting Plan
+      Review in a distinct review column, sends it back to INTAKE for re-specification. Both ends
+      were literals, so this never fired on a renamed board — and converting
       only the guard would have written an `intake` column the board may not declare directly into the row,
       which is worse than not firing: the store would hold a card in a column that does not exist.
 
@@ -449,10 +455,36 @@ export async function updateTaskDependenciesImpl(store: TaskStore, id: string, m
       const holdColumn = respecifyLifecycle?.hold ?? "todo";
       const intakeColumn = respecifyLifecycle?.intake;
       const respecifyFromColumn = task.column;
-      if (hasNewDependencies && task.column === holdColumn && intakeColumn !== undefined) {
+      const isPlanReviewCapPark = task.status === "awaiting-approval"
+        && task.awaitingApprovalReason === "plan-review-replan-cap";
+      const shouldRespecify = hasNewDependencies
+        && (task.column === holdColumn || isPlanReviewCapPark);
+      /*
+      FNXC:PlanningDependencyReseed 2026-08-04-06:35:
+      A new dependency invalidates every pre-execution approval artifact even
+      when merged intake/hold lanes make this a same-column transition. Leaving
+      the old fingerprint would let an unchanged prompt bypass manual approval.
+      */
+      if (shouldRespecify) {
+        task.status = "needs-replan";
+        task.approvedPlanFingerprint = undefined;
+        task.awaitingApprovalReason = undefined;
+        task.workflowStepResults = supersedePlanReviewResults(
+          task.workflowStepResults,
+          task.updatedAt,
+        );
+      }
+      if (shouldRespecify && intakeColumn !== undefined) {
         task.column = intakeColumn;
         movedToTriage = true;
-        task.status = undefined;
+        /*
+        FNXC:PlanningDependencyReseed 2026-08-04-00:30:
+        Dependency mutation shares updateTask's re-specification invariant. A
+        real new dependency must leave a durable `needs-replan` claim, never a
+        clean status that can strand a persisted plan between planning and the
+        pre-release graph gate.
+        */
+        task.status = "needs-replan";
         /*
         FNXC:WorkflowLifecycleColumns 2026-07-31-02:05 (PR #2720 review — greptile):
         `columnMovedAt` IS THE MOVE TIMESTAMP, so it may only move when the column does. On the default
@@ -495,7 +527,11 @@ export async function updateTaskDependenciesImpl(store: TaskStore, id: string, m
           blockedBy: task.blockedBy ?? null,
         },
       };
-      await store.atomicWriteTaskJsonWithAudit(dir, task, auditEvent);
+      await store.atomicWriteTaskJsonWithAudit(dir, task, auditEvent,
+        hasNewDependencies && task.status === "needs-replan"
+          ? {expectedCurrentDependencies: normalizedCurrent}
+          : undefined,
+      );
       // FNXC:BoardConsistency 2026-06-21-08:31: updateTaskDependencies' todo→triage re-spec move can also carry title/blocker changes, and leaving taskCache on the pre-move row made watch/SSE/board consumers surface one task ID in two columns (FN-6851/FN-6812). Sync the cache after the authoritative write like sibling mutation paths.
       if (store.isWatching) store.taskCache.set(id, { ...task });
       /*
@@ -525,4 +561,3 @@ export async function updateTaskDependenciesImpl(store: TaskStore, id: string, m
       return task;
     });
   }
-

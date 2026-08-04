@@ -58,35 +58,36 @@ import type {
   AgentPermissionPolicyActionCategory,
   PermanentAgentActionCategory,
   PermanentAgentGatingContext,
+  ProviderInstanceRef,
   ResolvedMcpServerDefinition,
 } from "@fusion/core";
 import {
   resolveSessionSkills,
   createSkillsOverrideFromSelection,
   type SkillSelectionContext,
-} from "./skill-resolver.js";
-import { isContextLimitError } from "./context-limit-detector.js";
-import { applyClaudeAcpEnable } from "./claude-acp-enable.js";
-import { createFusionAuthStorage, createFusionModelRegistry } from "./auth-storage.js";
-import { refreshFusionModelRegistry } from "./model-registry-refresh.js";
+} from "./cli-runtime/skill-resolver.js";
+import { isContextLimitError } from "./errors/context-limit-detector.js";
+import { applyClaudeAcpEnable } from "./cli-runtime/claude-acp-enable.js";
+import { createFusionAuthStorage, createFusionModelRegistry } from "./auth/auth-storage.js";
+import { refreshFusionModelRegistry } from "./auth/model-registry-refresh.js";
 import { piLog, extensionsLog } from "./logger.js";
-import { readCustomProviders } from "./custom-providers.js";
-import { buildCustomProviderModels } from "./custom-provider-registry.js";
+import { readCustomProviders } from "./auth/custom-providers.js";
+import { buildCustomProviderModels } from "./auth/custom-provider-registry.js";
 import {
   buildGateRejection,
   evaluateAgentActionGate,
   resolveGateOutcome,
   type AgentActionGateContext,
-} from "./agent-action-gate.js";
-import { resolvePermanentAgentToolDecision } from "./permanent-agent-gating.js";
+} from "./agents/agent-action-gate.js";
+import { resolvePermanentAgentToolDecision } from "./agents/permanent-agent-gating.js";
+import type { SystemPromptLayers } from "./execution/prompt-layers.js";
+import { READONLY_ALLOWLIST, filterCustomToolsForReadonly, isReadonlyAllowed } from "./workflows/workflow-step-tool-policy.js";
+import { createStreamingDeltaNormalizer } from "./execution/streaming-delta.js";
+import { isModelAuthTierIncompatibilityError, isProviderModelNotFoundError, isUnsupportedMessageRoleError } from "./errors/transient-error-detector.js";
+import { logMcpForwardingSkipped, runtimeSupportsMcp } from "./mcp/mcp-runtime-support.js";
+import { connectMcpSessionTools, type McpClientFactory, type McpSessionToolset } from "./mcp/mcp-session-tools.js";
+export { isModelAuthTierIncompatibilityError } from "./errors/transient-error-detector.js";
 import { buildBashContainmentDenialMessage, evaluateBashContainment } from "./bash-containment.js";
-import type { SystemPromptLayers } from "./prompt-layers.js";
-import { READONLY_ALLOWLIST, filterCustomToolsForReadonly, isReadonlyAllowed } from "./workflow-step-tool-policy.js";
-import { createStreamingDeltaNormalizer } from "./streaming-delta.js";
-import { isModelAuthTierIncompatibilityError, isProviderModelNotFoundError, isUnsupportedMessageRoleError } from "./transient-error-detector.js";
-import { logMcpForwardingSkipped, runtimeSupportsMcp } from "./mcp-runtime-support.js";
-import { connectMcpSessionTools, type McpClientFactory, type McpSessionToolset } from "./mcp-session-tools.js";
-export { isModelAuthTierIncompatibilityError } from "./transient-error-detector.js";
 
 const RTK_ACCEPTED_REWRITE_EXIT_CODES = new Set([0, 3]);
 const RTK_EXPECTED_PASSTHROUGH_EXIT_CODES = new Set([1, 2]);
@@ -170,6 +171,8 @@ export interface AgentResult {
   session: AgentSession;
   /** Path to the persisted session file (undefined for in-memory sessions). */
   sessionFile?: string;
+  /** Optional runtime-owned boundary for deferred fallback callback dispatch. */
+  settleFallbackDispatch?: () => Promise<void>;
 }
 
 /**
@@ -1064,6 +1067,10 @@ export interface AgentOptions {
   defaultProvider?: string;
   /** Default model ID within the provider (e.g. "claude-sonnet-4-5"). Used with `defaultProvider`. */
   defaultModelId?: string;
+  /** Concrete session-scoped credential instance, resolved by agent-session-helpers. */
+  resolvedCredentialInstance?: ProviderInstanceRef;
+  /** Informational requested credential instance id. */
+  credentialInstanceId?: string;
   /** Optional fallback model provider used when the primary selected model hits
    *  a retryable provider-side failure such as rate limiting or overload. */
   fallbackProvider?: string;
@@ -1916,12 +1923,12 @@ export function wrapToolsWithBashContainment(tools: ToolDefinition[]): ToolDefin
 }
 
 /*
-FNXC:ToolOutputBudget 2026-08-06-12:00:
+FNXC:ToolOutputBudget 2026-08-03-06:41:
 FN-8614 requires one finite budget for the total model-visible text in every
 engine-injected tool result. Per-tool overrides remain finite positive integers;
 only the operator-level setting can select the explicit unlimited mode.
 
-FNXC:ToolOutputBudget 2026-08-06-16:00:
+FNXC:ToolOutputBudget 2026-08-03-16:00:
 FN-8616 makes the shared cap configurable at the session seam. A `null` resolved
 value returns the original tool list, avoiding all clamp/marker rewriting.
 */
@@ -2299,7 +2306,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
     logMcpForwardingSkipped({ runtimeId: "pi", provider: options.defaultProvider, skippedCount: requestedMcpServers.length, lane: "createFnAgent" });
   }
   const authStorage = createFusionAuthStorage();
-  const modelRegistry = await createFusionModelRegistry(authStorage);
+  const modelRegistry = await createFusionModelRegistry(authStorage, undefined, options.resolvedCredentialInstance);
   const modelRuntime = modelRegistry.modelRuntime;
 
   // Resolve the project root early so extension providers, skill discovery,
@@ -2638,7 +2645,7 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
       boundaryContext.worktreeProjectRoot,
       normalizedAdditionalSkillPaths,
     );
-    // FNXC:ToolOutputBudget 2026-08-06-16:00:
+    // FNXC:ToolOutputBudget 2026-08-03-16:00:
     // Keep this outermost so policy-gate and boundary rejection text is bounded too;
     // a null setting-derived budget intentionally returns the chain unchanged.
     const customToolList: ToolDefinition[] = wrapToolsWithOutputBudget(boundaryWrappedTools, {
@@ -3108,5 +3115,15 @@ export async function createFnAgent(options: AgentOptions): Promise<AgentResult>
   */
   attachSessionIdentity(promptableSession as PromptableSession & { dispose?: () => void | Promise<void> });
 
-  return { session: promptableSession, sessionFile: promptableSession.sessionFile };
+  /*
+  FNXC:TriagePlanningRetry 2026-08-03-01:01:
+  Pi awaits `emitFallbackUsed` inside its prompt dispatcher, so prompt settlement already closes
+  fallback dispatch. Expose that explicit finite boundary rather than asking triage to inspect
+  unrelated Node timer resources created by tools or plugin housekeeping.
+  */
+  return {
+    session: promptableSession,
+    sessionFile: promptableSession.sessionFile,
+    settleFallbackDispatch: async () => undefined,
+  };
 }

@@ -1,5 +1,5 @@
-import { createLogger } from "../logger.js";
-import { columnsWithFlag, declaresAnyLifecycleTrait } from "../workflow-lifecycle-traits.js";
+import { createLogger } from "../process/logger.js";
+import { columnsWithFlag, declaresAnyLifecycleTrait } from "../workflows/workflow-lifecycle-traits.js";
 
 const severityAuditLog = createLogger("core-comments-ops");
 /**
@@ -18,11 +18,11 @@ import type {ArchivedTaskDocumentAdditionInput, ArchivedTaskDocumentAdditionResu
 import {validateDocumentKey} from "../types.js";
 import {ArchivedTaskDocumentPublicationRejectedError, validateArchivedTaskDocumentAddition, validateTaskDocumentPreconditions} from "../task-document-concurrency.js";
 import "../builtin-traits.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
-import {resolveLifecycleColumns} from "../workflow-lifecycle-traits.js";
 import {__setTaskActivityLogLimitsForTesting, isBootstrapPromptStub} from "../task-store/comments.js";
+import {getLiveTaskColumn, publishArchivedTaskDocumentAddition as publishArchivedTaskDocumentAdditionAsync, upsertTaskDocument as upsertTaskDocumentAsync} from "../task-store/async/async-comments-attachments.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
+import {resolveLifecycleColumns} from "../workflows/workflow-lifecycle-traits.js";
 import { resolveArchivedLanes } from "../project-lane-vocabulary.js";
-import {getLiveTaskColumn, publishArchivedTaskDocumentAddition as publishArchivedTaskDocumentAdditionAsync, upsertTaskDocument as upsertTaskDocumentAsync} from "../task-store/async-comments-attachments.js";
 
 /*
 FNXC:PostCommentRetriage 2026-07-29-19:30 (U11 lifecycle-column conversion):
