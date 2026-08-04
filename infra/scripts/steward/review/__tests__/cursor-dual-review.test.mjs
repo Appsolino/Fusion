@@ -56,7 +56,7 @@ function fakeSpawn(script) {
     ee.stdout = new EventEmitter();
     ee.stderr = new EventEmitter();
     ee.kill = () => {};
-    setImmediate(() => {
+    Promise.resolve().then(() => {
       const out = script(bin, args, opts);
       ee.stdout.emit("data", Buffer.from(out.stdout || ""));
       if (out.stderr) ee.stderr.emit("data", Buffer.from(out.stderr));
