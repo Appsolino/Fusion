@@ -1,6 +1,6 @@
 # Upstream Reliability Steward — policy
 
-**Phase:** S0 ACCEPTED · S1A AUTHORISED (advice) · S1B NOT AUTHORISED  
+**Phase:** S0 ACCEPTED · S1A IMPLEMENTED (manual advice) · S1B NOT AUTHORISED  
 **Authority:** Complements AUTO-1/2/3; does not replace them.  
 **Status ledger:** [`../CURRENT-STATE.md`](../CURRENT-STATE.md)
 
@@ -150,7 +150,7 @@ Engineer receives evidence and produces advice (S1A). Reviewer receives original
 | Phase | Status |
 | --- | --- |
 | S0 observation | **ACCEPTED** / enabled on `main` |
-| S1A expert advisory | **AUTHORISED** — [`S1A-EXPERT-ADVISORY.md`](S1A-EXPERT-ADVISORY.md) |
+| S1A expert advisory | **IMPLEMENTED / MANUAL** — [`S1A-EXPERT-ADVISORY.md`](S1A-EXPERT-ADVISORY.md); auto handoff OFF |
 | S1B repair PR agent | **Not authorised** |
 | S2 low-risk auto-merge | Not authorised |
 | S3 sensitive assist | Not authorised |
