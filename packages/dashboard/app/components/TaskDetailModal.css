@@ -127,9 +127,16 @@ It is excluded from shell-inset symmetry; FN-7581 Interventions remains at zero 
   position: relative;
 }
 
+/*
+FNXC:TaskDetailTitleSpacing 2026-08-04-18:07:
+The shared task-detail wrapper intentionally uses a smaller block-start inset than its
+side and bottom inset so every modal, embedded, pop-out, and mobile shell keeps the
+user-facing title close to the ID toolbar without changing canonical content spacing.
+*/
 .detail-body-content {
   min-width: 0;
   padding: calc(var(--space-lg) + var(--space-xs));
+  padding-block-start: var(--space-md);
 }
 
 .detail-body::-webkit-scrollbar {
@@ -3482,6 +3489,7 @@ Live and Feed Activity expansion overlays the content instead of reserving a too
 
   .detail-body-content {
     padding: calc(var(--space-md) + var(--space-xs) / 2);
+    padding-block-start: var(--space-sm);
   }
 
   .detail-body::-webkit-scrollbar {
