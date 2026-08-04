@@ -577,9 +577,9 @@ describe("S1A guard authority", () => {
     assert.match(src, /\/repos\/\$\{repo\}\/issues\/\$\{number\}\/comments/);
     assert.match(src, /kind:\s*["']read["']/);
     const wf = readFileSync(WORKFLOW, "utf8");
-    const analyzeStart = wf.search(/^  observe-analyze:/m);
-    const fixtureStart = wf.search(/^  fixture-replay:/m);
-    const upsertStart = wf.search(/^  upsert-advice:/m);
+    const analyzeStart = wf.search(/^ {2}observe-analyze:/m);
+    const fixtureStart = wf.search(/^ {2}fixture-replay:/m);
+    const upsertStart = wf.search(/^ {2}upsert-advice:/m);
     assert.ok(analyzeStart >= 0 && fixtureStart > analyzeStart);
     const analyzeBlock = wf.slice(analyzeStart, fixtureStart);
     assert.match(analyzeBlock, /issues:\s*read/);
