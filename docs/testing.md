@@ -378,6 +378,9 @@ Flags:
 
 **Rescue** (before the clock runs out) requires both: evidence the test catches real regressions, and a root-cause fix for the flake. Stabilization passes — widened timeouts, retries, loosened assertions — are appeasement, not rescue, and are banned (for agents especially).
 
+<!-- FNXC:DashboardTestQuarantine 2026-08-04-18:43: FN-8788 decides that the Kimi K3 supplemental route test remains quarantined until its existing 2026-08-15 deadline. Keep the test, matching dashboard Vitest exclusion, and ledger entry together; do not treat an unquarantined timing observation as a root-cause fix or permission to delete them early. -->
+**2026-08-04 Kimi K3 disposition (FN-8788):** Retain `register-model-routes-kimi-k3-supplemental.test.ts`, its `packages/dashboard/vitest.config.ts` exclusion, and its `scripts/lib/test-quarantine.json` entry through 2026-08-15. Before that deadline, removal requires a rescue with regression-value evidence and a root-cause fix; otherwise apply the normal deletion-ratchet decision when the deadline is reached.
+
 ### Validate before excluding and preserve timeout budgets
 
 Capture **full runner output** before recording or filing a ledger entry—for example, tee it to a file. Never pipe a dot reporter through `tail`: the summary remains but the `FAIL` identity lines needed for evidence are truncated.
