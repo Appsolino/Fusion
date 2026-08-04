@@ -93,8 +93,8 @@ export async function runDualGrokApproveMaybeMerge(input) {
     testsLog,
     risk: input.risk,
     rollbackPlan: input.rollbackPlan,
-    missionExcerpt: input.missionExcerpt,
-    policyExcerpt: input.policyExcerpt,
+    mission: input.missionExcerpt,
+    policyExcerpts: input.policyExcerpt,
     changedFiles: [],
   };
 
