@@ -23,12 +23,12 @@ import type {
 } from "@fusion/core";
 import { ProjectEngine } from "./project-engine.js";
 import type { ProjectEngineOptions } from "./project-engine.js";
-import type { ProjectRuntimeConfig } from "./project-runtime.js";
+import type { ProjectRuntimeConfig } from "./project/project-runtime.js";
 import {
   acquireEngineSingleton,
   EngineAlreadyRunningError,
   type EngineSingletonLock,
-} from "./engine-singleton-lock.js";
+} from "./project/engine-singleton-lock.js";
 import { runtimeLog } from "./logger.js";
 
 /**

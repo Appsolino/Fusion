@@ -8,7 +8,7 @@ Also covers embedded-H2 operator text so description updates cannot duplicate or
 corrupt PROMPT.md when the raw request contains lines like `## Required behavior`.
 */
 import { describe, expect, it } from "vitest";
-import { computePlanApprovalFingerprint } from "../plan-approval.js";
+import { computePlanApprovalFingerprint } from "../planner/plan-approval.js";
 import {
   ORIGINAL_DESCRIPTION_END_MARKER,
   ORIGINAL_DESCRIPTION_HEADING,
@@ -16,7 +16,7 @@ import {
   applyOriginalDescription,
   buildOriginalDescriptionSection,
   extractOriginalDescriptionBody,
-} from "../original-description-policy.js";
+} from "../tasks/original-description-policy.js";
 
 const SAMPLE_DESC = "Fix the board blank state when autoMerge is off on mobile Android.";
 

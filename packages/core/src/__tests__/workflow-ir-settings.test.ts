@@ -4,21 +4,21 @@ import {
   serializeWorkflowIr,
   downgradeIrToV1IfPure,
   WorkflowIrError,
-} from "../workflow-ir.js";
-import { DEFAULT_MAX_POST_REVIEW_FIXES } from "../builtin-workflow-settings.js";
-import { BUILTIN_CODING_WORKFLOW_IR } from "../builtin-coding-workflow-ir.js";
-import { BUILTIN_STEPWISE_FINAL_REVIEW_CODING_WORKFLOW_IR } from "../builtin-stepwise-final-review-coding-workflow-ir.js";
-import { getBuiltinWorkflow } from "../builtin-workflows.js";
+} from "../workflows/workflow-ir.js";
+import { BUILTIN_CODING_WORKFLOW_IR } from "../workflows/builtin-coding-workflow-ir.js";
+import { BUILTIN_STEPWISE_FINAL_REVIEW_CODING_WORKFLOW_IR } from "../workflows/builtin-stepwise-final-review-coding-workflow-ir.js";
+import { getBuiltinWorkflow } from "../workflows/builtin-workflows.js";
+import { DEFAULT_MAX_POST_REVIEW_FIXES } from "../workflows/builtin-workflow-settings.js";
 import {
   BUILTIN_MOVED_WORKFLOW_SETTINGS,
   BUILTIN_WORKFLOW_SETTINGS,
-} from "../builtin-workflow-settings.js";
+} from "../workflows/builtin-workflow-settings.js";
 import { DEFAULT_PROJECT_SETTINGS } from "../types.js";
 import type {
   WorkflowIrV2,
   WorkflowIrNode,
   WorkflowSettingDefinition,
-} from "../workflow-ir-types.js";
+} from "../workflows/workflow-ir-types.js";
 
 const startEnd: WorkflowIrNode[] = [
   { id: "start", kind: "start" },
@@ -282,7 +282,7 @@ describe("built-in workflow settings parity anchor (U1, R4)", () => {
 
 describe("credential-instance workflow settings", () => {
   it("accepts valid ids and atomically rejects malformed companion values", async () => {
-    const { validateSettingValuePatch } = await import("../workflow-settings.js");
+    const { validateSettingValuePatch } = await import("../workflows/workflow-settings.js");
     const declarations: WorkflowSettingDefinition[] = [
       { id: "executionCredentialInstanceId", name: "Instance", type: "string" },
     ];

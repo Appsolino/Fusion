@@ -20,7 +20,7 @@ import { HeaderWorkflowSwitcherSlot } from "../HeaderWorkflowSwitcherSlot";
 import { GraphWorkflowSwitcherSlot, filterTasksByGraphWorkflowSelection } from "../GraphWorkflowSwitcherSlot";
 import { PluginDashboardViewHost } from "../../plugins/PluginDashboardViewHost";
 import { isPluginViewId } from "../../plugins/pluginViewRegistry";
-import { isNearDuplicateCanonicalInactive } from "../../../../core/src/near-duplicate-canonical";
+import { isNearDuplicateCanonicalInactive } from "../../../../core/src/duplicates/near-duplicate-canonical";
 import { fetchMission, fetchMissions, fetchInsights, fetchTaskDetail, listEvals } from "../../api";
 import type { DetailTaskTab } from "../../hooks/useModalManager";
 import type { SectionId } from "../SettingsModal";
@@ -35,6 +35,7 @@ export function MainContent({
   handleRetryProjects,
   shellApi,
   taskView,
+  pluginDashboardViews,
   modalManager,
   handleChangeTaskView,
   refreshAppSettings,
@@ -107,7 +108,6 @@ export function MainContent({
   memoryEnabled,
   goalsEnabled,
   handleOpenMission,
-  todosEnabled,
   openPlanningWithInitialPlanWithNav,
   ingestCreatedTasks,
   nodesEnabled,
@@ -178,7 +178,6 @@ export function MainContent({
   ResearchView,
   SecretsView,
   SkillsView,
-  TodoView,
   _AutomationsView,
   _ImportTasksView,
   _SettingsView,
@@ -330,9 +329,18 @@ export function MainContent({
   }
 
   const resolvedPluginTaskView = taskView === "graph" ? graphPluginTaskView : (isPluginViewId(taskView) ? taskView : null);
+  /*
+  FNXC:TodoPluginEnablement 2026-08-03-16:00:
+  Static bundled registrations make plugin chunks importable, not enabled. Only the project-scoped
+  dashboard-views response may mount a plugin view, so a persisted legacy view cannot revive a
+  disabled plugin and issue requests to an unavailable plugin API.
+  */
+  const isEnabledPluginTaskView = resolvedPluginTaskView !== null && pluginDashboardViews.some(
+    (entry) => resolvedPluginTaskView === `plugin:${entry.pluginId}:${entry.view.viewId}`,
+  );
 
   // Project view
-  if (resolvedPluginTaskView) {
+  if (resolvedPluginTaskView && isEnabledPluginTaskView) {
     const pluginTasks = isRemote && remoteData.tasks.length > 0 ? remoteData.tasks : tasks;
     const isDependencyGraphView = resolvedPluginTaskView === "plugin:fusion-plugin-dependency-graph:graph";
     /*
@@ -400,6 +408,8 @@ export function MainContent({
               />
             ),
             addToast,
+            openPlanningMode: openPlanningWithInitialPlanWithNav,
+            onTaskCreated: (task) => ingestCreatedTasks([task]),
           }}
         />
       </PageErrorBoundary>
@@ -691,17 +701,6 @@ export function MainContent({
       </PageErrorBoundary>
     );
   }
-  if (taskView === "todos") {
-    // FNXC:Todos 2026-06-21-09:21: Todos render as a docked right-content view, not a modal overlay, per FN-6829 so all dashboard navigation surfaces share the same taskView routing model.
-    if (!settingsLoaded || !todosEnabled) return null;
-    return (
-      <PageErrorBoundary>
-        <Suspense fallback={null}>
-          <TodoView projectId={currentProject?.id} addToast={addToast} onPlanningMode={openPlanningWithInitialPlanWithNav} onTaskCreated={(task) => ingestCreatedTasks([task])} />
-        </Suspense>
-      </PageErrorBoundary>
-    );
-  }
   if (taskView === "command-center") {
     return (
       <PageErrorBoundary>
@@ -847,6 +846,7 @@ export function MainContent({
             onArchiveTask={archiveTask}
             onUnarchiveTask={unarchiveTask}
             onRevertTask={revertTask}
+            onReviseTask={(task) => modalManager.openNewTaskWithDescription(task.description)}
             onDeleteTask={deleteTask}
             onArchiveAllDone={archiveAllDone}
             onLoadArchivedTasks={loadArchivedTasks}
@@ -900,6 +900,7 @@ export function MainContent({
               onOpenDetail={(value) => openTaskDetailInMainPanel(value, "chat")}
               onMoveTask={moveTask}
               onDeleteTask={deleteTask}
+              onReviseTask={(task) => modalManager.openNewTaskWithDescription(task.description)}
               onMergeTask={mergeTask}
               onRetryTask={retryTask}
               onResetTask={resetTask}
@@ -962,6 +963,7 @@ export function MainContent({
           onArchiveTask={archiveTask}
           onUnarchiveTask={unarchiveTask}
           onRevertTask={revertTask}
+          onReviseTask={(task) => modalManager.openNewTaskWithDescription(task.description)}
           onDeleteTask={deleteTask}
           onArchiveAllDone={archiveAllDone}
           onLoadArchivedTasks={loadArchivedTasks}
@@ -997,6 +999,7 @@ export function MainContent({
         onMoveTask={moveTask}
         onRetryTask={retryTask}
         onDeleteTask={deleteTask}
+        onReviseTask={(task) => modalManager.openNewTaskWithDescription(task.description)}
         onPauseTask={pauseTask}
         onUnpauseTask={unpauseTask}
         onArchiveTask={archiveTask}

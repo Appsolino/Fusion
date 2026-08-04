@@ -21,14 +21,14 @@ import {
   resolveValidatorFallbackThinkingLevel,
   createResolvedAgentSession,
   wrapCustomToolsForPluginRuntime,
-} from "../agent-session-helpers.js";
+} from "../agents/agent-session-helpers.js";
 
 const { resolveRuntimeMock } = vi.hoisted(() => ({
   resolveRuntimeMock: vi.fn(),
 }));
 
-vi.mock("../runtime-resolution.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime-resolution.js")>("../runtime-resolution.js");
+vi.mock("../execution/runtime-resolution.js", async () => {
+  const actual = await vi.importActual<typeof import("../execution/runtime-resolution.js")>("../execution/runtime-resolution.js");
   return {
     ...actual,
     resolveRuntime: resolveRuntimeMock,
@@ -243,6 +243,22 @@ describe("resolve session model parity", () => {
     defaultProvider: "zai",
     defaultModelId: "glm-5.1",
   };
+
+  it("carries the winning selection credential instance alongside its provider and model", () => {
+    expect(resolveExecutorSessionModel("task-provider", "task-model", settings, undefined, "personal")).toEqual({
+      provider: "task-provider",
+      modelId: "task-model",
+      credentialInstanceId: "personal",
+    });
+    expect(resolvePlanningSessionModel(undefined, undefined, {
+      ...settings,
+      planningCredentialInstanceId: "work",
+    })).toEqual({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-5",
+      credentialInstanceId: "work",
+    });
+  });
 
   it("uses the same fresh settings model for executor and heartbeat when runtimeConfig is absent", () => {
     const executor = resolveExecutorSessionModel(undefined, undefined, settings);
@@ -659,7 +675,7 @@ describe("createResolvedAgentSession", () => {
       wasConfigured: false,
     });
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     const taskEnv = { PATH: "/tmp/bin", FUSION_TEST_VAR: "value" };
     await createResolvedAgentSession({
@@ -694,7 +710,7 @@ describe("createResolvedAgentSession", () => {
       wasConfigured: false,
     });
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
     const additionalSkillPaths = ["/tmp/plugin-skills/foo", "/tmp/plugin-skills"];
     await createResolvedAgentSession({
       sessionPurpose: "executor",
@@ -736,7 +752,7 @@ describe("createResolvedAgentSession", () => {
       wasConfigured: false,
     });
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await createResolvedAgentSession({
       sessionPurpose: "merger",
@@ -757,7 +773,7 @@ describe("createResolvedAgentSession", () => {
     const createSessionMock = vi.fn().mockResolvedValue({ session: mockSession });
     const auditDatabaseMock = vi.fn().mockResolvedValue(undefined);
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await createResolvedAgentSession({
       sessionPurpose: "executor",
@@ -801,7 +817,7 @@ describe("createResolvedAgentSession", () => {
       runtimeId: "grok",
       wasConfigured: true,
     });
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await createResolvedAgentSession({
       sessionPurpose: "triage",
@@ -841,7 +857,7 @@ describe("createResolvedAgentSession", () => {
       wasConfigured: false,
     });
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await expect(createResolvedAgentSession({
       sessionPurpose: "executor",
@@ -866,7 +882,7 @@ describe("createResolvedAgentSession", () => {
     });
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
 
     await expect(createResolvedAgentSession({
       sessionPurpose: "executor",
@@ -921,7 +937,7 @@ describe("createResolvedAgentSession", () => {
       },
     };
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
     await createResolvedAgentSession({
       sessionPurpose: "executor",
       cwd: "/tmp/project",
@@ -980,7 +996,7 @@ describe("createResolvedAgentSession", () => {
       execute,
     };
 
-    const { createResolvedAgentSession } = await import("../agent-session-helpers.js");
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
     await createResolvedAgentSession({
       sessionPurpose: "executor",
       cwd: "/tmp/project",
@@ -999,6 +1015,73 @@ describe("createResolvedAgentSession", () => {
 
     const passedTools = createSessionMock.mock.calls[0][0].customTools;
     expect(passedTools[0]).toBe(rawTool);
+  });
+
+  /*
+  FNXC:ProviderAuth 2026-08-03-17:35:
+  Executor used to synthesize credentialInstanceId "default" and hard-fail when auth.json
+  had no default instance for a custom provider. Chat omits the field and works via
+  customProviders.apiKey. Session create must self-heal: continue without a scoped ref.
+  */
+  it("self-heals missing credential instances instead of failing the session", async () => {
+    const createSessionMock = vi.fn().mockResolvedValue({
+      session: { prompt: vi.fn() },
+      sessionFile: "session.json",
+    });
+    resolveRuntimeMock.mockResolvedValue({
+      runtime: {
+        id: "pi",
+        name: "Default PI Runtime",
+        createSession: createSessionMock,
+        promptWithFallback: vi.fn(),
+        describeModel: vi.fn(() => "umansapi/model"),
+      },
+      runtimeId: "pi",
+      wasConfigured: false,
+    });
+
+    const emptyAuth = {
+      reload() {},
+      get: () => undefined,
+      getAll: () => ({}),
+      list: () => [],
+      has: () => false,
+      hasAuth: () => false,
+      listInstances: () => [],
+      getInstance: () => undefined,
+      setInstance: async () => {},
+      removeInstance: async () => {},
+      getDefaultInstance: () => undefined,
+      setDefaultInstance: async () => {},
+      set: async () => {},
+      remove: async () => {},
+      logout: async () => {},
+      getApiKey: async () => undefined,
+      getOAuthProviders: () => [],
+      login: async () => {},
+      modify: async () => undefined,
+      setModelRuntime: () => {},
+    };
+
+    const { createResolvedAgentSession } = await import("../agents/agent-session-helpers.js");
+    await expect(createResolvedAgentSession({
+      sessionPurpose: "executor",
+      cwd: "/tmp/project",
+      systemPrompt: "system",
+      defaultProvider: "umansapi",
+      defaultModelId: "model",
+      credentialInstanceId: "default",
+      authStorage: emptyAuth as any,
+    })).resolves.toMatchObject({ runtimeId: "pi" });
+
+    expect(createSessionMock).toHaveBeenCalledWith(expect.not.objectContaining({
+      credentialInstanceId: expect.anything(),
+      resolvedCredentialInstance: expect.anything(),
+    }));
+    // Unscoped legacy path: neither scoped field is set.
+    const passed = createSessionMock.mock.calls[0][0];
+    expect(passed.credentialInstanceId).toBeUndefined();
+    expect(passed.resolvedCredentialInstance).toBeUndefined();
   });
 });
 

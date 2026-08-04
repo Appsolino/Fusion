@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "@fusion/core";
 import { ProjectEngine, __resetDeterministicMergerModeDeprecationWarned } from "../project-engine.js";
-import { AgentSemaphore, projectAdmissionCoordinator } from "../concurrency.js";
+import { AgentSemaphore, projectAdmissionCoordinator} from "../concurrency/concurrency.js";
 // Resolves to the vi.mock factory above (the mocked merger-ai exports the real-shaped
 // workspace land error classes so the dispatch's `instanceof` matching is exercised).
-import { WorkspacePartialLandError, WorkspaceRepoLandBusyError } from "../merger-ai.js";
+import { WorkspacePartialLandError, WorkspaceRepoLandBusyError } from "../merge/merger-ai.js";
 import { runtimeLog } from "../logger.js";
 import { TunnelProcessManager } from "../remote-access/tunnel-process-manager.js";
-import { NtfyNotifier } from "../notifier.js";
+import { NtfyNotifier } from "../util/notifier.js";
 import { NotificationService, OAuthAlertStateStore, OAuthExpiryMonitor, OAuthValidityLogger } from "../notification/index.js";
 
 const mocks = vi.hoisted(() => ({
@@ -44,8 +44,8 @@ const mocks = vi.hoisted(() => ({
   prHandlerCreateFollowUpTask: vi.fn(async () => undefined),
 }));
 
-vi.mock("../postgres-migration-notice.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../postgres-migration-notice.js")>();
+vi.mock("../project/postgres-migration-notice.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../project/postgres-migration-notice.js")>();
   return {
     ...actual,
     deliverPostgresMigrationCompleteNoticeIfNeeded: mocks.deliverPostgresMigrationCompleteNotice,
@@ -67,7 +67,7 @@ vi.mock("@fusion/core", async (importOriginal) => {
   });
 });
 
-vi.mock("../cron-runner.js", () => {
+vi.mock("../scheduling/cron-runner.js", () => {
   return {
     CronRunner: vi.fn().mockImplementation(function () {
       return {
@@ -93,7 +93,7 @@ vi.mock("../merger.js", () => ({
 // and a mockable `landWorkspaceTask`; otherwise `err instanceof WorkspacePartialLandError`
 // throws "not callable" and the workspace dispatch can't be exercised. The classes are
 // declared INSIDE the (hoisted) factory so they exist when the mock is evaluated.
-vi.mock("../merger-ai.js", () => {
+vi.mock("../merge/merger-ai.js", () => {
   class WorkspaceRepoLandBusyError extends Error {
     public readonly retryable = true;
     constructor(
@@ -132,7 +132,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-vi.mock("../pr-monitor.js", () => ({
+vi.mock("../merge/pr-monitor.js", () => ({
   PrMonitor: vi.fn().mockImplementation(function () {
     return {
       onNewComments: vi.fn(),
@@ -140,7 +140,7 @@ vi.mock("../pr-monitor.js", () => ({
   }),
 }));
 
-vi.mock("../pr-comment-handler.js", () => ({
+vi.mock("../merge/pr-comment-handler.js", () => ({
   PrCommentHandler: vi.fn().mockImplementation(function () {
     return {
       handleNewComments: vi.fn(),
@@ -149,7 +149,7 @@ vi.mock("../pr-comment-handler.js", () => ({
   }),
 }));
 
-vi.mock("../notifier.js", () => ({
+vi.mock("../util/notifier.js", () => ({
   NtfyNotifier: vi.fn().mockImplementation(function () {
     return {
       start: mocks.notifierStart,
@@ -190,7 +190,7 @@ vi.mock("../notification/index.js", () => ({
   }),
 }));
 
-vi.mock("../auth-storage.js", () => ({
+vi.mock("../auth/auth-storage.js", () => ({
   createFusionAuthStorage: vi.fn(() => ({
     reload: vi.fn(),
     getOAuthProviders: vi.fn(() => []),
@@ -3670,7 +3670,7 @@ describe("ProjectEngine stale mergeActive rescue (FN-3900)", () => {
 });
 
 describe("allowInReviewMergeProcessing per-task autoMerge override", () => {
-  const gate = (task: Partial<Task>, settings: { autoMerge: boolean }, branchGroup: { status: "open" | "finalized" | "abandoned" } | null = null): Promise<boolean> =>
+  const gate = (task: Partial<Task>, settings: { autoMerge: boolean; integrationBranch?: string }, branchGroup: { status: "open" | "finalized" | "abandoned"; branchName?: string } | null = null): Promise<boolean> =>
     (createEngine() as any).allowInReviewMergeProcessing(task, settings, { getBranchGroup: vi.fn(() => branchGroup) });
 
   it("lets an explicit per-task autoMerge:true through when the global setting is off", async () => {
@@ -3687,12 +3687,20 @@ describe("allowInReviewMergeProcessing per-task autoMerge override", () => {
     await expect(gate({ autoMerge: false }, { autoMerge: true })).resolves.toBe(true);
   });
 
-  it("still exempts live shared-branch-group member integration when the global setting is off", async () => {
+  it("still exempts live shared-branch-group member integration on an intermediate branch when the global setting is off", async () => {
     await expect(gate(
       { branchContext: { assignmentMode: "shared", groupId: "grp-1" } as Task["branchContext"] },
-      { autoMerge: false },
-      { status: "open" },
+      { autoMerge: false, integrationBranch: "main" },
+      { status: "open", branchName: "mission/M-3324" },
     )).resolves.toBe(true);
+  });
+
+  it("keeps live shared-branch-group member integration on the default branch behind the manual gate", async () => {
+    await expect(gate(
+      { branchContext: { assignmentMode: "shared", groupId: "grp-1" } as Task["branchContext"] },
+      { autoMerge: false, integrationBranch: "main" },
+      { status: "open", branchName: "main" },
+    )).resolves.toBe(false);
   });
 
   it.each([
@@ -3864,8 +3872,8 @@ describe("U9 merge safeguards without prior coverage", () => {
       mergeRetries: 0,
       createdAt: new Date(0).toISOString(),
     });
-    const admitted = (await mergeProvider.refresh()) as Array<{ taskId: string }>;
-    expect(admitted.map((c) => c.taskId)).toEqual(["FN-paused"]);
+    const admitted = (await mergeProvider.refresh()) as Array<{ taskId: string; lane: string }>;
+    expect(admitted).toMatchObject([{ taskId: "FN-paused", lane: "review" }]);
 
     // Engine-level `paused` is the sibling half of the same filter.
     mockStore.store.getTask.mockResolvedValue({

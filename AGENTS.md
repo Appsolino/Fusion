@@ -94,10 +94,11 @@ A linter (`pnpm check:changesets`) validates this format and runs in the PR-chec
 When a human operator does release, use only:
 
 ```bash
-pnpm release --yes
+pnpm release
 ```
 
-`scripts/release.mjs` is the source of truth. Do not substitute with manual `changeset version`, `pnpm publish`, or git tags.
+Confirm interactively when prompted. `scripts/release.mjs` is the source of truth. Do not substitute with manual `changeset version`, `pnpm publish`, or git tags. There is no `--yes` skip.
+
 
 ### Package Structure
 
@@ -143,34 +144,12 @@ pnpm verify:workspace  # deep opt-in verification (lint -> test:full -> build); 
 
 `pnpm verify:fast` is the recommended **test-free verification** path: bootstrap missing/stale workspace dist artifacts, typecheck + build scoped to the changed packages (it reuses `pnpm test`'s changed-package resolution), an always-on `@runfusion/fusion` CLI build required by the source-checkout boot smoke, plus the boot smoke once, with **no test run**. It is deterministic and flake-free, suitable as a project `testCommand`/verification command when you want non-test verification; the full suite stays available and runs non-blocking. It is additive and does not change `pnpm test`, the gate, or CI. See `docs/testing.md`.
 
-### Check whether a file is claimed before converting it
-
-Every fleet worker pushes as the same GitHub account, so `gh pr list --author "@me"` returns EVERY open
-PR and cannot distinguish your work from a teammate's. Before starting a conversion, ask:
-
-```bash
-node scripts/check-file-claimed.mjs packages/engine/src/self-healing.ts
-```
-
-It lists the open PRs touching that path and exits non-zero if any do, so it can gate work directly.
-
-It narrows the collision window rather than closing it — it cannot see unpushed work in progress.
-Measured cost of not having it: four PRs in one session were superseded by teammates landing the same
-conversion first, each time with both implementations correct and independently identical.
-
 <!--
-FNXC:FleetClaims 2026-07-31-21:15: WHY THIS IS A RULE AND NOT A SUGGESTION.
-
-Every worker ranks work from the same census output, so without a published claim they independently
-pick the same top file. In one fleet phase that produced three parallel conversions of
-`self-healing.ts` (two left unmergeable after the first landed), two workers marking the same two
-files, and two independent versions of the same `task:moved` emitter fix — five collisions, all with
-both sides correct.
-
-The check is cheap because the claim is a pushed branch: `git ls-remote` is authoritative the moment
-work starts, whereas a claim announced anywhere else is invisible until the duplicate work exists.
-That asymmetry is the whole point — the first signal of a collision used to be a failed checkout or a
-conflicting PR, i.e. after the cost was already paid.
+FNXC:FleetClaims 2026-08-02-23:59: The "Check whether a file is claimed before converting it" rule
+(scripts/check-file-claimed.mjs, added 2026-07-31 for the lifecycle-migration fleet) is REMOVED.
+It caused board tasks to park blocked on unrelated open PRs (FN-8728 vs PR #2398). Operator decision:
+file-scope conflict detection must only consider Fusion's own board (file-scope leases, dependencies),
+never open GitHub PRs. The fleet phase that motivated the rule is complete.
 -->
 
 ### Standing Rule: Flaky Tests Are Quarantined on Sight (Deletion Ratchet)
@@ -300,6 +279,7 @@ Scoped exception (FN-5819): shared-branch-group members (`branchContext.assignme
 - FN-7158: agent performance reflections emit `reflection:generated`, `reflection:skipped`, and `reflection:failed` with ids/counts/outcomes-only metadata; never persist reflection prose or prompt text in run-audit.
 - FN-7528: a deterministic, non-LLM post-task performance capture (`AgentReflectionService.captureTaskPerformance`) runs once per completed task and emits `reflection:captured` with ids/counts/outcomes-only metadata (`retryReworkCount?`, `filesTouchedCount?`, `packagesTouchedCount?`, `verificationFileScoped?`, `durationMs?`); never persists `verificationScopeReason` free-text or summary prose in run-audit.
 - FN-7787: `createResolvedAgentSession` enriches `session:runtime-resolved` with `noModelResolved: true` and `runtimeBuiltInFallbackModel` when a non-mock/non-test session reaches runtime creation without a complete provider/model pair; this is a visibility signal for runtime built-in fallback usage, not a fabricated model-resolution verdict.
+- FN-8661: `session:runtime-resolved` records `credentialInstanceId` for a resolved explicit credential, plus `credentialInstanceMissing`, requested, and resolved instance ids when a dangling selection falls back to the provider default. Metadata is ids/outcomes-only and never includes credential material.
 - FN-7835/FN-7844/FN-7859/FN-7878: durable-agent error-state recovery emits `agent:auto-recover-error-state` when either the heartbeat timer or the self-healing sweep clears a recoverable, non-operator-actionable `error` and retries; metadata stays ids/counts/outcomes-only (`agentId`, attempt, limit, source), where `source` is `timer`/`automation`/`self-healing`. Generic/unknown heartbeat failures are recoverable by default because manual Retry often proves they were transient; both entry paths share the `heartbeatErrorRecovery` budget (self-healing keeps `durableErrorRecovery` only for cooldown/stale-path bookkeeping) and emit `agent:error-retry-exhausted` when the shared budget is exhausted and the agent is parked `paused` with `pauseReason:"error-retry-exhausted"`. Only operator-actionable durable heartbeat errors (credentials/OAuth scope, model access, billing/quota, excluding transient auth rotation), plus stale worktree/module-resolution errors handled by their dedicated suppression path, skip the retry budget and emit `agent:error-parked-unrecoverable` with ids/counts/outcomes-only metadata (`agentId`, `source`, optional `attempts`, `limit`) before parking `paused` with `pauseReason:"error-unrecoverable"` for human repair.
 - FN-7884: self-healing startup recovery emits `agent:reset-error-state-on-startup` when an engine restart clears an eligible durable-agent `error` or `pauseReason:"error-retry-exhausted"` park, resets shared `heartbeatErrorRecovery` plus legacy `durableErrorRecovery` budget/cooldown metadata, clears `lastError`/exhaustion pause state, and re-arms the heartbeat. Metadata stays ids/counts/outcomes-only (`agentId`, `priorState`, optional `priorPauseReason`, `source`). This startup-only path bypasses steady-state staleness/cooldown/exhaustion gates while preserving operator-actionable, stale-module, user-paused, `error-unrecoverable`, ephemeral, disabled-runtime, and active-execution suppression.
 - FN-7802: self-healing emits `task:reconcile-missing-worktree-merge-active` when it proves an `in-review` merge-active task (`merging`/`merging-pr`/`merging-fix`) is stranded by an unusable-worktree session-start failure, clears stale `worktree`/`branch`/`sessionFile`, resets the worktree-session retry budget, increments `recoveryRetryCount` as the bounded stale-metadata clear counter, and requeues to `todo`; it emits `task:reconcile-missing-worktree-merge-active-no-action` when `autoMerge:false`, workspace-task ownership, or triple-proof blocks the backward move.
@@ -322,6 +302,7 @@ Scoped exception (FN-5819): shared-branch-group members (`branchContext.assignme
 - FN-8144: archive emits `archive-workspace-worktree-disposer-missing` when a workspace archive has no store-scoped backend disposer; per-repository archive removal is awaited under canonical-path reservations, with failed paths quarantined for successor reconciliation.
 - FN-7514: the planner overseer's per-task oversight loop (`PlannerRecoveryController.tick`) emits `overseer:oversight-withheld-human-control` when the pure `evaluateOverseerHumanControl` guard withholds ALL oversight action (no steering, retry, targeted-fix, or pending confirmation) for a task that is user-paused (`task.userPaused===true`, or `task.paused===true` with no `pausedReason`) or ineligible for auto-merge processing per `allowsAutoMergeProcessing` (`autoMerge:false`/PR-based human-review terminal contract). The guard runs BEFORE FN-7513's confirmation classification, so a withheld task never records a pending confirmation. Metadata: `{ taskId, reason: "user-paused" | "auto-merge-off-human-review", stage, oversightLevel }`; deduped per (taskId, withheld reason) so it is not re-emitted every poll while the reason is unchanged.
 - FN-7720: `TaskStore.bypassFailedPreMergeReviewStep` emits `task:bypass-review` when a privileged operator bypasses the latest failed pre-merge review step of an `in-review` task; metadata includes `workflowStepId`, `workflowStepName`, `bypassedFromStatus`, `bypassedFromVerdict`, and the mandatory `reason`. The bypass rewrites the step's `status` to `"skipped"` with `bypassedBy`/`bypassedAt`/`bypassReason`/`bypassedFromStatus` fields; it never fabricates a reviewer `verdict` and clears only the failed-pre-merge-step `getTaskMergeBlocker` reason. Reachable via `fn_task_bypass_review` (CLI/pi-extension operator tool surface only — not executor/reviewer/triage) and `POST /tasks/:id/bypass-review`.
+- FN-8654: credential rotation emits append-only `credential:instance-rotation-attempt`, `credential:instance-rotation-outcome`, and `credential:instance-rotation-exhausted` rows. Attempt and terminal outcome are separate immutable rows; metadata contains provider/instance IDs, lane, optional task/agent IDs, counts, and fixed outcomes only. Exhaustion records `startingInstanceId` separately and excludes it from `attemptedCount`; providers with zero or one configured instance emit none of these rows.
 - FN-7996: executor emits `task:execution-tool-failure-retry` for a claimed same-model consecutive-tool-failure retry and `task:execution-tool-failure-retry-exhausted` when the matching run budget is spent. Metadata is ids/counts/outcomes-only; the exhausted event is emitted once through a project-scoped compare-and-set while terminal parking remains idempotent.
 - FN-7998: executor emits `task:execution-escalation-retry` when its opt-in, single alternate model/node attempt is persisted after FN-7996 exhaustion, and `task:execution-escalation-exhausted` when that attempt also reaches the terminal park. Metadata remains ids/counts/outcomes-only (`taskId`, graph node id, target booleans, and prior retry count); no model identifiers or prose are persisted in run-audit.
 - FN-8004: `agent:heartbeat-move-skipped-soft-delete` records a heartbeat move that races a soft-deleted task without parking the durable agent. Metadata remains ids/timestamps/source only (`agentId`, optional `taskId`/`deletedAt`, `moveAttemptedAt`, optional `source`); it never stores error prose.
@@ -363,7 +344,7 @@ Scoped exception (FN-5819): shared-branch-group members (`branchContext.assignme
 
 ### Lazy-Loaded Heavy Views
 
-These 20 views are lazy-loaded via `React.lazy()` with `<Suspense fallback={null}>`.
+These 19 views are lazy-loaded via `React.lazy()` with `<Suspense fallback={null}>`.
 Keep this AGENTS inventory in sync with App lazy imports, AppModals lazy modal imports (`SettingsModal`, `WorkflowNodeEditor`, `SetupWizardModal`), plugin settings lazy imports (`PluginManager`, `PiExtensionsManager`), AgentsView lazy imports (`AgentDetailView`), and `packages/dashboard/app/__tests__/lazy-loaded-views-docs.test.ts`.
 
 - `AgentsView`
@@ -377,7 +358,6 @@ Keep this AGENTS inventory in sync with App lazy imports, AppModals lazy modal i
 - `ResearchView`
 - `CommandCenter`
 - `EvalsView`
-- `TodoView`
 - `GoalsView`
 - `PullRequestView`
 - `SetupWizardModal`

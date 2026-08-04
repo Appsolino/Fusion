@@ -15,25 +15,25 @@ import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import * as fusionCore from "@fusion/core";
 import type { AgentState, AgentCapability, AgentUpdateInput, AgentLogEntry, Artifact, ArtifactCreateInput, ArtifactWithTask, Task, TaskDocument, TaskDocumentCreateInput, TaskStore, RunMutationContext, MessageStore, Message, SourceType, Settings, ResearchRun, ResearchRunStatus, TaskCreateInput, ReflectionStore, ApprovalRequestStore, ProjectSettings, ChatStore, WorkflowSettingDefinition, GoalStatus, WorkflowIrNode, IdeationCandidate, MissionWithHierarchy, DbTransaction } from "@fusion/core";
 import { listTraits, isBuiltinWorkflowId, AgentStore, validateColumnAgentBindings, ColumnAgentBindingError, stripApprovalBypassFlags, WorkflowSettingRejectionError, resolveEffectiveSettingsById, resolveWorkflowIrById, findOrphanedSettingValues, BUILTIN_WORKFLOW_SETTINGS, MAX_TASK_LIST_TEXT_CHARS, formatCurrentTaskLine, normalizeWorkflowIcon, parseWorkflowIr, WorkflowIrError, assertColumnTraitsValid, ColumnTraitValidationError } from "@fusion/core";
-import { promoteHeldTask } from "./hold-release.js";
+import { promoteHeldTask } from "./execution/hold-release.js";
 import { computeCrossParentDiagnosticClaim, computeCrossParentDiagnosticClaimId, computeParentIntentClaimId, DASHBOARD_USER_ID, dailyMemoryPath, ensureOpenClawMemoryFiles, evaluateImplementationTaskBind, extractAgentProvisioningRequest, findSameAgentDuplicates, getMemoryBackendCapabilities, getProjectMemory, isEphemeralAgent, memoryLongTermPath, normalizeMessageParticipant, reconcileDeterministicDuplicate, resolveAgentProvisioningPolicy, resolveMemoryBackend, resolveResearchSettings, resolveTaskGithubTracking, runDeterministicDuplicateGuard, scheduleQmdProjectMemoryRefresh, searchProjectMemory, shouldSkipBackgroundQmdRefresh } from "@fusion/core";
-import { ResearchOrchestrator } from "./research-orchestrator.js";
+import { ResearchOrchestrator } from "./research/research-orchestrator.js";
 import { ResearchProviderRegistry } from "./research/provider-registry.js";
-import { ResearchStepRunner } from "./research-step-runner.js";
+import { ResearchStepRunner } from "./research/research-step-runner.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "@earendil-works/pi-ai";
-import type { AgentReflectionService } from "./agent-reflection.js";
+import type { AgentReflectionService } from "./agents/agent-reflection.js";
 import { createLogger } from "./logger.js";
 // FNXC:PlanArtifactPersistence 2026-07-26-03:55: PROMPT.md is filesystem-only; mirror plan writes into the DB.
 import { mirrorPlanToProjectDb } from "./plan-artifact-writeback.js";
-import { fetchWebContent, WebFetchError } from "./web-fetch.js";
-import type { RunAuditor } from "./run-audit.js";
-import { computeApprovalDedupeKey } from "./agent-action-gate.js";
+import { fetchWebContent, WebFetchError } from "./util/web-fetch.js";
+import type { RunAuditor } from "./util/run-audit.js";
+import { computeApprovalDedupeKey } from "./agents/agent-action-gate.js";
 import { MessageDeliveryAutoRecoveryHandler } from "./auto-recovery-handlers/message-delivery.js";
-import { emitGoalRetrievalAudit } from "./goal-anchoring-audit.js";
-import { recordRetry } from "./retry-burned-logger.js";
-import { acquireWorkspaceRepoWorktree, WorkspaceRepoAcquireBusyError } from "./worktree-acquisition.js";
-import { validateCodeNodeSources } from "./code-node-runner.js";
+import { emitGoalRetrievalAudit } from "./goals/goal-anchoring-audit.js";
+import { recordRetry } from "./errors/retry-burned-logger.js";
+import { acquireWorkspaceRepoWorktree, WorkspaceRepoAcquireBusyError } from "./worktree/worktree-acquisition.js";
+import { validateCodeNodeSources } from "./execution/code-node-runner.js";
 
 // ── Tool parameter schemas (canonical definitions) ────────────────────────
 
@@ -1277,6 +1277,27 @@ async function findDefinedFeatureBootstrapDuplicate(
   return matches[0] ? byId.get(matches[0].id) : undefined;
 }
 
+async function resolveDelegationReadyColumn(
+  store: TaskStore,
+  workflowId?: string,
+): Promise<string> {
+  /*
+  FNXC:AgentDelegation 2026-08-01-23:36:
+  Delegation promises immediate heartbeat eligibility, so it targets the workflow's hold/ready lane,
+  not a manual intake lane. Resolve the selected workflow's trait-defined hold column first, then its
+  entry column; the legacy `todo` fallback preserves delegation when workflow resolution is degraded.
+  */
+  try {
+    const selectedWorkflowId = workflowId ?? (await store.getDefaultWorkflowId()) ?? fusionCore.DEFAULT_WORKFLOW_ID;
+    const ir = await fusionCore.resolveWorkflowIrById(store, selectedWorkflowId);
+    return fusionCore.columnsWithFlag(ir, "hold")[0]
+      ?? fusionCore.resolveEntryColumnId(ir)
+      ?? "todo";
+  } catch {
+    return "todo";
+  }
+}
+
 async function carryCanonicalTaskRouting(
   store: TaskStore,
   canonical: Task,
@@ -1743,7 +1764,7 @@ function formatTaskReadLines(lines: string[], emptyStateText: string): string {
 }
 
 /*
-FNXC:ToolOutputBudget 2026-08-06-12:00:
+FNXC:ToolOutputBudget 2026-08-03-06:41:
 FN-8614 requires high-volume read tools to preserve their identifying headers while
 providing a useful source-level stop before the universal per-result wrapper runs.
 The hint names the narrowing surface instead of silently tail-cutting an agent's context.
@@ -5383,8 +5404,8 @@ export function createDelegateTaskTool(
     name: "fn_delegate_task",
     label: "Delegate Task",
     description:
-      "Create a new task and assign it to a specific agent for execution. The task goes to " +
-      "'todo' and will be picked up by the target agent on their next heartbeat cycle. " +
+      "Create a new task and assign it to a specific agent for execution. The task goes to the " +
+      "selected workflow's ready lane and will be picked up by the target agent on their next heartbeat cycle. " +
       "Use fn_list_agents first to find available agents and their capabilities. " +
       "Optionally pass workflow_id to select a workflow at creation time; use " +
       "fn_workflow_list to discover valid IDs.",
@@ -5465,11 +5486,11 @@ export function createDelegateTaskTool(
         if (lineage && "error" in lineage) {
           return { content: [{ type: "text" as const, text: `ERROR: ${lineage.error}` }], details: { rule: "mission-lineage-required" }, isError: true };
         }
-        // Create task assigned to the target agent
+        const readyColumn = await resolveDelegationReadyColumn(taskStore, workflowId);
         const { task, wasDuplicate } = await createAgentTask(taskStore, {
           description: params.description,
           dependencies: params.dependencies,
-          column: "todo",
+          column: readyColumn,
           assignedAgentId: params.agent_id,
           ...(workflowId ? { workflowId } : {}),
           ...(lineage ? { missionId: lineage.missionId, sliceId: lineage.sliceId } : {}),
@@ -6299,7 +6320,7 @@ export function createAcquireRepoWorktreeTool(opts: {
   */
   onAcquired?: (worktreePath: string) => void;
   // FNXC:Workspace 2026-06-22 — thread the configured worktree-init runner so sub-repo worktrees run configured setup.
-  runConfiguredCommand?: import("./worktree-acquisition.js").AcquireWorkspaceRepoWorktreeOptions["runConfiguredCommand"];
+  runConfiguredCommand?: import("./worktree/worktree-acquisition.js").AcquireWorkspaceRepoWorktreeOptions["runConfiguredCommand"];
   taskEnv?: NodeJS.ProcessEnv;
 }): ToolDefinition {
   const { workspaceRootDir, workspaceRepos, task, store, settings, logger, secretsStore, runContext, audit, onAcquired, runConfiguredCommand, taskEnv } = opts;

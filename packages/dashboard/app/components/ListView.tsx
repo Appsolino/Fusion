@@ -4,12 +4,10 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ArrowUpDown, ArrowUp, ArrowDown, Link, Columns3, EyeOff, Eye, ChevronRight, Zap, Trash2, Pause, Play, Archive } from "lucide-react";
-import type { Task, TaskDetail, Column, ColumnId, TaskCreateInput, MergeResult, GithubIssueAction, PrInfo, ThinkingLevel } from "@fusion/core";
-import { DEFAULT_COLUMN, THINKING_LEVELS, getErrorMessage, isColumn } from "@fusion/core";
-import { resolveEffectiveAutoMerge } from "../../../core/src/task-merge";
+import { DEFAULT_COLUMN, THINKING_LEVELS, getErrorMessage, isColumn, sortTasksForDisplayColumn, type Task, type TaskDetail, type Column, type ColumnId, type TaskCreateInput, type MergeResult, type GithubIssueAction, type PrInfo, type ThinkingLevel } from "@fusion/core";
+import { resolveEffectiveAutoMerge } from "../../../core/src/merge/task-merge";
 import { useColumnLabel } from "../i18n/labels";
 import { isArchivedColumnRole, isCompleteColumnRole, isIntakeColumnRole, isPreImplementationColumnRole, isWipColumnRole } from "../utils/columnRoles";
-import { sortTasksForDisplayColumn } from "./taskSorting";
 import { batchUpdateTaskModels, fetchNodes, fetchTaskDetail, rebuildTaskSpec, refreshPrStatus, updateTask } from "../api";
 import { TaskDetailContent } from "./TaskDetailModal";
 import { PrCreateModal } from "./PrCreateModal";
@@ -36,6 +34,7 @@ import { useBoardWorkflows } from "../hooks/useBoardWorkflows";
 import { useUnmappedWorkflowRefetch } from "../hooks/useUnmappedWorkflowRefetch";
 import { TaskContextMenu, buildTaskActionMenuModel, getTaskPrAutomationLabel, type TaskContextMenuColumnMetadata, type TaskMenuActionDescriptor } from "./TaskContextMenu";
 import type { DetailTaskOpenOptions } from "../hooks/useModalManager";
+import { isTaskReverted, partitionRevertedTasks } from "../utils/taskRevert";
 
 const COLUMN_COLOR_MAP: Record<Column, string> = {
   triage: "var(--triage)",
@@ -234,6 +233,14 @@ function readSidebarWidth(projectId?: string): number {
 const LIST_SIDEBAR_MIN_WIDTH = 64; // FNXC:ListView 2026-06-22-00:00: The desktop task-list split sidebar minimum is 64 (was 120) so users can shrink the left panel much further; task titles wrap to two lines (.list-split-sidebar .list-cell-title) so they stay legible at narrow widths. Resize, keyboard, and ARIA paths share one clamp value.
 const LIST_SIDEBAR_MAX_RATIO = 0.65;
 const LIST_SIDEBAR_KEYBOARD_STEP = 16;
+const LIST_MINIMUM_USABLE_TASK_LIST_WIDTH = 320;
+const LIST_MINIMUM_USABLE_DETAIL_WIDTH = 480;
+export const LIST_MINIMUM_SPLIT_LAYOUT_WIDTH = LIST_MINIMUM_USABLE_TASK_LIST_WIDTH + LIST_MINIMUM_USABLE_DETAIL_WIDTH;
+
+/** Returns whether the List surface can keep both its task list and embedded detail usable. */
+export function canUseListSplitLayout(containerWidth: number): boolean {
+  return containerWidth >= LIST_MINIMUM_SPLIT_LAYOUT_WIDTH;
+}
 
 function getSidebarMaxWidth(containerWidth: number): number {
   return Math.max(LIST_SIDEBAR_MIN_WIDTH, containerWidth * LIST_SIDEBAR_MAX_RATIO);
@@ -248,6 +255,7 @@ interface ListViewProps {
   tasks: Task[];
   onMoveTask: (id: string, column: ColumnId, optionsOrPosition?: { preserveProgress?: boolean } | number) => Promise<Task>;
   onRetryTask?: (id: string) => Promise<Task>;
+  onReviseTask?: (task: Task) => void;
   onDeleteTask: (id: string, options?: {
     removeDependencyReferences?: boolean;
     removeLineageReferences?: boolean;
@@ -350,6 +358,7 @@ export function ListView({
   onMoveTask,
   onRetryTask,
   onDeleteTask,
+  onReviseTask,
   onPauseTask,
   onUnpauseTask,
   onArchiveTask,
@@ -422,11 +431,19 @@ export function ListView({
   });
   const viewportMode = useViewportMode();
   const isMobile = viewportMode === "mobile";
+  const [listContainerWidth, setListContainerWidth] = useState<number | null>(null);
   /*
-  FNXC:ListView 2026-07-10-00:00 (FN-7809):
-  Tablet-width List view must use the same single-pane layout as mobile because the desktop two-pane sidebar leaves too little horizontal room and clips the primary actions plus expanded QuickEntryBox. Keep touch-only long-press behavior on `isMobile`; this gate only controls split-vs-single-pane structure and detail routing.
+  FNXC:ListView 2026-08-03-05:47:
+  Available List width—not the global viewport label—owns split-versus-modal routing. A measured
+  surface must leave 320px for task navigation and 480px for the existing embedded detail; real
+  phones remain single-pane even when a synthetic measurement is large. When measurement support is
+  unavailable, retain the established desktop split and constrained tablet modal fallbacks.
   */
-  const useSinglePaneList = viewportMode === "mobile" || viewportMode === "tablet";
+  const canRenderSplitLayout = viewportMode !== "mobile"
+    && (listContainerWidth !== null
+      ? canUseListSplitLayout(listContainerWidth)
+      : viewportMode === "desktop");
+  const useSinglePaneList = !canRenderSplitLayout;
   const { confirm, confirmWithChoice } = useConfirm();
 
   useEffect(() => {
@@ -490,6 +507,11 @@ export function ListView({
   });
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth(projectId));
   const splitLayoutRef = useRef<HTMLDivElement>(null);
+  const [splitLayoutContainer, setSplitLayoutContainer] = useState<HTMLDivElement | null>(null);
+  const setSplitLayoutRef = useCallback((node: HTMLDivElement | null) => {
+    splitLayoutRef.current = node;
+    setSplitLayoutContainer(node);
+  }, []);
   const splitSidebarRef = useRef<HTMLDivElement>(null);
   // FNXC:ListView 2026-06-22-18:00: Holds the active pointer-drag teardown so move/up/cancel/unmount all detach the same listeners — prevents the "window mousemove with no cleanup" leak called out by the frontend-races review.
   const splitResizeTeardownRef = useRef<(() => void) | null>(null);
@@ -546,6 +568,24 @@ export function ListView({
       return { ...previous, ...liveTask };
     });
   }, [selectedTaskId, tasks]);
+
+  useLayoutEffect(() => {
+    if (!splitLayoutContainer) return;
+
+    const measureContainer = (observedWidth?: number) => {
+      const width = observedWidth ?? (splitLayoutContainer.getBoundingClientRect().width || splitLayoutContainer.clientWidth);
+      setListContainerWidth(width > 0 ? width : null);
+    };
+
+    measureContainer();
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver((entries) => {
+      measureContainer(entries[0]?.contentRect.width);
+    });
+    observer.observe(splitLayoutContainer);
+    return () => observer.disconnect();
+  }, [splitLayoutContainer]);
 
   useEffect(() => {
     if (useSinglePaneList || typeof ResizeObserver === "undefined") return;
@@ -606,7 +646,9 @@ export function ListView({
 
   // Bulk edit state and handlers (declared before clearSelection so every clear path resets pending lane edits)
   const [executorModel, setExecutorModel] = useState<string>("__no_change__");
+  const [credentialInstanceId, setCredentialInstanceId] = useState<string>("__no_change__");
   const [validatorModel, setValidatorModel] = useState<string>("__no_change__");
+  const [validatorCredentialInstanceId, setValidatorCredentialInstanceId] = useState<string>("__no_change__");
   const [bulkThinkingLevel, setBulkThinkingLevel] = useState<string>("__no_change__");
   const [nodeOverride, setNodeOverride] = useState<string>("__no_change__");
 
@@ -615,7 +657,9 @@ export function ListView({
       if (prev) {
         setSelectedTaskIds(new Set());
         setExecutorModel("__no_change__");
+        setCredentialInstanceId("__no_change__");
         setValidatorModel("__no_change__");
+        setValidatorCredentialInstanceId("__no_change__");
         setBulkThinkingLevel("__no_change__");
         setNodeOverride("__no_change__");
       }
@@ -640,7 +684,9 @@ export function ListView({
   const clearSelection = useCallback(() => {
     setSelectedTaskIds(new Set());
     setExecutorModel("__no_change__");
+    setCredentialInstanceId("__no_change__");
     setValidatorModel("__no_change__");
+    setValidatorCredentialInstanceId("__no_change__");
     setBulkThinkingLevel("__no_change__");
     setNodeOverride("__no_change__");
   }, []);
@@ -1152,6 +1198,7 @@ export function ListView({
     columnFiltered.forEach((task) => {
       const column = workflowMode ? task.column : (isColumn(task.column) ? task.column : DEFAULT_COLUMN);
       if (groups[column] !== undefined) {
+        if (isTaskReverted(task.sourceMetadata) && listColumns.find((candidate) => candidate.id === column)?.flags.complete) return;
         groups[column].push(task);
         return;
       }
@@ -1166,18 +1213,9 @@ export function ListView({
     for (const column of listColumns) {
       const columnId = column.id;
       if (!sortField) {
-        /* FNXC:WorkflowResolvedColumns 2026-07-31-08:22: same conversion as Lane.tsx — the sort's four
-           role questions default to legacy ids, so a renamed board sorted every lane generically. */
-        const isDoneLikeColumn = column.flags.complete === true && column.flags.archived !== true;
-        groups[columnId] = sortTasksForDisplayColumn(
-          groups[columnId],
-          columnId as Column,
-          undefined,
-          column.flags.archived === true,
-          column.flags.hold === true,
-          isDoneLikeColumn,
-          column.flags.mergeBlocker === true || column.flags.humanReview === true,
-        );
+        groups[columnId] = sortTasksForDisplayColumn(groups[columnId], columnId, {
+          columnFlags: column.flags,
+        });
         continue;
       }
 
@@ -1779,6 +1817,8 @@ export function ListView({
       validatorModelId?: string | null;
       nodeId?: string | null;
       thinkingLevel?: ThinkingLevel | null;
+      credentialInstanceId?: string | null;
+      validatorCredentialInstanceId?: string | null;
     } = { taskIds };
 
     if (executorModel !== "__no_change__") {
@@ -1786,11 +1826,13 @@ export function ListView({
         // "Use default" - clear override
         payload.modelProvider = null;
         payload.modelId = null;
+        payload.credentialInstanceId = null;
       } else {
         const slashIdx = executorModel.indexOf("/");
         if (slashIdx !== -1) {
           payload.modelProvider = executorModel.slice(0, slashIdx);
           payload.modelId = executorModel.slice(slashIdx + 1);
+          payload.credentialInstanceId = null;
         }
       }
     }
@@ -1800,14 +1842,19 @@ export function ListView({
         // "Use default" - clear override
         payload.validatorModelProvider = null;
         payload.validatorModelId = null;
+        payload.validatorCredentialInstanceId = null;
       } else {
         const slashIdx = validatorModel.indexOf("/");
         if (slashIdx !== -1) {
           payload.validatorModelProvider = validatorModel.slice(0, slashIdx);
           payload.validatorModelId = validatorModel.slice(slashIdx + 1);
+          payload.validatorCredentialInstanceId = null;
         }
       }
     }
+
+    if (credentialInstanceId !== "__no_change__") payload.credentialInstanceId = credentialInstanceId || null;
+    if (validatorCredentialInstanceId !== "__no_change__") payload.validatorCredentialInstanceId = validatorCredentialInstanceId || null;
 
     if (nodeOverride !== "__no_change__") {
       if (nodeOverride === "") {
@@ -1840,6 +1887,8 @@ export function ListView({
         payload.nodeId,
         payload.thinkingLevel,
         projectId,
+        payload.credentialInstanceId,
+        payload.validatorCredentialInstanceId,
       );
 
       if (onTasksUpdated) {
@@ -1851,7 +1900,9 @@ export function ListView({
       // Reset state
       clearSelection();
       setExecutorModel("__no_change__");
+      setCredentialInstanceId("__no_change__");
       setValidatorModel("__no_change__");
+      setValidatorCredentialInstanceId("__no_change__");
       setBulkThinkingLevel("__no_change__");
       setNodeOverride("__no_change__");
     } catch (err) {
@@ -1859,7 +1910,7 @@ export function ListView({
     } finally {
       setIsApplying(false);
     }
-  }, [addToast, bulkThinkingLevel, clearSelection, executorModel, isTaskArchivedColumn, nodeOverride, onTasksUpdated, projectId, selectedTaskIds, tasks, validatorModel]);
+  }, [addToast, bulkThinkingLevel, clearSelection, credentialInstanceId, executorModel, isTaskArchivedColumn, nodeOverride, onTasksUpdated, projectId, selectedTaskIds, tasks, validatorCredentialInstanceId, validatorModel]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenuState(null);
@@ -2776,7 +2827,9 @@ export function ListView({
             <CustomModelDropdown
               models={availableModels}
               value={executorModel}
-              onChange={setExecutorModel}
+              onChange={(value) => { setCredentialInstanceId("__no_change__"); setExecutorModel(value); }}
+              credentialInstanceId={credentialInstanceId === "__no_change__" ? undefined : credentialInstanceId}
+              onCredentialInstanceChange={setCredentialInstanceId}
               label={t("listView.executorModel", "Executor Model")}
               noChangeValue="__no_change__"
               noChangeLabel={t("listView.noChange", "No change")}
@@ -2790,7 +2843,9 @@ export function ListView({
             <CustomModelDropdown
               models={availableModels}
               value={validatorModel}
-              onChange={setValidatorModel}
+              onChange={(value) => { setValidatorCredentialInstanceId("__no_change__"); setValidatorModel(value); }}
+              credentialInstanceId={validatorCredentialInstanceId === "__no_change__" ? undefined : validatorCredentialInstanceId}
+              onCredentialInstanceChange={setValidatorCredentialInstanceId}
               label={t("listView.reviewerModel", "Reviewer Model")}
               noChangeValue="__no_change__"
               noChangeLabel={t("listView.noChange", "No change")}
@@ -2922,7 +2977,7 @@ export function ListView({
       )}
 
       <div className="list-table-container">
-        <div className={useSinglePaneList ? "" : "list-split-layout"} data-testid={useSinglePaneList ? undefined : "list-split-layout"} ref={splitLayoutRef}>
+        <div className={useSinglePaneList ? "" : "list-split-layout"} data-testid={useSinglePaneList ? undefined : "list-split-layout"} ref={setSplitLayoutRef}>
           <div
             className={useSinglePaneList ? "" : "list-split-sidebar"}
             data-testid={useSinglePaneList ? undefined : "list-split-sidebar"}
@@ -2995,6 +3050,18 @@ export function ListView({
                 }}
               />
             </div>
+        {partitionRevertedTasks(tasks).reverted.length > 0 && (
+          <section className="list-reverted-tasks" aria-label="Reverted Tasks" data-testid="list-reverted-tasks">
+            <h2>{t("tasks.revertedTasks", "Reverted Tasks")}</h2>
+            {partitionRevertedTasks(tasks).reverted.map((task) => (
+              <div key={`reverted-${task.id}`} className="list-card">
+                <button type="button" className="btn" onClick={() => onOpenDetail(task)}>{task.id}: {task.title}</button>
+                <button type="button" className="btn" onClick={() => void handleListTaskDelete(task)}>{t("tasks.delete", "Delete")}</button>
+                {onReviseTask && <button type="button" className="btn" onClick={() => onReviseTask(task)}>{t("tasks.revise", "Revise")}</button>}
+              </div>
+            ))}
+          </section>
+        )}
         {filteredCount === 0 ? (
           <div className="list-empty">
             {searchQuery ? t("listView.noTasksMatch", "No tasks match your filter") : t("listView.noTasksYet", "No tasks yet")}
@@ -3565,6 +3632,8 @@ export function ListView({
                       onRequestClose={closeEmbeddedTaskDetail}
                       onOpenDetail={handleEmbeddedOpenDetail}
                       onMoveTask={onMoveTask}
+                      /* FNXC:TaskRevert 2026-08-01-20:27: Split detail receives the list recovery callback so reverted tasks remain revisable here. */
+                      onReviseTask={onReviseTask}
                       onDeleteTask={onDeleteTask}
                       onMergeTask={onMergeTask}
                       onRetryTask={onRetryTask}

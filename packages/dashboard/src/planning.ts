@@ -3874,15 +3874,12 @@ function formatInterviewAnswer(question: PlanningQuestion, responseValue: unknow
     case "text":
       return typeof responseValue === "string" ? responseValue : String(responseValue ?? "");
 
-    case "single_select":
-      if (other.length > 0) {
-        return `${other} (user's own answer)`;
-      }
-      if (typeof responseValue === "string") {
-        const option = question.options?.find((candidate) => candidate.id === responseValue);
-        return option?.label || responseValue;
-      }
-      return String(responseValue ?? "");
+    case "single_select": {
+      const selected = typeof responseValue === "string"
+        ? question.options?.find((candidate) => candidate.id === responseValue)?.label || responseValue
+        : String(responseValue ?? "");
+      return [selected, other.length > 0 ? `${other} (user's own answer)` : ""].filter(Boolean).join(", ");
+    }
 
     case "multi_select": {
       const selected = Array.isArray(responseValue) ? responseValue.map((id) => {
@@ -3898,8 +3895,10 @@ function formatInterviewAnswer(question: PlanningQuestion, responseValue: unknow
       return selected.length > 0 ? selected.join(", ") : String(responseValue ?? "");
     }
 
-    case "confirm":
-      return other.length > 0 ? `${other} (user's own answer)` : responseValue === true ? "Yes" : "No";
+    case "confirm": {
+      const selected = responseValue === true ? "Yes" : "No";
+      return [selected, other.length > 0 ? `${other} (user's own answer)` : ""].filter(Boolean).join(", ");
+    }
 
     default:
       return JSON.stringify(responseValue);
@@ -3930,6 +3929,25 @@ export function formatInterviewQA(
   });
 
   return `## Planning Interview Context\n\n${entries.join("\n\n")}`;
+}
+
+/*
+FNXC:PlanningMode 2026-08-03-10:03:
+Every task created from Planning Mode must retain the ordered interview decisions that shaped its
+lean plan. Compose a copy for the task handoff so the authoritative running summary stays lean,
+empty sessions add no shell, and replaying an already-composed child cannot duplicate Q&A.
+*/
+export function formatPlanningTaskHandoff(
+  summary: PlanningSummary,
+  history: Array<{ question: PlanningQuestion; response: unknown }>,
+): string {
+  const qaSection = formatInterviewQA(history);
+  const description = summary.description.trim();
+  const handoffDescription = qaSection && !description.includes(qaSection)
+    ? `${description}\n\n${qaSection}`
+    : description;
+
+  return formatPlanningPlanMd({ ...summary, description: handoffDescription });
 }
 
 /**
@@ -4028,9 +4046,10 @@ function restoreClaimSession(row: import("./ai-session-store.js").AiSessionRow):
 /*
 FNXC:PlanningMultiTask 2026-07-24-00:20:
 One plan may produce multiple tasks, one per creation epoch. The task table's partial unique
-proposalClaimId index stays the multi-process crash authority WITHIN an epoch: replaying
-Proceed without editing dedupes to the same task (alreadyCreated), while editing the plan
-after a task exists rotates to a new epoch/key so the next Proceed creates a fresh task.
+proposalClaimId index stays the multi-process crash authority WITHIN an epoch. A new explicit
+create action carrying the latest task id advances the epoch; transport retries carrying the
+prior id stay on the already-advanced epoch and dedupe to its canonical task. Editing the plan
+after a task exists also rotates to a new epoch/key.
 Epoch 0 keeps the legacy un-suffixed key so pre-existing linked sessions stay reconciled.
 */
 export function planningProposalClaimId(sessionId: string, taskCreationEpoch?: number): string {
@@ -4098,10 +4117,10 @@ export async function createTaskFromPlanSession(
   const summary = session.summary ?? buildRunningSummary(session.initialPlan, session.history);
   if (!summary) throw new InvalidSessionStateError("Planning session has no plan to create a task from");
 
-  const claimEpoch = session.taskCreationEpoch ?? 0;
-  const proposalClaimId = planningProposalClaimId(sessionId, claimEpoch);
+  let claimEpoch = session.taskCreationEpoch ?? 0;
+  const currentProposalClaimId = () => planningProposalClaimId(sessionId, claimEpoch);
   const findCreatedTask = async (): Promise<Task | undefined> =>
-    (await store.listTasks({ includeArchived: true })).find((candidate) => candidate.proposalClaimId === proposalClaimId);
+    (await store.listTasks({ includeArchived: true })).find((candidate) => candidate.proposalClaimId === currentProposalClaimId());
   const markSessionComplete = async (): Promise<void> => {
     const current = await getSession(sessionId);
     if (current && !current.validated) {
@@ -4128,18 +4147,31 @@ export async function createTaskFromPlanSession(
   const clearStaleLinkedTask = async (staleTaskId: string): Promise<boolean> => {
     const allTasks = await store.listTasks({ includeArchived: true }).catch(() => null);
     if (allTasks === null || allTasks.some((candidate) => candidate.id === staleTaskId)) return false;
-    diagnostics.warn("Planning session linked task no longer exists; clearing stale linkage", {
+    diagnostics.warn("Planning session linked task no longer exists; advancing creation epoch", {
       sessionId,
       staleTaskId,
       operation: "create-task-session",
     });
-    await updatePlanningCreateClaim(sessionId, { createClaimStatus: "none", createdTaskId: undefined, claimOwnerToken: undefined, claimStartedAt: undefined }).catch(() => undefined);
-    if (session) {
-      session.createdTaskId = undefined;
-      session.createClaimStatus = "none";
-      session.claimOwnerToken = undefined;
-      session.claimStartedAt = undefined;
+    const advanced = await advancePlanningTaskCreationEpoch(
+      sessionId,
+      staleTaskId,
+      claimEpoch,
+    );
+    if (!advanced) {
+      /*
+      FNXC:PlanningMultiTask 2026-08-03-18:32:
+      Losing the epoch CAS means another process may already have advanced this session.
+      Refresh that state once so agent creation can reconcile or claim the winning epoch.
+      */
+      const refreshed = await getDurablePlanningSession(sessionId).catch(() => undefined);
+      if (!refreshed
+        || ((refreshed.taskCreationEpoch ?? 0) === claimEpoch && refreshed.createdTaskId === staleTaskId)) return false;
+      session = refreshed;
+      claimEpoch = refreshed.taskCreationEpoch ?? claimEpoch;
+      return true;
     }
+    session = advanced;
+    claimEpoch = advanced.taskCreationEpoch ?? claimEpoch + 1;
     return true;
   };
 
@@ -4191,7 +4223,7 @@ export async function createTaskFromPlanSession(
   // FNXC:PlanningMultiTask 2026-07-24-03:40: review finding — a post-insert failure (e.g. finalize) lands in the raced-insert catch; without this marker the task WE created was mislabeled alreadyCreated:true.
   let insertedTask: Task | undefined;
   try {
-    const planMd = formatPlanningPlanMd(summary);
+    const planMd = formatPlanningTaskHandoff(summary, session.history);
     const originalRequest = session.initialPlan?.trim() || summary.description.trim();
     const task = await store.createTask({
       title: summary.title,
@@ -4200,7 +4232,7 @@ export async function createTaskFromPlanSession(
       priority: isTaskPriority(summary.priority) ? summary.priority : DEFAULT_TASK_PRIORITY,
       source: { sourceType: options?.sourceType ?? "cli" },
       ...(options?.baseBranch?.trim() ? { baseBranch: options.baseBranch.trim() } : {}),
-      proposalClaimId,
+      proposalClaimId: currentProposalClaimId(),
     });
     insertedTask = task;
     // FNXC:PlanningMultiTask 2026-07-24-03:20: best-effort side effects must be LOUD on failure (review finding) — a task missing its plan document with no signal is undebuggable.
@@ -4218,7 +4250,7 @@ export async function createTaskFromPlanSession(
     if (originalRequest) {
       await sideEffect("Planning create-task original description document write failed", () => store.upsertTaskDocument?.(task.id, { key: "original-description", content: originalRequest, author: "planning", metadata: { planningSessionId: sessionId, source: "planning-mode-initial-plan" } }));
     }
-    await sideEffect("Planning create-task log entry failed", () => store.logEntry?.(task.id, "Created via Planning Mode", `Initial plan: ${(session.initialPlan ?? "").slice(0, 200)}`));
+    await sideEffect("Planning create-task log entry failed", () => store.logEntry?.(task.id, "Created via Planning Mode", `Initial plan: ${(session?.initialPlan ?? "").slice(0, 200)}`));
     await finalizePlanningTaskCreation(sessionId, claimOwnerToken, task.id, claimEpoch);
     await markSessionComplete();
     return { task, alreadyCreated: false };
@@ -4289,6 +4321,35 @@ export async function releasePlanningTaskCreation(sessionId: string, ownerToken:
   }
   const row = await _aiSessionStore.releasePlanningTaskCreation(sessionId, ownerToken);
   return row ? restoreClaimSession(row) : undefined;
+}
+
+/** FNXC:PlanningMultiTask 2026-08-03-18:32: Advance once when an explicit new create action identifies the session's latest task. */
+export async function advancePlanningTaskCreationEpoch(
+  sessionId: string,
+  previousTaskId: string,
+  expectedTaskCreationEpoch: number,
+): Promise<Session | undefined> {
+  if (_aiSessionStore && typeof (_aiSessionStore as unknown as { advancePlanningTaskCreationEpoch?: unknown }).advancePlanningTaskCreationEpoch === "function") {
+    const row = await _aiSessionStore.advancePlanningTaskCreationEpoch(
+      sessionId,
+      previousTaskId,
+      expectedTaskCreationEpoch,
+    );
+    return row ? restoreClaimSession(row) : undefined;
+  }
+
+  const session = await getSession(sessionId);
+  if (!session
+    || session.createdTaskId !== previousTaskId
+    || (session.taskCreationEpoch ?? 0) !== expectedTaskCreationEpoch) return undefined;
+  rotateTaskCreationEpochOnReopen(session);
+  await updatePlanningCreateClaim(sessionId, {
+    createClaimStatus: "none",
+    createdTaskId: undefined,
+    claimOwnerToken: undefined,
+    claimStartedAt: undefined,
+  });
+  return session;
 }
 
 /**

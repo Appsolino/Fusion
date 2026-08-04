@@ -4,7 +4,7 @@ import {
   type BoardWorkflowDefinition,
   type BoardWorkflowsPayload,
 } from "../api";
-import { setProjectBoardSelectedWorkflow as defaultPersistBoardWorkflowSelection } from "../api/workflows";
+import { setProjectBoardSelectedWorkflow as defaultPersistBoardWorkflowSelection } from "../api/system/workflows";
 import { subscribeSse as defaultSubscribeSse } from "../sse-bus";
 import {
   clearBoardWorkflowsCache as defaultClearBoardWorkflowsCache,

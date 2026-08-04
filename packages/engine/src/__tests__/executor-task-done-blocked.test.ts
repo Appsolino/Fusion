@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./executor-test-helpers.js";
 import { TaskExecutor } from "../executor.js";
-import * as worktreePool from "../worktree-pool.js";
+import * as worktreePool from "../worktree/worktree-pool.js";
 import { SelfHealingManager } from "../self-healing.js";
 import { evaluateNoCommitsNoOpFinalize } from "@fusion/core";
 import {
@@ -147,14 +147,21 @@ describe("FN-8141 fn_task_done honest blocked exit", () => {
         target: "FN-8141",
         // FNXC:HonestBlockedExit 2026-08-01-01:45: `parkedAs` discriminates the dependency-free
         // auto-replan park from the failed park (both ids/outcomes-only).
-        metadata: { taskId: "FN-8141", blockedBy: ["FN-8145"], hasReason: true, parkedAs: "failed" },
+        // FNXC:HonestBlockedExit 2026-08-02-01:30: additive blockedClass/thrash fields stay ids/outcomes-only.
+        metadata: expect.objectContaining({
+          taskId: "FN-8141",
+          blockedBy: ["FN-8145"],
+          hasReason: true,
+          parkedAs: "failed",
+          blockedClass: "external",
+        }),
       }),
     );
     const auditCall = store.recordRunAuditEvent.mock.calls[0][0];
     expect(JSON.stringify(auditCall.metadata)).not.toContain("secret blocker prose");
   });
 
-  it("parks a dependency-free block as needs-replan (auto-replan), never as an alarming failed badge", async () => {
+  it("parks a dependency-free plan-defect block as needs-replan (auto-replan), never as an alarming failed badge", async () => {
     /*
     FNXC:HonestBlockedExit 2026-08-01-01:45 (operator report — FN-8634):
     No blockedBy = nothing external to wait for; the recovery is a replan, which the overseer was
@@ -172,6 +179,35 @@ describe("FN-8141 fn_task_done honest blocked exit", () => {
       expect.objectContaining({
         mutationType: "task:execution-blocked-parked",
         metadata: expect.objectContaining({ parkedAs: "auto-replan", blockedBy: [] }),
+      }),
+    );
+  });
+
+  it("ignores file-claim / open-PR blocks — PR refs are discarded and the exit auto-replans (board-only blockers)", async () => {
+    /*
+    FNXC:HonestBlockedExit 2026-08-02-23:59 (operator decision — FN-8728 vs PR #2398):
+    Open PRs are never blockers. A blocked exit citing only a PR claim carries no real
+    task dependency, so it parks needs-replan (auto-replan) instead of the removed
+    FN-8700 durable file-claim park, and no PR data lands in dependencies or metadata.
+    */
+    const { store, tool } = await setup();
+
+    await tool.execute("id", {
+      outcome: "blocked",
+      reason: "Required path packages/core/src/task-store/reads.ts is actively claimed by PR #2398 (check-file-claimed).",
+      blockedBy: ["pr:2398"],
+    });
+
+    const patch = store.updateTask.mock.calls.find(([, p]: [string, Record<string, unknown>]) => "status" in p)?.[1] as Record<string, unknown>;
+    expect(patch.status).toBe("needs-replan");
+    expect(patch.error).toBeNull();
+    // The discarded PR ref must not become a dependency edge or metadata blocker.
+    const depCall = store.updateTask.mock.calls.find(([, p]: [string, Record<string, unknown>]) => Array.isArray(p?.dependencies));
+    expect(depCall).toBeUndefined();
+    expect(store.recordRunAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mutationType: "task:execution-blocked-parked",
+        metadata: expect.objectContaining({ parkedAs: "auto-replan", blockedBy: [], blockedClass: "plan-defect" }),
       }),
     );
   });

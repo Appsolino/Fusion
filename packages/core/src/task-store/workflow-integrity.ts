@@ -1,4 +1,4 @@
-import { createLogger } from "../logger.js";
+import { createLogger } from "../process/logger.js";
 import { resolveLegacyStampReviewColumns } from "./task-store-helpers.js";
 
 const severityAuditLog = createLogger("core-workflow-integrity");
@@ -16,8 +16,8 @@ import {join} from "node:path";
 import {existsSync} from "node:fs";
 import type {AgentLogEntry, CommitAssociationDiffBackfillReport} from "../types.js";
 import "../builtin-traits.js";
-import {appendAgentLogEntriesSync} from "../agent-log-file-store.js";
-import {truncateAgentLogDetail} from "../agent-log-constants.js";
+import {appendAgentLogEntriesSync} from "../agents/agent-log-file-store.js";
+import {truncateAgentLogDetail} from "../agents/agent-log-constants.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
 import type {CommitAssociationDiffBackfillCandidateRow} from "../task-store/row-types.js";
 import {and, asc, eq, isNull, sql} from "drizzle-orm";

@@ -12,28 +12,36 @@ const WORKFLOW_THINKING_LEVEL_SET: ReadonlySet<string> = new Set(THINKING_LEVELS
 import { basename, delimiter, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
-import type { TaskStore, Task, TaskDetail, TaskTokenUsage, StepStatus, Settings, WorkflowStep, MissionStore, AsyncMissionStore, Slice, AgentState, AgentCapability, RunMutationContext, AgentHeartbeatConfig, Agent, AgentMemoryInclusionMode, ProjectSettings, MergeResult, WorkflowIrNode, WorkflowIrNodeKind, WorkflowStepResult as CoreWorkflowStepResult, ThinkingLevel } from "@fusion/core";
+import { DEFAULT_PROVIDER_INSTANCE_ID, type ProviderInstanceRef, type TaskStore, type Task, type TaskDetail, type TaskTokenUsage, type StepStatus, type Settings, type WorkflowStep, type MissionStore, type AsyncMissionStore, type Slice, type AgentState, type AgentCapability, type RunMutationContext, type AgentHeartbeatConfig, type Agent, type AgentMemoryInclusionMode, type ProjectSettings, type MergeResult, type WorkflowIrNode, type WorkflowIrNodeKind, type WorkflowStepResult as CoreWorkflowStepResult, type ThinkingLevel } from "@fusion/core";
 import { getUnmetSchedulingDependencies } from "./scheduler.js";
 import type { ImplementationExit, ImplementationExitReporter } from "./executor/implementation-exit.js";
 import { emitWorkflowLifecycleEvent } from "@fusion/core";
-import { resolveTaskLifecycleColumns, resolveProjectColumnsForRoles, resolveWipTargetForTask, resolveTerminalColumns, RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, columnsWithFlag, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveLifecycleColumns, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, DEFAULT_MAX_POST_REVIEW_FIXES, COMPLETION_SUMMARY_NODE_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel, resolveValidatorFallbackModel } from "@fusion/core";
-import { finalizeProvenAutoMergeTask } from "./auto-merge-finalization.js";
-import { mergeEffectiveSettings } from "./effective-settings.js";
+import { resolveTaskLifecycleColumns, resolveProjectColumnsForRoles, resolveWipTargetForTask, resolveTerminalColumns, RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, columnsWithFlag, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveLifecycleColumns, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, DEFAULT_MAX_POST_REVIEW_FIXES, COMPLETION_SUMMARY_NODE_ID, PLAN_REVIEW_GROUP_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel, resolveValidatorFallbackModel, parseExplicitDuplicateMarker, nonExecutableDuplicateRedirectReason } from "@fusion/core";
+import {
+  BLOCKED_THRASH_LIMIT,
+  buildExternalBlockMetadataPatch,
+  classifyBlockedExit,
+  countBlockedThrashHits,
+  isDurableBlockedTask,
+  partitionBlockedByRefs,
+} from "./execution-block-classifier.js";
+import { finalizeProvenAutoMergeTask } from "./merge/auto-merge-finalization.js";
+import { mergeEffectiveSettings } from "./project/effective-settings.js";
 import { generateFeatureVideo, type GenerateFeatureVideoOptions } from "./review-artifacts/feature-video.js";
-import { moveTaskToReplanColumn, resolvePlannerLanes, resolvePlannerLanesForTaskAsync, resolveReplanTargetColumn } from "./replan-target.js";
+import { moveTaskToReplanColumn, resolvePlannerLanes, resolvePlannerLanesForTaskAsync, resolveReplanTargetColumn } from "./execution/replan-target.js";
 import type { TaskStep, WorkflowIr, WorkflowFieldDefinition, WorkflowColumnAgent, EffectiveAgentInput, WorkflowWorkEngineDispatchResult, WorkflowWorkItem, TaskMoveLanes } from "@fusion/core";
-import { WorkflowGraphTaskRunner, type WorkflowGraphTaskRunResult, type WorkflowColumnBoundaryHooks } from "./workflow-graph-task-runner.js";
+import { WorkflowGraphTaskRunner, type WorkflowGraphTaskRunResult, type WorkflowColumnBoundaryHooks } from "./workflows/workflow-graph-task-runner.js";
 import { createExecutorColumnBoundaryHooks } from "./workflow-column-boundary-hooks.js";
-import { ensureWorkflowCompletionSummary } from "./workflow-completion-summary.js";
-import { createCodeNodeRunner } from "./code-node-runner.js";
-import { getTaskReviewCheckoutPath, resolveReviewCheckoutCwd } from "./review-checkout.js";
-import { getActiveNotificationService } from "./notifier.js";
-import type { ParseStepsHandlerDeps, CodeNodeRunner } from "./workflow-node-handlers.js";
-import type { WorkflowBranchPersistence, WorkflowBranchRunState } from "./workflow-graph-branches.js";
+import { ensureWorkflowCompletionSummary } from "./workflows/workflow-completion-summary.js";
+import { createCodeNodeRunner } from "./execution/code-node-runner.js";
+import { getTaskReviewCheckoutPath, resolveReviewCheckoutCwd } from "./execution/review-checkout.js";
+import { getActiveNotificationService } from "./util/notifier.js";
+import type { ParseStepsHandlerDeps, CodeNodeRunner } from "./workflows/workflow-node-handlers.js";
+import type { WorkflowBranchPersistence, WorkflowBranchRunState } from "./workflows/workflow-graph-branches.js";
 import type {
   WorkflowStepInstancePersistence,
   WorkflowStepInstanceState,
-} from "./workflow-graph-foreach.js";
+} from "./workflows/workflow-graph-foreach.js";
 import {
   FOREACH_ACTIVE_CONTEXT_KEY,
   SEAM_GOVERNING_NODE_CONTEXT_KEY,
@@ -42,7 +50,7 @@ import {
   SPLIT_ACTIVE_CONTEXT_KEY,
   type ForeachActiveContext,
   type WorkflowLegacySeams,
-} from "./workflow-node-handlers.js";
+} from "./workflows/workflow-node-handlers.js";
 import {
   MERGE_REGION_KINDS,
   PLAN_REVIEW_PROVIDER_FAILURE_HOLD_VALUE,
@@ -50,19 +58,19 @@ import {
   WORKFLOW_DRIFT_PARK_CONTEXT_KEY,
   WORKFLOW_NODE_ENGINE_PAUSE_ABORT_KIND,
   WORKFLOW_OPTIONAL_GROUP_CONTEXT_KEY,
-} from "./workflow-graph-executor.js";
-import type { WorkflowNodePreparationRequirement, WorkflowNodeResult } from "./workflow-graph-executor.js";
-import { workflowNodeRequiresWorktree } from "./workflow-node-execution-needs.js";
+} from "./workflows/workflow-graph-executor.js";
+import type { WorkflowNodePreparationRequirement, WorkflowNodeResult } from "./workflows/workflow-graph-executor.js";
+import { workflowNodeRequiresWorktree } from "./workflows/workflow-node-execution-needs.js";
 import type {
   AuditPrimitiveInput,
   PreparedWorktree,
   WorkflowPrimitiveContext,
   WorkflowRuntimePrimitives,
-} from "./runtime-primitives.js";
-import { createWorkflowRuntimePrimitiveProvider } from "./workflow-runtime-primitive-provider.js";
-import { WorkflowCustomNodeExecutionService } from "./workflow-custom-node-execution.js";
-import { WorkflowReviewService } from "./workflow-review-service.js";
-import { WorkflowPlanningService } from "./workflow-planning-service.js";
+} from "./execution/runtime-primitives.js";
+import { createWorkflowRuntimePrimitiveProvider } from "./workflows/workflow-runtime-primitive-provider.js";
+import { WorkflowCustomNodeExecutionService } from "./workflows/workflow-custom-node-execution.js";
+import { WorkflowReviewService } from "./workflows/workflow-review-service.js";
+import { WorkflowPlanningService } from "./workflows/workflow-planning-service.js";
 import {
   buildPlanVerifiedMessage,
   buildReviewUnavailableMessage,
@@ -71,7 +79,7 @@ import {
   buildStepFailureMessage,
   emitProactiveStatus,
   sanitizeFailureReason,
-} from "./proactive-status.js";
+} from "./project/proactive-status.js";
 import {
   ApprovalRequestStore,
   buildExecutionMemoryInstructions,
@@ -93,15 +101,22 @@ import {
   summarizeVerificationOutput,
   VERIFICATION_LOG_MAX_CHARS,
   type VerificationResult,
-} from "./verification-utils.js";
-import { canonicalFusionBranchName, canonicalStepInstanceBranchName, generateWorktreeName, resolveTaskWorkingBranch } from "./worktree-names.js";
-import { resolveTaskWorktreePath, resolveWorktreesDir } from "./worktree-paths.js";
+} from "./execution/verification-utils.js";
+import { canonicalFusionBranchName, canonicalStepInstanceBranchName, generateWorktreeName, resolveTaskWorkingBranch } from "./worktree/worktree-names.js";
+import {
+  collectPlanReviewFeedbackHistory,
+  countPlanReviewRevisionAttempts,
+  formatPlanReviewRevisionFeedback,
+  nextPlanReviewAttemptCount,
+  PLAN_REVIEW_FEEDBACK_HISTORY_LIMIT,
+} from "./plan-review-feedback-history.js";
+import { resolveTaskWorktreePath, resolveWorktreesDir } from "./worktree/worktree-paths.js";
 import { Type, type Static } from "@earendil-works/pi-ai";
 import { describeModel, formatModelMarkerDetails, promptWithFallback, compactSessionContext } from "./pi.js";
-import { buildAgentGatedActionSummary } from "./permanent-agent-gating.js";
-import { accumulateSessionTokenUsage, captureSessionTokenBaseline, mergeTokenUsagePerModel, resetSessionTokenBaseline } from "./session-token-usage.js";
+import { buildAgentGatedActionSummary } from "./agents/permanent-agent-gating.js";
+import { accumulateSessionTokenUsage, captureSessionTokenBaseline, mergeTokenUsagePerModel, resetSessionTokenBaseline } from "./execution/session-token-usage.js";
 import { finalizePlanningSegment, startPlanningSegment, resolveEphemeralTaskCreationPolicy } from "@fusion/core";
-import { enforceTaskTokenBudgetForPersist } from "./token-budget-enforcer.js";
+import { enforceTaskTokenBudgetForPersist } from "./concurrency/token-budget-enforcer.js";
 import {
   createResolvedAgentSession,
   extractRuntimeHint,
@@ -111,11 +126,11 @@ import {
   resolveExecutorFallbackThinkingLevel,
   resolveValidatorThinkingLevel,
   resolveValidatorFallbackThinkingLevel,
-} from "./agent-session-helpers.js";
-import { buildSessionSkillContext } from "./session-skill-context.js";
-import { resolveMcpServersForStore } from "./mcp-resolution.js";
-import { proseSignalsClearApproval, extractJsonObjectCandidates, type ReviewVerdict, type ReviewResult } from "./reviewer.js";
-import { buildUserCommentsPromptSection, selectUserCommentsForAgentContext } from "./agent-user-comments.js";
+} from "./agents/agent-session-helpers.js";
+import { buildSessionSkillContext } from "./cli-runtime/session-skill-context.js";
+import { resolveMcpServersForStore } from "./mcp/mcp-resolution.js";
+import { proseSignalsClearApproval, extractJsonObjectCandidates, type ReviewVerdict, type ReviewResult } from "./execution/reviewer.js";
+import { buildUserCommentsPromptSection, selectUserCommentsForAgentContext } from "./agents/agent-user-comments.js";
 import { resolveSandboxBackend } from "./sandbox/index.js";
 import type { SandboxBackend } from "./sandbox/types.js";
 import { ModelRegistry, SessionManager, type ToolDefinition, type AgentSession } from "@earendil-works/pi-coding-agent";
@@ -125,17 +140,17 @@ import {
   dropPreHeldExecutorSlot,
   takePreHeldExecutorSlot,
   type AgentSemaphore,
-} from "./concurrency.js";
+} from "./concurrency/concurrency.js";
 // FNXC:Workspace 2026-06-21-15:00: F5/F8 — wire in the previously dead workspace-path helpers.
 // `normalizeRepoRelPath` is the single shared scope-path normalizer (F8); `deriveRepoScopeSubset`
 // maps the task's repo-prefixed declared File Scope to a repo-LOCAL subset so the per-repo scope-leak
 // filter reuses the SAME always-allowed/scope-match surface as the non-workspace path (F5). One-way
 // executor→workspace-paths edge (workspace-paths imports nothing).
-import { deriveRepoScopeSubset, normalizeRepoRelPath } from "./workspace-paths.js";
-import { preservedWorktreeTargetPathForTask } from "./worktree-pinning.js";
-import { RemovalReason, classifyTaskWorktree, describeRegisteredWorktrees, detectGitRepository, detectNestedWorktreeRoot, getRegisteredWorktreePaths, isInsideWorktreesDir, isRegisteredGitWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, type GitRepoDetection, type WorktreePool } from "./worktree-pool.js";
-import { attemptBranchAutocorrect } from "./branch-autocorrect.js";
-import { ActiveSessionWorktreeRemovalError } from "./worktree-backend.js";
+import { deriveRepoScopeSubset, normalizeRepoRelPath } from "./worktree/workspace-paths.js";
+import { preservedWorktreeTargetPathForTask } from "./worktree/worktree-pinning.js";
+import { RemovalReason, classifyTaskWorktree, describeRegisteredWorktrees, detectGitRepository, detectNestedWorktreeRoot, getRegisteredWorktreePaths, isInsideWorktreesDir, isRegisteredGitWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, type GitRepoDetection, type WorktreePool } from "./worktree/worktree-pool.js";
+import { attemptBranchAutocorrect } from "./execution/branch-autocorrect.js";
+import { ActiveSessionWorktreeRemovalError } from "./worktree/worktree-backend.js";
 import {canonicalizeWorktreePath, registerArchiveWorkspaceWorktreeDisposer, registerArchiveWorktreeDisposer, registerTaskMoveDisposer} from "@fusion/core";
 import {
   ActiveSessionPathHeldByForeignTaskError,
@@ -144,7 +159,7 @@ import {
   executingTaskLock,
   reconcileSelfOwnedActiveSessionForRemoval,
   type ActiveSessionKind,
-} from "./active-session-registry.js";
+} from "./agents/active-session-registry.js";
 // CLI Agent Executor (U7): task ↔ CLI session orchestration seam.
 import {
   CliTaskSession,
@@ -163,8 +178,8 @@ import {
   classifyStaleLock,
   parseIndexLockPath,
   tryRemoveStaleLock,
-} from "./worktree-stale-lock.js";
-import { parseStaleRegistrationPath, recoverStaleRegistration } from "./worktree-stale-registration.js";
+} from "./worktree/worktree-stale-lock.js";
+import { parseStaleRegistrationPath, recoverStaleRegistration } from "./worktree/worktree-stale-registration.js";
 import {
   BranchConflictError,
   BranchCrossContaminationError,
@@ -178,67 +193,68 @@ import {
   reanchorBranchToBase,
   inspectBranchConflict,
   reportBranchAttribution,
-} from "./branch-conflicts.js";
+} from "./execution/branch-conflicts.js";
 import {
   classifyOrphanOurAdvance,
   rehomeOrphanOntoIntegration,
-} from "./merger-orphan-rehome.js";
-import { BranchAttributionError, filterFilesToOwnTaskCommits } from "./branch-attribution.js";
-import { resolveIntegrationBranch } from "./integration-branch.js";
-import { AgentLogger } from "./agent-logger.js";
+} from "./merge/merger-orphan-rehome.js";
+import { BranchAttributionError, filterFilesToOwnTaskCommits } from "./execution/branch-attribution.js";
+import { resolveIntegrationBranch } from "./merge/integration-branch.js";
+import { AgentLogger } from "./agents/agent-logger.js";
 import { createLogger, executorLog, reviewerLog, formatError } from "./logger.js";
-import { TokenCapDetector } from "./token-cap-detector.js";
-import { isUsageLimitError, checkSessionError, type UsageLimitPauser } from "./usage-limit-detector.js";
-import { isNonContinuableSessionError, isNonPlanDefectPlanReviewFailure, isSessionContentionError, isTransientError, isSilentTransientError, isDeterministicExecuteFailure, isDeterministicStepExecuteGraphFailure } from "./transient-error-detector.js";
-import { withRateLimitRetry } from "./rate-limit-retry.js";
+import { TokenCapDetector } from "./errors/token-cap-detector.js";
+import { isUsageLimitError, checkSessionError, type UsageLimitPauser } from "./errors/usage-limit-detector.js";
+import { isNonContinuableSessionError, isNonPlanDefectPlanReviewFailure, isSessionContentionError, isTransientError, isSilentTransientError, isDeterministicExecuteFailure, isDeterministicStepExecuteGraphFailure } from "./errors/transient-error-detector.js";
+import { withRateLimitRetry } from "./errors/rate-limit-retry.js";
+import type { CredentialInstanceRotator } from "./credential-instance-rotation.js";
 import {
   detectExternalIntegrationEvidenceGaps,
   formatExternalIntegrationEvidenceDiagnostic,
 } from "./spec-validation/external-integration-evidence.js";
-import { computeRecoveryDecision, formatDelay, MAX_RECOVERY_RETRIES } from "./recovery-policy.js";
+import { computeRecoveryDecision, formatDelay, MAX_RECOVERY_RETRIES } from "./healing/recovery-policy.js";
 import {
   isRequiredArtifactReadFailedValue,
   parseRequiredArtifactMissingValue,
   requiredArtifactMissingValue,
   requiredArtifactReadFailedValue,
   workflowEntryArtifacts,
-} from "./required-workflow-artifacts.js";
-import type { StuckTaskDetector, StuckTaskEvent } from "./stuck-task-detector.js";
-import type { PluginRunner } from "./plugin-runner.js";
-import { isContextLimitError } from "./context-limit-detector.js";
-import { StepSessionExecutor } from "./step-session-executor.js";
+} from "./execution/required-workflow-artifacts.js";
+import type { StuckTaskDetector, StuckTaskEvent } from "./healing/stuck-task-detector.js";
+import type { PluginRunner } from "./plugins/plugin-runner.js";
+import { isContextLimitError } from "./errors/context-limit-detector.js";
+import { StepSessionExecutor } from "./execution/step-session-executor.js";
 import {
   isUsableWorktreeDirectory,
   makeAncestryBlastRadiusGuard,
   resetStepToBaseline,
   runTaskStep,
   type RunTaskStepResult,
-} from "./step-runner.js";
+} from "./execution/step-runner.js";
 // FNXC:MergerUnification 2026-06-21-19:05: the foundation branch imported `acquireWorkspaceRepoWorktree` here but never used it in executor.ts (the agent tool wraps it via agent-tools.ts), which fails lint on the inherited base. Removed until master-plan U1 re-adds it together with its per-repo acquisition usage.
-import { acquireTaskWorktree, type AcquireTaskWorktreeResult } from "./worktree-acquisition.js";
-import { resolveCapturedBaseCommitSha } from "./base-commit-capture.js";
-import { installTaskWorktreeIdentityGuard } from "./worktree-hooks.js";
+import { acquireTaskWorktree, type AcquireTaskWorktreeResult } from "./worktree/worktree-acquisition.js";
+import { resolveCapturedBaseCommitSha } from "./execution/base-commit-capture.js";
+import { installTaskWorktreeIdentityGuard } from "./worktree/worktree-hooks.js";
 import {
   resolveAgentInstructions,
   buildSystemPromptWithInstructions,
   buildPluginPromptSection,
-} from "./agent-instructions.js";
-import { buildPromptLayers, collapsePromptLayers } from "./prompt-layers.js";
-import { resolveAndEmitGoalContext } from "./goal-injection-diagnostics.js";
-import type { AgentReflectionService } from "./agent-reflection.js";
-import { createRunAuditor, generateSyntheticRunId, type EngineRunContext, type RunAuditor } from "./run-audit.js";
-import { AutoRecoveryDispatcher } from "./auto-recovery.js";
+} from "./agents/agent-instructions.js";
+import { buildPromptLayers, collapsePromptLayers } from "./execution/prompt-layers.js";
+import { resolveAndEmitGoalContext } from "./goals/goal-injection-diagnostics.js";
+import type { AgentReflectionService } from "./agents/agent-reflection.js";
+import { createRunAuditor, generateSyntheticRunId, type EngineRunContext, type RunAuditor } from "./util/run-audit.js";
+import { AutoRecoveryDispatcher } from "./healing/auto-recovery.js";
 import {
   classifyMissingWorktreeSessionStartFailure,
   extractMissingWorktreePathFromSessionStartFailure,
   isMissingWorktreeSessionStartFailure,
-} from "./restart-recovery-coordinator.js";
+} from "./healing/restart-recovery-coordinator.js";
 import { BranchWorktreeAutoRecoveryHandler } from "./auto-recovery-handlers/branch-worktree.js";
 import { autoRecoverWorktreeSessionStartFailure, COMPLETED_BLOCKED_PAUSE_REASON, MAX_WORKTREE_SESSION_RETRIES, PAUSE_ABORT_PARK_ERROR_MARKER, PAUSE_ABORT_PARK_OPERATOR_MARKER } from "./self-healing.js";
 import { ContaminationAutoRecoveryHandler } from "./auto-recovery-handlers/contamination.js";
 import { createFileScopeAutoRecoveryHandler } from "./auto-recovery-handlers/file-scope.js";
-import { ReadonlyViolationError, filterCustomToolsForReadonly } from "./workflow-step-tool-policy.js";
-import { evaluateSpecStaleness, getPromptPath } from "./spec-staleness.js";
+import { ReadonlyViolationError, filterCustomToolsForReadonly } from "./workflows/workflow-step-tool-policy.js";
+import { evaluateSpecStaleness, getPromptPath } from "./execution/spec-staleness.js";
 import { resolveDedicatedPlannerColumnsForTask } from "./planner-lane-resolution.js";
 import {
   createAgentCreateTool,
@@ -281,18 +297,18 @@ import {
   createTraitListTool as sharedCreateTraitListTool,
   createAcquireRepoWorktreeTool,
 } from "./agent-tools.js";
-import { getTaskCompletionBlockerForStore } from "./task-completion.js";
-import { createStreamingDeltaNormalizer } from "./streaming-delta.js";
+import { getTaskCompletionBlockerForStore } from "./execution/task-completion.js";
+import { createStreamingDeltaNormalizer } from "./execution/streaming-delta.js";
 import {
   getEnabledPluginTools,
   getResearchGuidanceForSurface,
   isResearchToolSurfaceEnabled,
-} from "./tool-availability.js";
-import { createFusionAuthStorage, createFusionModelRegistry } from "./auth-storage.js";
-import { createRunVerificationTool, runVerificationCommand as runTaskVerificationCommand } from "./run-verification-tool.js";
-import { createFallbackModelObserver } from "./fallback-model-observer.js";
-import { recordRetry } from "./retry-burned-logger.js";
-import type { AgentActionGateContext } from "./agent-action-gate.js";
+} from "./execution/tool-availability.js";
+import { createFusionAuthStorage, createFusionModelRegistry } from "./auth/auth-storage.js";
+import { createRunVerificationTool, runVerificationCommand as runTaskVerificationCommand } from "./execution/run-verification-tool.js";
+import { createFallbackModelObserver } from "./auth/fallback-model-observer.js";
+import { recordRetry } from "./errors/retry-burned-logger.js";
+import type { AgentActionGateContext } from "./agents/agent-action-gate.js";
 
 /*
 FNXC:WorkflowLifecycle 2026-07-26-11:20:
@@ -315,7 +331,7 @@ function isGenericAbortProvenance(provenance: PausedAbortProvenance | undefined)
 }
 
 // Re-export for backward compatibility (tests import from executor.ts)
-export { summarizeToolArgs } from "./agent-logger.js";
+export { summarizeToolArgs } from "./agents/agent-logger.js";
 export {
   createAgentCreateTool,
   createAgentDeleteTool,
@@ -510,6 +526,38 @@ function countOptionalStepRevisionAttempts(task: Pick<Task, "log">, key: string,
 
 function optionalStepRevisionLogOutcome(details: string, key: string): string {
   return `${details}\n${OPTIONAL_STEP_REVISION_KEY_MARKER} ${key}`;
+}
+
+function buildGraphPlanReviewConvergenceContext(
+  task: Pick<Task, "workflowStepResults">,
+  revisionKey: string,
+): string {
+  // FNXC:PlanReviewConvergence 2026-08-04-06:35 (FN-8768): Retry numbering uses
+  // the uncapped durable attempt ledger, while prompt prose uses the separately
+  // bounded, deduplicated same-episode decision history.
+  const priorAttemptCount = countPlanReviewRevisionAttempts(task.workflowStepResults, { revisionKey });
+  const attempt = priorAttemptCount + 1;
+  if (attempt <= 1) return "";
+
+  const history = collectPlanReviewFeedbackHistory(task.workflowStepResults, { revisionKey });
+  const lines = [
+    `## Convergence — Plan Review attempt ${attempt}`,
+    "Treat the cumulative prior feedback below as a decision primer. Verify each prior blocker against the current PROMPT.md before looking for new findings.",
+    "- Do not re-raise a resolved or semantically duplicate blocker.",
+    "- A newly blocking finding must identify the revision that introduced it, the prior blocker that genuinely masked it, or why it is independently delivery-blocking for correctness, security, data safety, or executability. Record an earlier reviewer miss explicitly; never demote a critical defect merely because it was missed before.",
+  ];
+  if (attempt >= 3) {
+    lines.push(
+      "- Severity ratchet (attempt 3+): only delivery-blocking critical defects may return REVISE; important/minor wording or implementation-detail findings are advisory.",
+    );
+  }
+  if (history.length > 0) {
+    lines.push("", "### Cumulative prior Plan Review ledger");
+    history.forEach((feedback, index) => {
+      lines.push(`#### PR${index + 1}`, feedback);
+    });
+  }
+  return lines.join("\n");
 }
 
 const STEP_STATUSES: StepStatus[] = ["pending", "in-progress", "done", "skipped"];
@@ -1405,7 +1453,7 @@ If you have just finished a step's work, immediately call \`fn_task_update\` to 
 
 The user is not watching this conversation in real-time. They will read the final result. Asking permission wastes a full retry cycle and may orphan committed work.
 
-**Cannot proceed — the honest blocked exit.** If the work genuinely cannot be finished (an upstream API break, a missing prerequisite task, an unresolvable external error), call \`fn_task_done(outcome="blocked", reason="<concrete blocker + what would unblock it>", blockedBy=["FN-XXXX"])\`. This parks the task as failed WITHOUT any completion claim, leaves your steps in their true statuses, preserves your worktree/branch, and records \`blockedBy\` task IDs as dependencies so the task requeues once the blocker completes.
+**Cannot proceed — the honest blocked exit.** If the work genuinely cannot be finished (an upstream API break, a missing prerequisite task, or an unresolvable external error), call \`fn_task_done(outcome="blocked", reason="<concrete blocker + what would unblock it>", blockedBy=["FN-XXXX"])\`. That parks durable failed WITHOUT auto-replan so the engine does not thrash; task IDs requeue when those tasks complete. Blockers must be Fusion board tasks — do NOT treat open GitHub PRs touching the same files as blockers; other PRs are not claims on your file scope. Do NOT skip remaining steps to fake completion.
 This is THE correct action when you are stuck — do NOT instead mark the remaining steps \`skipped\` and call \`fn_task_done\` to make the task look finished. Skipping steps to escape a blocker launders a failure into \`done\` and is never the right move. (\`skipped\` remains valid only for the stale-premise path below, when the requested work is already present on HEAD.) Never write the blocker as plain prose.
 
 ## How to work
@@ -1668,6 +1716,8 @@ export interface TaskExecutorOptions {
    * Parks only tasks routed through the provider whose API limit was detected.
    */
   usageLimitPauser?: UsageLimitPauser;
+  /** Runtime-owned credential rotation inventory/cooldown coordinator. */
+  credentialRotator?: CredentialInstanceRotator;
   /** Stuck task detector — monitors agent sessions for stagnation and triggers recovery. */
   stuckTaskDetector?: StuckTaskDetector;
   /** AgentStore for tracking spawned child agents. If not provided, spawning is disabled. */
@@ -1708,7 +1758,7 @@ export interface TaskExecutorOptions {
    *  callbacks) for the `pr-create`/`pr-respond`/`pr-merge` workflow nodes. The
    *  runtime binds the store and threads the CLI-injected ops. Absent → the pr-*
    *  node kinds fail closed. */
-  prNodes?: import("./pr-nodes.js").PrNodeDeps;
+  prNodes?: import("./merge/pr-nodes.js").PrNodeDeps;
   /**
    * CLI Agent Executor runtime (U7). When present, workflow nodes with
    * `config.executor === "cli-agent"` drive an engine-owned CLI session via the
@@ -5142,7 +5192,12 @@ export class TaskExecutor {
     if (!merged) return;
     const tokenUsage = this.tokenUsageWithModelSnapshot(merged, activeSession, task.tokenUsage, delta);
 
-    tokenCacheMetricsLog.log(JSON.stringify({
+    /*
+    FNXC:EngineDiagnostics 2026-08-01-18:11:
+    Executor token-cache metrics mirror session-token-usage: debug-only telemetry
+    (FUSION_DEBUG=token-cache-metrics), not default TUI noise.
+    */
+    tokenCacheMetricsLog.debug(JSON.stringify({
       taskId,
       agentId: task.assignedAgentId ?? undefined,
       role: "executor",
@@ -5610,7 +5665,25 @@ export class TaskExecutor {
         return false;
       }
       const revisionKey = optionalStepRevisionKey(info.nodeId ?? "plan-review", info.stepName);
-      const currentCount = countOptionalStepRevisionAttempts(liveTask, revisionKey, info.stepName);
+      // FNXC:PlanReviewConvergence 2026-08-04-06:35 (FN-8768): The terminal
+      // result is persisted before remediation. Budget from the durable raw
+      // same-episode count, not the capped prompt history or cross-episode log.
+      const currentEpisodeAttemptCount = countPlanReviewRevisionAttempts(
+        liveTask.workflowStepResults,
+        { revisionKey },
+      );
+      const matchingProjection = liveTask.workflowStepResults?.find((result) =>
+        result.workflowStepId === revisionKey
+        || (revisionKey === PLAN_REVIEW_GROUP_ID && result.workflowStepName === "Plan Review"),
+      );
+      const hasEpisodeBoundary = matchingProjection?.supersededAt != null
+        || matchingProjection?.priorAttempts?.some((attempt) => attempt.supersededAt != null) === true;
+      const nextCount = currentEpisodeAttemptCount > 0
+        ? currentEpisodeAttemptCount
+        : hasEpisodeBoundary
+          ? 1
+          : countOptionalStepRevisionAttempts(liveTask, revisionKey, info.stepName) + 1;
+      const currentCount = nextCount - 1;
       if (!budget.unbounded && currentCount >= budget.max) {
         // U3: finite replan budget exhausted → park awaiting-approval (cap park
         // re-owned from the deleted triage gate), not a silent leave-in-place.
@@ -5623,20 +5696,18 @@ export class TaskExecutor {
        * FNXC:PlanReviewReplanCap 2026-07-05-17:28:
        * FN-7561: an unset Plan Review revision budget resolves to "unbounded" (see FNXC:WorkflowRevisionBudget above), which by design skips the ceiling check — so a task whose planner and reviewer persistently disagree, or whose reviewer keeps hard-failing, replans triage↔plan-review forever, silently burning a triage + review LLM call every cycle (FN-7525 ran 13+ attempts overnight with zero operator visibility). Enforce a finite safety ceiling even when unbounded: once hit, emit a loud halting log entry and STOP replanning (return false) so the gate falls through to a visible failed/parked state a human can act on, instead of looping indefinitely. Explicit numeric operator budgets are still honored as-is above; this only backstops the unbounded DEFAULT.
        */
-      const PLAN_REVIEW_REPLAN_HARD_CAP = 15;
-      if (budget.unbounded && currentCount >= PLAN_REVIEW_REPLAN_HARD_CAP) {
+      if (budget.unbounded && currentCount >= PLAN_REVIEW_FEEDBACK_HISTORY_LIMIT) {
         // U3: the unbounded-default safety ceiling now parks awaiting-approval with
         // the replan-cap reason (re-owned from the deleted triage gate) so the
         // non-convergence surfaces to a human instead of silently sitting in place.
         await this.parkPlanReviewReplanCapExhausted(
           taskId,
-          String(PLAN_REVIEW_REPLAN_HARD_CAP),
+          String(PLAN_REVIEW_FEEDBACK_HISTORY_LIMIT),
           currentCount,
           feedback,
         );
         return true;
       }
-      const nextCount = currentCount + 1;
       const totalFixCount = (liveTask.postReviewFixCount ?? 0) + 1;
       const budgetLabel = budget.unbounded ? "unbounded" : String(budget.max);
       await this.store.updateTask(taskId, { postReviewFixCount: totalFixCount }, this.getRunContextFor(taskId));
@@ -5644,7 +5715,7 @@ export class TaskExecutor {
       await this.store.logEntry(
         taskId,
         "AI spec revision requested",
-        `Plan Review requested a planning revision before execution.\n\nStatus: ${info.status}\nFeedback:\n${feedback}`,
+        formatPlanReviewRevisionFeedback(revisionKey, info.status, feedback),
         this.getRunContextFor(taskId),
       );
       /*
@@ -6675,7 +6746,22 @@ export class TaskExecutor {
             fix) must preserve the prior `status:"failed"` entry's history in
             `priorAttempts` rather than silently overwriting it.
             */
-            const existing = upsertWorkflowStepResult(live?.workflowStepResults, result);
+            const isPlanReviewResult = result.workflowStepId === PLAN_REVIEW_GROUP_ID
+              || result.workflowStepName === "Plan Review";
+            const resultToPersist = isPlanReviewResult
+              ? {
+                  ...result,
+                  planReviewAttemptCount: nextPlanReviewAttemptCount(
+                    live?.workflowStepResults?.find((existing) => existing.workflowStepId === result.workflowStepId),
+                    result,
+                  ),
+                }
+              : result;
+            const existing = upsertWorkflowStepResult(
+              live?.workflowStepResults,
+              resultToPersist,
+              isPlanReviewResult ? { maxPriorAttempts: PLAN_REVIEW_FEEDBACK_HISTORY_LIMIT } : undefined,
+            );
             await this.store.updateTask(taskId, { workflowStepResults: existing }, this.getRunContextFor(taskId));
           } catch {
             // Result recording is additive visibility — never affect the run.
@@ -7191,8 +7277,8 @@ export class TaskExecutor {
       base: string | undefined,
     ) => Promise<{ worktreePath: string; branchName: string }>;
     resolveIntegrationBase: () => Promise<string | undefined>;
-    integrationGitOps: import("./step-integration.js").IntegrationGitOps;
-    integrationProjection: import("./step-integration.js").IntegrationProjection;
+    integrationGitOps: import("./execution/step-integration.js").IntegrationGitOps;
+    integrationProjection: import("./execution/step-integration.js").IntegrationProjection;
     semaphoreAvailability: () => number;
     resumeReconcile: (
       pinned: number,
@@ -7243,7 +7329,7 @@ export class TaskExecutor {
         return { worktreePath: created.path, branchName: created.branch };
       },
       integrationGitOps: {
-        integrate: async (branchName, stepIndex): Promise<import("./step-integration.js").IntegrationAttemptResult> => {
+        integrate: async (branchName, stepIndex): Promise<import("./execution/step-integration.js").IntegrationAttemptResult> => {
           const cwd = await mainWorktree();
           const target = await mainBranch();
           // The instance branch is checked out in its OWN worktree, so the rebase
@@ -8735,6 +8821,7 @@ export class TaskExecutor {
               ),
               taskValidatorProvider: detail.validatorModelProvider,
               taskValidatorModelId: detail.validatorModelId,
+              taskValidatorCredentialInstanceId: detail.validatorCredentialInstanceId,
               projectValidatorProvider: settings.validatorProvider,
               projectValidatorModelId: settings.validatorModelId,
               projectValidatorFallbackProvider: settings.validatorFallbackProvider,
@@ -9212,6 +9299,7 @@ export class TaskExecutor {
     task: TaskDetail,
     settings: Settings,
     nodeId: string,
+    refreshStaleBase = false,
   ): Promise<TaskDetail> {
     /*
     FNXC:WorkflowExecution 2026-06-29-08:21:
@@ -9267,13 +9355,19 @@ export class TaskExecutor {
           }),
         taskEnv: process.env,
         secretsStore: this.options.secretsStore,
+        refreshStaleBase,
       });
       this.addActiveWorktree(task.id, acquisition.worktreePath);
       if (!acquisition.isResume) {
         await this.captureBaseCommitSha(task, acquisition.worktreePath, audit, { isResume: false });
       }
       this.options.onStart?.(task, acquisition.worktreePath);
-      executorLog.log(`${task.id}: workflow node '${nodeId}' acquired worktree at ${acquisition.worktreePath}`);
+      /*
+      FNXC:EngineDiagnostics 2026-08-03-05:54:
+      Per-node worktree acquisition is expected graph plumbing once the task has a worktree;
+      Worktree created / Starting lines remain the operator-visible lifecycle events.
+      */
+      executorLog.debug(`${task.id}: workflow node '${nodeId}' acquired worktree at ${acquisition.worktreePath}`);
       return await this.store.getTask(task.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -9388,8 +9482,14 @@ export class TaskExecutor {
   ): Promise<void> {
     if (!requirement.requiresWorktree) return;
     const live = await this.store.getTask(nodeTask.id);
-    if (live.worktree && existsSync(live.worktree)) return;
-    const taskForAcquisition = live.worktree
+    const executionCodeNode = node.kind === "code";
+    if (live.worktree && existsSync(live.worktree) && !executionCodeNode) return;
+    /*
+    FNXC:WorktreeBaseRefresh 2026-08-01-16:32:
+    An existing code-node checkout must remain attached to the acquisition input so it takes the
+    guarded reuse/refresh path. Only a missing recorded path is cleared to permit fresh creation.
+    */
+    const taskForAcquisition = live.worktree && !existsSync(live.worktree)
       ? ({ ...live, worktree: undefined, sessionFile: undefined } as TaskDetail)
       : live;
     if (live.worktree) {
@@ -9408,7 +9508,13 @@ export class TaskExecutor {
     FNXC:WorkflowExecution 2026-06-29-09:50:
     The workflow graph decides which nodes require pre-execution lifecycle resources. This adapter only fulfills a graph-declared worktree requirement with executor-owned git mechanics; custom-node handlers remain ordinary node execution and no longer decide when to bootstrap task isolation.
     */
-    await this.ensureGraphCustomNodeWorktree(taskForAcquisition, settings, node.id);
+    /*
+    FNXC:WorktreeBaseRefresh 2026-08-01-16:04:
+    Code nodes are the sole graph implementation boundary. They reacquire an existing planning
+    worktree with refresh enabled before a model session can start; planning and review nodes keep
+    their C0 checkout so lane isolation does not become an implicit rebase policy.
+    */
+    await this.ensureGraphCustomNodeWorktree(taskForAcquisition, settings, node.id, executionCodeNode);
   }
 
   private async finalizeMergeConfirmedWorkflowGraphTask(taskId: string, reason: string): Promise<boolean> {
@@ -9840,9 +9946,8 @@ export class TaskExecutor {
     } else if (mode === "prompt") {
       const injected = await this.buildInjectedRuntimeEnv(live.id, worktreePath, executionTarget.branch ?? undefined);
       nodeEnv = injected.env;
-      executorLog.log(
-        `${live.id}: graph node '${node.id}' runtime env injected (${injected.pathEntryCount} PATH entries, ${injected.injectedKeyCount} env keys)`,
-      );
+      // FNXC:EngineDiagnostics 2026-08-03-05:54: per-node PATH/key injection is plumbing, not a lifecycle event.
+      executorLog.debug(`${live.id}: graph node '${node.id}' runtime env injected (${injected.pathEntryCount} PATH entries, ${injected.injectedKeyCount} env keys)`);
     }
 
     // (U3) Genuinely-unattended signal. `unattended` is an explicit opt-in
@@ -10118,6 +10223,19 @@ export class TaskExecutor {
   private isSessionContentionGraphFailure(result: WorkflowGraphTaskRunResult): boolean {
     if (this.graphFailureValue(result) === SESSION_CONTENTION_HOLD_VALUE) return true;
     return this.graphFailureErrorTexts(result).some((text) => isSessionContentionError(text));
+  }
+
+  /** True only for the pre-session refresh refusal values emitted by graph preparation. */
+  private isWorktreeBaseRefreshGraphFailure(result: WorkflowGraphTaskRunResult): boolean {
+    return new Set([
+      "stale-base-conflict",
+      "dirty-worktree",
+      "base-unresolvable",
+      "worktrunk-refresh-unsupported",
+      "git-refresh-failed",
+      "base-persistence-failed-compensated",
+      "base-reconciliation-required",
+    ]).has(this.graphFailureValue(result) ?? "");
   }
 
   /*
@@ -10503,7 +10621,9 @@ export class TaskExecutor {
     const groupId = live.branchContext?.groupId?.trim();
     // FNXC:PostgresCutover 2026-07-10: getBranchGroup is async on the PG branch.
     const branchGroup = groupId ? await this.store.getBranchGroup(groupId) : null;
-    return isLiveSharedBranchGroupMemberIntegration(live, branchGroup);
+    const settings = await this.store.getSettings();
+    const projectDefaultBranch = await resolveIntegrationBranch(this.rootDir, settings);
+    return isLiveSharedBranchGroupMemberIntegration(live, branchGroup, projectDefaultBranch);
   }
 
   private async routeRetryableRemediationGraphFailureToPreMergeFix(
@@ -11294,6 +11414,39 @@ export class TaskExecutor {
         return;
       }
       /*
+      FNXC:WorktreeBaseRefresh 2026-08-01-16:33:
+      Code-node acquisition publishes every stale/unknown checkout refusal as a typed graph value.
+      Keep it in the same bounded delayed-resume lane as other recoverable pre-session failures so
+      no handler runs, no failure edge mislabels it as a plan defect, and its exact reason survives
+      in the task log. Exhaustion deliberately leaves the task held for a later clean acquisition.
+      */
+      if (this.isWorktreeBaseRefreshGraphFailure(result)) {
+        const refreshKind = this.graphFailureValue(result)!;
+        const priorRetries = live.graphResumeRetryCount ?? 0;
+        if (priorRetries < MAX_TRANSIENT_GRAPH_RESUME_RETRIES) {
+          const nextRetries = priorRetries + 1;
+          const message = `Worktree base refresh blocked execution (${refreshKind}) — retrying in place (${nextRetries}/${MAX_TRANSIENT_GRAPH_RESUME_RETRIES})`;
+          await this.store.logEntry(task.id, message, undefined, this.getRunContextFor(task.id));
+          await this.store.updateTask(task.id, { graphResumeRetryCount: nextRetries }, this.getRunContextFor(task.id));
+          const scheduleRetry = () => {
+            this.execute(live).catch((err) =>
+              executorLog.error(`Failed worktree base refresh retry for ${task.id}:`, err),
+            );
+          };
+          const handle = setTimeout(scheduleRetry, TRANSIENT_GRAPH_RESUME_RETRY_BACKOFF_MS);
+          handle.unref?.();
+        } else {
+          await this.store.logEntry(
+            task.id,
+            `Worktree base refresh remains blocked (${refreshKind}) — retry budget exhausted; task remains held`,
+            undefined,
+            this.getRunContextFor(task.id),
+          );
+        }
+        await this.persistTokenUsage(task.id);
+        return;
+      }
+      /*
       FNXC:MissingWorktreeRecovery 2026-07-16-18:25:
       An unusable-worktree session-start refusal inside a graph node must route to the bounded
       worktree-session recovery BEFORE any other classifier: FN-7977's provider-failure hold
@@ -11748,6 +11901,61 @@ export class TaskExecutor {
       const failedNode = result.visitedNodeIds[result.visitedNodeIds.length - 1];
       const mergeGraphFailure = this.isMergeGraphFailure(failedNode);
       const failureValue = this.graphFailureValue(result);
+      /*
+      FNXC:DuplicateIntake 2026-08-01-19:24:
+      Defense in depth for FN-8704: if a card slipped into WIP with PROMPT.md = only
+      `DUPLICATE: FN-####`, the graph dies at the parse node. Parked `failed` in WIP
+      re-ran forever on Retry. Rebound to needs-replan with feedback instead of
+      terminal failed so triage rewrites a real plan. Primary gate is scheduler
+      filesystem validation; this recovers cards already past admission.
+      */
+      if (
+        !live.paused
+        && !live.userPaused
+        && !live.deletedAt
+        && typeof failedNode === "string"
+        && (failedNode === "parse" || failedNode.endsWith(":parse") || failedNode.includes("parse-steps") || failureValue === "parse-error" || failureValue === "missing-implementation-steps")
+      ) {
+        try {
+          const tasksDir = typeof this.store.getTasksDir === "function"
+            ? this.store.getTasksDir()
+            : join(this.rootDir, ".fusion", "tasks");
+          const promptContent = await readFile(getPromptPath(tasksDir, live.id), "utf-8").catch(() => "");
+          const redirectReason = nonExecutableDuplicateRedirectReason(promptContent);
+          if (redirectReason) {
+            const marker = parseExplicitDuplicateMarker(promptContent);
+            const replanColumn = await resolveReplanTargetColumn(this.store, live.id);
+            await moveTaskToReplanColumn(this.store, { id: live.id, column: live.column }, replanColumn);
+            await this.store.updateTask(live.id, {
+              status: "needs-replan",
+              error: null,
+            }, this.getRunContextFor(live.id));
+            const feedback = marker
+              ? `Execution parse rejected non-executable PROMPT.md (DUPLICATE: ${marker.canonicalId}). Write a full plan body; do not re-emit only DUPLICATE: ${marker.canonicalId}.`
+              : `Execution parse rejected non-executable PROMPT.md (${redirectReason}). Write a full plan body.`;
+            await this.store.logEntry(
+              live.id,
+              "AI spec revision requested",
+              feedback,
+              this.getRunContextFor(live.id),
+            );
+            await this.store.logEntry(
+              live.id,
+              `Parse node failed on duplicate redirect — rebounded to ${replanColumn} for re-specification`,
+              redirectReason,
+              this.getRunContextFor(live.id),
+            );
+            executorLog.warn(`${live.id}: ${redirectReason} — replan instead of failed park`);
+            this.activeWorktrees.delete(live.id);
+            await this.persistTokenUsage(live.id);
+            return;
+          }
+        } catch (replanErr) {
+          executorLog.warn(
+            `${live.id}: failed to rebound non-executable duplicate prompt after parse failure: ${replanErr instanceof Error ? replanErr.message : String(replanErr)}`,
+          );
+        }
+      }
       /*
       FNXC:WorkflowExecutionOwnership 2026-07-28-09:40 (U8 / R3):
       The execution-policy ladder below — the FN-7863/FN-7926 dispatch-loop gate, the FN-7996
@@ -12212,6 +12420,19 @@ export class TaskExecutor {
     if (live.deletedAt) return false;
     if (live.paused || live.userPaused === true) return false;
     if ((await resolveTerminalColumnsFor(this.store, live.id)).includes(live.column)) return false;
+    /*
+    FNXC:HonestBlockedExit 2026-08-02-23:59:
+    Durable external (task-dependency) BLOCKED parks must NOT bounce to todo for execution
+    resume — the scheduler requeues them when the blocking tasks complete. PR/file-claim
+    parks and the session-log BLOCKED promotion are removed (operator decision, FN-8728):
+    open PRs are never blockers, so only metadata-classed task-dependency parks are honored.
+    */
+    if (isDurableBlockedTask(live)) {
+      executorLog.log(
+        `${live.id}: graph failure resume skipped — durable BLOCKED park honored (task-dependency block)`,
+      );
+      return false;
+    }
     /*
      * FNXC:WorkflowCompletion 2026-07-01-16:26:
      * Backstop for issue #1863. The advisory completion-summary node must never
@@ -13024,6 +13245,7 @@ export class TaskExecutor {
               }),
             taskEnv,
             secretsStore: this.options.secretsStore,
+            refreshStaleBase: true,
           });
         } finally {
           this.unregisterConfiguredCommandController(task.id, taskCommandAbortController);
@@ -13258,9 +13480,8 @@ export class TaskExecutor {
 
       const injected = await this.buildInjectedRuntimeEnv(task.id, worktreePath, acquisition.branch ?? undefined);
       taskEnv = injected.env;
-      executorLog.log(
-        `${task.id}: executor runtime env injected (${injected.pathEntryCount} PATH entries, ${injected.injectedKeyCount} env keys)`,
-      );
+      // FNXC:EngineDiagnostics 2026-08-03-05:54: env injection counts are session setup, not operator state changes.
+      executorLog.debug(`${task.id}: executor runtime env injected (${injected.pathEntryCount} PATH entries, ${injected.injectedKeyCount} env keys)`);
 
       this.options.onStart?.(task, worktreePath);
 
@@ -13359,6 +13580,62 @@ export class TaskExecutor {
 
         let accumulatedStepTokenUsage = detail.tokenUsage;
         const tokenUsageRecordedSteps = new Set<number>();
+        let stepRotationEvent: import("./credential-instance-rotation.js").RotationEvent | undefined;
+        let stepRotationDeclined = false;
+        let stepDispatchedRotation = false;
+        const initialStepSessionModel = resolveExecutorSessionModel(
+          detail.modelProvider,
+          detail.modelId,
+          settings,
+          (stepIdentityAgent?.runtimeConfig ?? undefined) as Record<string, unknown> | undefined,
+          detail.credentialInstanceId ?? undefined,
+        );
+        let activeStepInstanceRef: ProviderInstanceRef | undefined = initialStepSessionModel.provider
+          ? {
+              providerId: initialStepSessionModel.provider,
+              instanceId: initialStepSessionModel.credentialInstanceId ?? DEFAULT_PROVIDER_INSTANCE_ID,
+            }
+          : undefined;
+        const stepExecutorRef: { current?: StepSessionExecutor } = {};
+        const nextStepInstance = async (): Promise<ProviderInstanceRef | undefined> => {
+          /*
+          FNXC:CredentialInstanceRotation 2026-08-01-11:22:
+          Executor-step retries refresh task and project pause state at the limit
+          boundary, rather than trusting dispatch snapshots. A pause arriving while
+          a session is in flight must prevent an autonomous billed-account switch.
+          */
+          const [liveTask, liveSettings] = await Promise.all([
+            this.store.getTask(task.id).catch(() => undefined),
+            this.store.getSettings().catch(() => settings),
+          ]);
+          if (stepRotationDeclined || this.pausedAborted.has(task.id) || !liveTask
+            || liveTask.userPaused === true || liveTask.autoMerge === false
+            || liveSettings.globalPause === true || liveSettings.enginePaused === true
+            || !activeStepInstanceRef?.providerId) return undefined;
+          stepRotationEvent ??= await this.options.credentialRotator?.beginEvent({
+            providerId: activeStepInstanceRef.providerId,
+            startingInstanceId: activeStepInstanceRef.instanceId,
+            lane: "executor-step",
+            taskId: task.id,
+          });
+          if (!stepRotationEvent) { stepRotationDeclined = true; return undefined; }
+          // FNXC:CredentialInstanceRotation 2026-08-01-11:34: beginEvent awaits credential inventory, so repeat the human-control check after it resolves. A pause that races this await must prevent cooldown writes and credential dispatch.
+          const [postInventoryTask, postInventorySettings] = await Promise.all([
+            this.store.getTask(task.id).catch(() => undefined),
+            this.store.getSettings().catch(() => settings),
+          ]);
+          if (this.pausedAborted.has(task.id) || !postInventoryTask
+            || postInventoryTask.userPaused === true || postInventoryTask.autoMerge === false
+            || postInventorySettings.globalPause === true || postInventorySettings.enginePaused === true) return undefined;
+          this.options.credentialRotator?.markLimited(activeStepInstanceRef);
+          if (stepDispatchedRotation) stepRotationEvent.recordOutcome("rotation-failed-limit");
+          const next = await stepRotationEvent.next();
+          if (!next) { stepRotationEvent.finishExhausted(); return undefined; }
+          activeStepInstanceRef = next;
+          stepDispatchedRotation = true;
+          await stepExecutorRef.current?.retargetCredentialInstance(next);
+          return next;
+        };
         /*
         FNXC:WorkflowStepControl 2026-06-29-10:15:
         Graph-pinned step sessions are lifecycle-owned by the workflow graph, not by the legacy executor prompt/tools. Their callback projection must use source:"graph" so independent steps can finish out of index order and so duplicate graph runner writes do not trigger the legacy sequential fn_task_update guard.
@@ -13377,6 +13654,14 @@ export class TaskExecutor {
           pluginRunner: this.options.pluginRunner,
           runtimeHint: stepSessionRuntimeHint,
           assignedAgentRuntimeConfig: (stepIdentityAgent?.runtimeConfig ?? undefined) as Record<string, unknown> | undefined,
+          /*
+           * FNXC:CredentialInstanceRotation 2026-08-01-10:41:
+           * Step sessions must start on the task-selected account. On a usage-limit
+           * retry, re-read the live selection and resolve its provider with the same
+           * effective column-agent runtime config used to create the session.
+           */
+          credentialInstanceId: detail.credentialInstanceId,
+          resolveCredentialInstanceRetarget: nextStepInstance,
           // Attribute the per-step run auditor to the column agent when it governs
           // (U4); absent → StepSessionExecutor falls back to assignedAgentId.
           effectiveAgentId: stepColumnAgent?.agent.id,
@@ -13461,6 +13746,7 @@ export class TaskExecutor {
             });
           },
         });
+        stepExecutorRef.current = stepExecutor;
         this.setActiveStepExecutor(task.id, stepExecutor, worktreePath, this.createSeenSteeringIds(detail));
 
         const stepWork = async () => {
@@ -13729,6 +14015,11 @@ export class TaskExecutor {
         };
 
         const retryableStepWork = () => withRateLimitRetry(stepWork, {
+          signal: this.activeWorkflowGraphAbortControllers.get(task.id)?.signal,
+          rotation: this.options.credentialRotator && activeStepInstanceRef ? {
+            providerId: activeStepInstanceRef.providerId,
+            nextInstance: nextStepInstance,
+          } : undefined,
           onRetry: (attempt, delayMs, error) => {
             const delaySec = Math.round(delayMs / 1000);
             executorLog.warn(`⏳ ${task.id} rate limited — retry ${attempt} in ${delaySec}s: ${error.message}`);
@@ -13741,6 +14032,7 @@ export class TaskExecutor {
 
         try {
           await this.runWithExecutorSemaphore(task.id, retryableStepWork);
+          if (stepDispatchedRotation) stepRotationEvent?.recordOutcome("rotation-succeeded");
         } catch (err: unknown) {
           const { message: errorMessage, detail: errorDetail, stack: errorStack } = formatError(err);
           if (this.depAborted.has(task.id)) {
@@ -14232,6 +14524,11 @@ export class TaskExecutor {
         },
       });
 
+      let agentRotationEvent: import("./credential-instance-rotation.js").RotationEvent | undefined;
+      let agentRotationDeclined = false;
+      let agentDispatchedRotation = false;
+      let activeAgentInstanceRef: ProviderInstanceRef | undefined;
+
       const agentWork = async () => {
         // Resolve model settings using canonical lane hierarchy:
         // 1. Task override pair (modelProvider + modelId)
@@ -14247,12 +14544,28 @@ export class TaskExecutor {
         Override column agents own initial session model selection as well as mid-flight re-resolution. Ignore task-level modelProvider/modelId before resolveExecutorSessionModel so pre-existing task model pairs cannot run the column-agent identity on the task model.
         */
         const overrideColumnGovernsInitialSession = columnAgentSeam?.mode === "override";
-        const { provider: executorProvider, modelId: executorModelId } = resolveExecutorSessionModel(
+        const executorSessionModel = resolveExecutorSessionModel(
           overrideColumnGovernsInitialSession ? undefined : detail.modelProvider,
           overrideColumnGovernsInitialSession ? undefined : detail.modelId,
           settings,
           (identityAgent?.runtimeConfig ?? undefined) as Record<string, unknown> | undefined,
+          overrideColumnGovernsInitialSession ? undefined : activeAgentInstanceRef?.instanceId ?? detail.credentialInstanceId,
         );
+        const { provider: executorProvider, modelId: executorModelId } = executorSessionModel;
+        /*
+        FNXC:ProviderAuth 2026-08-03-17:35:
+        Keep a synthetic "default" ref only for credential-rotation bookkeeping (startingInstanceId).
+        Never force that synthetic id into createResolvedAgentSession: chat omits unset instance ids
+        and custom providers authenticate via customProviders.apiKey. Passing "default" required an
+        auth.json default instance and failed step-execute while chat with the same model worked.
+        After a usage-limit rotation, agentDispatchedRotation is true and the offered instance is real.
+        */
+        activeAgentInstanceRef ??= executorProvider
+          ? { providerId: executorProvider, instanceId: executorSessionModel.credentialInstanceId ?? DEFAULT_PROVIDER_INSTANCE_ID }
+          : undefined;
+        const sessionCredentialInstanceId = agentDispatchedRotation
+          ? activeAgentInstanceRef?.instanceId
+          : executorSessionModel.credentialInstanceId;
         const { provider: executorFallbackProvider, modelId: executorFallbackModelId } = resolveExecutorFallbackModel(settings);
         const executorSessionThinkingSource = this.graphSeamThinkingLevel.get(task.id) ?? detail.thinkingLevel;
         const executorThinkingLevel = resolveExecutorThinkingLevel(executorSessionThinkingSource, settings);
@@ -14353,6 +14666,7 @@ export class TaskExecutor {
             onToolEnd: agentLogger.onToolEnd,
             defaultProvider: executorProvider,
             defaultModelId: executorModelId,
+            ...(sessionCredentialInstanceId ? { credentialInstanceId: sessionCredentialInstanceId } : {}),
             fallbackProvider: executorFallbackProvider,
             fallbackModelId: executorFallbackModelId,
             fallbackThinkingLevel: executorFallbackThinkingLevel,
@@ -14797,6 +15111,7 @@ export class TaskExecutor {
                   onToolEnd: agentLogger.onToolEnd,
                   defaultProvider: executorProvider,
                   defaultModelId: executorModelId,
+                  ...(executorSessionModel.credentialInstanceId ? { credentialInstanceId: executorSessionModel.credentialInstanceId } : {}),
                   fallbackProvider: executorFallbackProvider,
                   fallbackModelId: executorFallbackModelId,
                   fallbackThinkingLevel: executorFallbackThinkingLevel,
@@ -15060,6 +15375,51 @@ export class TaskExecutor {
       };
 
       const retryableWork = () => withRateLimitRetry(agentWork, {
+        signal: this.activeWorkflowGraphAbortControllers.get(task.id)?.signal,
+        rotation: this.options.credentialRotator ? {
+          providerId: activeAgentInstanceRef?.providerId ?? detail.modelProvider ?? "",
+          nextInstance: async () => {
+            /*
+            FNXC:CredentialInstanceRotation 2026-08-01-11:05:
+            Executor agent runs rotate only after the shared retry helper classifies a
+            usage limit. Live task/settings reads and the executor pause-abort marker
+            bail before opening an event, because a pause arriving mid-run cannot
+            authorize changing the billed credential. A successful offer causes
+            agentWork to construct a fresh session; a non-limit failure intentionally
+            leaves its attempt without an outcome row.
+            */
+            const [liveTask, liveSettings] = await Promise.all([
+              this.store.getTask(task.id).catch(() => undefined),
+              this.store.getSettings().catch(() => settings),
+            ]);
+            if (agentRotationDeclined || this.pausedAborted.has(task.id) || !liveTask
+              || liveTask.userPaused === true || liveTask.autoMerge === false
+              || liveSettings.globalPause === true || liveSettings.enginePaused === true
+              || !activeAgentInstanceRef?.providerId) return undefined;
+            agentRotationEvent ??= await this.options.credentialRotator!.beginEvent({
+              providerId: activeAgentInstanceRef.providerId,
+              startingInstanceId: activeAgentInstanceRef.instanceId,
+              lane: "executor-agent",
+              taskId: task.id,
+            });
+            if (!agentRotationEvent) { agentRotationDeclined = true; return undefined; }
+            // FNXC:CredentialInstanceRotation 2026-08-01-11:34: Inventory lookup is asynchronous; re-check human control before this retry marks a credential limited or offers another billed account.
+            const [postInventoryTask, postInventorySettings] = await Promise.all([
+              this.store.getTask(task.id).catch(() => undefined),
+              this.store.getSettings().catch(() => settings),
+            ]);
+            if (this.pausedAborted.has(task.id) || !postInventoryTask
+              || postInventoryTask.userPaused === true || postInventoryTask.autoMerge === false
+              || postInventorySettings.globalPause === true || postInventorySettings.enginePaused === true) return undefined;
+            this.options.credentialRotator!.markLimited(activeAgentInstanceRef);
+            if (agentDispatchedRotation) agentRotationEvent.recordOutcome("rotation-failed-limit");
+            const next = await agentRotationEvent.next();
+            if (!next) { agentRotationEvent.finishExhausted(); return undefined; }
+            activeAgentInstanceRef = next;
+            agentDispatchedRotation = true;
+            return next;
+          },
+        } : undefined,
         onRetry: (attempt, delayMs, error) => {
           const delaySec = Math.round(delayMs / 1000);
           executorLog.warn(`⏳ ${task.id} rate limited — retry ${attempt} in ${delaySec}s: ${error.message}`);
@@ -15071,6 +15431,7 @@ export class TaskExecutor {
       });
 
       await this.runWithExecutorSemaphore(task.id, retryableWork);
+      if (agentDispatchedRotation) agentRotationEvent?.recordOutcome("rotation-succeeded");
     } catch (err: unknown) {
       const { message: errorMessage, detail: errorDetail, stack: errorStack } = formatError(err);
       if (this.depAborted.has(task.id)) {
@@ -17130,7 +17491,7 @@ export class TaskExecutor {
           { description: "\"completed\" (default) finishes the task; \"blocked\" honestly parks it as failed because the work cannot proceed. Use \"blocked\" instead of skipping steps + completing when you are stuck." },
         )),
         blockedBy: Type.Optional(Type.Array(Type.String(), {
-          description: "When outcome=\"blocked\": task IDs (e.g. [\"FN-8145\"]) that must complete before this task can proceed. Recorded as real dependency edges so the task requeues behind the blocker.",
+          description: "When outcome=\"blocked\": Fusion task IDs (e.g. [\"FN-8145\"]) that must complete before this task can proceed. Task IDs become real dependency edges. Open GitHub PRs are not valid blockers.",
         })),
         reason: Type.Optional(Type.String({
           description: "Required when outcome=\"blocked\": concrete explanation of what is blocking the work and what is needed to unblock it.",
@@ -17155,31 +17516,40 @@ export class TaskExecutor {
           }
 
           const blockedTask = await store.getTask(taskId);
-          const blockedByIds = Array.from(
+          const rawBlockedBy = Array.from(
             new Set((params.blockedBy ?? []).map((id) => id.trim()).filter((id) => id.length > 0)),
           );
+          /*
+          FNXC:HonestBlockedExit 2026-08-02-23:59 (operator decision — FN-8728 vs PR #2398):
+          Blocked exits classify on Fusion task dependencies ONLY. The FN-8700 file-claim/open-PR
+          classification is removed: open PRs are never blockers, legacy pr:N refs are discarded,
+          and reason prose never makes a block durable. Task deps → durable failed park (requeues
+          when deps complete); no deps → plan defect → needs-replan (FN-8634).
+          */
+          const classification = classifyBlockedExit(reason, rawBlockedBy);
+          const { taskIds: blockedByIds } = partitionBlockedByRefs(rawBlockedBy);
+          const thrashCount = countBlockedThrashHits(
+            blockedTask.log,
+            classification.thrashSignature,
+          ) + 1;
+          const thrashExhausted = !classification.allowAutoReplan && thrashCount >= BLOCKED_THRASH_LIMIT;
 
-          const parkError = `BLOCKED: ${reason}`;
-          // Record blockedBy as real dependency edges (union with existing) so the task requeues
-          // behind the blocker rather than re-running the doomed work. Preserve worktree/branch/
-          // step progress (FN-7863 EXECUTION_DISPATCH_LOOP_EXHAUSTED park convention) — do NOT
-          // call onDone() so the outer loop's `liveTask.status === "failed"` honor-park branch keeps
-          // the row parked for the blocker/operator instead of handing off to review.
+          const parkError = thrashExhausted
+            ? `BLOCKED: ${reason} [thrash-exhausted after ${thrashCount} identical durable blocks]`
+            : `BLOCKED: ${reason}`;
+          // Record blockedBy TASK ids as real dependency edges (union with existing).
           const mergedDependencies = blockedByIds.length > 0
             ? Array.from(new Set([...(blockedTask.dependencies ?? []), ...blockedByIds]))
             : undefined;
           /*
           FNXC:HonestBlockedExit 2026-08-01-01:40 (operator: FN-8634 "shouldn't show a failed badge"):
-          When `blockedBy` is EMPTY there is nothing external to wait for — the block is a defect in
-          the PLAN (contradictory requirements, impossible step), and the designed recovery is a
-          replan, which the planner overseer was already performing after the alarm: park failed →
-          overseer "stage=executor signal=failed" → steer to replan. Skip the alarm: park directly
-          as `needs-replan` (the graph's durable replan signal) with the BLOCKED reason in the log,
-          and move to the replan column so triage re-admits it. A blocked exit WITH dependencies
-          keeps the failed park — waiting on other tasks is a real park an operator may act on.
-          The run-audit event fires for both shapes (`parkedAs` discriminates, ids/outcomes-only).
+          When `blockedBy` is EMPTY, park needs-replan (auto-replan) — nothing external to wait for.
+          Task-dependency blocks park failed so the scheduler leaves the card alone until deps complete.
           */
-          const autoReplanPark = blockedByIds.length === 0;
+          const autoReplanPark = classification.allowAutoReplan && blockedByIds.length === 0 && !thrashExhausted;
+          const metaPatch = !autoReplanPark
+            ? buildExternalBlockMetadataPatch(classification, thrashCount)
+            : undefined;
           if (autoReplanPark) {
             const replanColumn = await resolveReplanTargetColumn(this.store, taskId);
             await store.logEntry(
@@ -17207,11 +17577,14 @@ export class TaskExecutor {
               paused: false,
               pausedByAgentId: null,
               ...(mergedDependencies ? { dependencies: mergedDependencies } : {}),
+              ...(metaPatch ? { sourceMetadataPatch: metaPatch } : {}),
             }, this.getRunContextFor(taskId));
 
             await store.logEntry(
               taskId,
-              `${parkError} — recorded dependencies: ${blockedByIds.join(", ")} — parked failed (honest blocked exit; steps preserved)`,
+              thrashExhausted
+                ? `${parkError} — durable external block thrash-exhausted (signature=${classification.thrashSignature}); parked failed, no auto-requeue`
+                : `${parkError} — recorded dependencies: ${blockedByIds.join(", ")} — parked failed (honest blocked exit; steps preserved)`,
               undefined,
               this.getRunContextFor(taskId),
             );
@@ -17228,17 +17601,30 @@ export class TaskExecutor {
               blockedBy: blockedByIds,
               hasReason: true,
               parkedAs: autoReplanPark ? "auto-replan" : "failed",
+              blockedClass: classification.class,
+              thrashCount,
+              thrashExhausted,
             },
           });
           await this.persistTokenUsage(taskId);
-          executorLog.log(`⛔ ${taskId} ${autoReplanPark ? "parked for automatic replan via blocked exit (no dependencies)" : `parked failed via blocked exit (blockedBy: ${blockedByIds.join(", ")})`}`);
+          executorLog.log(
+            `⛔ ${taskId} ${
+              autoReplanPark
+                ? "parked for automatic replan via blocked exit (plan defect, no dependencies)"
+                : thrashExhausted
+                  ? `parked failed via blocked thrash-exhaustion (class=${classification.class})`
+                  : `parked failed via durable blocked exit (class=${classification.class}; blockedBy tasks: ${blockedByIds.join(", ") || "none"})`
+            }`,
+          );
 
           return {
             content: [{
               type: "text" as const,
               text: autoReplanPark
-                ? "Task parked as blocked with no blocking dependencies — queued for automatic replan so the plan can resolve the conflict. Steps left in their true statuses; no completion recorded."
-                : `Task parked as blocked (failed). Recorded ${blockedByIds.length} blocking dependency(ies); it will requeue once they complete. Steps left in their true statuses; no completion recorded.`,
+                ? "Task parked as blocked with no blocking task dependencies — queued for automatic replan so the plan can resolve the conflict. Steps left in their true statuses; no completion recorded."
+                : thrashExhausted
+                  ? "Task parked as blocked (failed) after repeated identical durable blocks — no further automatic retries. Resolve the blocking tasks or replan manually."
+                  : `Task parked as blocked (failed). Recorded ${blockedByIds.length} blocking task dependency(ies); it will requeue once they complete. Steps left in their true statuses; no completion recorded.`,
             }],
             details: {},
           };
@@ -17773,12 +18159,14 @@ export class TaskExecutor {
 
       // Resolve model using the executor's model hierarchy
       const assignedRuntimeConfig = await this.getAssignedAgentRuntimeConfig(task.assignedAgentId);
-      const { provider: executorProvider, modelId: executorModelId } = resolveExecutorSessionModel(
+      const executorSessionModel = resolveExecutorSessionModel(
         task.modelProvider,
         task.modelId,
         settings,
         assignedRuntimeConfig,
+        task.credentialInstanceId,
       );
+      const { provider: executorProvider, modelId: executorModelId } = executorSessionModel;
 
       const executorFallback = resolveExecutorFallbackModel(settings);
 
@@ -17810,6 +18198,7 @@ Do not refactor, rename broadly, or make opportunistic improvements.
         onToolEnd: logger.onToolEnd,
         defaultProvider: executorProvider,
         defaultModelId: executorModelId,
+        ...(executorSessionModel.credentialInstanceId ? { credentialInstanceId: executorSessionModel.credentialInstanceId } : {}),
         fallbackProvider: executorFallback.provider,
         fallbackModelId: executorFallback.modelId,
         fallbackThinkingLevel: resolveExecutorFallbackThinkingLevel(task.thinkingLevel, settings),
@@ -18140,7 +18529,11 @@ ${scopeGuard}
       }
 
       await this.store.updateTask(task.id, { baseCommitSha });
-      executorLog.log(`${task.id}: captured baseCommitSha ${baseCommitSha.slice(0, 7)}`);
+      /*
+      FNXC:EngineDiagnostics 2026-08-03-05:54:
+      Base-SHA capture is per-task setup bookkeeping (also in run-audit). Worktree created stays info.
+      */
+      executorLog.debug(`${task.id}: captured baseCommitSha ${baseCommitSha.slice(0, 7)}`);
       await audit.git({ type: "commit:create", target: baseCommitSha, metadata: { purpose: "base", preserved: false } });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -18538,13 +18931,16 @@ ${scopeGuard}
     // assumptions and proceed instead of parking on a question. Explicit opt-in
     // only (default false = board run); see runGraphCustomNode / KTD-3.
     const unattended = stepOptions?.unattended === true;
-    const isPlanReviewStep = workflowStep.id === "graph:plan-review-step" || workflowStep.name === "Plan Review";
     const workflowStepMetadata = workflowStep as WorkflowStep & {
       optionalGroupId?: string;
       reviewCanFixInline?: boolean;
       requireExternalIntegrationEvidence?: boolean;
     };
     const optionalGroupId = workflowStepMetadata.optionalGroupId;
+    const isPlanReviewStep = workflowStep.id === "graph:plan-review-step"
+      || workflowStep.name === "Plan Review"
+      || optionalGroupId === PLAN_REVIEW_GROUP_ID;
+    const planReviewRevisionKey = optionalStepRevisionKey(optionalGroupId, workflowStep.name);
     const isReviewTypeWorkflowStep =
       isPlanReviewStep
       || workflowStepMetadata.reviewCanFixInline === true
@@ -18586,6 +18982,9 @@ ${scopeGuard}
     }
     const workflowReviewSpecText = typeof workflowReviewSpecArtifact === "string" ? workflowReviewSpecArtifact : "";
     const planReviewSpecText = isPlanReviewStep ? workflowReviewSpecText : "";
+    const planReviewConvergenceContext = isPlanReviewStep
+      ? buildGraphPlanReviewConvergenceContext(task, planReviewRevisionKey)
+      : "";
 
     /*
     FNXC:PlanReview 2026-07-21-16:30:
@@ -18688,14 +19087,15 @@ ${workflowReviewSpecText}
 
 --- BEGIN PROMPT.md ---
 ${planReviewSpecText}
---- END PROMPT.md ---`
+--- END PROMPT.md ---${planReviewConvergenceContext ? `\n\n${planReviewConvergenceContext}` : ""}`
       : `Diff Scope (files changed by THIS task vs base):
 ${scopeFileBlock}${diffShortstat ? `\nDiff stat: ${diffShortstat}` : ""}
 
 CRITICAL SCOPING RULES — read before doing anything else:
-- Review ONLY the files listed above. Do NOT analyze unmodified files or unrelated parts of the codebase.
-- If NONE of the files in the diff scope are relevant to your review category (e.g. a UX/design reviewer with no UI/CSS/component files in scope, a security reviewer with no auth/network code in scope, an a11y reviewer with no markup changes), respond IMMEDIATELY with a single short approval line such as "No relevant changes in scope — approved." and STOP. Do not start exploring the codebase.
-- Your wall-clock budget is short. Spending it browsing unmodified files will cause this step to time out and block merge.${approvedContractBlock}`;
+- The modified-file list is the starting point and primary reporting scope, not a prohibition on reading code required to validate the change.
+- Read necessary callers, selectors, shared helpers, consumers, and tests outside that list when they establish production reachability, invariant coverage, or API/UI parity. Do not report unrelated pre-existing issues.
+- If NONE of the modified files are relevant to your review category, confirm that from the list and fast-bail without broad repository exploration.
+- Keep adjacent reads bounded to the changed behavior and its immediate production/test chain so the review finishes within its wall-clock budget.${approvedContractBlock}`;
 
     const latestTaskForUserComments = await this.store.getTask(task.id).catch(() => task);
     const workflowStepUserComments = selectUserCommentsForAgentContext(latestTaskForUserComments, { limit: null });
@@ -18752,7 +19152,8 @@ This review-type node may fix issues it finds before returning a final verdict.
 - If you find an in-scope issue you can fix safely, edit the relevant files in this same session, run the smallest relevant verification, and then return APPROVE or APPROVE_WITH_NOTES.
 - Return REVISE only when the issue is still present, cannot be safely fixed in this reviewer session, needs broader executor remediation, or needs user input.
 - Plan Review may use fn_task_prompt_write to replace the task's PROMPT.md with the complete revised plan. Do not implement product code from Plan Review.
-- Code Review and Browser Verification may fix implementation issues inside the assigned task worktree and should mention the fix in notes.`
+- Code Review and Browser Verification may fix implementation issues inside the assigned task worktree and should mention the fix in notes.
+- After any inline edit, treat your own change as untrusted: re-read the fresh diff, restart the mandatory review procedure from its requirements ledger and production-reachability checks, and rerun the smallest relevant verification. Never approve solely because the local fix compiles or its narrow test passes.`
       : "";
 
     const systemPrompt = `You are a workflow step agent executing: ${workflowStep.name}
@@ -18803,16 +19204,20 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
           task.validatorModelId,
           settings,
           assignedRuntimeConfig,
+          task.validatorCredentialInstanceId,
         )
       : resolveExecutorSessionModel(
           task.modelProvider,
           task.modelId,
           settings,
           assignedRuntimeConfig,
+          task.credentialInstanceId,
         );
     const useOverride = !!(workflowStep.modelProvider && workflowStep.modelId);
     const primaryProvider = useOverride ? workflowStep.modelProvider : laneModel.provider;
     const primaryModelId = useOverride ? workflowStep.modelId : laneModel.modelId;
+    // FNXC:ProviderAuth 2026-08-01-08:39: A workflow-step model override has no paired instance selection, so only the resolved primary task lane may carry its requested credential instance. Fallback attempts must retain their provider-default behavior rather than inheriting a primary-provider identity.
+    const primaryCredentialInstanceId = useOverride ? undefined : laneModel.credentialInstanceId;
 
     const workflowFallback = isReviewTypeWorkflowStep
       ? resolveValidatorFallbackModel(settings)
@@ -18992,6 +19397,9 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
         tools: toolMode,
         defaultProvider: provider,
         defaultModelId: modelId,
+        ...(attemptLabel !== "fallback" && primaryCredentialInstanceId
+          ? { credentialInstanceId: primaryCredentialInstanceId }
+          : {}),
         fallbackProvider: workflowFallback.provider,
         fallbackModelId: workflowFallback.modelId,
         fallbackThinkingLevel: workflowStepFallbackThinkingLevel,
@@ -21358,9 +21766,8 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
       const ir = await resolveWorkflowIrForTask(this.store, taskId);
       const stepSource = this.resolveTaskStepSource(ir);
       if (stepSource) {
-        executorLog.log(
-          `${taskId}: reconcile step source governed by parse-steps(artifact=${stepSource.artifact}, parser=${stepSource.parser})`,
-        );
+        // FNXC:EngineDiagnostics 2026-08-03-05:54: parse-steps source read-through is diagnostic only.
+        executorLog.debug(`${taskId}: reconcile step source governed by parse-steps(artifact=${stepSource.artifact}, parser=${stepSource.parser})`);
       }
     } catch {
       // Read-through is diagnostic only; never block reconcile on it.
@@ -22104,8 +22511,13 @@ Child agent: ${agent.id} (${name})`;
           // Resolve executor model via canonical lane hierarchy so child agents
           // honor project executionProvider/executionModelId overrides (parity
           // with main executor at the top of agentWork()).
-          const { provider: childExecutorProvider, modelId: childExecutorModelId } =
-            resolveExecutorSessionModel(undefined, undefined, settings, agent.runtimeConfig as Record<string, unknown> | undefined);
+          const childExecutorSessionModel = resolveExecutorSessionModel(
+            undefined,
+            undefined,
+            settings,
+            agent.runtimeConfig as Record<string, unknown> | undefined,
+          );
+          const { provider: childExecutorProvider, modelId: childExecutorModelId } = childExecutorSessionModel;
 
           const childExecutorFallback = resolveExecutorFallbackModel(settings);
 
@@ -22119,6 +22531,7 @@ Child agent: ${agent.id} (${name})`;
             tools: "coding",
             defaultProvider: childExecutorProvider,
             defaultModelId: childExecutorModelId,
+            ...(childExecutorSessionModel.credentialInstanceId ? { credentialInstanceId: childExecutorSessionModel.credentialInstanceId } : {}),
             fallbackProvider: childExecutorFallback.provider,
             fallbackModelId: childExecutorFallback.modelId,
             fallbackThinkingLevel: resolveExecutorFallbackThinkingLevel(undefined, settings),

@@ -20,10 +20,10 @@ import {
   PLANNER_OVERSIGHT_LEVELS,
   getErrorMessage,
 } from "@fusion/core";
-import { resolveEffectivePlannerOversightLevel } from "../../../core/src/workflow-settings-resolver";
-import { resolveTaskSessionAdvisorEnabled } from "../../../core/src/session-advisor";
-import { isNearDuplicateCanonicalInactive } from "../../../core/src/near-duplicate-canonical";
-import { getRevertOfId, findOpenUndoTaskForSource } from "../utils/taskRevert";
+import { resolveEffectivePlannerOversightLevel } from "../../../core/src/workflows/workflow-settings-resolver";
+import { resolveTaskSessionAdvisorEnabled } from "../../../core/src/agents/session-advisor";
+import { isNearDuplicateCanonicalInactive } from "../../../core/src/duplicates/near-duplicate-canonical";
+import { getRevertOfId, findOpenUndoTaskForSource, isTaskReverted } from "../utils/taskRevert";
 import {
   isArchivedColumnRole,
   isCompleteColumnRole,
@@ -32,7 +32,7 @@ import {
   isReviewColumnRole,
   isWipColumnRole,
 } from "../utils/columnRoles";
-import { resolveEffectiveAutoMerge } from "../../../core/src/task-merge";
+import { resolveEffectiveAutoMerge } from "../../../core/src/merge/task-merge";
 import { uploadAttachment, deleteAttachment, updateTask, repairOverlapBlocker, pauseTask, unpauseTask, fetchTaskDetail, fetchTaskVerificationRequest, fetchSettings, fetchTaskEffectiveSettings, fetchGlobalSettings, requestSpecRevision, rebuildTaskSpec, approvePlan, rejectPlan, refineTask, fetchWorkflowResults, assignTask, fetchAgents, fetchAgent, refreshPrStatus, fetchBoardWorkflows, updateTaskCustomFields, summarizeTitle, fetchWorkflowSettingValues, nudgeOverseer, stopOverseer, explainOverseer, fetchModels, fetchNodes, api } from "../api";
 import type { RevertTaskOptions, RevertTaskResult, ModelInfo, NodeInfo } from "../api";
 import type { BoardWorkflowsPayload, WorkflowFieldDefinition, CustomFieldRejection } from "../api";
@@ -85,7 +85,7 @@ import { hasPendingAutomaticRecovery, isTaskManuallyRetryable } from "../utils/t
 import { findInReviewStallLogEntry, IN_REVIEW_STALL_LOG_REGEX } from "../utils/findInReviewStallLogEntry";
 import { getTaskLogEntryAction, getTaskLogEntryOutcome } from "../utils/taskLogEntryDisplay";
 import { getRelativeTimeBucket } from "../utils/relativeTimeAgo";
-import { isReviewBudgetExhaustedApproval } from "../utils/reviewBudgetApproval";
+import { isReviewBudgetExhaustedApproval, isTaskAwaitingPlanApproval } from "../utils/reviewBudgetApproval";
 import { ACTIVE_STATUSES, resolveEffectiveExecutor, resolveEffectivePlanning, resolveEffectiveValidator, type ModelSelection } from "./effective-model-resolution";
 import { TaskContextMenu, buildTaskActionMenuModel, getTaskPrAutomationLabel } from "./TaskContextMenu";
 import type { TaskContextMenuColumnFlags, TaskContextMenuColumnMetadata } from "./TaskContextMenu";
@@ -102,6 +102,17 @@ const ACTIVITY_VIEW_MENU_MIN_WIDTH = 160;
 const ACTIVITY_VIEW_MENU_MIN_HEIGHT = 120;
 const ACTIVITY_VIEW_MENU_MAX_HEIGHT = 320;
 const ACTIVITY_VIEW_MENU_OPEN_VIEWPORT_GUARD_MS = 350;
+const PROMPT_REFRESH_INTERVAL_MS = 5_000;
+
+function isPromptRefreshLifecycleActive(task: Pick<Task, "status" | "workflowStepResults">): boolean {
+  if (task.status === "planning" || task.status === "needs-replan") return true;
+  return task.workflowStepResults?.some((result) =>
+    (result.workflowStepId === "plan-review" || result.workflowStepId === "plan-replan")
+    && result.startedAt != null
+    && result.completedAt == null,
+  ) ?? false;
+}
+
 // FNXC:TaskDetailSwipeBack 2026-07-05-12:30: FN-7587 — mobile-mode gating the presentation-only predictive-back slide/fade transition on the modal/list/nested task-detail surface uses the shared viewport classifier, so known 768px tablets do not receive phone-only presentation.
 // FNXC:PlannerOversight 2026-07-05-00:00: FN-7604 — the OVERSIGHT_MENU_MOBILE_BREAKPOINT constant (formerly used to branch the oversight controls between an inline cluster and this overflow menu) was removed; the overflow-menu dropdown is now the single universal surface at every viewport, so no breakpoint gates it.
 
@@ -368,6 +379,8 @@ export interface TaskDetailModalProps {
   onClose: () => void;
   onOpenDetail: (task: Task | TaskDetail) => void; // For clicking dependencies
   onMoveTask: (id: string, column: Column, optionsOrPosition?: { preserveProgress?: boolean } | number) => Promise<Task>;
+  /** Opens a New Task draft from a reverted task description. */
+  onReviseTask?: (task: Task) => void;
   onDeleteTask: (id: string, options?: {
     removeDependencyReferences?: boolean;
     removeLineageReferences?: boolean;
@@ -760,6 +773,7 @@ export function TaskDetailContent({
   onOpenDetail,
   onMoveTask,
   onDeleteTask,
+  onReviseTask,
   onArchiveTask,
   onRevertTask,
   onMergeTask,
@@ -825,6 +839,27 @@ export function TaskDetailContent({
     !("prompt" in task),
   );
   const [verificationRequest, setVerificationRequest] = useState<TaskVerificationRequest | null>(null);
+  const detailRequestGenerationRef = useRef(0);
+  const detailRequestRef = useRef<{ key: string; promise: Promise<TaskDetail> } | null>(null);
+
+  /*
+  FNXC:TaskDetailPlan 2026-08-03-02:24:
+  A slim task can need its initial detail and its visible Definition refresh in the same commit.
+  Share that project-scoped request so opening Definition produces one authoritative fetch rather
+  than invalidating the initial load and issuing duplicate traffic.
+  */
+  const requestTaskDetail = useCallback((taskId: string, requestProjectId?: string) => {
+    const key = `${requestProjectId ?? ""}:${taskId}`;
+    if (detailRequestRef.current?.key === key) return detailRequestRef.current.promise;
+
+    const promise = fetchTaskDetail(taskId, requestProjectId);
+    detailRequestRef.current = { key, promise };
+    void promise.then(
+      () => { if (detailRequestRef.current?.promise === promise) detailRequestRef.current = null; },
+      () => { if (detailRequestRef.current?.promise === promise) detailRequestRef.current = null; },
+    );
+    return promise;
+  }, []);
 
   /*
   FNXC:TaskPopupViewGating 2026-07-23-10:20:
@@ -845,6 +880,8 @@ export function TaskDetailContent({
   }, [task.id, projectId, active]);
 
   useEffect(() => {
+    // FNXC:TaskDetailPlan 2026-08-03-02:06: hidden kept-alive hosts defer their initial detail request until reveal.
+    if (!active) return;
     // If the prop already has a prompt field, it's a full TaskDetail
     if ("prompt" in task) {
       setFullDetail(task as TaskDetail);
@@ -853,24 +890,25 @@ export function TaskDetailContent({
     }
 
     let cancelled = false;
+    const requestGeneration = ++detailRequestGenerationRef.current;
     setDetailLoading(true);
     setFullDetail(null);
 
-    fetchTaskDetail(task.id, projectId)
+    requestTaskDetail(task.id, projectId)
       .then((detail) => {
-        if (!cancelled) {
+        if (!cancelled && detailRequestGenerationRef.current === requestGeneration) {
           setFullDetail(detail);
           setDetailLoading(false);
         }
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && detailRequestGenerationRef.current === requestGeneration) {
           setDetailLoading(false);
         }
       });
 
     return () => { cancelled = true; };
-  }, [task.id, projectId]);
+  }, [task.id, projectId, active, requestTaskDetail]);
 
   // Derive a working task that always has all available fields.
   // Falls back to the optimistic Task while loading, uses fullDetail once loaded.
@@ -1164,6 +1202,52 @@ export function TaskDetailContent({
   const [specEditContent, setSpecEditContent] = useState(workingTask.prompt || "");
   const [specFeedback, setSpecFeedback] = useState("");
   const [showRefineModal, setShowRefineModal] = useState(false);
+
+  /*
+  FNXC:TaskDetailPlan 2026-08-03-02:06:
+  Definition is the authoritative PROMPT.md view while planning or graph Plan Review may rewrite it.
+  Refresh on every visible show/re-show, then keep one bounded chain only for planning, replan, or a
+  running plan-review gate. The request generation prevents a late task/project response from
+  replacing current detail, and intentionally updates only the authoritative prompt so active edits
+  retain their local textarea buffer.
+  */
+  const promptRefreshLifecycleActive = isPromptRefreshLifecycleActive(task);
+  useEffect(() => {
+    if (!active || activeTab !== "definition") return;
+
+    let cancelled = false;
+    let inFlight = false;
+    const requestGeneration = ++detailRequestGenerationRef.current;
+    const refreshPrompt = () => {
+      if (inFlight) return;
+      inFlight = true;
+      void requestTaskDetail(task.id, projectId)
+        .then((detail) => {
+          if (cancelled || detailRequestGenerationRef.current !== requestGeneration || detail.id !== task.id) return;
+          setFullDetail((previous) => previous ? { ...previous, prompt: detail.prompt } : detail);
+          setDetailLoading(false);
+        })
+        .catch(() => {
+          // FNXC:TaskDetailPlan 2026-08-03-02:06: retain the last good prompt; a later eligible tick may recover.
+        })
+        .finally(() => { inFlight = false; });
+    };
+
+    refreshPrompt();
+    if (!promptRefreshLifecycleActive) {
+      return () => {
+        cancelled = true;
+        if (detailRequestGenerationRef.current === requestGeneration) detailRequestGenerationRef.current++;
+      };
+    }
+
+    const timer = window.setInterval(refreshPrompt, PROMPT_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      if (detailRequestGenerationRef.current === requestGeneration) detailRequestGenerationRef.current++;
+    };
+  }, [active, activeTab, projectId, promptRefreshLifecycleActive, requestTaskDetail, task.id]);
   const [prCreateOpen, setPrCreateOpen] = useState(false);
 
   useLayoutEffect(() => {
@@ -1390,8 +1474,11 @@ export function TaskDetailContent({
   const [editBranch, setEditBranch] = useState(task.branch ?? "");
   const [editBaseBranch, setEditBaseBranch] = useState(task.baseBranch ?? "");
   const [editExecutorModel, setEditExecutorModel] = useState("");
+  const [editCredentialInstanceId, setEditCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editValidatorModel, setEditValidatorModel] = useState("");
+  const [editValidatorCredentialInstanceId, setEditValidatorCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editPlanningModel, setEditPlanningModel] = useState("");
+  const [editPlanningCredentialInstanceId, setEditPlanningCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editThinkingLevel, setEditThinkingLevel] = useState("");
   // FNXC:PlannerOversight 2026-07-04-00:00: Per-task override of the workflow-native plannerOversightLevel setting (FN-7508). "" means "inherit from workflow" (clear-to-default).
   const [editPlannerOversightLevel, setEditPlannerOversightLevel] = useState("");
@@ -1950,12 +2037,17 @@ export function TaskDetailContent({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [showMoveMenu, showActionsMenu, showActivityViewMenu, showOversightMenu, showInlinePriorityPicker]);
 
-  // Reset spec edit state when task changes
+  /*
+  FNXC:TaskDetailPlan 2026-08-03-02:32:
+  A visible Definition poll may update the authoritative prompt while an operator is editing it.
+  Reset edit state only for a different task; reacting to prompt revisions would discard the active
+  local draft and replace its textarea.
+  */
   useEffect(() => {
     setIsEditingSpec(false);
     setSpecEditContent(workingTask.prompt || "");
     setSpecFeedback("");
-  }, [task.id, workingTask.prompt]);
+  }, [task.id]);
 
   // Note: TaskForm handles auto-focus internally via isActive prop
 
@@ -2144,8 +2236,11 @@ export function TaskDetailContent({
     const valModel = task.validatorModelProvider && task.validatorModelId ? `${task.validatorModelProvider}/${task.validatorModelId}` : "";
     const planModel = task.planningModelProvider && task.planningModelId ? `${task.planningModelProvider}/${task.planningModelId}` : "";
     setEditExecutorModel(execModel);
+    setEditCredentialInstanceId(task.credentialInstanceId);
     setEditValidatorModel(valModel);
+    setEditValidatorCredentialInstanceId(task.validatorCredentialInstanceId);
     setEditPlanningModel(planModel);
+    setEditPlanningCredentialInstanceId(task.planningCredentialInstanceId);
     setEditThinkingLevel(task.thinkingLevel ?? "");
     setEditPlannerOversightLevel(task.plannerOversightLevel ?? "");
     setEditNodeId(task.nodeId);
@@ -2208,6 +2303,9 @@ export function TaskDetailContent({
     if (editExecutorModel !== currentExecutorModel) {
       updates.modelProvider = executorSelection?.provider ?? null;
       updates.modelId = executorSelection?.modelId ?? null;
+      updates.credentialInstanceId = null;
+    } else if ((editCredentialInstanceId ?? "") !== (task.credentialInstanceId ?? "")) {
+      updates.credentialInstanceId = editCredentialInstanceId ?? null;
     }
 
     const validatorSelection = splitModelSelection(editValidatorModel);
@@ -2215,6 +2313,9 @@ export function TaskDetailContent({
     if (editValidatorModel !== currentValidatorModel) {
       updates.validatorModelProvider = validatorSelection?.provider ?? null;
       updates.validatorModelId = validatorSelection?.modelId ?? null;
+      updates.validatorCredentialInstanceId = null;
+    } else if ((editValidatorCredentialInstanceId ?? "") !== (task.validatorCredentialInstanceId ?? "")) {
+      updates.validatorCredentialInstanceId = editValidatorCredentialInstanceId ?? null;
     }
 
     const planningSelection = splitModelSelection(editPlanningModel);
@@ -2222,6 +2323,9 @@ export function TaskDetailContent({
     if (editPlanningModel !== currentPlanningModel) {
       updates.planningModelProvider = planningSelection?.provider ?? null;
       updates.planningModelId = planningSelection?.modelId ?? null;
+      updates.planningCredentialInstanceId = null;
+    } else if ((editPlanningCredentialInstanceId ?? "") !== (task.planningCredentialInstanceId ?? "")) {
+      updates.planningCredentialInstanceId = editPlanningCredentialInstanceId ?? null;
     }
 
     const currentThinkingLevel = task.thinkingLevel ?? "";
@@ -2269,7 +2373,7 @@ export function TaskDetailContent({
     }
 
     return { updates, error: null as string | null };
-  }, [editBaseBranch, editBranch, editDependencies, editDescription, editExecutionMode, editExecutorModel, editNodeId, editPlanningModel, editPriority, editReviewLevel, editSelectedWorkflowSteps, editSourceIssueExternalId, editSourceIssueProvider, editSourceIssueRepository, editSourceIssueUrl, editThinkingLevel, editPlannerOversightLevel, editTitle, editValidatorModel, task]);
+  }, [editBaseBranch, editBranch, editDependencies, editDescription, editExecutionMode, editCredentialInstanceId, editExecutorModel, editNodeId, editPlanningCredentialInstanceId, editPlanningModel, editPriority, editReviewLevel, editSelectedWorkflowSteps, editSourceIssueExternalId, editSourceIssueProvider, editSourceIssueRepository, editSourceIssueUrl, editThinkingLevel, editPlannerOversightLevel, editTitle, editValidatorCredentialInstanceId, editValidatorModel, task]);
 
   const persistEditChanges = useCallback(async (includeDescription: boolean) => {
     const { updates, error } = buildEditUpdates(includeDescription);
@@ -2370,8 +2474,11 @@ export function TaskDetailContent({
     editBranch,
     editBaseBranch,
     editExecutorModel,
+    editCredentialInstanceId,
     editValidatorModel,
+    editValidatorCredentialInstanceId,
     editPlanningModel,
+    editPlanningCredentialInstanceId,
     editThinkingLevel,
     editPlannerOversightLevel,
     editNodeId,
@@ -3301,8 +3408,8 @@ export function TaskDetailContent({
   const isIntakeColumn = detailColumnFlags
     ? detailColumnFlags.intake === true
     : task.column === "triage";
-  const isAwaitingApproval = isIntakeColumn && task.status === "awaiting-approval";
   const isPlanReviewReplanCapApproval = isReviewBudgetExhaustedApproval(task);
+  const isAwaitingApproval = isTaskAwaitingPlanApproval(task, isIntakeColumn);
 
   const handleTogglePause = useCallback(async () => {
     try {
@@ -3666,17 +3773,15 @@ export function TaskDetailContent({
     try {
       await updateTask(workingTask.id, { prompt: newContent }, projectId);
       addToast(t("taskDetail.spec.updated", "Spec updated"), "success");
-      // Update local detail data
-      if (fullDetail) {
-        fullDetail.prompt = newContent;
-      }
+      // FNXC:TaskDetailPlan 2026-08-03-02:06: update immutably so the preview reflects an explicit save.
+      setFullDetail((previous) => previous ? { ...previous, prompt: newContent } : previous);
     } catch (err) {
       addToast(getErrorMessage(err), "error");
       throw err;
     } finally {
       setIsSavingSpec(false);
     }
-  }, [workingTask, fullDetail, addToast]);
+  }, [workingTask, addToast]);
 
   const handleRequestSpecRevision = useCallback(async (feedback: string) => {
     setIsRequestingRevision(true);
@@ -4532,11 +4637,17 @@ export function TaskDetailContent({
                 baseBranch={editBaseBranch}
                 onBaseBranchChange={setEditBaseBranch}
                 executorModel={editExecutorModel}
-                onExecutorModelChange={setEditExecutorModel}
+                onExecutorModelChange={(value) => { setEditCredentialInstanceId(undefined); setEditExecutorModel(value); }}
+                credentialInstanceId={editCredentialInstanceId}
+                onCredentialInstanceIdChange={(instanceId) => setEditCredentialInstanceId(instanceId || undefined)}
                 validatorModel={editValidatorModel}
-                onValidatorModelChange={setEditValidatorModel}
+                onValidatorModelChange={(value) => { setEditValidatorCredentialInstanceId(undefined); setEditValidatorModel(value); }}
+                validatorCredentialInstanceId={editValidatorCredentialInstanceId}
+                onValidatorCredentialInstanceIdChange={(instanceId) => setEditValidatorCredentialInstanceId(instanceId || undefined)}
                 planningModel={editPlanningModel}
-                onPlanningModelChange={setEditPlanningModel}
+                onPlanningModelChange={(value) => { setEditPlanningCredentialInstanceId(undefined); setEditPlanningModel(value); }}
+                planningCredentialInstanceId={editPlanningCredentialInstanceId}
+                onPlanningCredentialInstanceIdChange={(instanceId) => setEditPlanningCredentialInstanceId(instanceId || undefined)}
                 thinkingLevel={editThinkingLevel}
                 onThinkingLevelChange={setEditThinkingLevel}
                 plannerOversightLevel={editPlannerOversightLevel}
@@ -6790,6 +6901,19 @@ export function TaskDetailContent({
                   <button className="btn btn-danger btn-sm" data-testid="detail-plan-approval-footer-reject" onClick={handleRejectPlan}>
                     {t("taskDetail.plan.rejectBtn", "Reject Plan")}
                   </button>
+                </>
+              )}
+
+              {/*
+              FNXC:TaskRevert 2026-08-01-19:51:
+              A reverted task remains accessible for provenance, but cannot present as ordinary
+              completed work. Detail therefore retains guarded Delete and routes Revise through
+              the shared New Task draft callback with the original description.
+              */}
+              {isTaskReverted(task.sourceMetadata) && (
+                <>
+                  <button className="btn btn-sm btn-danger" onClick={handleDelete} aria-label="Delete reverted task">Delete</button>
+                  {onReviseTask && <button className="btn btn-sm" onClick={() => { onReviseTask(task); requestClose?.(); }}>Revise</button>}
                 </>
               )}
 

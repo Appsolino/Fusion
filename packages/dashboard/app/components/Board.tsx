@@ -1,6 +1,6 @@
-import type { Task, TaskDetail, Column as ColumnType, ColumnId, TaskCreateInput, GithubIssueAction, MergeResult } from "@fusion/core";
-import { sortTasksForDisplayColumn, type DoneColumnSortMode } from "./taskSorting";
+import { sortTasksForDisplayColumn, type DoneColumnSortMode, type Task, type TaskDetail, type Column as ColumnType, type ColumnId, type TaskCreateInput, type GithubIssueAction, type MergeResult } from "@fusion/core";
 import { Column } from "./Column";
+import { TaskCard } from "./TaskCard";
 import "./Lane.css";
 import "./Board.css";
 import type { ToastType } from "../hooks/useToast";
@@ -24,6 +24,7 @@ import {
   writeBoardWorkflowSelection,
 } from "../utils/boardWorkflowSelection";
 import type { TaskContextMenuColumnMetadata } from "./TaskContextMenu";
+import { isTaskReverted, partitionRevertedTasks } from "../utils/taskRevert";
 
 interface BoardProps {
   tasks: Task[];
@@ -58,6 +59,8 @@ interface BoardProps {
   onUnarchiveTask?: (id: string) => Promise<Task>;
   /* FNXC:TaskRevert 2026-07-05-00:00 (FN-7525): threaded alongside onArchiveTask/onUnarchiveTask. */
   onRevertTask?: (id: string, body?: RevertTaskOptions) => Promise<RevertTaskResult>;
+  /** Opens a New Task draft using a reverted task description. */
+  onReviseTask?: (task: Task) => void;
   onDeleteTask?: (id: string, options?: {
     removeDependencyReferences?: boolean;
     removeLineageReferences?: boolean;
@@ -174,7 +177,7 @@ function columnDefOffersArchiveAllDone(columnDef: { flags: { complete?: boolean;
   return columnDef.flags.complete === true && columnDef.flags.archived !== true;
 }
 
-export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, onMoveTask, onPauseTask, onUnpauseTask, onResetTask, onDuplicateTask, onMergeTask, onOpenDetail, onOpenRefine, onOpenGroupModal, addToast, onQuickCreate, onNewTask, autoMerge, mergeStrategy = "direct", onToggleAutoMerge, planAutoApproveEnabled, onTogglePlanAutoApprove, globalPaused, onUpdateTask, onRetryTask, onArchiveTask, onUnarchiveTask, onRevertTask, onDeleteTask, onArchiveAllDone, onLoadArchivedTasks, onLoadMoreArchivedTasks, archivedHasMore, archivedLoadingMore, searchQuery = "", availableModels, onPlanningMode, onSubtaskBreakdown, onOpenDetailWithTab, favoriteProviders, favoriteModels, onToggleFavorite, onToggleModelFavorite, taskStuckTimeoutMs, onOpenMission, staleHighFanoutBlockerAgeThresholdMs, lastFetchTimeMs, prAuthAvailable, onOpenWorkflowEditor, onCreateWorkflow, workflowControlsInHeader = false }: BoardProps) {
+export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, onMoveTask, onPauseTask, onUnpauseTask, onResetTask, onDuplicateTask, onMergeTask, onOpenDetail, onOpenRefine, onOpenGroupModal, addToast, onQuickCreate, onNewTask, autoMerge, mergeStrategy = "direct", onToggleAutoMerge, planAutoApproveEnabled, onTogglePlanAutoApprove, globalPaused, onUpdateTask, onRetryTask, onArchiveTask, onUnarchiveTask, onRevertTask, onReviseTask, onDeleteTask, onArchiveAllDone, onLoadArchivedTasks, onLoadMoreArchivedTasks, archivedHasMore, archivedLoadingMore, searchQuery = "", availableModels, onPlanningMode, onSubtaskBreakdown, onOpenDetailWithTab, favoriteProviders, favoriteModels, onToggleFavorite, onToggleModelFavorite, taskStuckTimeoutMs, onOpenMission, staleHighFanoutBlockerAgeThresholdMs, lastFetchTimeMs, prAuthAvailable, onOpenWorkflowEditor, onCreateWorkflow, workflowControlsInHeader = false }: BoardProps) {
   const [archivedCollapsed, setArchivedCollapsed] = useState(true);
   /*
   FNXC:DoneColumnSorting 2026-06-29-16:57:
@@ -640,33 +643,17 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
     Safety net (defense in depth for the taskWorkflowIds refetch above): a card that passed the selected-workflow membership filter genuinely belongs on THIS board, so it must always land in a rendered lane. If its stored `column` is not one this workflow declares (a workflow edited to drop a column, or a create/refetch race that lands an intake-column card before its lane is known), re-home it for DISPLAY into the workflow's intake/first visible column instead of a `??=`-created bucket that is never rendered. Display-only — the task's stored column is untouched.
     */
     for (const task of selectedWorkflowTasks) {
+      if (isTaskReverted(task.sourceMetadata) && selectedWorkflow.columns.find((column) => column.id === task.column)?.flags.complete) continue;
       const columnId = grouped[task.column] !== undefined
         ? task.column
         : (selectedWorkflowCreateColumnId ?? task.column);
       (grouped[columnId] ??= []).push(task);
     }
     for (const column of selectedWorkflow.columns) {
-      /*
-      FNXC:DoneColumnSorting 2026-06-29-20:20:
-      Workflow-mode Done sorting follows the workflow trait, not only the built-in `done` id, so custom complete lanes get the same descending completion-date/task-id selector while archived lanes keep their own behavior.
-      */
-      const isWorkflowDoneLikeColumn = column.flags.complete === true && column.flags.archived !== true;
-      /*
-      FNXC:WorkflowResolvedColumns 2026-07-30-07:10 (fleet phase):
-      No more synthetic "done" column id. This branch forced done-sorting by passing the LITERAL "done"
-      as the column argument, so a custom complete lane sorted correctly only because its caller lied
-      about its name. `sortTasksForDisplayColumn` now takes the trait directly, so the real column id goes
-      through and the sort intent is stated rather than smuggled through a fake id.
-      */
-      grouped[column.id] = sortTasksForDisplayColumn(
-        grouped[column.id] ?? [],
-        column.id as ColumnType,
+      grouped[column.id] = sortTasksForDisplayColumn(grouped[column.id] ?? [], column.id, {
+        columnFlags: column.flags,
         doneSortMode,
-        column.flags.archived === true,
-        column.flags.hold === true,
-        isWorkflowDoneLikeColumn,
-        column.flags.mergeBlocker === true || column.flags.humanReview === true,
-      );
+      });
     }
     return grouped;
   }, [doneSortMode, selectedWorkflow, selectedWorkflowCreateColumnId, selectedWorkflowTasks]);
@@ -798,6 +785,17 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
     [aggregateArchivedBoardColumns, aggregateVisibleBoardColumns],
   );
 
+  /*
+  FNXC:TaskRevert 2026-08-01-20:06:
+  A successful revert is resolution-required work, not completed work. Aggregate the
+  shared, deduplicated partition once so All Workflows keeps those cards discoverable
+  after its complete lanes exclude them, including custom complete columns.
+  */
+  const aggregateRevertedTasks = useMemo(
+    () => partitionRevertedTasks(tasks).reverted,
+    [tasks],
+  );
+
   const aggregateTasksByColumn = useMemo(() => {
     const grouped: Record<string, Task[]> = {};
     for (const column of aggregateBoardColumns) grouped[column.id] = [];
@@ -819,6 +817,7 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
       Aggregate Board grouping must resolve the task's effective workflow before using a shared column id. If one workflow hides `qa` while another shows it, tasks assigned to the hidden `qa` column stay hidden instead of leaking into the visible aggregate lane.
       */
       if (workflowColumn?.flags.hiddenFromBoard) continue;
+      if (isTaskReverted(task.sourceMetadata) && workflowColumn?.flags.complete) continue;
       if (!workflowColumn) {
         /*
         FNXC:WorkflowBoard 2026-07-12-23:35:
@@ -847,23 +846,10 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
       (grouped[task.column] ??= []).push(task);
     }
     for (const column of aggregateBoardColumns) {
-      const isDoneLikeColumn = column.flags.complete === true && column.flags.archived !== true;
-      /*
-      FNXC:WorkflowResolvedColumns 2026-07-30-07:10 (fleet phase):
-      No more synthetic "done" column id. This branch forced done-sorting by passing the LITERAL "done"
-      as the column argument, so a custom complete lane sorted correctly only because its caller lied
-      about its name. `sortTasksForDisplayColumn` now takes the trait directly, so the real column id goes
-      through and the sort intent is stated rather than smuggled through a fake id.
-      */
-      grouped[column.id] = sortTasksForDisplayColumn(
-        grouped[column.id] ?? [],
-        column.id as ColumnType,
+      grouped[column.id] = sortTasksForDisplayColumn(grouped[column.id] ?? [], column.id, {
+        columnFlags: column.flags,
         doneSortMode,
-        column.flags.archived === true,
-        column.flags.hold === true,
-        isDoneLikeColumn,
-        column.flags.mergeBlocker === true || column.flags.humanReview === true,
-      );
+      });
     }
     return grouped;
   }, [aggregateBoardColumns, aggregateQuickCreateTarget, boardWorkflows, doneSortMode, getEffectiveTaskWorkflowId, tasks, workflowColumnsByWorkflowId]);
@@ -1034,6 +1020,23 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
                 />
               );
             })}
+            {aggregateRevertedTasks.length > 0 && (
+              <section className="reverted-tasks-section" aria-label="Reverted Tasks" data-testid="board-reverted-tasks">
+                <h2>Reverted Tasks</h2>
+                {aggregateRevertedTasks.map((task) => (
+                  <TaskCard
+                    key={`reverted-${task.id}`}
+                    task={task}
+                    taskColumnFlags={blockerFanoutColumnFlagsByTaskId.get(task.id)}
+                    onOpenDetail={onOpenDetail}
+                    onDeleteTask={onDeleteTask}
+                    onReviseTask={onReviseTask}
+                    addToast={addToast}
+                    disableDrag
+                  />
+                ))}
+              </section>
+            )}
           </main>
         </div>
       );
@@ -1118,6 +1121,12 @@ export function Board({ tasks, projectId, maxConcurrent, showWorktreeGrouping, o
               />
             );
           })}
+          {partitionRevertedTasks(selectedWorkflowTasks).reverted.length > 0 && (
+            <section className="reverted-tasks-section" aria-label="Reverted Tasks" data-testid="board-reverted-tasks">
+              <h2>Reverted Tasks</h2>
+              {partitionRevertedTasks(selectedWorkflowTasks).reverted.map((task) => <TaskCard key={`reverted-${task.id}`} task={task} taskColumnFlags={blockerFanoutColumnFlagsByTaskId.get(task.id)} onOpenDetail={onOpenDetail} onDeleteTask={onDeleteTask} onReviseTask={onReviseTask} addToast={addToast} disableDrag />)}
+            </section>
+          )}
           {selectedWorkflowArchivedColumn && (
             <Column
               key={selectedWorkflowArchivedColumn.id}

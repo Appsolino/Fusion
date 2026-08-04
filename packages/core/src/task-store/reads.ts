@@ -14,20 +14,20 @@ import type {Task, TaskDetail, ColumnId, ArchivedTaskEntry, TaskVerificationRequ
 import * as schema from "../postgres/schema/index.js";
 import { and, eq } from "drizzle-orm";
 import "../builtin-traits.js";
-import {allowsAutoMergeProcessing} from "../task-merge.js";
-import {getInReviewStallReason, DEFAULT_STALE_MERGING_MIN_AGE_MS, type InReviewStallContext} from "../in-review-stall.js";
-import {getAgentLogFilePath} from "../agent-log-file-store.js";
-import {getInReviewStalledSignal, type InReviewStalledContext} from "../in-review-stalled.js";
-import {getStalePausedReviewSignal, type StalePausedReviewContext} from "../stale-paused-review.js";
-import {getStalePausedTodoSignal} from "../stale-paused-todo.js";
-import {resolveLifecycleColumns, resolveReviewColumns} from "../workflow-lifecycle-traits.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
-import type {WorkflowIr} from "../workflow-ir-types.js";
+import {allowsAutoMergeProcessing} from "../merge/task-merge.js";
+import {getInReviewStallReason, DEFAULT_STALE_MERGING_MIN_AGE_MS, type InReviewStallContext} from "../tasks/in-review-stall.js";
+import {getAgentLogFilePath} from "../agents/agent-log-file-store.js";
+import {getInReviewStalledSignal, type InReviewStalledContext} from "../tasks/in-review-stalled.js";
+import {getStalePausedReviewSignal, type StalePausedReviewContext} from "../tasks/stale-paused-review.js";
+import {getStalePausedTodoSignal} from "../tasks/stale-paused-todo.js";
+import {resolveLifecycleColumns, resolveReviewColumns} from "../workflows/workflow-lifecycle-traits.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
+import type {WorkflowIr} from "../workflows/workflow-ir-types.js";
 
-import {getTaskAgeStalenessSignal, type TaskAgeStalenessThresholds} from "../task-age-staleness.js";
-import {resolveTaskLifecycleColumns} from "../workflow-lifecycle-traits.js";
-import {detectStalledReview} from "../stalled-review-detector.js";
-import {computeRetrySummary} from "../retry-summary.js";
+import {getTaskAgeStalenessSignal, type TaskAgeStalenessThresholds} from "../tasks/task-age-staleness.js";
+import {resolveTaskLifecycleColumns} from "../workflows/workflow-lifecycle-traits.js";
+import {detectStalledReview} from "../tasks/stalled-review-detector.js";
+import {computeRetrySummary} from "../tasks/retry-summary.js";
 // FNXC:TaskLookup404 2026-07-26-11:20: typed miss signal so API boundaries can
 // answer 404 instead of 500 (see TaskNotFoundError in task-store/errors.ts).
 import {TaskNotFoundError} from "../task-store/errors.js";
@@ -127,14 +127,14 @@ function hasFreshAgentLogActivitySinceTaskUpdate(
 }
 
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
-import {readTaskRow, readLiveTaskRows} from "../task-store/async-persistence.js";
-import {searchTasksTsvector, searchTasksLike} from "../task-store/async-search.js";
+import {readTaskRow, readLiveTaskRows} from "./async/async-persistence.js";
+import {searchTasksTsvector, searchTasksLike} from "./async/async-search.js";
 import {
   getArchivedTask,
   listArchivedTasks as listArchivedTaskEntries,
   listArchivedTasksByCreatedOrder,
   searchArchivedTasks,
-} from "../async-archive-db.js";
+} from "../async-stores/async-archive-db.js";
 
 /*
 FNXC:WorkflowLifecycleColumns 2026-07-28-04:00 (PR #2470 review, P1):

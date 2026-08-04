@@ -1,4 +1,4 @@
-import { createLogger } from "../logger.js";
+import { createLogger } from "../process/logger.js";
 
 const severityAuditLog = createLogger("core-dispatcher");
 import type { NotificationProvider } from "./provider.js";

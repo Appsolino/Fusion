@@ -35,12 +35,21 @@ import { type TaskMoveLanes, resolveColumnFlags, IN_REVIEW_STALL_DEADLOCK_LOG_PR
   TERMINAL_ROLES,
   resolveProjectColumnsForRoles,
   REVIEW_ROLES,
+  pruneTaskLifecycleEvents,
 } from "@fusion/core";
 import { finalizePlanningSegment } from "@fusion/core";
-import type { MeshLeaseManager } from "./mesh-lease-manager.js";
+import type { MeshLeaseManager } from "./project/mesh-lease-manager.js";
 import { createLogger, schedulerLog } from "./logger.js";
-import { mergeEffectiveSettings } from "./effective-settings.js";
-import { RemovalReason, classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, hasUsableWorktreeShape, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "./worktree-pool.js";
+import {
+  TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+  buildInactiveDuplicateClearFeedback,
+  buildKeepDuplicateClearFeedback,
+  buildMarkerClearedReplanTaskPatch,
+  buildMarkerExhaustedFailedTaskPatch,
+  buildDuplicateReplanExhaustedError,
+} from "./duplicate-marker-clear.js";
+import { mergeEffectiveSettings } from "./project/effective-settings.js";
+import { RemovalReason, classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, hasUsableWorktreeShape, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "./worktree/worktree-pool.js";
 import {
   classifyMissingWorktreeSessionStartFailure,
   extractMissingWorktreePathFromSessionStartFailure,
@@ -49,8 +58,8 @@ import {
   isRecoverableMissingWorktreeReviewFailureNoProgress,
   isRecoverableMissingWorktreeReviewFailureWithProgress,
   MERGE_ACTIVE_MISSING_WORKTREE_STATUSES,
-} from "./restart-recovery-coordinator.js";
-import { extractMissingModulePath, isNonContinuableSessionError, isStaleWorktreeModuleResolutionError } from "./transient-error-detector.js";
+} from "./healing/restart-recovery-coordinator.js";
+import { extractMissingModulePath, isNonContinuableSessionError, isStaleWorktreeModuleResolutionError } from "./errors/transient-error-detector.js";
 import {
   buildHeartbeatErrorRecoveryMetadata,
   HEARTBEAT_ERROR_RETRY_EXHAUSTED_PAUSE_REASON,
@@ -62,13 +71,14 @@ import {
   resetHeartbeatErrorRecoveryMetadata,
   resolveErrorRecoveryLimit,
 } from "./agent-heartbeat.js";
-import { classifyForeignOnlyContamination, deriveTaskIdFromFusionBranch, inspectBranchConflict, listUniqueBranchCommits } from "./branch-conflicts.js";
-import { createRunAuditor, generateSyntheticRunId, type DatabaseMutationType, type RunAuditor } from "./run-audit.js";
-import { finalizeProvenAutoMergeTask, validateWorkflowDoneMergeProof } from "./auto-merge-finalization.js";
-import { AutoRecoveryDispatcher } from "./auto-recovery.js";
-import { activeSessionRegistry, executingTaskLock } from "./active-session-registry.js";
-import { isTaskStillInPlanningStage } from "./replan-target.js";
-import { getPromptPath } from "./spec-staleness.js";
+import { classifyForeignOnlyContamination, deriveTaskIdFromFusionBranch, inspectBranchConflict, listUniqueBranchCommits } from "./execution/branch-conflicts.js";
+import { createRunAuditor, generateSyntheticRunId, type DatabaseMutationType, type RunAuditor } from "./util/run-audit.js";
+import { finalizeProvenAutoMergeTask, validateWorkflowDoneMergeProof } from "./merge/auto-merge-finalization.js";
+import { AutoRecoveryDispatcher } from "./healing/auto-recovery.js";
+import { activeSessionRegistry, executingTaskLock } from "./agents/active-session-registry.js";
+import { isTaskStillInPlanningStage } from "./execution/replan-target.js";
+import { classifyPersistedPlanHandoff, LEGACY_NULL_PLAN_HANDOFF_STALE_MS } from "./planning-handoff-recovery.js";
+import { getPromptPath } from "./execution/spec-staleness.js";
 import { evaluateStrandedHoldContinuation, seedPreReleasePlanReviewContinuation } from "./plan-review-continuation.js";
 /*
 FNXC:Workspace 2026-06-22-14:10 (Phase D review G — cycle dissolved):
@@ -77,19 +87,19 @@ the dependency-free `workspace-land-predicate` module, NOT merger-ai. Previously
 imported it from merger-ai while merger-ai imports `MIN_TEMP_WORKTREE_REAP_AGE_MS` from
 self-healing — a real import cycle. Importing from the predicate module breaks the cycle.
 */
-import { isRepoLanded } from "./workspace-land-predicate.js";
-import { getCommitTaskOwnership } from "./already-merged-detector.js";
-import { getTaskCompletionBlockerForStore } from "./task-completion.js";
-import { shouldReclaimWedgedMerge } from "./merge-reclaim-policy.js";
+import { isRepoLanded } from "./merge/workspace-land-predicate.js";
+import { getCommitTaskOwnership } from "./merge/already-merged-detector.js";
+import { getTaskCompletionBlockerForStore } from "./execution/task-completion.js";
+import { shouldReclaimWedgedMerge } from "./merge/merge-reclaim-policy.js";
 
-import { advanceIntegrationBranchRef } from "./merger-ref-update-advance.js";
-import { isAiMergeContainerDir, resolveAiMergeRootPath, resolveLegacyAiMergeRootPath, resolveWorktreesDir } from "./worktree-paths.js";
-import { canonicalFusionBranchName, resolveTaskWorkingBranch } from "./worktree-names.js";
-import { preservedWorktreeTargetPathForTask } from "./worktree-pinning.js";
-import { resolveIntegrationBranch } from "./integration-branch.js";
-import { resolveBranchGroupMergeRouting } from "./group-merge-coordinator.js";
+import { advanceIntegrationBranchRef } from "./merge/merger-ref-update-advance.js";
+import { isAiMergeContainerDir, resolveAiMergeRootPath, resolveLegacyAiMergeRootPath, resolveWorktreesDir } from "./worktree/worktree-paths.js";
+import { canonicalFusionBranchName, resolveTaskWorkingBranch } from "./worktree/worktree-names.js";
+import { preservedWorktreeTargetPathForTask } from "./worktree/worktree-pinning.js";
+import { resolveIntegrationBranch } from "./merge/integration-branch.js";
+import { resolveBranchGroupMergeRouting } from "./merge/group-merge-coordinator.js";
 import type { OwnedLandedClassification } from "./merger.js";
-import { regenerateBareMergeSubject } from "./merger-bare-subject.js";
+import { regenerateBareMergeSubject } from "./merge/merger-bare-subject.js";
 import { recoverForeignOnlyContamination } from "./recovery/foreign-only-contamination.js";
 import {
   buildNtfyClickUrl,
@@ -98,14 +108,14 @@ import {
   resolveNtfyEvents,
   sendNtfyNotification,
   type NtfyNotifier,
-} from "./notifier.js";
-import type { GhostBugDecision } from "./triage-preflight.js";
-import { filterPathsByIgnoreList, getUnmetSchedulingDependencies, isCoordinationOnlyTask, pathsOverlap, resolveDependencySatisfactionColumns, shouldHoldActiveFileScopeLease } from "./scheduler.js";
+} from "./util/notifier.js";
+import type { GhostBugDecision } from "./triage-domain/triage-preflight.js";
+import { filterPathsByIgnoreList, getUnmetSchedulingDependencies, isCoordinationOnlyTask, pathsOverlap, shouldHoldActiveFileScopeLease, resolveDependencySatisfactionColumns} from "./scheduler.js";
 import { runSurfacingSweep, hours, type SurfacingCycle } from "./surfacing-sweeps.js";
 /* U4 substrate PR1: the git-evidence readers and their helpers now live in
    self-healing-git-evidence.ts. Imported back here because call sites remain. */
 import { SelfHealingGitEvidence, execAsync, shellQuote } from "./self-healing-git-evidence.js";
-import { evaluateParkedAgentTaskLink, PARKED_AGENT_LINK_FRESH_RUN_MS } from "./task-agent-sync.js";
+import { evaluateParkedAgentTaskLink, PARKED_AGENT_LINK_FRESH_RUN_MS } from "./agents/task-agent-sync.js";
 import { describeSelfHealingNoActionWedge } from "./notification/task-wedge-notification.js";
 
 export {
@@ -123,7 +133,7 @@ export {
   PAUSE_ABORT_PARK_OPERATOR_MARKER,
   MAX_AUTO_MERGE_RETRIES,
   MAX_TRANSIENT_MERGE_RECOVERIES,
-} from "./self-healing-constants.js";
+} from "./healing/self-healing-constants.js";
 import {
   COMPLETED_BLOCKED_PAUSE_REASON,
   STALE_TEMP_MERGE_WORKTREE_MS,
@@ -137,9 +147,9 @@ import {
   PAUSE_ABORT_PARK_ERROR_MARKER,
   PAUSE_ABORT_PARK_OPERATOR_MARKER,
   MAX_TRANSIENT_MERGE_RECOVERIES,
-} from "./self-healing-constants.js";
-export { isBranchAheadOfBase } from "./self-healing-branch.js";
-import { isBranchAheadOfBase } from "./self-healing-branch.js";
+} from "./healing/self-healing-constants.js";
+export { isBranchAheadOfBase } from "./healing/self-healing-branch.js";
+import { isBranchAheadOfBase } from "./healing/self-healing-branch.js";
 
 export {
   OPTIONAL_STEP_REVISION_KEY_MARKER,
@@ -147,12 +157,12 @@ export {
   optionalStepRevisionKey,
   countOptionalStepRevisionAttempts,
   optionalStepRevisionLogOutcome,
-} from "./self-healing-optional-step-revision.js";
+} from "./healing/self-healing-optional-step-revision.js";
 import {
   optionalStepRevisionKey,
   countOptionalStepRevisionAttempts,
   optionalStepRevisionLogOutcome,
-} from "./self-healing-optional-step-revision.js";
+} from "./healing/self-healing-optional-step-revision.js";
 
 export {
   extractTaskIdFromTempMergeDir,
@@ -162,7 +172,7 @@ export {
   formatRecoveryTimestamp,
   matchGlob,
   matchesScope,
-} from "./self-healing-path-utils.js";
+} from "./healing/self-healing-path-utils.js";
 import {
   extractTaskIdFromTempMergeDir,
   getErrorMessage,
@@ -170,7 +180,7 @@ import {
   buildResumeLimboStepSignature,
   formatRecoveryTimestamp,
   matchesScope,
-} from "./self-healing-path-utils.js";
+} from "./healing/self-healing-path-utils.js";
 
 
 const log = createLogger("self-healing");
@@ -497,8 +507,8 @@ shares ONE definition with this sweep. Previously the manual gate hardcoded its 
 and refused to retry ANY merge-active status, so an orphaned `landing` stamp was un-retryable by
 hand while this sweep cleared it automatically minutes later.
 */
-import { ACTIVE_MERGE_STATUSES, DEFAULT_STALE_MERGING_STATUS_MIN_AGE_MS, isStaleMergeActiveStatus } from "./merge-active-status.js";
-export { ACTIVE_MERGE_STATUSES, DEFAULT_STALE_MERGING_STATUS_MIN_AGE_MS, isMergeActiveStatus, isStaleMergeActiveStatus } from "./merge-active-status.js";
+import { ACTIVE_MERGE_STATUSES, DEFAULT_STALE_MERGING_STATUS_MIN_AGE_MS, isStaleMergeActiveStatus } from "./merge/merge-active-status.js";
+export { ACTIVE_MERGE_STATUSES, DEFAULT_STALE_MERGING_STATUS_MIN_AGE_MS, isMergeActiveStatus, isStaleMergeActiveStatus } from "./merge/merge-active-status.js";
 const NON_TERMINAL_STEP_STATUSES = new Set(["pending", "in-progress"]);
 const STRANDED_COMPLETED_TODO_ACTIVE_STATUSES = new Set([
   "in-progress",
@@ -551,8 +561,8 @@ const RECONCILE_SCOPE_OVERRIDE_MERGE_ACTIVE_STATUS_SET = new Set<string>(MERGE_A
 // to avoid pulling `createLogger` into modules that mock `../logger.js`
 // (notification-service tests in particular). Re-exported here for callers
 // that already depend on `self-healing.ts` exports.
-import { classifyTransientMergeError } from "./transient-merge-error-classifier.js";
-export { classifyTransientMergeError } from "./transient-merge-error-classifier.js";
+import { classifyTransientMergeError } from "./errors/transient-merge-error-classifier.js";
+export { classifyTransientMergeError } from "./errors/transient-merge-error-classifier.js";
 const MAX_STARVATION_DROPS = 3;
 const DEADLOCK_RECOVERY_COOLDOWN_MS = 15 * 60_000;
 // DEFAULT_STALE_MERGING_STATUS_MIN_AGE_MS now lives in ./merge-active-status.js (imported above)
@@ -915,6 +925,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
   private symbolLockNoActionAudited = false;
   private preservedQueuedOverlapLogged = new Map<string, string>();
   private maintenanceTickCounter = 0;
+  private readonly taskLifecycleRetentionLastPrunedAt = new Map<string, number>();
   private readonly processBootStartedAt = Date.now();
   private lastDbCorruptionNotifiedAt: number | null = null;
 
@@ -2159,6 +2170,27 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
     }, intervalMs);
   }
 
+  /*
+  FNXC:CrossProcessDeleteObservation 2026-08-01-11:39:
+  Periodic self-healing owns outbox retention. Each already-open PostgreSQL project is gated to
+  one bounded prune every six hours; failures stay diagnostic-only so retention never blocks
+  task execution or another maintenance step.
+  */
+  private async pruneTaskLifecycleEventsForMaintenance(): Promise<void> {
+    const layer = this.store.getAsyncLayer();
+    const projectId = layer?.projectId;
+    if (!layer || !projectId) return;
+    const now = Date.now();
+    const lastPrunedAt = this.taskLifecycleRetentionLastPrunedAt.get(projectId) ?? 0;
+    if (now - lastPrunedAt < 6 * 60 * 60 * 1000) return;
+    try {
+      await pruneTaskLifecycleEvents(layer, projectId);
+      this.taskLifecycleRetentionLastPrunedAt.set(projectId, now);
+    } catch (error) {
+      log.warn(`Task lifecycle retention failed for project ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private isPastInterruptedMergeGrace(task: Task, timeoutMs: number): boolean {
     const updatedAt = task.updatedAt ? Date.parse(task.updatedAt) : 0;
     if (!Number.isFinite(updatedAt) || updatedAt <= 0) return false;
@@ -2527,6 +2559,10 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
       // Batch 1 — housekeeping (safe under pause: filesystem/db cleanup only)
       const batch1Fns: Array<{ name: string; fn: () => Promise<unknown> }> = [
         { name: "prune-worktrees", fn: () => this.pruneWorktrees() },
+        {
+          name: "prune-task-lifecycle-events",
+          fn: async () => this.pruneTaskLifecycleEventsForMaintenance(),
+        },
         { name: "cleanup-orphans", fn: () => this.cleanupOrphans() },
         {
           name: "cleanup-stale-temp-merge-worktrees",
@@ -4649,8 +4685,14 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
   }
 
   async reclaimStaleActiveBranches(): Promise<number> {
-    /* FNXC:WorkflowLifecycleColumns 2026-07-31-22:30 (self-healing cluster): an archived card must not have its branch reclaimed, whatever that lane is named. Keyed on the literal this sweep answered "no" for every card on a renamed board. */
+    /*
+    FNXC:WorkflowLifecycleColumns 2026-07-31-22:30 (self-healing cluster): an archived card must not have its branch reclaimed, whatever that lane is named. Keyed on the literal this sweep answered "no" for every card on a renamed board.
+
+    FNXC:StaleActiveBranchDoneSpam 2026-08-03-01:47:
+    Complete-lane cards used to hit the unique-commit rescue-needed warn every maintenance sweep after squash/AI merge (feature tip SHAs are not ancestors of main). That spam was not actionable — the work already landed — and left local fusion/* refs forever. Resolve complete columns and force-delete their stale branches once the no-worktree / no-session gates pass; keep rescue-needed only for non-terminal columns where unique commits may still be real unmerged work. Archived still skips entirely (archive cleanup owns those refs).
+    */
     const reclaimArchivedColumns = await resolveProjectColumnsForRoles(this.store, ["archived"]);
+    const reclaimCompleteColumns = await resolveProjectColumnsForRoles(this.store, ["complete"]);
     try {
       const settings = await this.store.getSettings();
       if (settings.globalPause || settings.enginePaused) return 0;
@@ -4765,10 +4807,15 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         const inspection = await this.inspectOrphanedBranch(branch);
         if (!inspection) continue;
 
-        if (inspection.uniqueCommitCount > 0) {
+        const isCompleteColumn = reclaimCompleteColumns.has(task.column);
+        if (inspection.uniqueCommitCount > 0 && !isCompleteColumn) {
           log.warn(`[recovery] stale-active-branch-rescue-needed ${task.id} branch=${branch} unique=${inspection.uniqueCommitCount} tip=${inspection.tipSha.slice(0, 12)}`);
           continue;
         }
+
+        const reclaimReason = inspection.uniqueCommitCount > 0
+          ? "complete-column-unique-commits-force"
+          : "zero-unique-commits-no-worktree";
 
         await execAsync(`git branch -D ${JSON.stringify(branch)}`, {
           cwd: this.options.rootDir,
@@ -4791,7 +4838,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
         });
         await this.store.logEntry(
           task.id,
-          `[recovery] stale-active-branch-reclaim ${task.id} branch=${branch} reason=zero-unique-commits-no-worktree`,
+          `[recovery] stale-active-branch-reclaim ${task.id} branch=${branch} reason=${reclaimReason}`,
         );
 
         try {
@@ -4810,7 +4857,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
               branch,
               tipSha: inspection.tipSha,
               uniqueCommitCount: inspection.uniqueCommitCount,
-              reason: "zero-unique-commits-no-worktree",
+              reason: reclaimReason,
             },
           });
         } catch (auditErr: unknown) {
@@ -4850,6 +4897,10 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
    */
 
   private async clearCompletionBranchIfSubsumed(task: Task, branchName: string): Promise<boolean> {
+    /*
+    FNXC:StaleActiveBranchDoneSpam 2026-08-03-01:47:
+    Completion fan-out used to skip deletion when the tip still had unique commits vs the integration base. Squash / AI-merge always leaves that shape (new main SHA, old fusion/* tip still "unique"), so done tasks kept local branches forever and reclaimStaleActiveBranches warned rescue-needed every sweep. After a successful complete, force-delete the task branch regardless of unique commit count; the landed content is already on the integration branch under a different SHA. Log unique-count force deletes at info, not as an open rescue.
+    */
     try {
       await execAsync(`git rev-parse --verify ${shellQuote(branchName)}`, {
         cwd: this.options.rootDir,
@@ -4862,10 +4913,9 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
     const baseBranch = task.baseBranch || await resolveIntegrationBranch(this.options.rootDir, undefined);
     const comparison = await listUniqueBranchCommits(this.options.rootDir, baseBranch, branchName);
     if (comparison.commits.length > 0) {
-      log.warn(
-        `[self-healing] reconcileCompletedTask ${task.id}: branch ${branchName} has ${comparison.commits.length} unique commit(s) vs ${comparison.mainRef}; skip deletion`,
+      log.log(
+        `[self-healing] reconcileCompletedTask ${task.id}: branch ${branchName} has ${comparison.commits.length} unique commit(s) vs ${comparison.mainRef}; force-deleting post-completion (squash-safe)`,
       );
-      return false;
     }
 
     try {
@@ -7037,12 +7087,31 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
           const canonicalFlags = await resolveNearDuplicateCanonicalFlags(this.store, canonical);
           if (!isNearDuplicateCanonicalInactive(canonical ?? undefined, canonicalFlags)) continue;
 
-          await this.store.updateTask(task.id, {
-            paused: false,
-            pausedReason: null,
-            status: null,
-            sourceMetadataPatch: { nearDuplicateDismissed: true },
-          });
+          /*
+          FNXC:NearDuplicateDetection 2026-08-01-18:47:
+          Stale-decision recovery for an inactive canonical is the same writer as marker clear:
+          needs-replan (not status:null) plus dismissal so the card cannot look planning-finished
+          without a real PROMPT. Drop a still-present DUPLICATE marker file when present.
+          */
+          const promptPath = join(this.options.rootDir, ".fusion", "tasks", task.id, "PROMPT.md");
+          if (existsSync(promptPath)) {
+            try {
+              const written = readFileSync(promptPath, "utf-8");
+              if (parseExplicitDuplicateMarker(written)) {
+                rmSync(promptPath, { force: true });
+              }
+            } catch {
+              // best-effort marker removal; status write still proceeds
+            }
+          }
+          await this.store.updateTask(task.id, buildMarkerClearedReplanTaskPatch(canonicalId));
+          if (typeof this.store.logEntry === "function") {
+            await Promise.resolve(this.store.logEntry(
+              task.id,
+              TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+              buildInactiveDuplicateClearFeedback(canonicalId),
+            )).catch(() => {});
+          }
           await createRunAuditor(this.store, {
             runId: generateSyntheticRunId("reconcile-stale-duplicate-decision", task.id),
             agentId: "self-healing",
@@ -7335,6 +7404,7 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
             stepResults: task.workflowStepResults, effectiveSettings: { autoMerge: resolveEffectiveAutoMerge(task, freshSettings) },
             enginePaused: freshEnginePaused, promptContent, live: live(task.id),
             stalenessMs: Date.now() - new Date(task.columnMovedAt ?? task.updatedAt).getTime(), graceMs,
+            now: Date.now(),
           }),
         };
       };
@@ -7352,19 +7422,30 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
               if (type.endsWith("no-action")) this.strandedHoldContinuationNoActionAudited.add(key);
             };
             if (!initial.result.stranded) { await audit("task:reconcile-stranded-hold-continuation-no-action", initial.result.reason); continue; }
-            // FNXC:StrandedHoldContinuation 2026-07-26-14:15:
-            // Re-read every predicate input immediately before the atomic insert.
-            // This reduces stale pause/liveness/settings decisions; the shared
-            // store lock remains the correctness guard for continuation/results.
-            const fresh = await evaluate(snapshot.id);
-            if (!fresh || !fresh.result.stranded) {
-              if (fresh) await audit("task:reconcile-stranded-hold-continuation-no-action", fresh.result.reason, fresh);
-              continue;
-            }
-            const seeded = await seedPreReleasePlanReviewContinuation(this.store, fresh.task, fresh.ir, { atomic: true });
-            if (!seeded.seeded) { await audit("task:reconcile-stranded-hold-continuation-no-action", seeded.reason, fresh); continue; }
-            repaired += 1;
-            await audit("task:reconcile-stranded-hold-continuation", undefined, fresh);
+            // FNXC:PlanningDependencyReseed 2026-08-04-04:10:
+            // Re-read and seed under the same cross-process lifecycle lock used
+            // by dependency invalidation and planning finalization. A dependency
+            // mutation that wins first is therefore visible to this predicate;
+            // one that wins second supersedes the continuation after it commits.
+            const reconcileUnderLifecycleLock = async () => {
+              const fresh = await evaluate(snapshot.id);
+              if (!fresh || !fresh.result.stranded) {
+                if (fresh) await audit("task:reconcile-stranded-hold-continuation-no-action", fresh.result.reason, fresh);
+                return false;
+              }
+              const seeded = await seedPreReleasePlanReviewContinuation(this.store, fresh.task, fresh.ir, { atomic: true });
+              if (!seeded.seeded) {
+                await audit("task:reconcile-stranded-hold-continuation-no-action", seeded.reason, fresh);
+                return false;
+              }
+              await audit("task:reconcile-stranded-hold-continuation", undefined, fresh);
+              return true;
+            };
+            const lifecycleLock = (this.store as Partial<TaskStore>).withPlanningLifecycleLock;
+            const seeded = lifecycleLock
+              ? await lifecycleLock.call(this.store, snapshot.id, reconcileUnderLifecycleLock)
+              : await reconcileUnderLifecycleLock();
+            if (seeded) repaired += 1;
           } catch (error) { log.warn(`reconcileStrandedHoldContinuations: failed for ${snapshot.id}: ${error instanceof Error ? error.message : String(error)}`); }
         }
         if (tasks.length < 500) break;
@@ -13328,7 +13409,16 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
       log.log(`Cleared drifted durable agent task link for ${agent.id} (${linkedTaskId}): ${reason}; file-scope lease preserved when present`);
     }
 
-    log.log(`Recovered ${clearedAgentIds.size} drifted durable agent task link(s)`);
+    /*
+    FNXC:EngineDiagnostics 2026-08-01-18:11:
+    Zero-recovery summary is a no-op sweep result — debug only (FUSION_DEBUG=self-healing).
+    Non-zero recoveries stay on log so operators still see real link repairs.
+    */
+    if (clearedAgentIds.size > 0) {
+      log.log(`Recovered ${clearedAgentIds.size} drifted durable agent task link(s)`);
+    } else {
+      log.debug(`Recovered ${clearedAgentIds.size} drifted durable agent task link(s)`);
+    }
     return clearedAgentIds.size;
   }
 
@@ -14298,12 +14388,16 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
       const planningIds = this.options.getPlanningTaskIds?.() ?? new Set<string>();
       const now = Date.now();
 
-      const orphanedApproved = tasks.filter((t) =>
-        t.status === "planning" &&
-        !t.paused &&
-        !planningIds.has(t.id) &&
-        now - new Date(t.updatedAt).getTime() >= APPROVED_TRIAGE_RECOVERY_GRACE_MS
-      );
+      const orphanedApproved = tasks.filter((task) => {
+        const handoffKind = classifyPersistedPlanHandoff(task, {
+          now,
+          hasLivePlanningWork: planningIds.has(task.id),
+          legacyStaleMs: LEGACY_NULL_PLAN_HANDOFF_STALE_MS,
+          requirePersistedSteps: true,
+        });
+        return handoffKind != null
+          && now - new Date(task.updatedAt).getTime() >= APPROVED_TRIAGE_RECOVERY_GRACE_MS;
+      });
 
       if (orphanedApproved.length === 0) return 0;
 
@@ -14318,7 +14412,17 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
         // Narrow test/legacy adapters can return an unrelated fixture row; only use a
         // re-read when it identifies the requested candidate.
         const recoveryTask = live?.id === task.id ? live : task;
-        if (!isTaskStillInPlanningStage(recoveryTask)) continue;
+        const handoffKind = classifyPersistedPlanHandoff(recoveryTask, {
+          now,
+          hasLivePlanningWork: planningIds.has(recoveryTask.id),
+          legacyStaleMs: LEGACY_NULL_PLAN_HANDOFF_STALE_MS,
+          requirePersistedSteps: true,
+        });
+        if (!handoffKind) continue;
+        // The legacy null handoff deliberately contains parsed task steps; the
+        // generic planning-stage predicate interprets null+steps as execution
+        // progress, so its exact classifier owns that one compatibility shape.
+        if (handoffKind !== "legacy-null" && !isTaskStillInPlanningStage(recoveryTask)) continue;
         log.log(`Recovering specified triage task ${task.id}: ${task.title || task.description?.slice(0, 60) || "(untitled)"}`);
         const success = await recoverFn(recoveryTask);
         if (success) recovered++;
@@ -14333,6 +14437,14 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
       return 0;
     }
   }
+
+  /*
+  FNXC:HonestBlockedExit 2026-08-02-23:59 (operator decision — FN-8728 vs PR #2398):
+  The FN-8700 `reconcile-external-pr-blockers` sweep (gh-backed clearing of PR-claim parks)
+  is REMOVED with the whole PR/file-claim blocking mechanism. Open PRs are never blockers;
+  file-scope conflicts are arbitrated only by Fusion's own board. Legacy PR-claim parks are
+  no longer honored by isDurableBlockedTask, so normal recovery paths reclaim them.
+  */
 
   async resolveExplicitDuplicateMarkerTasks(): Promise<number> {
     try {
@@ -14379,6 +14491,10 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
           FN-8356 keeps maintenance from re-parking a marker against a missing, deleted, done,
           or archived canonical. Such a decision has no detail-banner action, so cleanup restores
           eligible work to planning while preserving explicit, implicit, and unrelated system pauses.
+
+          FNXC:NearDuplicateDetection 2026-08-01-18:47:
+          Mirror triage: marker clear leaves needs-replan + feedback + dismissal, never
+          status:null (FN-8704 replan storm when the scheduler wakes on planning→null without PROMPT).
           */
           const canClearInactiveMarker = task.userPaused !== true
             && (task.paused !== true || task.pausedReason === "duplicate-decision-required")
@@ -14387,7 +14503,22 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
           if (!canonicalTask || isNearDuplicateCanonicalInactive(canonicalTask, canonicalFlags)) {
             if (canClearInactiveMarker) {
               rmSync(promptPath, { force: true });
-              await this.store.updateTask(task.id, { paused: false, pausedReason: null, status: null });
+              const priorClearCount = typeof task.sourceMetadata?.duplicateMarkerClearCount === "number"
+                ? task.sourceMetadata.duplicateMarkerClearCount
+                : 0;
+              const alreadyDismissed = isTriageDuplicateKeepAcknowledged(task.sourceMetadata, marker.canonicalId);
+              const exhausted = alreadyDismissed || priorClearCount >= 1;
+              const patch = exhausted
+                ? buildMarkerExhaustedFailedTaskPatch(marker.canonicalId, priorClearCount)
+                : buildMarkerClearedReplanTaskPatch(marker.canonicalId, priorClearCount);
+              await this.store.updateTask(task.id, patch);
+              if (typeof this.store.logEntry === "function") {
+                await Promise.resolve(this.store.logEntry(
+                  task.id,
+                  exhausted ? buildDuplicateReplanExhaustedError(marker.canonicalId) : TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                  buildInactiveDuplicateClearFeedback(marker.canonicalId),
+                )).catch(() => {});
+              }
               resolved += 1;
             }
             continue;
@@ -14403,12 +14534,25 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
           if (resolution === "prompt" && isTriageDuplicateKeepAcknowledged(task.sourceMetadata, canonicalTask.id)) {
             if (canClearInactiveMarker) {
               rmSync(promptPath, { force: true });
-              await this.store.updateTask(task.id, {
-                paused: false,
-                pausedReason: null,
-                status: null,
-                sourceMetadataPatch: { nearDuplicateDismissed: true },
-              });
+              const priorKeepClears = typeof task.sourceMetadata?.duplicateMarkerClearCount === "number"
+                ? task.sourceMetadata.duplicateMarkerClearCount
+                : 0;
+              const keepExhausted = priorKeepClears >= 1;
+              await this.store.updateTask(
+                task.id,
+                keepExhausted
+                  ? buildMarkerExhaustedFailedTaskPatch(canonicalTask.id, priorKeepClears)
+                  : buildMarkerClearedReplanTaskPatch(canonicalTask.id, priorKeepClears),
+              );
+              if (typeof this.store.logEntry === "function") {
+                await Promise.resolve(this.store.logEntry(
+                  task.id,
+                  keepExhausted
+                    ? buildDuplicateReplanExhaustedError(canonicalTask.id)
+                    : TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                  buildKeepDuplicateClearFeedback(canonicalTask.id),
+                )).catch(() => {});
+              }
               resolved += 1;
             }
             continue;
@@ -14420,7 +14564,14 @@ const movedTask = await this.store.moveTask(task.id, completeLane);
             await this.store.updateTask(task.id, { paused: true, pausedReason: "duplicate-decision-required", status: null });
           } else {
             rmSync(promptPath, { force: true });
-            await this.store.updateTask(task.id, { paused: false, pausedReason: null, status: null, sourceMetadataPatch: { nearDuplicateOf: canonicalTask.id, nearDuplicateScore: 1, duplicateSource: "triage-marker", nearDuplicateDismissed: true } });
+            await this.store.updateTask(task.id, buildMarkerClearedReplanTaskPatch(canonicalTask.id));
+            if (typeof this.store.logEntry === "function") {
+              await Promise.resolve(this.store.logEntry(
+                task.id,
+                TRIAGE_MARKER_CLEARED_REPLAN_LOG_ACTION,
+                buildKeepDuplicateClearFeedback(canonicalTask.id),
+              )).catch(() => {});
+            }
           }
           log.log(`[self-healing] resolved explicit duplicate marker ${task.id} → ${canonicalTask.id}`);
           resolved += 1;

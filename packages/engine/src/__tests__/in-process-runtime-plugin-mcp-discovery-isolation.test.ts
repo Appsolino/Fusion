@@ -8,8 +8,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PluginLoader, createProjectScopedPluginMcpProvider, type PluginInstallation } from "@fusion/core";
-import { PluginRunner } from "../plugin-runner.js";
-import { collectPluginSkillNames } from "../session-skill-context.js";
+import { PluginRunner } from "../plugins/plugin-runner.js";
+import { collectPluginSkillNames } from "../cli-runtime/session-skill-context.js";
 import { createDiscoveryPluginLoaderOptions, createRuntimePluginMcpProviderOptions } from "../runtimes/in-process-runtime.js";
 
 const roots: string[] = [];

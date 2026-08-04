@@ -11,12 +11,12 @@ import {existsSync} from "node:fs";
 import type {Task, MergeResult, MergeQueueEntry, MergeQueueAcquireOptions} from "../types.js";
 import {assertNotWorkspaceTaskMerge} from "../types.js";
 import "../builtin-traits.js";
-import {getTaskMergeBlocker, resolveTaskMergeTarget} from "../task-merge.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
-import {resolveReviewColumns, resolveTaskLifecycleColumns} from "../workflow-lifecycle-traits.js";
+import {getTaskMergeBlocker, resolveTaskMergeTarget} from "../merge/task-merge.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
+import {resolveReviewColumns, resolveTaskLifecycleColumns} from "../workflows/workflow-lifecycle-traits.js";
 import {__setTaskActivityLogLimitsForTesting} from "../task-store/comments.js";
 import {assertSafeGitBranchName, assertSafeAbsolutePath} from "../task-store/shell-safety.js";
-import {acquireMergeQueueLease as acquireMergeQueueLeaseAsync} from "../task-store/async-merge-coordination.js";
+import {acquireMergeQueueLease as acquireMergeQueueLeaseAsync} from "../task-store/async/async-merge-coordination.js";
 
 export type StepStartDisposition = "started" | "resumed" | "blocked" | "terminal";
 

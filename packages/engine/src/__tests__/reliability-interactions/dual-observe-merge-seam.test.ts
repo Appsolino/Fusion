@@ -4,7 +4,7 @@ import {
   getUnmetSchedulingDependencies,
 } from "../../scheduler.js";
 import { ProjectEngine } from "../../project-engine.js";
-import { classifyTransientMergeError } from "../../transient-merge-error-classifier.js";
+import { classifyTransientMergeError } from "../../errors/transient-merge-error-classifier.js";
 
 describe("FN-5742 dual-observe merge seam", () => {
   it("emits no dependency parity diff when legacy and marker agree", () => {
