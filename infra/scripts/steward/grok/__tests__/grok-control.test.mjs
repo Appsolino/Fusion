@@ -11,6 +11,21 @@ import {
 import { sha256Text, validateVerdict } from "../verdict.mjs";
 import { assertApprovalsStillValid } from "../approver.mjs";
 
+/** Minimal fetch Response stand-in (avoids eslint no-undef on Response). */
+function jsonOk(body) {
+  const text = JSON.stringify(body);
+  return {
+    ok: true,
+    status: 200,
+    async json() {
+      return body;
+    },
+    async text() {
+      return text;
+    },
+  };
+}
+
 function baseVerdict(over = {}) {
   return {
     schemaVersion: 1,
@@ -60,10 +75,7 @@ describe("grok control plane", () => {
       () =>
         resolveGrokModel({
           apiKey: "k",
-          fetchImpl: async () =>
-            new Response(JSON.stringify({ data: [{ id: "grok-3" }] }), {
-              status: 200,
-            }),
+          fetchImpl: async () => jsonOk({ data: [{ id: "grok-3" }] }),
         }),
       /unavailable/,
     );
@@ -168,10 +180,7 @@ describe("grok control plane", () => {
     const pin = await resolveGrokModel({
       apiKey: "k",
       fetchImpl: async () =>
-        new Response(
-          JSON.stringify({ data: [{ id: "grok-4.5" }, { id: "grok-3" }] }),
-          { status: 200 },
-        ),
+        jsonOk({ data: [{ id: "grok-4.5" }, { id: "grok-3" }] }),
     });
     assert.equal(pin.actualModel, "grok-4.5");
     assert.equal(pin.configuredProvider, "xai");
