@@ -64,6 +64,7 @@ import {
   columnsWithFlag,
   resolveReboundTarget,
   resolveColumnFlags,
+  PLAN_REVIEW_GROUP_ID,
   TransitionRejectionError,
   ArchivedTaskDocumentPublicationRejectedError,
   TaskDocumentPreconditionFailedError,
@@ -4018,6 +4019,22 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       firing; it started firing on everything.
       */
       const approveIntakeColumn = await resolveIntakeColumnForTask(scopedStore, task.id);
+      let approveColumn = approveIntakeColumn;
+      /*
+      FNXC:PlanReviewApproval 2026-08-04-00:26:
+      An exhausted Plan Review is parked in the review node's column. That column is not always
+      the workflow intake column (`builtin:legacy-coding` uses todo vs triage), so the operator's
+      terminal approval must be accepted where the failed review actually ran.
+      */
+      if (task.awaitingApprovalReason === "plan-review-replan-cap") {
+        try {
+          const ir = await resolveWorkflowIrForTask(scopedStore, task.id);
+          approveColumn = ir.nodes.find((node) => node.id === PLAN_REVIEW_GROUP_ID)?.column
+            ?? approveIntakeColumn;
+        } catch {
+          // Preserve the existing intake fallback when workflow resolution is unavailable.
+        }
+      }
       /*
       The resolved column ONLY — the legacy-`triage` disjunct this comment
       used to justify is gone (PR #2614 review — greptile: the comment outlived the code).
@@ -4027,8 +4044,8 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       no test in either direction. A guard that accepts a column no workflow declares is
       not caution, it is an unreachable branch that reads like a requirement.
       */
-      if (task.column !== approveIntakeColumn) {
-        throw badRequest(`Task must be in the '${approveIntakeColumn}' column to approve plan`);
+      if (task.column !== approveColumn) {
+        throw badRequest(`Task must be in the '${approveColumn}' column to approve plan`);
       }
       if (task.status !== "awaiting-approval") {
         throw badRequest("Task must have status 'awaiting-approval' to approve plan");
@@ -4038,9 +4055,6 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       // ordinary tasks). The approve-plan guard that refused any task carrying the legacy
       // awaitingApprovalReason === "release-authorization" is gone too, so tasks parked by
       // the old gate can now be approved normally instead of staying stuck with no exit.
-
-      // Log the approval
-      await scopedStore.logEntry(task.id, "Plan approved by user");
 
       /*
        * FNXC:PlanApproval 2026-07-04-22:41:
@@ -4062,6 +4076,48 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         // No PROMPT.md to fingerprint (unusual for an awaiting-approval task) — leave unset.
       }
 
+      /*
+      FNXC:PlanReviewApproval 2026-08-04-00:26:
+      Manual approval after the revision cap is durable evidence that the final REVISE was
+      accepted. Persist the audited bypass with the hold clear so no consumer can observe only
+      half of the operator decision and enqueue another Plan Review.
+      */
+      let approvedWorkflowStepResults: Task["workflowStepResults"] | undefined;
+      if (task.awaitingApprovalReason === "plan-review-replan-cap") {
+        const results = [...(task.workflowStepResults ?? [])];
+        let reviewIndex = -1;
+        for (let index = results.length - 1; index >= 0; index -= 1) {
+          const result = results[index];
+          if (
+            result.workflowStepId === PLAN_REVIEW_GROUP_ID
+            && (result.status === "failed" || result.status === "advisory_failure")
+            && result.verdict === "REVISE"
+          ) {
+            reviewIndex = index;
+            break;
+          }
+        }
+        if (reviewIndex === -1) {
+          throw conflict("Cannot approve exhausted Plan Review: no failed REVISE result is available to override");
+        }
+
+        const prior = results[reviewIndex];
+        const bypassed = {
+          ...prior,
+          status: "skipped" as const,
+          bypassedBy: "dashboard-operator",
+          bypassedAt: new Date().toISOString(),
+          bypassReason: "Approved after Plan Review did not converge",
+          bypassedFromStatus: prior.status,
+          bypassedFromVerdict: prior.verdict,
+        };
+        delete bypassed.verdict;
+        results[reviewIndex] = bypassed;
+        approvedWorkflowStepResults = results;
+      }
+
+      await scopedStore.logEntry(task.id, "Plan approved by user");
+
       // Move to todo and clear status
       const reboundColumn = await resolveReboundColumnForTask(scopedStore, task.id);
       await scopedStore.moveTask(task.id, reboundColumn);
@@ -4075,6 +4131,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       const updated = await scopedStore.updateTask(task.id, {
         status: null,
         approvedPlanFingerprint: approvedPlanFingerprint ?? null,
+        ...(approvedWorkflowStepResults ? { workflowStepResults: approvedWorkflowStepResults } : {}),
       });
 
       res.json(updated);

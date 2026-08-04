@@ -2,8 +2,8 @@ import {
   ACTIVE_WORKFLOW_WORK_ITEM_STATES,
   computeWorkflowIrPin,
   isTaskBlockedOnApproval,
+  isPlanReviewSatisfied,
   isUnplannedSeedPrompt,
-  PLAN_REVIEW_GROUP_ID,
   type Task,
   type TaskStore,
   type WorkflowIr,
@@ -107,7 +107,7 @@ export function evaluateStrandedHoldContinuation(input: {
   const review = resolvePreReleasePlanReviewNode(input.ir);
   if (!review || review.column !== input.task.column) return { stranded: false, candidate: false, reason: "no-pre-release-review" };
   if (input.continuations.some((item) => ACTIVE_WORKFLOW_WORK_ITEM_STATES.includes(item.state))) return { stranded: false, candidate: false, reason: "active-continuation" };
-  if (input.stepResults?.some((result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID && result.status === "passed")) return { stranded: false, candidate: false, reason: "plan-review-passed" };
+  if (input.stepResults?.some(isPlanReviewSatisfied)) return { stranded: false, candidate: false, reason: "plan-review-passed" };
   if (input.promptContent === null) return { stranded: false, candidate: false, reason: "prompt-missing" };
   if (isUnplannedSeedPrompt(input.promptContent, input.task.id, input.task.title, input.task.description)) return { stranded: false, candidate: false, reason: "seed-prompt" };
   if (input.task.status === "planning" || input.task.status === "needs-replan") return { stranded: false, candidate: false, reason: "triage-owned" };

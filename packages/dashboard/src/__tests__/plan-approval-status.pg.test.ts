@@ -54,6 +54,98 @@ pgDescribe("plan approval status persistence", () => {
     expect(response.body.approvedPlanFingerprint).toBe(persisted.approvedPlanFingerprint);
   });
 
+  it.each(["failed", "advisory_failure"] as const)(
+    "durably bypasses an exhausted %s Plan Review before clearing its approval hold",
+    async (reviewStatus) => {
+    const task = await store.createTask({ description: "Approve after Plan Review did not converge" });
+    await store.updateTask(task.id, {
+      status: "awaiting-approval",
+      awaitingApprovalReason: "plan-review-replan-cap",
+      workflowStepResults: [{
+        workflowStepId: "plan-review",
+        workflowStepName: "Plan Review",
+        phase: "pre-merge",
+        source: "optional-group",
+        status: reviewStatus,
+        verdict: "REVISE",
+        output: "The plan still needs revision.",
+        priorAttempts: [{
+          workflowStepId: "plan-review",
+          workflowStepName: "Plan Review",
+          status: "failed",
+          verdict: "REVISE",
+          output: "Earlier revision request.",
+        }],
+      }],
+    } as never);
+
+    const taskDir = join(harness.rootDir, ".fusion", "tasks", task.id);
+    await mkdir(taskDir, { recursive: true });
+    await writeFile(join(taskDir, "PROMPT.md"), "# Human-approved plan\n", "utf8");
+
+    const response = await request(createApp(), "POST", `/api/tasks/${task.id}/approve-plan`);
+
+    expect(response.status).toBe(200);
+    const persisted = await store.getTask(task.id);
+    expect(persisted.status).toBeUndefined();
+    expect(persisted.awaitingApprovalReason).toBeUndefined();
+    expect(persisted.workflowStepResults).toContainEqual(expect.objectContaining({
+      workflowStepId: "plan-review",
+      status: "skipped",
+      bypassedBy: "dashboard-operator",
+      bypassReason: "Approved after Plan Review did not converge",
+      bypassedFromStatus: reviewStatus,
+      bypassedFromVerdict: "REVISE",
+      priorAttempts: [expect.objectContaining({ output: "Earlier revision request." })],
+    }));
+    expect(persisted.workflowStepResults?.[0]?.verdict).toBeUndefined();
+    },
+  );
+
+  it("approves an exhausted Plan Review from a split workflow's review column", async () => {
+    const task = await store.createTask({ description: "Approve legacy split-column review" });
+    await store.writeTaskWorkflowSelection(task.id, "builtin:legacy-coding", []);
+    await store.updateTask(task.id, {
+      status: "awaiting-approval",
+      awaitingApprovalReason: "plan-review-replan-cap",
+      workflowStepResults: [{
+        workflowStepId: "plan-review",
+        workflowStepName: "Plan Review",
+        status: "failed",
+        verdict: "REVISE",
+      }],
+    } as never);
+
+    const response = await request(createApp(), "POST", `/api/tasks/${task.id}/approve-plan`);
+
+    expect(response.status).toBe(200);
+    const persisted = await store.getTask(task.id);
+    expect(persisted.column).toBe("todo");
+    expect(persisted.status).toBeUndefined();
+    expect(persisted.workflowStepResults).toContainEqual(expect.objectContaining({
+      workflowStepId: "plan-review",
+      status: "skipped",
+      bypassedFromStatus: "failed",
+      bypassedFromVerdict: "REVISE",
+    }));
+  });
+
+  it("keeps the approval hold when cap metadata has no failed REVISE result", async () => {
+    const task = await store.createTask({ description: "Malformed exhausted review state" });
+    await store.updateTask(task.id, {
+      status: "awaiting-approval",
+      awaitingApprovalReason: "plan-review-replan-cap",
+      workflowStepResults: [],
+    } as never);
+
+    const response = await request(createApp(), "POST", `/api/tasks/${task.id}/approve-plan`);
+
+    expect(response.status).toBe(409);
+    const persisted = await store.getTask(task.id);
+    expect(persisted.status).toBe("awaiting-approval");
+    expect(persisted.awaitingApprovalReason).toBe("plan-review-replan-cap");
+  });
+
   it("clears a prior fingerprint when the approved plan cannot be read", async () => {
     const task = await store.createTask({ description: "Approve without a readable plan" });
     await store.updateTask(task.id, {

@@ -42,6 +42,7 @@ import {
   workflowHasColumn,
   getStepParser,
   computePlanApprovalFingerprint,
+  isPlanReviewSatisfied,
   extractIntentSignature,
   findNearDuplicates,
   isNearDuplicateCanonicalInactive, resolveColumnFlags,
@@ -1259,11 +1260,13 @@ export class TriageProcessor {
     return evicted;
   }
 
-  /** True when Plan Review already recorded a passed verdict on this task. */
-  private hasPassedPlanReview(task: Pick<Task, "workflowStepResults">): boolean {
-    return task.workflowStepResults?.some(
-      (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID && result.status === "passed",
-    ) === true;
+  /*
+  FNXC:PlanReviewApproval 2026-08-04-00:26:
+  Recovery treats an audited operator acceptance as terminal Plan Review evidence, without
+  fabricating a reviewer pass or allowing an unaudited skip to release the task.
+  */
+  private hasSatisfiedPlanReview(task: Pick<Task, "workflowStepResults">): boolean {
+    return task.workflowStepResults?.some(isPlanReviewSatisfied) === true;
   }
 
   /**
@@ -1279,7 +1282,7 @@ export class TriageProcessor {
   async recoverApprovedTask(task: Task): Promise<boolean> {
     const recoverableStatus =
       task.status === "planning"
-      || (task.status == null && this.hasPassedPlanReview(task));
+      || (task.status == null && this.hasSatisfiedPlanReview(task));
     /* FNXC:WorkflowLifecycleColumns 2026-07-29-09:05 (U11): the INTAKE lane, not
        the literal. Converting only the `todo` sites left this one rejecting every
        card whose workflow renames its planner column, so the release below was

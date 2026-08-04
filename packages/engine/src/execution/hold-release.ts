@@ -51,6 +51,7 @@ import {
   isWorkflowOptionalGroupEnabled,
   resolveEffectiveAutoMerge,
   isTaskBlockedOnApproval,
+  isPlanReviewSatisfied,
   type TaskStore,
   type Task,
   type WorkflowIr,
@@ -212,10 +213,8 @@ export async function isUnplannedForExecution(store: TaskStore, task: Task, ir: 
   if (preReleaseReview && preReleaseReviewEnabled && preReleaseReview.column === task.column) {
     // Compatibility for tasks planned before durable continuations existed and
     // for narrow store adapters that expose only the legacy review result.
-    const legacyPassed = task.workflowStepResults?.some(
-      (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID && result.status === "passed",
-    );
-    if (!legacyPassed) {
+    const legacySatisfied = task.workflowStepResults?.some(isPlanReviewSatisfied);
+    if (!legacySatisfied) {
       if (typeof store.listWorkflowWorkItemsForTask !== "function") return true;
       // FNXC:StrandedHoldContinuation 2026-07-26-15:45:
       // FN-8592 defines graph idleness over every active continuation kind;

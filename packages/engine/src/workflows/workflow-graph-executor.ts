@@ -9,7 +9,7 @@ import type {
   WorkflowNodeExtensionResult,
   WorkflowStepResult,
 } from "@fusion/core";
-import { BUILTIN_CODING_WORKFLOW_IR, PLAN_REVIEW_GROUP_ID, WorkflowIrError, getWorkflowExtensionRegistry, resolveMaxReworkCycles, isExperimentalFeatureEnabled, GRAPH_NATIVE_POST_MERGE_FLAG, isCompletionSummaryNode, classifyReviewLease, isWorkflowOptionalGroupEnabled } from "@fusion/core";
+import { BUILTIN_CODING_WORKFLOW_IR, PLAN_REVIEW_GROUP_ID, WorkflowIrError, getWorkflowExtensionRegistry, resolveMaxReworkCycles, isExperimentalFeatureEnabled, GRAPH_NATIVE_POST_MERGE_FLAG, isCompletionSummaryNode, classifyReviewLease, isWorkflowOptionalGroupEnabled, isPlanReviewSatisfied } from "@fusion/core";
 import { isNonPlanDefectPlanReviewFailure } from "../errors/transient-error-detector.js";
 import { isSessionContentionError } from "../errors/transient-error-patterns.js";
 import { isRequiredArtifactReadFailedValue, parseRequiredArtifactMissingValue } from "../execution/required-workflow-artifacts.js";
@@ -819,12 +819,10 @@ export class WorkflowGraphExecutor {
           */
           if (
             node.id === PLAN_REVIEW_GROUP_ID
-            && task.workflowStepResults?.some(
-              (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID && result.status === "passed",
-            )
+            && task.workflowStepResults?.some(isPlanReviewSatisfied)
           ) {
             context[`node:${node.id}:outcome`] = "success";
-            this.deps.logTaskEntry?.("[pre-merge] Workflow step already passed: Plan Review");
+            this.deps.logTaskEntry?.("[pre-merge] Workflow step already satisfied: Plan Review");
             return await traverseChildren(node, { outcome: "success", value: "already-passed" });
           }
           const repairedPlanReview = node.id === PLAN_REVIEW_GROUP_ID

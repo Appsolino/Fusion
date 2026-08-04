@@ -85,7 +85,7 @@ export {
   resolveEffectivePluginSettings,
 } from "./plugins/plugin-prompt-condition.js";
 export type { PromptConditionEvaluationResult } from "./plugins/plugin-prompt-condition.js";
-export { computePlanApprovalFingerprint, resolvePlanApprovalRequired } from "./planner/plan-approval.js";
+export { computePlanApprovalFingerprint, isPlanReviewSatisfied, resolvePlanApprovalRequired } from "./planner/plan-approval.js";
 export type { PlanApprovalMode } from "./planner/plan-approval.js";
 export { isActiveNearDuplicateColumn, isNearDuplicateCanonicalInactive } from "./duplicates/near-duplicate-canonical.js";
 export type { NearDuplicateCanonicalState } from "./duplicates/near-duplicate-canonical.js";

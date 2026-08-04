@@ -41,6 +41,7 @@ import {readTaskRowInTransaction} from "./async/async-persistence.js";
 import {withTaskWorkflowSerialization} from "./async/async-workflow-workitems.js";
 import {recordActivityLogEntry as recordActivityLogEntryAsync} from "./async/async-audit.js";
 import {applyOriginalDescription} from "../tasks/original-description-policy.js";
+import {isPlanReviewSatisfied} from "../planner/plan-approval.js";
 import {recordRunAuditEvent as recordRunAuditEventAsync} from "../postgres/data-layer.js";
 import {listGoalCitations as listGoalCitationsAsync} from "./async/async-events.js";
 import type {RunAuditEventRow} from "../task-store/row-types.js";
@@ -175,7 +176,7 @@ export async function atomicWriteTaskJsonWithAuditImpl(store: TaskStore, dir: st
       seeding. This prevents a pass from committing between that repair's
       locked predicate reads and its insert.
       */
-      if (task.workflowStepResults?.some((result) => result.workflowStepId === "plan-review" && result.status === "passed")) {
+      if (task.workflowStepResults?.some(isPlanReviewSatisfied)) {
         return withTaskWorkflowSerialization(tx, layer.projectId, id, persist);
       }
       return persist();

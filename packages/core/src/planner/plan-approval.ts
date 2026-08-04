@@ -6,8 +6,30 @@ import {
 } from "../tasks/original-description-policy.js";
 import { FRONTEND_UX_CRITERIA_SECTION } from "../tasks/frontend-ux-policy.js";
 import type { ProjectSettings } from "../types.js";
+import type { WorkflowStepResult } from "../types/workflow/workflow-steps.js";
+import { PLAN_REVIEW_GROUP_ID } from "../workflows/builtin-plan-review-group.js";
 
 export type PlanApprovalMode = NonNullable<ProjectSettings["planApprovalMode"]>;
+
+/*
+FNXC:PlanReviewApproval 2026-08-04-00:26:
+Plan Review is terminal when the reviewer passed it or an operator durably accepted the final
+failed REVISE after the revision cap. Require the full audited source state so a malformed skip
+cannot silently open the execution gate.
+*/
+export function isPlanReviewSatisfied(result: WorkflowStepResult): boolean {
+  if (result.workflowStepId !== PLAN_REVIEW_GROUP_ID) return false;
+  if (result.status === "passed") return true;
+  return result.status === "skipped"
+    && (result.bypassedFromStatus === "failed" || result.bypassedFromStatus === "advisory_failure")
+    && result.bypassedFromVerdict === "REVISE"
+    && typeof result.bypassedBy === "string"
+    && result.bypassedBy.trim().length > 0
+    && typeof result.bypassedAt === "string"
+    && result.bypassedAt.trim().length > 0
+    && typeof result.bypassReason === "string"
+    && result.bypassReason.trim().length > 0;
+}
 
 /**
  * FNXC:PlanApproval 2026-07-04-22:41:
