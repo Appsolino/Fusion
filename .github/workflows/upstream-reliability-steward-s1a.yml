@@ -142,12 +142,13 @@ jobs:
           S1A_MODEL: composer-2.5
           S1A_MODE: live
           S1A_WORKTREE_ROOT: ${{ vars.S1A_WORKTREE_ROOT || '/srv/appsolino-fusion/phase-1/worktrees' }}
-          S1A_OUT_DIR: ${{ runner.temp }}/steward-s1a
+          S1A_OUT_DIR: ${{ runner.temp }}/steward-s1a-writer
+          S1A_PRIVATE_DIR: ${{ runner.temp }}/steward-s1a-private
           S1A_CURSOR_API_KEY: ${{ secrets.S1A_CURSOR_API_KEY || '' }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY || secrets.S1A_CURSOR_API_KEY || '' }}
         run: |
           set -euo pipefail
-          mkdir -p "$S1A_OUT_DIR"
+          mkdir -p "$S1A_OUT_DIR" "$S1A_PRIVATE_DIR"
           echo "runner.name=${RUNNER_NAME:-}"
           echo "runner.os=${RUNNER_OS:-}"
           echo "user=$(whoami)"
@@ -165,26 +166,35 @@ jobs:
             echo "::error::S1A_WORKTREE_ROOT missing: $S1A_WORKTREE_ROOT"
             exit 1
           }
+          # Stdout is a sanitized summary only (no evidencePack).
           node infra/scripts/steward/s1a/run-s1a-analyze.mjs \
             --issue="${{ steps.gate.outputs.issue_number }}" \
             --repo="$GITHUB_REPOSITORY" \
             --mode=live \
             --out="$S1A_OUT_DIR" \
-            | tee "$S1A_OUT_DIR/analyze-result.json"
+            | tee "$S1A_OUT_DIR/analyze-summary.json"
+          # Refuse accidental raw evidence in the writer upload directory.
+          if [[ -f "$S1A_OUT_DIR/evidence-pack.json" ]] || [[ -f "$S1A_OUT_DIR/analyze-result.json" ]]; then
+            echo "::error::raw evidence must not land in writer artifact directory"
+            exit 1
+          fi
           if [[ -f "$S1A_OUT_DIR/assessment-artifact.json" ]]; then
+            if grep -E '"evidencePack"|"workflowLogs"|"conflictFileSides"|"gitPathLog"' \
+              "$S1A_OUT_DIR/assessment-artifact.json"; then
+              echo "::error::assessment-artifact contains raw evidence fields"
+              exit 1
+            fi
             echo "artifact_ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "artifact_ready=false" >> "$GITHUB_OUTPUT"
           fi
-          # Cleanup leftover temp under out dir only (worktree cleaned by analyze finally).
-          rm -f "$S1A_OUT_DIR"/evidence-pack.json "$S1A_OUT_DIR"/prompt-*.txt 2>/dev/null || true
 
-      - name: Upload S1A assessment artifact
+      - name: Upload S1A writer artifact (sanitized only)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: steward-s1a-${{ github.run_id }}
-          path: ${{ runner.temp }}/steward-s1a/
+          path: ${{ runner.temp }}/steward-s1a-writer/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -258,7 +268,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: steward-s1a-${{ github.run_id }}
-          path: ${{ runner.temp }}/steward-s1a
+          path: ${{ runner.temp }}/steward-s1a-writer
 
       - name: Create GitHub App token (issues write)
         id: app-token
@@ -278,14 +288,18 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          ART="${{ runner.temp }}/steward-s1a/assessment-artifact.json"
+          ART="${{ runner.temp }}/steward-s1a-writer/assessment-artifact.json"
           test -f "$ART"
           if grep -E '"engine"[[:space:]]*:[[:space:]]*"(fixture|deterministic)"' "$ART"; then
             echo "::error::refuse live upsert of fixture/deterministic artifact"
+            exit 1
+          fi
+          if grep -E '"evidencePack"|"workflowLogs"|"conflictFileSides"' "$ART"; then
+            echo "::error::refuse writer artifact with raw evidence"
             exit 1
           fi
           node infra/scripts/steward/s1a/run-s1a-upsert.mjs \
             --artifact="$ART" \
             --repo="$GITHUB_REPOSITORY" \
             --expect-mode=live \
-            | tee "${{ runner.temp }}/steward-s1a/upsert-result.json"
+            | tee "${{ runner.temp }}/steward-s1a-writer/upsert-result.json"

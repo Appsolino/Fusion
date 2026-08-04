@@ -120,6 +120,15 @@ export async function runS1a(input) {
       clients: {
         labels: input.clients.labels,
         comments: input.clients.comments,
+        getIssue:
+          input.clients.getIssue ||
+          (async (n) => ({
+            ...(issue || {}),
+            number: n,
+            state: (issue && issue.state) || "open",
+            body: (issue && issue.body) || "",
+            labels: await input.clients.labels.getIssueLabels(n),
+          })),
       },
     });
 

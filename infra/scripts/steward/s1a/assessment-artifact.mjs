@@ -2,8 +2,9 @@
 /* eslint-env node */
 /**
  * FNXC:AppsolinoStewardS1A 2026-08-04:
- * Assessment artifact schema validate / serialize (analyze → upsert boundary).
+ * Writer assessment artifact — sanitized only (no raw evidence pack).
  */
+import { createHash } from "node:crypto";
 import {
   ALLOWED_REPO,
   FIXTURE_MODEL,
@@ -28,18 +29,52 @@ import {
  *   actualModel: string,
  *   assessment: object,
  *   reviewer: object,
- *   evidencePack: object,
- *   worktreePath: string|null,
  *   markdown: string,
  *   revised: boolean,
+ *   evidenceDigest: {
+ *     sha256: string,
+ *     fingerprint: string,
+ *     failureClass: string|null,
+ *     occurrence: string|null,
+ *     upstreamSha: string|null,
+ *     prUrl: string|null,
+ *     conflictedFiles: string[],
+ *     physical: object,
+ *   },
  * }} AssessmentArtifact
  */
 
 /**
- * @param {Partial<AssessmentArtifact>} art
+ * @param {import("./evidence-pack.mjs").EvidencePack} pack
+ */
+export function buildEvidenceDigest(pack) {
+  const payload = {
+    fingerprint: pack.fingerprint,
+    failureClass: pack.failureClass ?? null,
+    occurrence: pack.latestOccurrenceId ?? null,
+    upstreamSha: pack.auto1?.upstreamSha ?? null,
+    prUrl: pack.auto1?.prUrl || pack.relatedPr?.url || null,
+    conflictedFiles: [...(pack.auto1?.conflictedFiles || [])],
+    physical: pack.physical || {},
+  };
+  const sha256 = createHash("sha256")
+    .update(JSON.stringify(payload))
+    .digest("hex");
+  return { sha256, ...payload };
+}
+
+/**
+ * Build writer-safe artifact (NO raw evidencePack / logs / patches / sides).
+ * @param {Partial<AssessmentArtifact> & { evidencePack?: object, worktreePath?: string|null }} art
  * @returns {AssessmentArtifact}
  */
 export function buildAssessmentArtifact(art) {
+  const digest =
+    art.evidenceDigest ||
+    (art.evidencePack ? buildEvidenceDigest(/** @type {any} */ (art.evidencePack)) : null);
+  if (!digest) {
+    throw new Error("assessment artifact requires evidenceDigest");
+  }
   return {
     schemaVersion: S1A_BOUNDS.artifactSchemaVersion,
     repo: String(art.repo || ""),
@@ -54,11 +89,36 @@ export function buildAssessmentArtifact(art) {
     actualModel: String(art.actualModel || ""),
     assessment: art.assessment || {},
     reviewer: art.reviewer || {},
-    evidencePack: art.evidencePack || {},
-    worktreePath: art.worktreePath ?? null,
     markdown: String(art.markdown || ""),
     revised: Boolean(art.revised),
+    evidenceDigest: digest,
   };
+}
+
+/**
+ * Reject artifacts that still carry raw evidence payloads.
+ * @param {any} art
+ */
+export function assertArtifactSanitized(art) {
+  const forbidden = [
+    "evidencePack",
+    "workflowLogs",
+    "conflictFileSides",
+    "gitPathLog",
+    "comments",
+    "worktreePath",
+  ];
+  for (const k of forbidden) {
+    if (art && Object.prototype.hasOwnProperty.call(art, k) && art[k] != null) {
+      throw new Error(`writer artifact must not include raw field: ${k}`);
+    }
+  }
+  const md = String(art?.markdown || "");
+  // Heuristic: huge raw log dumps shouldn't be in markdown either.
+  if (md.length > 200_000) {
+    throw new Error("writer artifact markdown exceeds safe size");
+  }
+  return true;
 }
 
 /**
@@ -70,6 +130,7 @@ export function validateAssessmentArtifact(art, opts = {}) {
   if (!art || typeof art !== "object") {
     throw new Error("artifact missing");
   }
+  assertArtifactSanitized(art);
   if (Number(art.schemaVersion) !== S1A_BOUNDS.artifactSchemaVersion) {
     throw new Error(`artifact schemaVersion mismatch: ${art.schemaVersion}`);
   }
@@ -99,6 +160,9 @@ export function validateAssessmentArtifact(art, opts = {}) {
   }
   if (!art.markdown) {
     throw new Error("artifact markdown missing");
+  }
+  if (!art.evidenceDigest?.sha256) {
+    throw new Error("artifact evidenceDigest missing");
   }
 
   const mode = String(opts.expectMode || art.mode || "").toLowerCase();
@@ -135,7 +199,6 @@ export function validateAssessmentArtifact(art, opts = {}) {
         `live artifact provider/model must be ${LIVE_PROVIDER}/${LIVE_MODEL}`,
       );
     }
-    // Never accept fixture ids as AI provider in live.
     if (
       art.actualProvider === FIXTURE_PROVIDER ||
       art.actualModel === FIXTURE_MODEL

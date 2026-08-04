@@ -5,7 +5,7 @@
  * Live GitHub clients (read) + write helpers for upsert job only.
  * Analyze must use read token (GITHUB_TOKEN). Upsert uses App issues:write.
  */
-import { S1A_BOUNDS, S1A_LABEL_LIST } from "./policy.mjs";
+import { S1A_LABEL_LIST } from "./policy.mjs";
 import { inferSensitiveTouches, parseRunIdFromOccurrence } from "./evidence-pack.mjs";
 
 /**
@@ -106,32 +106,64 @@ export function createLiveReadClients(opts) {
       };
     },
     /**
-     * Fetch workflow run logs (untrusted, size-capped). Returns null on failure.
+     * Fetch workflow run logs as capped plain text.
+     * Prefer per-job plain-text logs; fall back to unzipping the run archive.
      * @param {string|null} runId
      */
     async getWorkflowRunLogs(runId) {
       if (!runId) return null;
       try {
-        const buf = await gh(`/repos/${repo}/actions/runs/${runId}/logs`, {
+        const { decodeRunLogArchive, finalizeLogText, looksLikeZip, toBuffer } =
+          await import("./log-decode.mjs");
+
+        // Option B: list jobs → download each job log (plain text).
+        try {
+          const jobsPayload = await gh(
+            `/repos/${repo}/actions/runs/${runId}/jobs?per_page=100`,
+          );
+          const jobs = jobsPayload?.jobs || [];
+          /** @type {string[]} */
+          const parts = [];
+          for (const job of jobs) {
+            if (!job?.id) continue;
+            try {
+              const jobBuf = await gh(`/repos/${repo}/actions/jobs/${job.id}/logs`, {
+                headers: { Accept: "application/vnd.github+json" },
+              });
+              const buf = toBuffer(jobBuf);
+              if (looksLikeZip(buf)) continue;
+              const text = buf.toString("utf8");
+              if (!text || text.includes("\u0000")) continue;
+              parts.push(`===== job ${job.id} ${job.name || ""} =====\n${text}`);
+            } catch {
+              /* try next job */
+            }
+          }
+          if (parts.length) {
+            return {
+              runId: String(runId),
+              ...finalizeLogText(parts.join("\n\n"), { source: "job-logs" }),
+            };
+          }
+        } catch {
+          /* fall through to archive */
+        }
+
+        // Option A: run-level archive → unzip safely.
+        const archive = await gh(`/repos/${repo}/actions/runs/${runId}/logs`, {
           headers: { Accept: "application/vnd.github+json" },
         });
-        let text = "";
-        if (buf instanceof ArrayBuffer) {
-          text = Buffer.from(buf).toString("utf8");
-        } else if (typeof buf === "string") {
-          text = buf;
-        } else {
-          text = JSON.stringify(buf);
+        const buf = toBuffer(archive);
+        if (looksLikeZip(buf)) {
+          const decoded = decodeRunLogArchive(buf);
+          return { runId: String(runId), ...decoded };
         }
-        const max = S1A_BOUNDS.maxWorkflowLogBytes;
-        const truncated = text.length > max;
         return {
           runId: String(runId),
-          excerpt: text.slice(0, max),
-          truncated,
+          ...finalizeLogText(buf.toString("utf8"), { source: "run-logs-plain" }),
         };
       } catch {
-        return { runId: String(runId), excerpt: null, truncated: false };
+        return { runId: String(runId), excerpt: null, truncated: false, format: "error" };
       }
     },
     async tryFetchAuto3Evidence(_hint) {

@@ -56,7 +56,7 @@ export const S1A_BOUNDS = Object.freeze({
   maxRuntimeMs: 600_000,
   maxTokens: 0,
   assessmentVersion: 1,
-  artifactSchemaVersion: 1,
+  artifactSchemaVersion: 2,
   maxWorkflowLogBytes: 256_000,
 });
 

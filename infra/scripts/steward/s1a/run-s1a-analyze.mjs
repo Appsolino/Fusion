@@ -18,7 +18,16 @@ import { runReviewerProcess } from "./run-reviewer-process.mjs";
 import { renderAssessmentMarkdown } from "./render-assessment.mjs";
 import { buildAssessmentArtifact } from "./assessment-artifact.mjs";
 import { guardAuthorityOrThrow } from "./guard-authority.mjs";
-import { createRepairWorktree, removeRepairWorktree, collectConflictEvidence } from "./worktree.mjs";
+import {
+  assertWorktreeIntegrity,
+  captureWorktreeIntegrity,
+  collectConflictEvidence,
+  createRepairWorktree,
+  fetchUpstreamEvidenceRef,
+  removeRepairWorktree,
+  removeUpstreamEvidenceRef,
+  upstreamEvidenceRef,
+} from "./worktree.mjs";
 import { findAssessmentComment } from "./upsert-comment.mjs";
 import {
   ALLOWED_REPO,
@@ -30,6 +39,32 @@ import {
   resolveEngineId,
   resolveWorktreePath,
 } from "./policy.mjs";
+
+/**
+ * Writer/CLI-safe summary — never includes raw evidence payloads.
+ * @param {Record<string, any>} result
+ */
+export function summarizeAnalyzeResult(result) {
+  return {
+    ok: result.ok,
+    action: result.action,
+    reason: result.reason,
+    reviewVerdict: result.reviewVerdict ?? null,
+    revised: result.revised ?? false,
+    engine: result.engine ?? null,
+    configuredProvider: result.configuredProvider ?? null,
+    configuredModel: result.configuredModel ?? null,
+    actualProvider: result.actualProvider ?? null,
+    actualModel: result.actualModel ?? null,
+    artifactSchemaVersion: result.artifact?.schemaVersion ?? null,
+    fingerprint: result.artifact?.fingerprint ?? null,
+    occurrence: result.artifact?.occurrence ?? null,
+    evidenceDigestSha256: result.artifact?.evidenceDigest?.sha256 ?? null,
+    worktreeRemoved: result.worktreeRemoved ?? null,
+    upstreamRefRemoved: result.upstreamRefRemoved ?? null,
+    elapsedMs: result.elapsedMs ?? null,
+  };
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -227,9 +262,27 @@ export async function runS1aAnalyze(input) {
 
   const repoRoot = input.repoRoot || process.cwd();
   let worktreePath = null;
-  /** @type {{ path: string } | null} */
+  /** @type {{ path: string, before?: any } | null} */
   let worktree = null;
+  let upstreamFetched = false;
+  let worktreeRemoved = false;
+  let upstreamRefRemoved = false;
+  /** @type {Error|null} */
+  let cleanupError = null;
 
+  const outDir =
+    input.outDir ||
+    process.env.S1A_OUT_DIR ||
+    (process.env.RUNNER_TEMP
+      ? join(process.env.RUNNER_TEMP, "steward-s1a")
+      : null);
+  const privateDir =
+    input.privateDir ||
+    process.env.S1A_PRIVATE_DIR ||
+    (outDir ? join(outDir, "..", "steward-s1a-private") : null);
+
+  /** @type {any} */
+  let result = null;
   try {
     if (Date.now() - startedAt > S1A_BOUNDS.maxRuntimeMs) {
       throw new Error("maxRuntimeMs exceeded before engineer");
@@ -285,17 +338,37 @@ export async function runS1aAnalyze(input) {
 
     let conflictFileSides = null;
     let gitPathLog = null;
+    const upstreamSha = evidencePackEarly.auto1.upstreamSha;
+    let upstreamRef = null;
+    if (
+      mode === "live" &&
+      upstreamSha &&
+      worktreePath &&
+      existsSync(worktreePath) &&
+      !input.clients?.skipWorktree &&
+      !input.clients?.skipUpstreamFetch
+    ) {
+      const fetched = fetchUpstreamEvidenceRef({
+        repoRoot,
+        incidentId: issue.number,
+        upstreamSha,
+      });
+      upstreamFetched = true;
+      upstreamRef = fetched.ref;
+    }
+
     if (worktreePath && existsSync(worktreePath) && !input.clients?.skipWorktree) {
       try {
         const ce = collectConflictEvidence({
           worktreePath,
           files: evidencePackEarly.auto1.conflictedFiles || [],
-          upstreamSha: evidencePackEarly.auto1.upstreamSha,
+          upstreamSha,
+          upstreamRef: upstreamRef || (upstreamFetched ? upstreamEvidenceRef(issue.number) : null),
         });
         conflictFileSides = ce.conflictFileSides;
         gitPathLog = ce.pathLog;
       } catch {
-        /* best effort */
+        /* best effort collection; sides may be partial */
       }
     }
 
@@ -310,22 +383,33 @@ export async function runS1aAnalyze(input) {
       worktreePath,
     });
 
-    // Persist evidence pack into worktree (no push).
-    if (worktreePath) {
-      mkdirSync(worktreePath, { recursive: true });
+    // Persist evidence outside the advice-only worktree (private / not uploaded to writer).
+    if (privateDir) {
+      mkdirSync(privateDir, { recursive: true });
       writeFileSync(
-        join(worktreePath, "evidence-pack.json"),
+        join(privateDir, "evidence-pack.json"),
         JSON.stringify(evidencePack, null, 2),
       );
     }
+
+    const integrityBefore =
+      worktree?.before ||
+      (worktreePath && existsSync(worktreePath) && !input.clients?.skipWorktree
+        ? captureWorktreeIntegrity(worktreePath)
+        : null);
 
     let assessment = await runEngineer(evidencePack, {
       attempt: 1,
       mode,
       engine: input.clients?.engineer,
       worktreePath,
+      evidenceDir: privateDir || undefined,
     });
     assertProviderMatch(assessment, configuredProvider, configuredModel);
+
+    if (integrityBefore && worktreePath && !input.clients?.skipIntegrity) {
+      assertWorktreeIntegrity({ worktreePath, before: integrityBefore });
+    }
 
     const useProcess =
       input.clients?.spawnReviewer !== false &&
@@ -346,14 +430,22 @@ export async function runS1aAnalyze(input) {
 
     let revised = false;
     if (review.verdict === REVIEW_VERDICT.REJECT) {
+      const beforeRetry =
+        worktreePath && existsSync(worktreePath) && !input.clients?.skipWorktree
+          ? captureWorktreeIntegrity(worktreePath)
+          : integrityBefore;
       assessment = await runEngineer(evidencePack, {
         attempt: 2,
         priorRejection: { reason: review.reason },
         mode,
         engine: input.clients?.engineer,
         worktreePath,
+        evidenceDir: privateDir || undefined,
       });
       assertProviderMatch(assessment, configuredProvider, configuredModel);
+      if (beforeRetry && worktreePath && !input.clients?.skipIntegrity) {
+        assertWorktreeIntegrity({ worktreePath, before: beforeRetry });
+      }
       review = useProcess
         ? await runReviewerProcess({
             evidencePack,
@@ -377,7 +469,7 @@ export async function runS1aAnalyze(input) {
       assessment,
       review,
       occurrence,
-      worktreePath,
+      worktreePath: null, // never leak path into writer markdown
     });
 
     const artifact = buildAssessmentArtifact({
@@ -394,24 +486,17 @@ export async function runS1aAnalyze(input) {
       assessment,
       reviewer: review,
       evidencePack,
-      worktreePath,
       markdown,
       revised,
     });
 
-    const outDir =
-      input.outDir ||
-      process.env.S1A_OUT_DIR ||
-      (process.env.RUNNER_TEMP
-        ? join(process.env.RUNNER_TEMP, "steward-s1a")
-        : null);
     if (outDir) {
       mkdirSync(outDir, { recursive: true });
       writeFileSync(join(outDir, "assessment-artifact.json"), JSON.stringify(artifact, null, 2));
       writeFileSync(join(outDir, "assessment.md"), markdown);
     }
 
-    return {
+    result = {
       ok: true,
       action: "analyzed",
       reason: review.reason,
@@ -429,17 +514,42 @@ export async function runS1aAnalyze(input) {
       bounds: S1A_BOUNDS,
       worktreePath,
       outDir,
+      privateDir,
+      worktreeRemoved: false,
+      upstreamRefRemoved: false,
       elapsedMs: Date.now() - startedAt,
     };
   } finally {
-    if (worktree?.path) {
+    // Fail-closed cleanup: worktree removal + temporary upstream ref.
+    if (upstreamFetched) {
       try {
-        removeRepairWorktree({ path: worktree.path, repoRoot });
-      } catch {
-        /* best effort */
+        removeUpstreamEvidenceRef({ repoRoot, incidentId: issue.number });
+        upstreamRefRemoved = true;
+      } catch (err) {
+        cleanupError = err instanceof Error ? err : new Error(String(err));
       }
     }
+    if (worktree?.path) {
+      try {
+        removeRepairWorktree({
+          path: worktree.path,
+          repoRoot,
+          failClosed: mode === "live" || Boolean(input.clients?.failClosedCleanup),
+        });
+        worktreeRemoved = true;
+      } catch (err) {
+        cleanupError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+    if (result) {
+      result.worktreeRemoved = worktreeRemoved;
+      result.upstreamRefRemoved = upstreamRefRemoved || !upstreamFetched;
+    }
   }
+  if (cleanupError) {
+    throw cleanupError;
+  }
+  return result;
 }
 
 const isMain =
@@ -467,7 +577,7 @@ if (isMain) {
       clients,
       skipAuthorityGuard: false,
     });
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(summarizeAnalyzeResult(result), null, 2));
     process.exit(result.ok ? 0 : 1);
   }
 
@@ -481,6 +591,6 @@ if (isMain) {
     skipAuthorityGuard: false,
     clients: { skipWorktree: true, spawnReviewer: false },
   });
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(summarizeAnalyzeResult(result), null, 2));
   process.exit(result.ok ? 0 : 1);
 }

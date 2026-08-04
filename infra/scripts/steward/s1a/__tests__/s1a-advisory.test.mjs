@@ -36,8 +36,32 @@ import {
   runS1aAnalyze,
   runS1aUpsert,
 } from "../run-s1a.mjs";
-import { validateAssessmentArtifact } from "../assessment-artifact.mjs";
-import { createRepairWorktree, removeRepairWorktree } from "../worktree.mjs";
+import {
+  validateAssessmentArtifact,
+  buildAssessmentArtifact,
+  assertArtifactSanitized,
+} from "../assessment-artifact.mjs";
+import {
+  createRepairWorktree,
+  removeRepairWorktree,
+  captureWorktreeIntegrity,
+  assertWorktreeIntegrity,
+  removeUpstreamEvidenceRef,
+  upstreamEvidenceRef,
+  collectConflictEvidence,
+} from "../worktree.mjs";
+import {
+  decodeRunLogArchive,
+  looksLikeZip,
+  finalizeLogText,
+} from "../log-decode.mjs";
+import {
+  reviewerChildEnv,
+  cursorChildEnv,
+  assertNoCredentialLeak,
+} from "../spawn-env.mjs";
+import { revalidateIssueForUpsert } from "../run-s1a-upsert.mjs";
+import { summarizeAnalyzeResult } from "../run-s1a-analyze.mjs";
 import {
   ALLOWED_REPO,
   FIXTURE_MODEL,
@@ -49,6 +73,7 @@ import {
   S1A_BOUNDS,
   S1A_LABELS,
   assertRepoAllowed,
+  assessmentMarkerHtml,
   extractAssessmentMarker,
   resolveEngineId,
 } from "../policy.mjs";
@@ -341,7 +366,7 @@ describe("S1A provider/model + engine gating", () => {
       ee.stdout = new EventEmitter();
       ee.stderr = new EventEmitter();
       ee.kill = () => {};
-      queueMicrotask(() => {
+      globalThis.queueMicrotask(() => {
         ee.stdout.emit(
           "data",
           Buffer.from(
@@ -393,10 +418,10 @@ describe("S1A trust zones + allowlist", () => {
     assert.ok(!UPSERT_SRC.includes("runCursorEngine("));
     assert.ok(!UPSERT_SRC.includes("runFixtureEngine("));
     assert.ok(!UPSERT_SRC.includes("runReviewer("));
-    assert.ok(!/from\s+[\"']\.\/fixture-engine/.test(UPSERT_SRC));
-    assert.ok(!/from\s+[\"']\.\/cursor-engine/.test(UPSERT_SRC));
-    assert.ok(!/from\s+[\"']\.\/engineer/.test(UPSERT_SRC));
-    assert.ok(!/from\s+[\"']\.\/reviewer/.test(UPSERT_SRC));
+    assert.ok(!/from\s+["']\.\/fixture-engine/.test(UPSERT_SRC));
+    assert.ok(!/from\s+["']\.\/cursor-engine/.test(UPSERT_SRC));
+    assert.ok(!/from\s+["']\.\/engineer/.test(UPSERT_SRC));
+    assert.ok(!/from\s+["']\.\/reviewer/.test(UPSERT_SRC));
   });
 
   it("live upsert refuses fixture/deterministic artifact", () => {
@@ -404,7 +429,7 @@ describe("S1A trust zones + allowlist", () => {
       () =>
         validateAssessmentArtifact(
           {
-            schemaVersion: 1,
+            schemaVersion: S1A_BOUNDS.artifactSchemaVersion,
             repo: ALLOWED_REPO,
             issueNumber: 74,
             fingerprint: "a".repeat(64),
@@ -418,6 +443,7 @@ describe("S1A trust zones + allowlist", () => {
             assessment: { criticalFreeze: false },
             reviewer: { verdict: "ACCEPT" },
             markdown: "x",
+            evidenceDigest: { sha256: "b".repeat(64) },
           },
           { expectMode: "live" },
         ),
@@ -471,7 +497,16 @@ describe("S1A trust zones + allowlist", () => {
       repo: ALLOWED_REPO,
       expectMode: "fixture",
       skipAuthorityGuard: true,
-      clients: { labels, comments },
+      clients: {
+        labels,
+        comments,
+        getIssue: async (n) => ({
+          ...fixture.issue,
+          number: n,
+          state: "open",
+          labels: await labels.getIssueLabels(n),
+        }),
+      },
     });
     assert.equal(upserted.action, "upserted");
     assert.equal(upserted.comment.action, "create");
@@ -624,5 +659,286 @@ describe("S1A PR flags → SENSITIVE", () => {
     });
     const assessment = analyzeEvidence(pack);
     assert.equal(assessment.risk, RISK_LEVEL.SENSITIVE);
+  });
+});
+
+describe("S1A log archive decode", () => {
+  it("run-log archive decoded into real text", () => {
+    const dir = mkdtempSync(join(tmpdir(), "s1a-zip-"));
+    try {
+      writeFileSync(
+        join(dir, "Job1.txt"),
+        "alpha-head\n".repeat(20) + "S1A_STRUCTURED_RESULT=ok\n",
+      );
+      const zipPath = join(dir, "logs.zip");
+      const z = spawnSync("zip", ["-q", "-r", zipPath, "Job1.txt"], { cwd: dir });
+      assert.equal(z.status, 0, z.stderr?.toString() || "");
+      const buf = readFileSync(zipPath);
+      assert.equal(looksLikeZip(buf), true);
+      const decoded = decodeRunLogArchive(buf);
+      assert.equal(decoded.format, "zip-archive");
+      assert.match(decoded.excerpt, /S1A_STRUCTURED_RESULT=ok/);
+      assert.ok(!decoded.excerpt.includes("PK\u0003\u0004"));
+      const plain = finalizeLogText("plain job log RESULT=42");
+      assert.match(plain.excerpt, /RESULT=42/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("S1A upstream conflict side fetch", () => {
+  it("upstream conflict side available after temporary fetch; ref removed", () => {
+    const root = mkdtempSync(join(tmpdir(), "s1a-up-"));
+    const up = join(root, "upstream.git");
+    const local = join(root, "local");
+    try {
+      spawnSync("git", ["init", "--bare", "-b", "main", up], { encoding: "utf8" });
+      const seed = join(root, "seed");
+      spawnSync("git", ["clone", up, seed], { encoding: "utf8" });
+      spawnSync("git", ["-C", seed, "config", "user.email", "t@t"], { encoding: "utf8" });
+      spawnSync("git", ["-C", seed, "config", "user.name", "t"], { encoding: "utf8" });
+      spawnSync("mkdir", ["-p", join(seed, "packages/engine/src")], { encoding: "utf8" });
+      writeFileSync(join(seed, "packages/engine/src/executor.ts"), "export const UP = 1;\n");
+      spawnSync("git", ["-C", seed, "add", "."], { encoding: "utf8" });
+      spawnSync("git", ["-C", seed, "commit", "-m", "up"], { encoding: "utf8" });
+      spawnSync("git", ["-C", seed, "push", "origin", "HEAD:main"], { encoding: "utf8" });
+      const sha = spawnSync("git", ["-C", seed, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).stdout.trim();
+
+      spawnSync("git", ["clone", up, local], { encoding: "utf8" });
+      writeFileSync(
+        join(local, "packages/engine/src/executor.ts"),
+        "export const MAIN = 1;\n",
+      );
+      spawnSync("git", ["-C", local, "add", "."], { encoding: "utf8" });
+      spawnSync("git", ["-C", local, "config", "user.email", "t@t"], { encoding: "utf8" });
+      spawnSync("git", ["-C", local, "config", "user.name", "t"], { encoding: "utf8" });
+      spawnSync("git", ["-C", local, "commit", "-m", "main"], { encoding: "utf8" });
+
+      const incidentId = 74;
+      const ref = upstreamEvidenceRef(incidentId);
+      const remote = `s1a-upstream-${incidentId}`;
+      spawnSync("git", ["-C", local, "remote", "add", remote, up], { encoding: "utf8" });
+      spawnSync("git", ["-C", local, "fetch", "--no-tags", "--depth=1", remote, sha], {
+        encoding: "utf8",
+      });
+      spawnSync("git", ["-C", local, "update-ref", ref, "FETCH_HEAD"], {
+        encoding: "utf8",
+      });
+
+      const ce = collectConflictEvidence({
+        worktreePath: local,
+        files: ["packages/engine/src/executor.ts"],
+        upstreamSha: sha,
+        upstreamRef: ref,
+      });
+      assert.match(ce.conflictFileSides["packages/engine/src/executor.ts"].main, /MAIN/);
+      assert.match(ce.conflictFileSides["packages/engine/src/executor.ts"].upstream, /UP/);
+
+      removeUpstreamEvidenceRef({ repoRoot: local, incidentId });
+      const check = spawnSync("git", ["-C", local, "show-ref", "--verify", "--quiet", ref]);
+      assert.notEqual(check.status, 0);
+      const remotes = spawnSync("git", ["-C", local, "remote"], { encoding: "utf8" }).stdout;
+      assert.ok(!remotes.split("\n").includes(remote));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("S1A writer artifact sanitization + revalidation", () => {
+  it("writer artifact contains no raw evidence", async () => {
+    const analyzed = await runS1aAnalyze({
+      repo: ALLOWED_REPO,
+      issueNumber: 74,
+      mode: "fixture",
+      skipAuthorityGuard: true,
+      clients: { skipWorktree: true, spawnReviewer: false },
+    });
+    assert.equal(analyzed.action, "analyzed");
+    assertArtifactSanitized(analyzed.artifact);
+    assert.ok(analyzed.artifact.evidenceDigest?.sha256);
+    assert.equal(analyzed.artifact.schemaVersion, S1A_BOUNDS.artifactSchemaVersion);
+    assert.ok(!("evidencePack" in analyzed.artifact));
+    assert.ok(!("workflowLogs" in analyzed.artifact));
+    const summary = summarizeAnalyzeResult(analyzed);
+    assert.ok(!("evidencePack" in summary));
+    assert.equal(summary.evidenceDigestSha256, analyzed.artifact.evidenceDigest.sha256);
+  });
+
+  it("stale fingerprint/occurrence rejected by writer", async () => {
+    const { issue } = loadFixturePack();
+    const pack = buildEvidencePack({ issue });
+    const art = buildAssessmentArtifact({
+      repo: ALLOWED_REPO,
+      issueNumber: issue.number,
+      fingerprint: pack.fingerprint,
+      occurrence: pack.latestOccurrenceId,
+      mode: "fixture",
+      engine: "fixture",
+      configuredProvider: FIXTURE_PROVIDER,
+      configuredModel: FIXTURE_MODEL,
+      actualProvider: FIXTURE_PROVIDER,
+      actualModel: FIXTURE_MODEL,
+      assessment: { criticalFreeze: false },
+      reviewer: { verdict: "ACCEPT" },
+      markdown: "advice",
+      revised: false,
+      evidencePack: pack,
+    });
+    await assert.rejects(
+      () =>
+        revalidateIssueForUpsert({
+          artifact: { ...art, fingerprint: "c".repeat(64) },
+          repo: ALLOWED_REPO,
+          getIssue: async () => ({ ...issue, state: "open" }),
+          listComments: async () => [],
+        }),
+      /fingerprint mismatch/,
+    );
+    await assert.rejects(
+      () =>
+        revalidateIssueForUpsert({
+          artifact: { ...art, occurrence: "workflow-run:stale:attempt:9" },
+          repo: ALLOWED_REPO,
+          getIssue: async () => ({ ...issue, state: "open" }),
+          listComments: async () => [],
+        }),
+      /occurrence mismatch/,
+    );
+    const marker = assessmentMarkerHtml(pack.fingerprint, pack.latestOccurrenceId);
+    await assert.rejects(
+      () =>
+        revalidateIssueForUpsert({
+          artifact: art,
+          repo: ALLOWED_REPO,
+          getIssue: async () => ({ ...issue, state: "open" }),
+          listComments: async () => [{ id: 1, body: `done\n${marker}` }],
+        }),
+      /already posted/,
+    );
+  });
+
+  it("cross-repository target rejected", () => {
+    assert.throws(() => assertRepoAllowed("Runfusion/Fusion"), /repo-not-allowed/);
+    assert.throws(
+      () =>
+        validateAssessmentArtifact(
+          {
+            schemaVersion: S1A_BOUNDS.artifactSchemaVersion,
+            repo: "Runfusion/Fusion",
+            issueNumber: 74,
+            fingerprint: "a".repeat(64),
+            occurrence: "x",
+            mode: "fixture",
+            engine: "fixture",
+            configuredProvider: FIXTURE_PROVIDER,
+            configuredModel: FIXTURE_MODEL,
+            actualProvider: FIXTURE_PROVIDER,
+            actualModel: FIXTURE_MODEL,
+            assessment: {},
+            reviewer: {},
+            markdown: "x",
+            evidenceDigest: { sha256: "d".repeat(64) },
+          },
+          { expectMode: "fixture" },
+        ),
+      /not allowed/,
+    );
+  });
+});
+
+describe("S1A child process credential allowlists", () => {
+  it("reviewer child has no credentials; Cursor child has no GitHub token", () => {
+    const prev = {
+      GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+      GH_TOKEN: process.env.GH_TOKEN,
+      S1A_CURSOR_API_KEY: process.env.S1A_CURSOR_API_KEY,
+      CURSOR_API_KEY: process.env.CURSOR_API_KEY,
+    };
+    try {
+      process.env.GITHUB_TOKEN = "gh-secret";
+      process.env.GH_TOKEN = "gh-secret-2";
+      process.env.S1A_CURSOR_API_KEY = "cursor-secret";
+      process.env.CURSOR_API_KEY = "cursor-secret-2";
+      const rev = reviewerChildEnv(process.env);
+      assertNoCredentialLeak(rev);
+      assert.equal(rev.GITHUB_TOKEN, undefined);
+      assert.equal(rev.S1A_CURSOR_API_KEY, undefined);
+      assert.equal(rev.CURSOR_API_KEY, undefined);
+      assert.ok(
+        Object.keys(rev).every((k) =>
+          [
+            "PATH",
+            "HOME",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "NODE_OPTIONS",
+            "LANG",
+            "LC_ALL",
+            "TZ",
+          ].includes(k),
+        ),
+      );
+
+      const cur = cursorChildEnv({ apiKey: "cursor-secret", src: process.env });
+      assertNoCredentialLeak(cur, { allowCursorKey: true });
+      assert.equal(cur.CURSOR_API_KEY, "cursor-secret");
+      assert.equal(cur.GITHUB_TOKEN, undefined);
+      assert.equal(cur.GH_TOKEN, undefined);
+      assert.equal(cur.S1A_CURSOR_API_KEY, undefined);
+      assert.ok(REVIEWER_PROC_SRC.includes("reviewerChildEnv"));
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+});
+
+describe("S1A worktree integrity + cleanup fail-closed", () => {
+  it("tracked worktree mutation rejected", () => {
+    const root = mkdtempSync(join(tmpdir(), "s1a-mut-"));
+    try {
+      spawnSync("git", ["init"], { cwd: root, encoding: "utf8" });
+      spawnSync("git", ["config", "user.email", "t@t"], { cwd: root, encoding: "utf8" });
+      spawnSync("git", ["config", "user.name", "t"], { cwd: root, encoding: "utf8" });
+      writeFileSync(join(root, "a.txt"), "1\n");
+      spawnSync("git", ["add", "."], { cwd: root, encoding: "utf8" });
+      spawnSync("git", ["commit", "-m", "i"], { cwd: root, encoding: "utf8" });
+      const wtRoot = join(root, "wts");
+      const wt = createRepairWorktree({
+        incidentId: 99,
+        repoRoot: root,
+        mode: "fixture",
+        worktreeRoot: wtRoot,
+      });
+      const before = wt.before || captureWorktreeIntegrity(wt.path);
+      writeFileSync(join(wt.path, "a.txt"), "mutated\n");
+      assert.throws(
+        () => assertWorktreeIntegrity({ worktreePath: wt.path, before }),
+        /unstaged tracked mutations/,
+      );
+      removeRepairWorktree({ path: wt.path, repoRoot: root, failClosed: true });
+      assert.ok(!existsSync(wt.path));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleanup failure rejected", () => {
+    assert.throws(
+      () =>
+        removeRepairWorktree({
+          path: "",
+          repoRoot: mkdtempSync(join(tmpdir(), "s1a-c-")),
+          failClosed: true,
+        }),
+      /path required/,
+    );
   });
 });

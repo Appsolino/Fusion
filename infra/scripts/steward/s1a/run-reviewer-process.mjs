@@ -55,6 +55,7 @@ if (isMain) {
 export async function runReviewerProcess(input) {
   const { spawn } = await import("node:child_process");
   const { dirname, join } = await import("node:path");
+  const { reviewerChildEnv } = await import("./spawn-env.mjs");
   const spawnFn = input.spawnFn || spawn;
   const script =
     input.scriptPath ||
@@ -64,7 +65,7 @@ export async function runReviewerProcess(input) {
   return new Promise((resolve, reject) => {
     const child = spawnFn(nodeBin, [script], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      env: reviewerChildEnv(),
     });
     let out = "";
     let err = "";

@@ -16,6 +16,7 @@ import {
   pinsForEngine,
 } from "./policy.mjs";
 import { classifyConflictFile } from "./path-heuristics.mjs";
+import { cursorChildEnv } from "./spawn-env.mjs";
 
 const REQUIRED_FIELDS = [
   "summary",
@@ -228,11 +229,15 @@ export async function runCursorEngine(evidencePack, opts = {}) {
   }
 
   const worktreePath = opts.worktreePath || evidencePack.worktreePath || null;
-  const evidencePackPath = worktreePath
-    ? join(worktreePath, "evidence-pack.json")
-    : null;
+  const evidenceDir = opts.evidenceDir || null;
+  const evidencePackPath = evidenceDir
+    ? join(evidenceDir, "evidence-pack.json")
+    : worktreePath
+      ? join(worktreePath, "evidence-pack.json")
+      : null;
   if (evidencePackPath) {
-    if (!existsSync(worktreePath)) mkdirSync(worktreePath, { recursive: true });
+    const dir = evidenceDir || worktreePath;
+    if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(evidencePackPath, JSON.stringify(evidencePack, null, 2));
   }
 
@@ -278,12 +283,13 @@ export async function runCursorEngine(evidencePack, opts = {}) {
     try {
       child = /** @type {any} */ (
         spawnFn(bin, args, {
-          env: {
-            ...process.env,
-            ...(process.env.S1A_CURSOR_API_KEY
-              ? { CURSOR_API_KEY: process.env.S1A_CURSOR_API_KEY }
-              : {}),
-          },
+          env: cursorChildEnv({
+            apiKey:
+              process.env.S1A_CURSOR_API_KEY ||
+              process.env.CURSOR_API_KEY ||
+              process.env.CURSOR_AGENT_API_KEY ||
+              "",
+          }),
           stdio: ["ignore", "pipe", "pipe"],
         })
       );

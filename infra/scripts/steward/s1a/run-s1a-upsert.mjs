@@ -10,12 +10,15 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { validateAssessmentArtifact } from "./assessment-artifact.mjs";
-import { upsertAssessmentComment } from "./upsert-comment.mjs";
+import { upsertAssessmentComment, findAssessmentComment } from "./upsert-comment.mjs";
 import { applyLabelTransition, planLabelTransition } from "./labels.mjs";
 import { guardAuthorityOrThrow } from "./guard-authority.mjs";
+import { buildEvidencePack } from "./evidence-pack.mjs";
+import { extractFingerprintFromIssueBody } from "../policy.mjs";
 import {
   ALLOWED_REPO,
   REVIEW_VERDICT,
+  STEWARD_ISSUE_LABEL,
   assertRepoAllowed,
 } from "./policy.mjs";
 
@@ -34,6 +37,64 @@ export function parseUpsertArgs(argv) {
 }
 
 /**
+ * Re-fetch current issue state and refuse stale/mismatched artifacts.
+ * @param {{
+ *   artifact: object,
+ *   repo: string,
+ *   getIssue: (n: number) => Promise<object>,
+ *   listComments: (n: number) => Promise<object[]>,
+ * }} input
+ */
+export async function revalidateIssueForUpsert(input) {
+  const art = input.artifact;
+  const issue = await input.getIssue(art.issueNumber);
+  if (!issue) {
+    throw new Error("writer revalidate: issue missing");
+  }
+  if (String(issue.state || "").toLowerCase() !== "open") {
+    throw new Error("writer revalidate: issue is not open");
+  }
+  const labels = (issue.labels || []).map((l) =>
+    typeof l === "string" ? l : l?.name,
+  );
+  if (!labels.includes(STEWARD_ISSUE_LABEL)) {
+    throw new Error("writer revalidate: missing appsolino-steward label");
+  }
+  const liveFp = extractFingerprintFromIssueBody(issue.body || "");
+  if (!liveFp || liveFp.toLowerCase() !== String(art.fingerprint).toLowerCase()) {
+    throw new Error(
+      `writer revalidate: fingerprint mismatch (live=${liveFp || "null"} artifact=${art.fingerprint})`,
+    );
+  }
+  const pack = buildEvidencePack({ issue });
+  const latest =
+    pack.latestOccurrenceId || pack.occurrenceIds[0] || `issue:${issue.number}`;
+  if (String(latest).trim() !== String(art.occurrence).trim()) {
+    throw new Error(
+      `writer revalidate: occurrence mismatch (live=${latest} artifact=${art.occurrence})`,
+    );
+  }
+  const comments = await input.listComments(art.issueNumber);
+  const existing = findAssessmentComment(comments, art.fingerprint, art.occurrence);
+  if (existing && !art.revised) {
+    throw new Error(
+      "writer revalidate: assessment already posted for fingerprint+occurrence",
+    );
+  }
+  if (String(input.repo) !== String(art.repo)) {
+    throw new Error(
+      `writer revalidate: repository mismatch (${input.repo} vs ${art.repo})`,
+    );
+  }
+  return {
+    ok: true,
+    fingerprint: liveFp,
+    occurrence: latest,
+    labels,
+  };
+}
+
+/**
  * @param {{
  *   artifact: object,
  *   repo?: string,
@@ -41,8 +102,10 @@ export function parseUpsertArgs(argv) {
  *   clients: {
  *     labels: import("./labels.mjs").LabelClient,
  *     comments: import("./upsert-comment.mjs").CommentClient,
+ *     getIssue?: (n: number) => Promise<object>,
  *   },
  *   skipAuthorityGuard?: boolean,
+ *   skipIssueRevalidate?: boolean,
  * }} input
  */
 export async function runS1aUpsert(input) {
@@ -58,6 +121,21 @@ export async function runS1aUpsert(input) {
   }
   if (!input.clients?.labels || !input.clients?.comments) {
     throw new Error("runS1aUpsert requires clients.labels and clients.comments");
+  }
+
+  if (!input.skipIssueRevalidate) {
+    const getIssue =
+      input.clients.getIssue ||
+      (async (n) => {
+        // Prefer labels client living issue fetch if provided separately later.
+        throw new Error("writer revalidate requires clients.getIssue");
+      });
+    await revalidateIssueForUpsert({
+      artifact: art,
+      repo,
+      getIssue,
+      listComments: (n) => input.clients.comments.listComments(n),
+    });
   }
 
   // Brief expert-running then settle to terminal labels.
@@ -129,13 +207,18 @@ if (isMain) {
     process.exit(2);
   }
   const artifact = JSON.parse(readFileSync(args.artifact, "utf8"));
-  const { createLiveWriteClients } = await import("./live-clients.mjs");
-  const clients = createLiveWriteClients({ repo: args.repo });
+  const { createLiveWriteClients, createLiveReadClients } = await import("./live-clients.mjs");
+  const write = createLiveWriteClients({ repo: args.repo });
+  const read = createLiveReadClients({ repo: args.repo });
   const result = await runS1aUpsert({
     artifact,
     repo: args.repo,
     expectMode: args.expectMode || "live",
-    clients,
+    clients: {
+      labels: write.labels,
+      comments: write.comments,
+      getIssue: (n) => read.getIssue(n),
+    },
     skipAuthorityGuard: false,
   });
   console.log(JSON.stringify(result, null, 2));
