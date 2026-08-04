@@ -37,10 +37,18 @@ jobs:
 
       - name: Setup Node.js and pnpm
         uses: ./.github/actions/setup-node-pnpm
+        with:
+          # Keep skip-install so setup-node takes the no-store-cache path
+          # (ci-workflow.test + setup-node-pnpm action contract).
+          skip-install: "true"
 
       # FNXC:AppsolinoUpstreamAbsorb 2026-08-04:
       # Upstream 56819e21e requires dist/plugin-sdk/index.d.ts before prepack.
-      # Pack fixture previously used skip-install and therefore never produced dist.
+      # Install + build explicitly while leaving composite skip-install intact.
+      - name: Install workspace deps for pack fixture
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
       - name: Build CLI package (plugin-sdk declarations)
         shell: bash
         run: pnpm --filter @runfusion/fusion run build:package
