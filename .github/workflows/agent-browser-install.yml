@@ -27,7 +27,7 @@ jobs:
   pack-fixture:
     name: Pack agent-browser install fixture
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -37,8 +37,13 @@ jobs:
 
       - name: Setup Node.js and pnpm
         uses: ./.github/actions/setup-node-pnpm
-        with:
-          skip-install: "true"
+
+      # FNXC:AppsolinoUpstreamAbsorb 2026-08-04:
+      # Upstream 56819e21e requires dist/plugin-sdk/index.d.ts before prepack.
+      # Pack fixture previously used skip-install and therefore never produced dist.
+      - name: Build CLI package (plugin-sdk declarations)
+        shell: bash
+        run: pnpm --filter @runfusion/fusion run build:package
 
       - name: Pack Fusion CLI and agent-browser
         shell: bash
