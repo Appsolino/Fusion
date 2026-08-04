@@ -226,6 +226,24 @@ Summarize-as-title is an in-field affordance, not a separate full-width row: it 
   min-width: 0;
 }
 
+.detail-title-control {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.detail-title-control:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-strong);
+  border-radius: var(--radius-sm);
+}
+
 .detail-summarize-title-btn {
   display: inline-flex;
   align-items: center;
@@ -255,22 +273,6 @@ Summarize-as-title is an in-field affordance, not a separate full-width row: it 
 .detail-summarize-title-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.detail-description-toggle {
-  display: block;
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  font-size: 13px;
-  padding: 2px 0;
-  margin-bottom: var(--space-md);
-  cursor: pointer;
-  text-align: left;
-}
-
-.detail-description-toggle:hover {
-  color: var(--text);
 }
 
 /*
@@ -1576,7 +1578,6 @@ Planner Chat should not open expanded by default. When the user expands it, the 
   min-height: 0;
 }
 
-.task-detail-content--planner-chat-expanded .detail-description-toggle,
 .task-detail-content--planner-chat-expanded .detail-near-duplicate-banner,
 .task-detail-content--planner-chat-expanded .detail-plan-approval-banner,
 .task-detail-content--planner-chat-expanded .task-fields-section,

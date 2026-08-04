@@ -2094,6 +2094,12 @@ describe("TaskDetailModal", () => {
       />,
     );
 
+    const expectNoStandaloneTitleToggle = () => {
+      expect(document.querySelector(".detail-description-toggle")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
+    };
+
     beforeEach(() => {
       setTitleLayout({ scrollHeight: 120, clientHeight: 40 });
       Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
@@ -2123,9 +2129,13 @@ describe("TaskDetailModal", () => {
       }
     });
 
-    it("collapses long triage title by default with Show more button and expands on demand", async () => {
+    it("toggles a long triage title directly without a standalone affordance", async () => {
+      /*
+      FNXC:TaskDetailTitle 2026-08-04-18:00:
+      Every TaskDetailModal lifecycle column and title fallback shares this definition header. An overflowed title alone owns expansion for pointer, touch, and keyboard users; short and fallback headings retain no empty control or legacy Show more/Show less shell, while Summarize remains separate.
+      */
       const longTitle = "Triage title ".repeat(25);
-      const { container } = renderDetail({
+      renderDetail({
         column: "triage",
         title: longTitle,
         description: "Triage planning context",
@@ -2134,28 +2144,45 @@ describe("TaskDetailModal", () => {
       const h2 = document.querySelector("h2.detail-title");
       expect(h2?.textContent).toBe(longTitle);
       expect(h2).toHaveClass("detail-title--collapsed");
-      const toggle = await screen.findByRole("button", { name: "Show more" });
-      expect(toggle).toHaveClass("detail-description-toggle");
+      const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      expect(titleControl).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
 
-      await userEvent.click(toggle);
+      await userEvent.click(titleControl);
 
       expect(document.querySelector("h2.detail-title")?.textContent).toBe(longTitle);
       expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
-      expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Collapse task title" })).toHaveAttribute("aria-expanded", "true");
+      expectNoStandaloneTitleToggle();
+
+      await userEvent.click(screen.getByRole("button", { name: "Collapse task title" }));
+
+      expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
+      expect(screen.getByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
-    it("collapses long triage description by default when title is missing", async () => {
+    it("supports keyboard activation through the title control", async () => {
+      renderDetail({ title: "Keyboard title ".repeat(25) });
+
+      const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      titleControl.focus();
+      await userEvent.keyboard("{Enter}");
+
+      expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
+      expect(screen.getByRole("button", { name: "Collapse task title" })).toHaveAttribute("aria-expanded", "true");
+      expectNoStandaloneTitleToggle();
+    });
+
+    it("collapses a long triage description fallback by default when title is missing", async () => {
       const longDescription = "Triage description ".repeat(20);
-      const { container } = renderDetail({
-        column: "triage",
-        title: undefined,
-        description: longDescription,
-      });
+      renderDetail({ column: "triage", title: undefined, description: longDescription });
 
       const h2 = document.querySelector("h2.detail-title");
       expect(h2?.textContent).toBe(longDescription);
       expect(h2).toHaveClass("detail-title--collapsed");
-      expect(await screen.findByRole("button", { name: "Show more" })).toHaveClass("detail-description-toggle");
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
     it("uses the title, description, and id fallback chain for the clamped heading", async () => {
@@ -2178,39 +2205,40 @@ describe("TaskDetailModal", () => {
       renderDetail({ title: "Title wins", description: "Description loses" });
       expect(document.querySelector("h2.detail-title")?.textContent).toBe("Title wins");
       expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
-      expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toBeInTheDocument();
+      expectNoStandaloneTitleToggle();
       cleanup();
 
       setTitleLayout({ scrollHeight: 40, clientHeight: 40 });
       renderDetail({ title: undefined, description: "Description fallback" });
       expect(document.querySelector("h2.detail-title")?.textContent).toBe("Description fallback");
-      expect(document.querySelector(".detail-description-toggle")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Expand task title" })).toBeNull();
+      expectNoStandaloneTitleToggle();
       cleanup();
 
       renderDetail({ id: "FN-FALLBACK", title: undefined, description: undefined });
       expect(document.querySelector("h2.detail-title")?.textContent).toBe("FN-FALLBACK");
-      expect(document.querySelector(".detail-description-toggle")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Expand task title" })).toBeNull();
+      expectNoStandaloneTitleToggle();
     });
 
     it.each(["todo", "in-progress", "in-review", "done", "archived"] as const)(
-      "collapses overflowing non-triage %s title by default",
+      "collapses overflowing non-triage %s titles with a title-owned control",
       async (column) => {
         const longTitle = `${column} title `.repeat(25);
-        const { container } = renderDetail({
-          column,
-          title: longTitle,
-        });
+        renderDetail({ column, title: longTitle });
 
         const h2 = document.querySelector("h2.detail-title");
         expect(h2?.textContent).toBe(longTitle);
         expect(h2).toHaveClass("detail-title--collapsed");
-        expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+        expect(await screen.findByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+        expectNoStandaloneTitleToggle();
       },
     );
 
-    it("does not render an empty toggle shell when the title fits within two lines", () => {
+    it("does not render an empty title control when the title fits within two lines", () => {
       setTitleLayout({ scrollHeight: 40, clientHeight: 40 });
-      const { container } = renderDetail({
+      renderDetail({
         title: "Short title",
         description: "This is a longer description that is not shown as the heading while title is present",
       });
@@ -2218,41 +2246,17 @@ describe("TaskDetailModal", () => {
       const h2 = document.querySelector("h2.detail-title");
       expect(h2?.textContent).toBe("Short title");
       expect(h2).toHaveClass("detail-title--collapsed");
-      expect(document.querySelector(".detail-description-toggle")).toBeNull();
-    });
-
-    it("collapses again when Show less is clicked", async () => {
-      const longDescription = "C".repeat(250);
-      const { container } = renderDetail({
-        title: undefined,
-        description: longDescription,
-      });
-
-      const toggle = await screen.findByRole("button", { name: "Show more" });
-      await userEvent.click(toggle);
-      expect(document.querySelector("h2.detail-title")?.textContent).toBe(longDescription);
-      expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
-
-      await userEvent.click(screen.getByRole("button", { name: "Show less" }));
-
-      const h2 = document.querySelector("h2.detail-title");
-      expect(h2?.textContent).toBe(longDescription);
-      expect(h2).toHaveClass("detail-title--collapsed");
-      expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Expand task title" })).toBeNull();
+      expectNoStandaloneTitleToggle();
     });
 
     it("resets to collapsed when switching from a non-triage task to a triage task", async () => {
       const todoDescription = "G".repeat(250);
       const triageDescription = "H".repeat(250);
-      const { container, rerender } = render(
+      const { rerender } = render(
         <TaskDetailModal
           initialTab="definition"
-          task={makeTask({
-            id: "FN-TODO",
-            column: "todo",
-            title: undefined,
-            description: todoDescription,
-          })}
+          task={makeTask({ id: "FN-TODO", column: "todo", title: undefined, description: todoDescription })}
           onClose={noop}
           onMoveTask={noopMove}
           onDeleteTask={noopDelete}
@@ -2262,18 +2266,13 @@ describe("TaskDetailModal", () => {
         />,
       );
 
-      await userEvent.click(await screen.findByRole("button", { name: "Show more" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Expand task title" }));
       expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
 
       rerender(
         <TaskDetailModal
           initialTab="definition"
-          task={makeTask({
-            id: "FN-TRIAGE",
-            column: "triage",
-            title: undefined,
-            description: triageDescription,
-          })}
+          task={makeTask({ id: "FN-TRIAGE", column: "triage", title: undefined, description: triageDescription })}
           onClose={noop}
           onMoveTask={noopMove}
           onDeleteTask={noopDelete}
@@ -2287,39 +2286,40 @@ describe("TaskDetailModal", () => {
         expect(document.querySelector("h2.detail-title")?.textContent).toBe(triageDescription);
       });
       expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
-      expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
     it("keeps the editing title form unaffected by the read-only clamp", async () => {
       const longTitle = "Editable title ".repeat(25);
-      const { container } = renderDetail({
-        column: "todo",
-        title: longTitle,
-        description: "Editable description",
-      });
+      renderDetail({ column: "todo", title: longTitle, description: "Editable description" });
 
-      expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Edit task" }));
 
       expect(document.querySelector("h2.detail-title")).toBeNull();
-      expect(document.querySelector(".detail-description-toggle")).toBeNull();
+      expectNoStandaloneTitleToggle();
       expect(screen.getByLabelText("Title")).toHaveValue(longTitle);
     });
 
-    it("keeps the summarize-title affordance aligned next to the clamped title", async () => {
-      const { container } = renderDetail({
+    it("keeps the summarize-title affordance distinct from title expansion", async () => {
+      renderDetail({
         column: "todo",
         title: "Summarize me ".repeat(25),
         description: "Description available for summarization",
       });
 
       expect(document.querySelector(".detail-heading-row h2.detail-title--collapsed")).toBeInTheDocument();
-      expect(screen.getByTestId("summarize-title-btn")).toBeInTheDocument();
-      expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+      const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      const summarizeButton = screen.getByTestId("summarize-title-btn");
+      expect(summarizeButton).not.toBe(titleControl);
+      await userEvent.click(summarizeButton);
+      expect(titleControl).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
     it("keeps the clamp available in chat-expanded layout", async () => {
-      const { container } = render(
+      render(
         <TaskDetailContent
           task={makeTask({
             column: "todo",
@@ -2339,7 +2339,8 @@ describe("TaskDetailModal", () => {
 
       expect(document.querySelector(".task-detail-content--chat-expanded")).toBeInTheDocument();
       expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
-      expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toBeInTheDocument();
+      expectNoStandaloneTitleToggle();
     });
 
     it("has desktop and mobile CSS rules that preserve the two-line title clamp", () => {
@@ -2347,8 +2348,11 @@ describe("TaskDetailModal", () => {
       expect(css).toContain(".detail-title--collapsed");
       expectBaseRule(css, ".detail-title--collapsed", "-webkit-line-clamp: 2");
       expectBaseRule(css, ".detail-title--collapsed", "line-clamp: 2");
+      expectBaseRule(css, ".detail-title-control", "width: 100%");
+      expectBaseRule(css, ".detail-title-control:focus-visible", "box-shadow: var(--focus-ring-strong)");
       expect(css).toContain("@media (max-width: 768px)");
       expectBaseRule(css, ".detail-title", "font-size: 16px");
+      expect(css).not.toContain(".detail-description-toggle");
     });
   });
 

@@ -4732,11 +4732,27 @@ export function TaskDetailContent({
                 Summarize-as-title renders inline with the title inside .detail-heading-row and is positioned (CSS) to the far bottom-right as an in-field affordance, not a separate full-width row. Markup order is preserved; only layout changed.
                 */}
                 <div className="detail-heading-row">
+                  {/*
+                  FNXC:TaskDetailTitle 2026-08-04-18:00:
+                  An overflowing task-detail title is its own sole expansion control. Keep the semantic button inside the h2 so pointer, touch, and keyboard activation share one accessible target; the separate Show more/Show less row must not return.
+                  */}
                   <h2
                     ref={titleRef}
                     className={`detail-title${descriptionExpanded ? "" : " detail-title--collapsed"}`}
                   >
-                    {displayTitleText}
+                    {titleOverflows || descriptionExpanded ? (
+                      <button
+                        type="button"
+                        className="detail-title-control"
+                        aria-expanded={descriptionExpanded}
+                        aria-label={descriptionExpanded
+                          ? t("taskDetail.title.collapse", "Collapse task title")
+                          : t("taskDetail.title.expand", "Expand task title")}
+                        onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+                      >
+                        {displayTitleText}
+                      </button>
+                    ) : displayTitleText}
                   </h2>
                   {showSummarizeTitleButton && (
                     <button
@@ -4751,14 +4767,6 @@ export function TaskDetailContent({
                     </button>
                   )}
                 </div>
-                {(titleOverflows || descriptionExpanded) && (
-                  <button
-                    className="detail-description-toggle"
-                    onClick={() => setDescriptionExpanded(!descriptionExpanded)}
-                  >
-                    {descriptionExpanded ? t("taskDetail.description.showLess", "Show less") : t("taskDetail.description.showMore", "Show more")}
-                  </button>
-                )}
               </>
               {customFieldDefs && customFieldDefs.length > 0 ? (
                 <TaskFieldsSection
