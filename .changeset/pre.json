@@ -43,6 +43,7 @@
     "calm-todos-build",
     "clear-plan-approval-status",
     "credential-instance-self-heal",
+    "dev-engine-watch",
     "fix-plugin-sdk-declarations",
     "fn-8753-voice-input-enable",
     "fn-8754-responsive-list-detail",
@@ -59,6 +60,8 @@
     "fn-8777-voice-entry-e2e",
     "fn-8778-planning-lock-receiver",
     "fn-8780-activity-thinking-open",
+    "fn-8785-queued-log-deduplication",
+    "fn-8785-user-duplicate-history",
     "planning-reusable-task-creation",
     "planning-review-prompt-completeness",
     "restore-fn-8752-8753-locale-parity"

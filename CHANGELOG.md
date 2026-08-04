@@ -2,6 +2,23 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.75.0-beta.2
+
+### Highlights
+
+- Dev source watching restarts the engine cleanly, draining active agents before rebuilding
+- Queue activity no longer repeats dependency and file-scope blocker entries for unchanged blockers
+- Duplicate detection ignores completed and archived tasks while protecting active work
+
+### New
+
+- Development source watching restarts the engine automatically on source changes: new admission is closed, active agents drain, the build is refreshed, and the supervised engine is respawned.
+
+### Fixed
+
+- Dependency and file-scope queue activity entries no longer repeat while the blocker is unchanged, so the task queue log stays readable.
+- Duplicate detection now matches against active tasks only, skipping completed and archived ones across intake, planning, and recovery.
+
 ## 0.75.0-beta.1
 
 ### Highlights

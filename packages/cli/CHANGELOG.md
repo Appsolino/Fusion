@@ -1,5 +1,22 @@
 # @runfusion/fusion
 
+## 0.75.0-beta.2
+
+### Minor Changes
+
+- 9e4a081: summary: Add safe development source watching with automatic engine restarts.
+  category: feature
+  dev: Use `pnpm dev:watch`; restarts close new admission, drain active agents, rebuild dist, and respawn the supervised child.
+
+### Patch Changes
+
+- 1dc636b: summary: Prevent repeated dependency and file-scope queue activity entries for unchanged blockers.
+  category: fix
+  dev: Queue episode signatures are durable and project/task transaction-serialized across scheduler, executor, and recovery producers.
+- 1d1a7fe: summary: Ignore completed and archived tasks during duplicate detection while protecting active work.
+  category: fix
+  dev: Applies active-only duplicate matching consistently across task intake, planning, and recovery.
+
 ## 0.75.0-beta.1
 
 ### Patch Changes
