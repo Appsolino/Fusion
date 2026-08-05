@@ -25,7 +25,7 @@
       "description": "Allow S2 low-risk exact-head auto-merge"
     },
     "s3Enabled": {
-      "enabled": false,
+      "enabled": true,
       "envOverride": "STEWARD_S3_ENABLED",
       "description": "Allow S3 sensitive assist (Appsolino+Host D only)"
     }
