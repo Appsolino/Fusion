@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Pencil, Bot, X, ChevronDown, ChevronRight, GitBranch, ArrowLeft, Zap, Loader2, AlertTriangle, Sparkles, Maximize2, Minimize2, Send, Square, Info, Paperclip, Eye, EyeOff } from "lucide-react";
 import { useViewportMode } from "../hooks/useViewportMode";
+import { mergeTaskSnapshot } from "../hooks/useTasks";
 import { FloatingWindow } from "./FloatingWindow";
 import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { useModalDismissPreference, useOverlayDismiss } from "../hooks/useOverlayDismiss";
@@ -884,7 +885,7 @@ export function TaskDetailContent({
     if (!active) return;
     // If the prop already has a prompt field, it's a full TaskDetail
     if ("prompt" in task) {
-      setFullDetail(task as TaskDetail);
+      setFullDetail((previous) => previous?.id === task.id ? mergeTaskSnapshot(previous, task) : task as TaskDetail);
       setDetailLoading(false);
       return;
     }
@@ -897,7 +898,7 @@ export function TaskDetailContent({
     requestTaskDetail(task.id, projectId)
       .then((detail) => {
         if (!cancelled && detailRequestGenerationRef.current === requestGeneration) {
-          setFullDetail(detail);
+          setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail) : detail);
           setDetailLoading(false);
         }
       })
@@ -926,19 +927,7 @@ export function TaskDetailContent({
   }, [task.id]);
   const workingTask: TaskDetail = fullDetail
     ? ({
-      ...fullDetail,
-      ...task,
-      prompt: fullDetail.prompt,
-      log: fullDetail.log,
-      githubTracking: task.githubTracking ?? fullDetail.githubTracking,
-      gitlabTracking: task.gitlabTracking ?? fullDetail.gitlabTracking,
-      assignedAgentId: task.assignedAgentId === undefined ? fullDetail.assignedAgentId : task.assignedAgentId,
-      checkedOutBy: task.checkedOutBy === undefined ? fullDetail.checkedOutBy : task.checkedOutBy,
-      status: task.status === undefined ? fullDetail.status : task.status,
-      column: task.column === undefined ? fullDetail.column : task.column,
-      paused: task.paused === undefined ? fullDetail.paused : task.paused,
-      userPaused: task.userPaused === undefined ? fullDetail.userPaused : task.userPaused,
-      pausedReason: task.pausedReason === undefined ? fullDetail.pausedReason : task.pausedReason,
+      ...mergeTaskSnapshot(fullDetail, task),
       /*
       FNXC:TaskDetailOverlapRepair 2026-06-25-04:34:
       SSE task props are authoritative for live blocker changes, but the Clear repair flow needs a local override while stale parent props catch up. Only fall back to fetched detail when the slim parent omitted the field entirely.
@@ -3647,7 +3636,7 @@ export function TaskDetailContent({
   const handleWorkflowReconciled = useCallback(async () => {
     try {
       const detail = await fetchTaskDetail(task.id, projectId);
-      setFullDetail(detail);
+      setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail) : detail);
       onTaskUpdated?.(detail);
     } catch {
       // Best-effort refresh; the SSE stream will catch the board up regardless.
@@ -3656,7 +3645,7 @@ export function TaskDetailContent({
 
   const handleBranchGroupReset = useCallback(async () => {
     const detail = await fetchTaskDetail(task.id, projectId);
-    setFullDetail(detail);
+    setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail) : detail);
     onTaskUpdated?.(detail);
   }, [task.id, projectId, onTaskUpdated]);
 
@@ -4547,8 +4536,14 @@ export function TaskDetailContent({
             `columnLabel` for the column a workflow does not declare and for the window before the
             board-workflows payload resolves.
             */}
-            <span className={`detail-column-badge badge-${task.column}`}>
-              {workflowColumnDisplayName ?? columnLabel(task.column)}
+            {/*
+            FNXC:TaskDetailStateStability 2026-08-05-02:55:
+            The header is the lifecycle presentation users watch during scheduler activity. Render the
+            timestamp-reconciled working snapshot, never the raw prop, so a late Todo board/detail
+            payload cannot flash over a newer queued dependency or file-overlap state.
+            */}
+            <span className={`detail-column-badge badge-${workingTask.column}`}>
+              {workflowColumnDisplayName ?? columnLabel(workingTask.column)}
             </span>
           </div>
           <div className="modal-header-actions">

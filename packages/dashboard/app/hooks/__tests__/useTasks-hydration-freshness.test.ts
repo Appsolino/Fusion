@@ -19,7 +19,7 @@ a mocked cache is what let the missing `savedAt` plumbing hide.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { Task } from "@fusion/core";
-import { useTasks } from "../useTasks";
+import { mergeTaskSnapshot, useTasks } from "../useTasks";
 import * as api from "../../api";
 import { SWR_CACHE_KEYS } from "../../utils/swrCache";
 import { isTaskStuck, countStuckTasks } from "../../utils/taskStuck";
@@ -126,6 +126,53 @@ afterEach(() => {
   (globalThis as unknown as { EventSource: unknown }).EventSource = originalEventSource;
   localStorage.clear();
   vi.useRealTimers();
+});
+
+/*
+FNXC:TaskDetailStateStability 2026-08-05-02:55:
+Scheduler-driven board resyncs can deliver an older Todo row after a newer queued dependency/file-overlap
+snapshot has already reached an open detail host. The reconciliation helper must use lifecycle timestamps,
+not payload arrival order: a stale or equal lifecycle payload cannot roll the visible task backwards, while
+a real newer column move can advance it. Full-detail prompt/log data is retained when slim rows arrive.
+*/
+describe("task snapshot lifecycle freshness", () => {
+  const todo = createInProgressTask("FN-ORDER", Date.parse("2026-08-05T10:00:00.000Z"));
+
+  it("keeps a newer queued status through an old → new → stale-old scheduler ordering", () => {
+    const queued = {
+      ...todo,
+      column: "todo",
+      status: "queued-dependency",
+      updatedAt: "2026-08-05T10:02:00.000Z",
+      columnMovedAt: "2026-08-05T10:02:00.000Z",
+      prompt: "# Full task detail",
+      log: [{ timestamp: "2026-08-05T10:02:00.000Z", action: "Queued behind dependency" }],
+    } as Task;
+    const staleTodo = { ...todo, status: "todo", columnMovedAt: "2026-08-05T10:00:00.000Z" };
+
+    const afterNew = mergeTaskSnapshot(todo, queued);
+    const afterStale = mergeTaskSnapshot(afterNew, staleTodo);
+
+    expect(afterStale).toMatchObject({ column: "todo", status: "queued-dependency", updatedAt: queued.updatedAt });
+    expect(afterStale).toHaveProperty("prompt", "# Full task detail");
+    expect(afterStale.log).toEqual(queued.log);
+  });
+
+  it("keeps the first known lifecycle state for duplicate/equal timestamps but fills sparse fields", () => {
+    const queued = { ...todo, status: "queued-overlap", updatedAt: "2026-08-05T10:02:00.000Z" };
+    const equalStale = { ...todo, status: "todo", updatedAt: queued.updatedAt, title: "Scheduler summary" };
+
+    const resolved = mergeTaskSnapshot(queued, equalStale);
+
+    expect(resolved).toMatchObject({ status: "queued-overlap", title: todo.title });
+  });
+
+  it("accepts a genuinely newer column transition", () => {
+    const queued = { ...todo, column: "todo", status: "queued-overlap", updatedAt: "2026-08-05T10:02:00.000Z", columnMovedAt: "2026-08-05T10:02:00.000Z" };
+    const executing = { ...todo, column: "in-progress", status: "executing", updatedAt: "2026-08-05T10:03:00.000Z", columnMovedAt: "2026-08-05T10:03:00.000Z" };
+
+    expect(mergeTaskSnapshot(queued, executing)).toMatchObject({ column: "in-progress", status: "executing" });
+  });
 });
 
 describe("useTasks hydration freshness (dataAsOfMs)", () => {

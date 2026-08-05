@@ -409,6 +409,65 @@ describe("AppModals", () => {
     ]);
   });
 
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-02:55:
+  This is the rendered production modal reproduction: scheduler resync delivers Todo after the
+  dependency/file-overlap queue transition. The open detail must continuously show Queued because
+  AppModals reconciles its retained detail snapshot with the live board by lifecycle freshness.
+  */
+  it("does not roll an open queued detail back when a stale scheduler board row arrives", async () => {
+    const detail = {
+      id: "FN-QUEUED",
+      title: "Blocked task",
+      description: "",
+      column: "todo",
+      status: "queued",
+      overlapBlockedBy: "FN-UPSTREAM",
+      dependencies: ["FN-UPSTREAM"],
+      steps: [],
+      log: [{ timestamp: "2026-08-05T10:02:00.000Z", action: "Queued for dependency" }],
+      prompt: "# Prompt",
+      createdAt: "2026-08-05T10:00:00.000Z",
+      updatedAt: "2026-08-05T10:02:00.000Z",
+      columnMovedAt: "2026-08-05T10:02:00.000Z",
+    };
+    const staleSchedulerTodo = {
+      ...detail,
+      status: undefined,
+      prompt: undefined,
+      log: [],
+      updatedAt: "2026-08-05T10:00:00.000Z",
+      columnMovedAt: "2026-08-05T10:00:00.000Z",
+    };
+    const manager = { ...mockModalManager, detailTask: detail };
+
+    const renderModal = (tasks: typeof detail[]) => (
+      <AppModals
+        projectId="project-a"
+        tasks={tasks}
+        projects={[]}
+        currentProject={null}
+        addToast={vi.fn()}
+        toasts={mockToasts}
+        removeToast={vi.fn()}
+        modalManager={manager}
+        projectActions={{ handleAddProject: vi.fn(), handleSetupComplete: vi.fn(), handleModelOnboardingComplete: vi.fn() }}
+        taskHandlers={{ handleModalCreate: vi.fn(), handlePlanningTaskCreated: vi.fn(), handlePlanningTasksCreated: vi.fn(), handleSubtaskTasksCreated: vi.fn(), handleGitHubImport: vi.fn() }}
+        taskOperations={{ moveTask: vi.fn(), deleteTask: vi.fn(), mergeTask: vi.fn(), retryTask: vi.fn(), duplicateTask: vi.fn() }}
+        deepLink={{ handleDetailClose: vi.fn() }}
+        settings={mockSettings}
+      />
+    );
+    const { rerender } = render(renderModal([detail]));
+    await waitFor(() => expect(mockTaskDetailModalProps).toHaveBeenCalled());
+
+    rerender(renderModal([staleSchedulerTodo]));
+
+    const renderedTask = mockTaskDetailModalProps.mock.calls.at(-1)?.[0]?.task;
+    expect(renderedTask).toMatchObject({ status: "queued", overlapBlockedBy: "FN-UPSTREAM", prompt: "# Prompt" });
+    expect(renderedTask.log).toEqual(detail.log);
+  });
+
   describe("ModelOnboardingModal wiring", () => {
     beforeEach(() => {
       mockModelOnboardingModalProps.mockClear();

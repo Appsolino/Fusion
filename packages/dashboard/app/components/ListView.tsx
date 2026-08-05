@@ -19,6 +19,7 @@ import { isTaskStuck } from "../utils/taskStuck";
 import { hasPendingAutomaticRecovery, isTaskManuallyRetryable } from "../utils/taskRecovery";
 import type { ToastType } from "../hooks/useToast";
 import { useViewportMode } from "../hooks/useViewportMode";
+import { mergeTaskSnapshot } from "../hooks/useTasks";
 import { getScopedItem, removeScopedItem, setScopedItem } from "../utils/projectStorage";
 import { ALL_WORKFLOWS_BOARD_VIEW_ID } from "../utils/boardWorkflowSelection";
 import { getRunningOptionalGateBadge, getRunningWorkflowStepLabel, getUnifiedTaskProgress } from "../utils/taskProgress";
@@ -565,7 +566,7 @@ export function ListView({
         return liveTask;
       }
       if (previous === liveTask) return previous;
-      return { ...previous, ...liveTask };
+      return mergeTaskSnapshot(previous, liveTask);
     });
   }, [selectedTaskId, tasks]);
 
@@ -2108,7 +2109,7 @@ export function ListView({
     try {
       const updatedTask = await updateTask(task.id, { githubTracking: { enabled: true } }, projectId);
       onTasksUpdated?.([updatedTask]);
-      setSelectedTaskSnapshot((previous) => previous?.id === updatedTask.id ? ({ ...previous, ...updatedTask, githubTracking: updatedTask.githubTracking } as Task | TaskDetail) : previous);
+      setSelectedTaskSnapshot((previous) => previous?.id === updatedTask.id ? mergeTaskSnapshot(previous, updatedTask) : previous);
       addToast(t("taskDetail.githubTracking.issueCreationRequested", "Requested GitHub tracking issue creation"), "info");
     } catch (err) {
       addToast(t("taskDetail.updateFailed", "Failed to update {{id}}: {{error}}", { id: task.id, error: getErrorMessage(err) }), "error");
@@ -2467,7 +2468,7 @@ export function ListView({
             if (!previous || previous.id !== detail.id) {
               return previous;
             }
-            return { ...previous, ...detail };
+            return mergeTaskSnapshot(previous, detail);
           });
         })
         .catch(() => {
@@ -3643,7 +3644,7 @@ export function ListView({
                       onTaskUpdated={(updatedTask) => {
                         setSelectedTaskSnapshot((previous) => {
                           if (!previous || previous.id !== updatedTask.id) return previous;
-                          return { ...previous, ...updatedTask };
+                          return mergeTaskSnapshot(previous, updatedTask);
                         });
                       }}
                       addToast={addToast}

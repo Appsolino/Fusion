@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react"
 import type { ProjectInfo, RevertTaskOptions, RevertTaskResult } from "../api";
 import type { ColorTheme, Column, MergeResult, Task, TaskCreateInput, ThemeMode, GithubIssueAction } from "@fusion/core";
 import type { UseProjectActionsResult } from "../hooks/useProjectActions";
+import { mergeTaskSnapshot } from "../hooks/useTasks";
 import type { ModalManager } from "../hooks/useModalManager";
 import type { UseTaskHandlersResult } from "../hooks/useTaskHandlers";
 import type { Toast, ToastType } from "../hooks/useToast";
@@ -132,20 +133,7 @@ export function AppModals({
   const detailTask = modalManager.detailTask
     ? (() => {
         const liveTask = tasks.find((task) => task.id === modalManager.detailTask?.id);
-        if (!liveTask) {
-          return modalManager.detailTask;
-        }
-
-        if ("prompt" in modalManager.detailTask) {
-          return {
-            ...modalManager.detailTask,
-            ...liveTask,
-            prompt: modalManager.detailTask.prompt,
-            log: modalManager.detailTask.log,
-          };
-        }
-
-        return liveTask;
+        return liveTask ? mergeTaskSnapshot(modalManager.detailTask, liveTask) : modalManager.detailTask;
       })()
     : null;
 

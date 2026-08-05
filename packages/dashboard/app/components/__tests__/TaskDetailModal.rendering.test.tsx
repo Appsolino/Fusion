@@ -45,6 +45,51 @@ import { FileBrowserProvider } from "../../context/FileBrowserContext";
 setupTaskDetailModalHooks();
 
 describe("TaskDetailModal", () => {
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-02:55:
+  A real rendered detail host receives a newer queued-overlap detail and then the stale Todo row
+  produced by a scheduler resync. Rerender without remounting proves the visible lifecycle badge
+  never oscillates and the retained prompt/log survive the slim stale payload.
+  */
+  it("keeps the rendered queued-overlap lifecycle through a stale scheduler rerender", async () => {
+    const queued = makeTask({
+      id: "FN-QUEUED",
+      column: "in-progress",
+      status: "queued",
+      overlapBlockedBy: "FN-OWNER",
+      prompt: "# Preserved prompt",
+      log: [{ timestamp: "2026-08-05T10:02:00.000Z", action: "Queued behind file overlap" }],
+      updatedAt: "2026-08-05T10:02:00.000Z",
+      columnMovedAt: "2026-08-05T10:02:00.000Z",
+    });
+    const staleTodo = makeTask({
+      id: queued.id,
+      column: "todo",
+      status: undefined,
+      prompt: undefined,
+      log: [],
+      updatedAt: "2026-08-05T10:00:00.000Z",
+      columnMovedAt: "2026-08-05T10:00:00.000Z",
+    });
+    const props = {
+      initialTab: "definition" as const,
+      onClose: noop,
+      onMoveTask: noopMove,
+      onDeleteTask: noopDelete,
+      onMergeTask: noopMerge,
+      onOpenDetail: noopOpenDetail,
+      addToast: noop,
+    };
+
+    const { rerender } = render(<TaskDetailModal {...props} task={queued} />);
+    expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
+
+    rerender(<TaskDetailModal {...props} task={staleTodo} />);
+
+    expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
+    expect(screen.getByText("Preserved prompt")).toBeInTheDocument();
+  });
+
   describe("workflow timestamp badge", () => {
     const workflowPayload = {
       flagEnabled: true,

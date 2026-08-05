@@ -246,46 +246,61 @@ function carryAwaitingPlanning(current: Task, incoming: Task): boolean | undefin
   return stepCountUnchanged ? current.awaitingPlanning : undefined;
 }
 
-function mergeSameColumnTask(current: Task, incoming: Task): Task {
-  return {
-    ...incoming,
-    awaitingPlanning: carryAwaitingPlanning(current, incoming),
-    // Preserve stable execution metadata when a same-column live update arrives
-    // without the full task payload (common during status/log-only SSE updates).
-    columnMovedAt: current.columnMovedAt ?? incoming.columnMovedAt,
-    executionStartedAt: current.executionStartedAt ?? incoming.executionStartedAt,
-    executionCompletedAt: current.executionCompletedAt ?? incoming.executionCompletedAt,
-    firstExecutionAt: current.firstExecutionAt ?? incoming.firstExecutionAt,
-    cumulativeActiveMs: incoming.cumulativeActiveMs ?? current.cumulativeActiveMs,
-    worktree: incoming.worktree ?? current.worktree,
-    modifiedFiles: incoming.modifiedFiles ?? current.modifiedFiles,
-    timedExecutionMs: incoming.timedExecutionMs ?? current.timedExecutionMs,
-    workflowStepResults: incoming.workflowStepResults ?? current.workflowStepResults,
-    tokenUsage: incoming.tokenUsage ?? current.tokenUsage,
-    mergeDetails: incoming.mergeDetails ?? current.mergeDetails,
-  };
+/*
+FNXC:TaskDetailStateStability 2026-08-05-02:55:
+The scheduler can refresh the board while a task-detail host holds a newer queued dependency or
+file-overlap snapshot. Providers (SWR, SSE, fetchTaskDetail, and local mutations) do not share an
+arrival order, so lifecycle rendering must use the existing timestamp evidence: a later `columnMovedAt`
+owns a real column transition; within that column, a later `updatedAt` owns status. Equal or absent
+clock evidence retains the already-visible known lifecycle state, preventing Todo/Queued flashes.
+
+This helper intentionally merges only defined sparse fields and retains a fetched detail's prompt/log
+when a slim board row arrives. Every open-detail host and useTasks ingestion uses this one boundary so
+one provider cannot regress a modal, main panel, split detail, dock, or popup independently.
+*/
+export function mergeTaskSnapshot<T extends Task>(current: T, incoming: Task): T {
+  if (current.id !== incoming.id) return current;
+
+  const merged = { ...current } as Record<string, unknown>;
+  const updatedAtCompare = compareTimestamps(incoming.updatedAt, current.updatedAt);
+  const acceptsIncomingSnapshot = updatedAtCompare > 0 || !current.updatedAt;
+  for (const [key, value] of Object.entries(incoming)) {
+    // Older/equal scheduler payloads may enrich only fields that are still absent; they never
+    // rewrite a known snapshot simply because they arrived later.
+    if (value !== undefined && (acceptsIncomingSnapshot || merged[key] === undefined)) {
+      merged[key] = value;
+    }
+  }
+
+
+  const columnMovedAtCompare = compareTimestamps(incoming.columnMovedAt, current.columnMovedAt);
+  const incomingMovesColumn = incoming.column !== undefined
+    && (current.column === undefined
+      || columnMovedAtCompare > 0
+      // Older rows have no column-move clock. A newer task timestamp is still evidence for a real move.
+      || (!current.columnMovedAt && !incoming.columnMovedAt && updatedAtCompare > 0));
+  const incomingUpdatesStatus = incoming.status !== undefined
+    && (current.status === undefined || updatedAtCompare > 0 || incomingMovesColumn);
+
+  // The lifecycle fields are evidence-owned rather than object-spread-owned.
+  merged.column = incomingMovesColumn ? incoming.column : current.column;
+  merged.columnMovedAt = columnMovedAtCompare > 0 ? incoming.columnMovedAt : current.columnMovedAt;
+  merged.status = incomingUpdatesStatus ? incoming.status : current.status;
+  merged.updatedAt = updatedAtCompare > 0 ? incoming.updatedAt : current.updatedAt;
+  merged.awaitingPlanning = acceptsIncomingSnapshot
+    ? carryAwaitingPlanning(current, incoming)
+    : current.awaitingPlanning;
+
+  if ("prompt" in current && incoming.prompt === undefined) {
+    merged.prompt = current.prompt;
+    merged.log = current.log;
+  }
+
+  return merged as T;
 }
 
 function mergeIncomingTask(current: Task, incoming: Task): Task {
-  const updatedAtCompare = compareTimestamps(incoming.updatedAt, current.updatedAt);
-  if (updatedAtCompare < 0) {
-    return current;
-  }
-
-  if (current.column === incoming.column) {
-    return mergeSameColumnTask(current, incoming);
-  }
-
-  const columnTimestampCompare = compareTimestamps(current.columnMovedAt, incoming.columnMovedAt);
-  if (current.columnMovedAt && !incoming.columnMovedAt) {
-    return { ...incoming, column: current.column, columnMovedAt: current.columnMovedAt };
-  }
-
-  if (columnTimestampCompare >= 0) {
-    return { ...incoming, column: current.column, columnMovedAt: current.columnMovedAt };
-  }
-
-  return incoming;
+  return mergeTaskSnapshot(current, incoming);
 }
 
 export interface UseTasksOptions {
@@ -523,13 +538,20 @@ export function useTasks(options?: UseTasksOptions) {
       the query is cleared.
       */
       const shouldCarryOverArchived = !wantArchived && !query && archivedLoadedRef.current;
-      if (shouldCarryOverArchived) {
-        const freshIds = new Set(normalizedFetchedTasks.map((task) => task.id));
+      setTasks((previous) => {
+        // A scheduler/SWR response can have been assembled before a newer SSE/local update.
+        // Reconcile matching rows inside the state updater so that race cannot roll an open detail
+        // (or its board source) back merely because this fetch callback arrived last.
+        const reconciledFetchedTasks = normalizedFetchedTasks.map((fetched) => {
+          const current = previous.find((candidate) => candidate.id === fetched.id);
+          return current ? mergeIncomingTask(current, fetched) : fetched;
+        });
+        if (!shouldCarryOverArchived) return reconciledFetchedTasks;
+
+        const freshIds = new Set(reconciledFetchedTasks.map((task) => task.id));
         const archivedCarryOver = archivedTasksRef.current.filter((task) => !freshIds.has(task.id));
-        setTasks(archivedCarryOver.length > 0 ? [...normalizedFetchedTasks, ...archivedCarryOver] : normalizedFetchedTasks);
-      } else {
-        setTasks(normalizedFetchedTasks);
-      }
+        return archivedCarryOver.length > 0 ? [...reconciledFetchedTasks, ...archivedCarryOver] : reconciledFetchedTasks;
+      });
       if (requestProjectId) {
         writeTaskCacheSnapshot(`${SWR_CACHE_KEYS.TASKS_PREFIX}${requestProjectId}`, fetchedTasks);
       }
@@ -892,8 +914,11 @@ export function useTasks(options?: UseTasksOptions) {
           // task becomes visible instead of being silently dropped.
           return [...prev, movedTask];
         }
+        const current = prev[existingIndex]!;
+        const merged = mergeIncomingTask(current, movedTask);
+        if (merged === current) return prev;
         const next = [...prev];
-        next[existingIndex] = movedTask;
+        next[existingIndex] = merged;
         return next;
       });
       advanceFreshnessClockForLiveUpdate();
