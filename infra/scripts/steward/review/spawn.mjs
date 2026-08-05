@@ -136,7 +136,12 @@ export async function invokeCursorReviewRole(input) {
     model,
   ];
 
-  const timeoutMs = input.timeoutMs || 600_000;
+  const promptBytesEst = Buffer.byteLength(String(input.user || ""), "utf8");
+  // Mega upstream absorbs need longer than 10m for Cursor to read evidence.json.
+  const timeoutMs =
+    input.timeoutMs ||
+    (promptBytesEst > 500_000 ? 1_800_000 : 600_000);
+
   let stdout;
   try {
     stdout = await new Promise((resolve, reject) => {
