@@ -1,5 +1,5 @@
 ---
-"@runfusion/fusion": minor
+"@runfusion/fusion": patch
 ---
 
 summary: Classify custom workflow review nodes for direct Review-tab feedback.
