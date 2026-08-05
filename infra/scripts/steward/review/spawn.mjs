@@ -4,9 +4,14 @@
  * FNXC:AppsolinoStewardReview 2026-08-04:
  * Fresh cursor-agent ask-mode invocation per role (isolated sessionId).
  * Always probes models with sanitized env; actual model comes from probe evidence.
+ * Full evidence is written to a temp workspace file; stdin carries a short read
+ * instruction so mega upstream diffs neither hit ARG_MAX nor overwhelm the reply.
  */
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   CURSOR_AGENT_BIN,
   REVIEW_MODEL,
@@ -99,7 +104,9 @@ export async function invokeCursorReviewRole(input) {
     };
   }
 
-  const prompt = [
+  const evidenceDir = mkdtempSync(join(tmpdir(), `steward-review-${input.role}-`));
+  const evidencePath = join(evidenceDir, "evidence.json");
+  const fullPrompt = [
     input.system,
     "",
     "Return ONLY one fenced ```json object matching the required schema.",
@@ -107,9 +114,15 @@ export async function invokeCursorReviewRole(input) {
     "",
     input.user,
   ].join("\n");
+  writeFileSync(evidencePath, fullPrompt, "utf8");
+  const prompt = [
+    `Read the COMPLETE review instructions and evidence from this file (UTF-8): ${evidencePath}`,
+    "The file contains the system rules and the full JSON evidence including diffText.",
+    "You MUST examine diffText and requiredCheckResults from that file before deciding.",
+    "Return ONLY one fenced ```json object matching the required schema.",
+    "Your JSON must set actualProvider/actualModel to the model you are running.",
+  ].join("\n");
 
-  // Full evidence (including multi-MB upstream diffs) must reach Cursor without
-  // argv/E2BIG. cursor-agent reads the initial prompt from stdin when argv omits it.
   const args = [
     "--mode",
     "ask",
@@ -117,76 +130,88 @@ export async function invokeCursorReviewRole(input) {
     "--trust",
     "--sandbox",
     "enabled",
+    "--workspace",
+    evidenceDir,
     "--model",
     model,
   ];
 
   const timeoutMs = input.timeoutMs || 600_000;
-  const stdout = await new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = /** @type {any} */ (
-        spawnFn(bin, args, { env, stdio: ["pipe", "pipe", "pipe"] })
-      );
-    } catch (err) {
-      reject(
-        new Error(
-          `cursor review spawn failed (${input.role}): ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      );
-      return;
-    }
-    let out = "";
-    let err = "";
-    const timer = setTimeout(() => {
+  let stdout;
+  try {
+    stdout = await new Promise((resolve, reject) => {
+      let child;
       try {
-        child.kill("SIGKILL");
-      } catch {
-        /* ignore */
-      }
-      reject(new Error(`cursor review timeout (${input.role})`));
-    }, timeoutMs);
-    child.stdout?.on("data", (d) => {
-      out += String(d);
-    });
-    child.stderr?.on("data", (d) => {
-      err += String(d);
-    });
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      reject(new Error(`cursor review error (${input.role}): ${e.message}`));
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
+        child = /** @type {any} */ (
+          spawnFn(bin, args, { env, stdio: ["pipe", "pipe", "pipe"] })
+        );
+      } catch (err) {
         reject(
           new Error(
-            `cursor review exit ${code} (${input.role}): ${(err || out).slice(0, 400)}`,
+            `cursor review spawn failed (${input.role}): ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
         return;
       }
-      resolve(out);
+      let out = "";
+      let err = "";
+      const timer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
+        reject(new Error(`cursor review timeout (${input.role})`));
+      }, timeoutMs);
+      child.stdout?.on("data", (d) => {
+        out += String(d);
+      });
+      child.stderr?.on("data", (d) => {
+        err += String(d);
+      });
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        reject(new Error(`cursor review error (${input.role}): ${e.message}`));
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (code !== 0) {
+          reject(
+            new Error(
+              `cursor review exit ${code} (${input.role}): ${(err || out).slice(0, 400)}`,
+            ),
+          );
+          return;
+        }
+        resolve(out);
+      });
+      try {
+        child.stdin?.write(prompt);
+        child.stdin?.end();
+      } catch (err) {
+        clearTimeout(timer);
+        reject(
+          new Error(
+            `cursor review stdin write failed (${input.role}): ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+      }
     });
+  } finally {
     try {
-      child.stdin?.write(prompt);
-      child.stdin?.end();
-    } catch (err) {
-      clearTimeout(timer);
-      reject(
-        new Error(
-          `cursor review stdin write failed (${input.role}): ${err instanceof Error ? err.message : String(err)}`,
-        ),
-      );
+      rmSync(evidenceDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
     }
-  });
+  }
 
   const parsed = parseLastJsonObject(stdout);
   if (!parsed) {
-    throw new Error(`cursor review malformed JSON (${input.role})`);
+    throw new Error(
+      `cursor review malformed JSON (${input.role}): stdoutHead=${JSON.stringify(String(stdout).slice(0, 500))}`,
+    );
   }
 
-  // Prefer provider-reported model when present; still fail closed on mismatch vs probe.
   const reported =
     parsed.actualModel || parsed.model || modelEvidence.actualModel;
   if (reported !== REVIEW_MODEL) {
@@ -209,7 +234,8 @@ export async function invokeCursorReviewRole(input) {
     stdout,
     childEnvKeys: Object.keys(env).sort(),
     spawnArgs: args,
-    promptDelivery: "stdin",
-    promptBytes: Buffer.byteLength(prompt, "utf8"),
+    promptDelivery: "evidence-file+stdin",
+    promptBytes: Buffer.byteLength(fullPrompt, "utf8"),
+    evidencePath,
   };
 }
