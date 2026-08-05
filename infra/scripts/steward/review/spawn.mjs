@@ -137,10 +137,13 @@ export async function invokeCursorReviewRole(input) {
   ];
 
   const promptBytesEst = Buffer.byteLength(String(input.user || ""), "utf8");
-  // Mega upstream absorbs need longer than 10m for Cursor to read evidence.json.
+  const evidenceBytesEst = Buffer.byteLength(fullPrompt, "utf8");
+  // Mega upstream absorbs (multi-MB evidence.json) need far longer than 10–30m for
+  // Cursor ask-mode to read diffText and emit a structured verdict.
+  const mega = promptBytesEst > 500_000 || evidenceBytesEst > 500_000;
   const timeoutMs =
     input.timeoutMs ||
-    (promptBytesEst > 500_000 ? 1_800_000 : 600_000);
+    (mega ? 5_400_000 : 600_000);
 
   let stdout;
   try {
