@@ -55,9 +55,21 @@ function fakeSpawn(script) {
     const ee = new EventEmitter();
     ee.stdout = new EventEmitter();
     ee.stderr = new EventEmitter();
+    ee.stdin = {
+      chunks: [],
+      write(chunk) {
+        this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+        return true;
+      },
+      end() {
+        this.ended = true;
+      },
+    };
     ee.kill = () => {};
+    // Defer so callers can write stdin before script runs.
     Promise.resolve().then(() => {
-      const out = script(bin, args, opts);
+      const stdinText = Buffer.concat(ee.stdin.chunks).toString("utf8");
+      const out = script(bin, args, { ...opts, stdinText });
       ee.stdout.emit("data", Buffer.from(out.stdout || ""));
       if (out.stderr) ee.stderr.emit("data", Buffer.from(out.stderr));
       ee.emit("close", out.code ?? 0);
@@ -251,6 +263,44 @@ describe("model probe + sanitized spawn", () => {
     // Fingerprint is listed line evidence, not a bare constant assignment path alone.
     assert.match(r.modelFingerprint, /composer-2.5/);
   });
+
+  it("large review prompts use stdin (never argv) to avoid spawn E2BIG", async () => {
+    const huge = "x".repeat(200_000);
+    let sawAsk = false;
+    const spawnFn = fakeSpawn((_bin, args, opts) => {
+      if (args[0] === "models") return { stdout: "composer-2.5\n", code: 0 };
+      sawAsk = true;
+      assert.equal(args.some((a) => String(a).length > 100_000), false);
+      assert.match(opts.stdinText || "", /diffText/);
+      assert.ok((opts.stdinText || "").includes(huge.slice(0, 32)));
+      return {
+        stdout:
+          "```json\n" +
+          JSON.stringify({
+            schemaVersion: 1,
+            role: "reviewer",
+            verdict: "APPROVE",
+            risk: "SENSITIVE",
+            requestId: "big",
+            actualModel: "composer-2.5",
+            actualProvider: "cursor-cli",
+          }) +
+          "\n```\n",
+        code: 0,
+      };
+    });
+    const r = await invokeCursorReviewRole({
+      role: "reviewer",
+      system: "sys",
+      user: JSON.stringify({ diffText: huge }),
+      spawnFn,
+      sessionId: randomUUID(),
+    });
+    assert.equal(sawAsk, true);
+    assert.equal(r.promptDelivery, "stdin");
+    assert.ok(r.promptBytes > 100_000);
+    assert.equal(r.actualModel, "composer-2.5");
+  });
 });
 
 describe("dual review with real child process simulation", () => {
@@ -271,7 +321,9 @@ describe("dual review with real child process simulation", () => {
     const spawnFn = fakeSpawn((_bin, args, opts) => {
       seen.push({ args: [...args], env: { ...opts.env } });
       if (args[0] === "models") return { stdout: "composer-2.5 (default)\n", code: 0 };
-      const prompt = args[args.length - 1] || "";
+      assert.equal(args.includes("--mode") && args.includes("ask"), true);
+      assert.equal(args.some((a) => String(a).includes("diffText")), false);
+      const prompt = opts.stdinText || "";
       assert.match(prompt, /CredentialInstanceRotator/);
       assert.match(prompt, /diffText/);
       assert.match(prompt, /requiredCheckResults/);

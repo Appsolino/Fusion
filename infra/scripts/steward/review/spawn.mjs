@@ -108,6 +108,8 @@ export async function invokeCursorReviewRole(input) {
     input.user,
   ].join("\n");
 
+  // Full evidence (including multi-MB upstream diffs) must reach Cursor without
+  // argv/E2BIG. cursor-agent reads the initial prompt from stdin when argv omits it.
   const args = [
     "--mode",
     "ask",
@@ -117,7 +119,6 @@ export async function invokeCursorReviewRole(input) {
     "enabled",
     "--model",
     model,
-    prompt,
   ];
 
   const timeoutMs = input.timeoutMs || 600_000;
@@ -125,7 +126,7 @@ export async function invokeCursorReviewRole(input) {
     let child;
     try {
       child = /** @type {any} */ (
-        spawnFn(bin, args, { env, stdio: ["ignore", "pipe", "pipe"] })
+        spawnFn(bin, args, { env, stdio: ["pipe", "pipe", "pipe"] })
       );
     } catch (err) {
       reject(
@@ -167,6 +168,17 @@ export async function invokeCursorReviewRole(input) {
       }
       resolve(out);
     });
+    try {
+      child.stdin?.write(prompt);
+      child.stdin?.end();
+    } catch (err) {
+      clearTimeout(timer);
+      reject(
+        new Error(
+          `cursor review stdin write failed (${input.role}): ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
   });
 
   const parsed = parseLastJsonObject(stdout);
@@ -196,6 +208,8 @@ export async function invokeCursorReviewRole(input) {
     elapsedMs: Date.now() - started,
     stdout,
     childEnvKeys: Object.keys(env).sort(),
-    spawnArgs: args.filter((a) => a !== prompt),
+    spawnArgs: args,
+    promptDelivery: "stdin",
+    promptBytes: Buffer.byteLength(prompt, "utf8"),
   };
 }
