@@ -39,6 +39,7 @@ jobs:
   cursor-review-approve:
     name: Cursor reviewer then independent approver
     runs-on: [self-hosted, appsolino-fusion]
+    timeout-minutes: 120
     outputs:
       head_sha: ${{ steps.run.outputs.head_sha }}
       action: ${{ steps.run.outputs.action }}
