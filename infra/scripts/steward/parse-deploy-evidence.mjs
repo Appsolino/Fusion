@@ -36,8 +36,13 @@ export function nullIfEmpty(value) {
  */
 export function stripLogDecorations(line) {
   let s = String(line || "");
-  // ANSI CSI sequences
-  s = s.replace(/\u001b\[[0-9;]*m/g, "");
+  // ANSI CSI sequences (built without a control-char regex literal for eslint)
+  const esc = String.fromCharCode(27);
+  s = s.split(esc).reduce((acc, part, i) => {
+    if (i === 0) return part;
+    const m = /^\[[0-9;]*m([\s\S]*)$/.exec(part);
+    return acc + (m ? m[1] : esc + part);
+  }, "");
   // GHA: job\tstep\tISO8601Z message
   const gha = /^[^\t]+\t[^\t]+\t\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(.*)$/.exec(s);
   if (gha) s = gha[1];

@@ -112,13 +112,18 @@ export function mapAuto3RunToTerminal(input) {
  * @param {string} logText
  */
 export function parseAuto3TerminalMarker(logText) {
-  // Local import avoided at module top to keep handoff usable in light tests;
-  // duplicated runtime-line rules stay in sync with parse-deploy-evidence.mjs.
+  // Keep runtime-line rules aligned with parse-deploy-evidence.mjs (#105).
   const lines = String(logText || "").split(/\r?\n/);
   /** @type {string|null} */
   let last = null;
+  const esc = String.fromCharCode(27);
   for (const raw of lines) {
-    let s = String(raw || "").replace(/\u001b\[[0-9;]*m/g, "");
+    let s = String(raw || "");
+    s = s.split(esc).reduce((acc, part, i) => {
+      if (i === 0) return part;
+      const am = /^\[[0-9;]*m([\s\S]*)$/.exec(part);
+      return acc + (am ? am[1] : esc + part);
+    }, "");
     const gha = /^[^\t]+\t[^\t]+\t\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(.*)$/.exec(s);
     if (gha) s = gha[1];
     if (!/AUTO3_TERMINAL_STATUS=/.test(s)) continue;
