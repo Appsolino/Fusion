@@ -1,7 +1,7 @@
 # Steward S3 — Sensitive assistance
 
-**Status:** IMPLEMENTED (gate OFF) — Appsolino + Host D only; unit-proven  
-**Parent:** [`STEWARD-POLICY.md`](STEWARD-POLICY.md) · Programme [#78](https://github.com/Appsolino/Fusion/issues/78)
+**Status:** ENABLING (programme [#78](https://github.com/Appsolino/Fusion/issues/78))  
+**Parent:** [`STEWARD-POLICY.md`](STEWARD-POLICY.md)
 
 ## May
 
@@ -11,14 +11,12 @@ AUTO-3 Host D deploy.
 
 Entry: `infra/scripts/steward/s3/run-s3.mjs` (`runS3`). Writer merge is wired through
 `writerRevalidateAndMaybeMerge` with `risk: SENSITIVE` and the live `s3Enabled` gate
-(same exact-head path as S2). Default dry-run.
+(same exact-head path as S2).
 
 ## Must not
 
 Host P (structurally prohibited) · production activation · destructive production data ·
 create/expand secrets · weaken rollback/audit/review · broaden GitHub App installation.
-
-Owner-only boundaries → durable `NEEDS_OWNER`.
 
 ## Rollback path
 
@@ -34,5 +32,5 @@ A non-empty rollback plan is **required** for S3 eligibility. Plans must not ins
 
 ## Activation
 
-`activation-policy.json` → `gates.s3Enabled` (default **false**) + emergency `KILL`.  
+`activation-policy.json` → `gates.s3Enabled` + emergency `KILL`.  
 Provider/model pinned to Cursor — no silent xAI/alternate switch.
