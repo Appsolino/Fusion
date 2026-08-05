@@ -106,22 +106,63 @@ export async function invokeCursorReviewRole(input) {
 
   const evidenceDir = mkdtempSync(join(tmpdir(), `steward-review-${input.role}-`));
   const evidencePath = join(evidenceDir, "evidence.json");
+  const diffPath = join(evidenceDir, "diff.patch");
+  const userRaw = String(input.user || "");
+  let userObj = null;
+  try {
+    userObj = JSON.parse(userRaw);
+  } catch {
+    userObj = null;
+  }
+  const diffText =
+    userObj && typeof userObj.diffText === "string" ? userObj.diffText : "";
+  const mega =
+    Buffer.byteLength(userRaw, "utf8") > 500_000 ||
+    Buffer.byteLength(diffText, "utf8") > 500_000;
+
+  // Always persist the full unified diff as a sibling file so ask-mode can
+  // tool-read it. For mega payloads, strip diffText from evidence.json to avoid
+  // single-blob context collapse while keeping digests + required checks inline.
+  if (diffText) {
+    writeFileSync(diffPath, diffText, "utf8");
+  }
+  const evidenceBody = userObj
+    ? {
+        ...userObj,
+        diffText: mega
+          ? `[FULL DIFF IN FILE diff.patch — sha256=${userObj.diffSha256 || "see-meta"}; you MUST read diff.patch with tools before deciding]`
+          : userObj.diffText,
+        diffPatchPath: diffText ? "diff.patch" : null,
+        diffBytes: Buffer.byteLength(diffText, "utf8"),
+      }
+    : userRaw;
   const fullPrompt = [
     input.system,
     "",
     "Return ONLY one fenced ```json object matching the required schema.",
     "Your JSON must set actualProvider/actualModel to the model you are running.",
     "",
-    input.user,
+    typeof evidenceBody === "string"
+      ? evidenceBody
+      : JSON.stringify(evidenceBody, null, 2),
   ].join("\n");
   writeFileSync(evidencePath, fullPrompt, "utf8");
-  const prompt = [
-    `Read the COMPLETE review instructions and evidence from this file (UTF-8): ${evidencePath}`,
-    "The file contains the system rules and the full JSON evidence including diffText.",
-    "You MUST examine diffText and requiredCheckResults from that file before deciding.",
-    "Return ONLY one fenced ```json object matching the required schema.",
-    "Your JSON must set actualProvider/actualModel to the model you are running.",
-  ].join("\n");
+  const prompt = mega
+    ? [
+        `Workspace: ${evidenceDir}`,
+        "1) Read evidence.json (system rules + digests + requiredCheckResults + changedFiles).",
+        "2) Read the COMPLETE unified diff from diff.patch using file tools (do not skip).",
+        "3) Verify diff.patch content hashes to evidence.diffSha256 before deciding.",
+        "4) Return ONLY one fenced ```json object matching the required schema.",
+        "Your JSON must set actualProvider/actualModel to the model you are running.",
+      ].join("\n")
+    : [
+        `Read the COMPLETE review instructions and evidence from this file (UTF-8): ${evidencePath}`,
+        "Also read diff.patch when present — it is the authoritative unified diff.",
+        "You MUST examine the full diff and requiredCheckResults before deciding.",
+        "Return ONLY one fenced ```json object matching the required schema.",
+        "Your JSON must set actualProvider/actualModel to the model you are running.",
+      ].join("\n");
 
   const args = [
     "--mode",
@@ -136,11 +177,10 @@ export async function invokeCursorReviewRole(input) {
     model,
   ];
 
-  const promptBytesEst = Buffer.byteLength(String(input.user || ""), "utf8");
-  // Mega upstream absorbs need longer than 10m for Cursor to read evidence.json.
+  // Mega: allow up to 3h — Cursor must tool-read multi-MB diffs.
   const timeoutMs =
     input.timeoutMs ||
-    (promptBytesEst > 500_000 ? 1_800_000 : 600_000);
+    (mega ? 10_800_000 : 600_000);
 
   let stdout;
   try {
