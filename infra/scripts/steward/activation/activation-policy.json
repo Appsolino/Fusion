@@ -15,17 +15,17 @@
       "description": "Allow S0 to attach steward/needs-expert on new incidents"
     },
     "s1bEnabled": {
-      "enabled": false,
+      "enabled": true,
       "envOverride": "STEWARD_S1B_ENABLED",
       "description": "Allow S1B repair-PR generation"
     },
     "s2Enabled": {
-      "enabled": false,
+      "enabled": true,
       "envOverride": "STEWARD_S2_ENABLED",
       "description": "Allow S2 low-risk exact-head auto-merge"
     },
     "s3Enabled": {
-      "enabled": false,
+      "enabled": true,
       "envOverride": "STEWARD_S3_ENABLED",
       "description": "Allow S3 sensitive assist (Appsolino+Host D only)"
     }
