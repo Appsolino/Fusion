@@ -1,5 +1,5 @@
 ---
-"@runfusion/fusion": minor
+"@runfusion/fusion": patch
 ---
 
 summary: Select individual structured workflow review findings for same-task revision.
