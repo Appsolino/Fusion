@@ -254,7 +254,16 @@ export function AuthenticationSection({ auth, form, setForm }: AuthenticationSec
             })}
           </div>}
           {pending && <div className="auth-instance-pending" data-testid={`auth-pending-instance-${provider.id}`}>
-            <input className="input" aria-label={t("settings.auth.accountLabel", "Account name")} value={pending.label} onChange={(event) => setPendingInstances((current) => ({ ...current, [provider.id]: { ...pending, label: event.target.value } }))} />
+            {/*
+            FNXC:ProviderAuth 2026-08-02-05:27:
+            Each pending credential needs a visible Account name label associated with its provider-specific input. The padded field keeps its purpose separate from credential actions at desktop and mobile widths without changing instance identity or save/login payloads.
+            */}
+            <div className="auth-pending-instance-field">
+              <label className="auth-pending-instance-label" htmlFor={`auth-pending-instance-${provider.id}-label`}>
+                {t("settings.auth.accountLabel", "Account name")}
+              </label>
+              <input id={`auth-pending-instance-${provider.id}-label`} className="input" value={pending.label} onChange={(event) => setPendingInstances((current) => ({ ...current, [provider.id]: { ...pending, label: event.target.value } }))} />
+            </div>
             {providerSupportsApiKey(provider)
               ? renderApiKeySection(provider, pending.instanceId, pending.label, true)
               : renderAvailableOAuthActions(provider, pending.instanceId, pending.label || undefined)}
@@ -276,7 +285,7 @@ export function AuthenticationSection({ auth, form, setForm }: AuthenticationSec
       return <div className="auth-apikey-section">
         <div className="auth-apikey-input-row">
           <input type="password" className="auth-apikey-input" placeholder={t("settings.authentication.enterAPIKey", "Enter API key")} value={apiKeyInputs[stateKey] ?? ""} onChange={(e) => setApiKeyInputs((prev) => ({ ...prev, [stateKey]: e.target.value }))} disabled={isAuthActionActive(stateKey)}/>
-          {provider.keyHint && !isPending && !apiKeyInputs[stateKey] ? <button className="btn btn-sm" onClick={() => selectedInstanceId ? handleClearApiKey(provider.id, selectedInstanceId) : handleClearApiKey(provider.id)} disabled={isAuthActionActive(stateKey)}>{t("settings.auth.clearKey", "Clear")}</button> : <button className="btn btn-primary btn-sm" onClick={() => selectedInstanceId ? handleSaveApiKey(provider.id, selectedInstanceId, pendingLabel || undefined) : handleSaveApiKey(provider.id)} disabled={isAuthActionActive(stateKey)}>{t("settings.actions.save", "Save")}</button>}
+          {provider.keyHint && !isPending && !apiKeyInputs[stateKey] ? <button className="btn btn-sm" onClick={() => instanceId ? handleClearApiKey(provider.id, instanceId) : handleClearApiKey(provider.id)} disabled={isAuthActionActive(stateKey)}>{t("settings.auth.clearKey", "Clear")}</button> : <button className="btn btn-primary btn-sm" onClick={() => instanceId ? handleSaveApiKey(provider.id, instanceId, pendingLabel || undefined) : handleSaveApiKey(provider.id)} disabled={isAuthActionActive(stateKey)}>{t("settings.actions.save", "Save")}</button>}
         </div>
         {isAuthActionActive(stateKey) && <small className="auth-apikey-progress">{t("settings.auth.savingKey", "Saving…")}</small>}
         {apiKeyErrors[stateKey] && <small className="auth-apikey-error">{apiKeyErrors[stateKey]}</small>}
@@ -284,11 +293,12 @@ export function AuthenticationSection({ auth, form, setForm }: AuthenticationSec
       </div>;
     };
     const renderAuthenticatedOAuthActions = (provider: AuthProvider, selectedInstanceId?: string) => {
-      const stateKey = formatProviderInstanceKey({ providerId: provider.id, instanceId: selectedInstanceId ?? provider.instanceId ?? "default" });
+      const instanceId = selectedInstanceId ?? provider.instanceId;
+      const stateKey = formatProviderInstanceKey({ providerId: provider.id, instanceId: instanceId ?? "default" });
       return <div>
         {isAuthActionActive(stateKey) ? <button className="btn btn-sm" disabled>{t("settings.auth.loggingOut", "Logging out…")}</button>
-          : provider.loginInProgress ? <div className="auth-provider-actions-row"><button className="btn btn-sm" disabled>{t("settings.auth.waitingForLogin", "Waiting for login…")}</button><button className="btn btn-sm" onClick={() => selectedInstanceId ? handleCancelLogin(provider.id, selectedInstanceId) : handleCancelLogin(provider.id)}>{t("settings.actions.cancel", "Cancel")}</button></div>
-            : <button className="btn btn-sm" onClick={() => selectedInstanceId ? handleLogout(provider.id, selectedInstanceId) : handleLogout(provider.id)}>{t("settings.auth.logout", "Logout")}</button>}
+          : provider.loginInProgress ? <div className="auth-provider-actions-row"><button className="btn btn-sm" disabled>{t("settings.auth.waitingForLogin", "Waiting for login…")}</button><button className="btn btn-sm" onClick={() => instanceId ? handleCancelLogin(provider.id, instanceId) : handleCancelLogin(provider.id)}>{t("settings.actions.cancel", "Cancel")}</button></div>
+            : <button className="btn btn-sm" onClick={() => instanceId ? handleLogout(provider.id, instanceId) : handleLogout(provider.id)}>{t("settings.auth.logout", "Logout")}</button>}
       </div>;
     };
     const renderAvailableOAuthActions = (provider: AuthProvider, selectedInstanceId?: string, pendingLabel?: string) => {
@@ -296,9 +306,9 @@ export function AuthenticationSection({ auth, form, setForm }: AuthenticationSec
       const stateKey = formatProviderInstanceKey({ providerId: provider.id, instanceId: instanceId ?? "default" });
       const isActive = provider.loginInProgress || isAuthActionActive(stateKey);
       return <div>
-        {isAuthActionActive(stateKey) ? <div className="auth-provider-actions-row"><button className="btn btn-sm" disabled>{t("settings.auth.waitingForLogin", "Waiting for login…")}</button><button className="btn btn-sm" onClick={() => handleCancelLogin(provider.id, selectedInstanceId)}>{t("settings.actions.cancel", "Cancel")}</button></div>
-          : provider.loginInProgress ? <div className="auth-provider-actions-row"><button className="btn btn-sm" disabled>{t("settings.auth.waitingForLogin", "Waiting for login…")}</button><button className="btn btn-sm" onClick={() => selectedInstanceId ? handleCancelLogin(provider.id, selectedInstanceId) : handleCancelLogin(provider.id)}>{t("settings.actions.cancel", "Cancel")}</button></div>
-            : <button className="btn btn-primary btn-sm" onClick={() => selectedInstanceId ? handleLogin(provider.id, selectedInstanceId, pendingLabel) : handleLogin(provider.id)}>{t("settings.auth.login", "Login")}</button>}
+        {isAuthActionActive(stateKey) ? <div className="auth-provider-actions-row"><button className="btn btn-sm" disabled>{t("settings.auth.waitingForLogin", "Waiting for login…")}</button><button className="btn btn-sm" onClick={() => instanceId ? handleCancelLogin(provider.id, instanceId) : handleCancelLogin(provider.id)}>{t("settings.actions.cancel", "Cancel")}</button></div>
+          : provider.loginInProgress ? <div className="auth-provider-actions-row"><button className="btn btn-sm" disabled>{t("settings.auth.waitingForLogin", "Waiting for login…")}</button><button className="btn btn-sm" onClick={() => instanceId ? handleCancelLogin(provider.id, instanceId) : handleCancelLogin(provider.id)}>{t("settings.actions.cancel", "Cancel")}</button></div>
+            : <button className="btn btn-primary btn-sm" onClick={() => instanceId ? handleLogin(provider.id, instanceId, pendingLabel) : handleLogin(provider.id)}>{t("settings.auth.login", "Login")}</button>}
         {provider.id === "github-copilot" && deviceCodes[stateKey] && isActive && <div className="auth-device-code-panel" data-testid={`auth-device-code-${stateKey}`}>
           <strong>{t("settings.auth.enterCodeOnGitHub", "Enter this code on GitHub")}</strong>
           <div className="auth-device-code-pill">{deviceCodes[stateKey].userCode}</div>

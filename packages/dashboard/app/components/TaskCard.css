@@ -13,6 +13,13 @@
   position: relative;
   user-select: none;
   touch-action: pan-x pan-y;
+  /*
+  FNXC:TaskCardLayout 2026-08-05-07:31 (FN-8802):
+  Every TaskCard host can become narrower than a card's populated intrinsic content, including pinned desktop docks and mobile columns. Make the shared root a border-box, shrinkable flex item so existing title truncation, badge wrapping, footer-chip wrapping, and visible trailing controls contain themselves without host-specific branches.
+  */
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   container-type: inline-size;
   container-name: task-card;
 }
@@ -267,7 +274,7 @@ Lock the id to the same chip-height row as .card-header-actions so the task id, 
 }
 
 .card-status-badge--queued-with-reason {
-  padding-inline-end: 0;
+  padding-inline-end: var(--space-xs);
 }
 
 /*
@@ -2163,3 +2170,7 @@ The three-dot menu is the sole card move/action entry point. Keep this shared bu
 .card-field-badge--overflow {
   font-weight: 600;
 }
+
+/* FNXC:TaskRevert 2026-08-01-19:51: Reverted tasks require visible resolution controls, not hover-only menu actions. */
+.card-reverted-actions { display: inline-flex; gap: var(--space-1); }
+.reverted-tasks-section { display: grid; gap: var(--space-2); padding: var(--space-3); }

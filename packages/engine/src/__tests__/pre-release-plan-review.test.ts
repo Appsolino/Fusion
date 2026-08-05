@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkflowIr } from "@fusion/core";
-import { isUnplannedForExecution, resolvePreReleasePlanReviewNode } from "../hold-release.js";
+import { isUnplannedForExecution, resolvePreReleasePlanReviewNode } from "../execution/hold-release.js";
 
 function workflow(reviewColumn = "todo"): WorkflowIr {
   return {
@@ -71,6 +71,29 @@ describe("pre-release Plan Review readiness", () => {
     await expect(isUnplannedForExecution(store, task, workflow())).resolves.toBe(false);
     item.waitReason = "planning";
     await expect(isUnplannedForExecution(store, task, workflow())).resolves.toBe(true);
+  });
+
+  it("treats an operator-bypassed Plan Review as satisfied without another continuation", async () => {
+    const task = {
+      id: "T-HUMAN",
+      column: "todo",
+      enabledWorkflowSteps: ["plan-review"],
+      workflowStepResults: [{
+        workflowStepId: "plan-review",
+        workflowStepName: "Plan Review",
+        phase: "pre-merge",
+        source: "optional-group",
+        status: "skipped",
+        bypassedBy: "operator",
+        bypassedAt: "2026-08-03T23:53:04.539Z",
+        bypassReason: "Approved after Plan Review did not converge",
+        bypassedFromStatus: "failed",
+        bypassedFromVerdict: "REVISE",
+      }],
+    } as any;
+    const store = { listWorkflowWorkItemsForTask: async () => [] } as any;
+
+    await expect(isUnplannedForExecution(store, task, workflow())).resolves.toBe(false);
   });
 
   it("does not filter active continuations to task kind", async () => {

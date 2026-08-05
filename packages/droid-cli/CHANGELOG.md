@@ -1,5 +1,65 @@
 # @fusion/droid-cli
 
+## 0.11.60-beta.1
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.60-beta.1
+
+## 0.11.60-beta.0
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.60-beta.0
+
+## 0.11.59
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.59
+
+## 0.11.59-beta.2
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.59-beta.2
+
+## 0.11.59-beta.1
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.59-beta.1
+
+## 0.11.59-beta.0
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.59-beta.0
+
+## 0.11.58
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.58
+
+## 0.11.58-beta.9
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.58-beta.9
+
+## 0.11.58-beta.8
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.58-beta.8
+
+## 0.11.58-beta.7
+
+### Patch Changes
+
+- @fusion-plugin-examples/droid-runtime@0.1.58-beta.7
+
 ## 0.11.58-beta.6
 
 ### Patch Changes

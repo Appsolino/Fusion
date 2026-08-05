@@ -1,12 +1,13 @@
 import { EventEmitter } from "node:events";
-import type { TaskMoveLanes } from "./workflow-lifecycle-traits.js";
+import type { TaskMoveLanes } from "./workflows/workflow-lifecycle-traits.js";
 import { TaskLaneCache } from "./task-lane-cache.js";
 import { randomUUID } from "node:crypto";
+import { WEDGE_RENOTIFY_COOLDOWN_MS } from "./types/task/task-core.js";
 import { join } from "node:path";
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import * as schema from "./postgres/schema/index.js";
 import { type FSWatcher } from "node:fs";
-import type { Task, TaskDetail, TaskCreateInput, TaskAttachment, AgentLogEntry, BoardConfig, Column, ColumnId, CheckoutClaimPrecondition, MergeResult, Settings, GlobalSettings, ProjectSettings, ActivityLogEntry, ActivityEventType, TaskDocument, TaskDocumentRevision, TaskDocumentCreateInput, ArchivedTaskDocumentAdditionInput, ArchivedTaskDocumentAdditionResult, TaskDocumentWithTask, Artifact, ArtifactCreateInput, ArtifactType, ArtifactWithTask, InboxTask, TaskLogEntry, RunMutationContext, RunAuditEvent, RunAuditEventInput, RunAuditEventFilter, ArchivedTaskEntry, ArchiveAgentLogMode, TaskPriority, WorkflowStepTemplate, Agent, AutostashOrphanRecord, TaskCommitAssociation, CommitAssociationDiffBackfillReport, GithubIssueAction, MergeQueueEntry, MergeQueueEnqueueOptions, MergeQueueAcquireOptions, MergeQueueReleaseOutcome, HandoffToReviewOptions, GoalCitation, GoalCitationFilter, GoalCitationInput, GoalCitationSurface, BranchGroup, BranchGroupCreateInput, BranchGroupUpdate, TaskBranchAssignmentMode, MergeRequestRecord, MergeRequestState, MergeRequestWorkflowProjectionOptions, CompletionHandoffMarker, WorkflowWorkItem, WorkflowWorkItemDueFilter, WorkflowWorkItemKind, WorkflowWorkItemState, WorkflowWorkItemTransitionPatch, WorkflowWorkItemUpsertInput, PrEntity, PrEntityCreateInput, PrEntityUpdate, PrThreadState, PrThreadOutcome, PluginActivation, PluginActivationInput } from "./types.js";
+import type { Task, TaskDetail, TaskCreateInput, TaskAttachment, AgentLogEntry, BoardConfig, Column, ColumnId, CheckoutClaimPrecondition, MergeResult, Settings, GlobalSettings, ProjectSettings, ActivityLogEntry, ActivityEventType, TaskDocument, TaskDocumentRevision, TaskDocumentCreateInput, ArchivedTaskDocumentAdditionInput, ArchivedTaskDocumentAdditionResult, TaskDocumentWithTask, Artifact, ArtifactCreateInput, ArtifactType, ArtifactWithTask, InboxTask, TaskLogEntry, RunMutationContext, RunAuditEvent, RunAuditEventInput, RunAuditEventFilter, ArchivedTaskEntry, ArchiveAgentLogMode, TaskPriority, WorkflowStepTemplate, Agent, AutostashOrphanRecord, TaskCommitAssociation, CommitAssociationDiffBackfillReport, GithubIssueAction, TaskDeleteClosureContext, MergeQueueEntry, MergeQueueEnqueueOptions, MergeQueueAcquireOptions, MergeQueueReleaseOutcome, HandoffToReviewOptions, GoalCitation, GoalCitationFilter, GoalCitationInput, GoalCitationSurface, BranchGroup, BranchGroupCreateInput, BranchGroupUpdate, TaskBranchAssignmentMode, MergeRequestRecord, MergeRequestState, MergeRequestWorkflowProjectionOptions, CompletionHandoffMarker, WorkflowWorkItem, WorkflowWorkItemDueFilter, WorkflowWorkItemKind, WorkflowWorkItemState, WorkflowWorkItemTransitionPatch, WorkflowWorkItemUpsertInput, PrEntity, PrEntityCreateInput, PrEntityUpdate, PrThreadState, PrThreadOutcome, PluginActivation, PluginActivationInput } from "./types.js";
 
 export type OverlapBlockerRepairReason =
   | "task-not-found"
@@ -37,52 +38,53 @@ export interface RepairOverlapBlockerResult {
 }
 
 /** @internal Extracted modules use this compatibility flag */
-import { type PluginGateVerdict } from "./plugin-gate-verdict.js";
-import type { PluginOnSchemaInit, PluginPostgresSchemaDefinition } from "./plugin-types.js";
+import { type PluginGateVerdict } from "./plugins/plugin-gate-verdict.js";
+import type { PluginOnSchemaInit, PluginPostgresSchemaDefinition } from "./plugins/plugin-types.js";
 import { assertLoadedPluginSchemaInitHooksSupported, type LoadedPluginSchemaContract } from "./postgres/plugin-schema-hook.js";
-import { DEFAULT_WORKFLOW_POOL_ID } from "./workflow-capacity.js";
-import type { WorkflowIr, WorkflowFieldDefinition, WorkflowSettingDefinition } from "./workflow-ir-types.js";
-import type { WorkflowMovePolicyInput } from "./workflow-extension-types.js";
-import { type CustomFieldRejection } from "./task-fields.js";
+import { DEFAULT_WORKFLOW_POOL_ID } from "./workflows/workflow-capacity.js";
+import type { WorkflowIr, WorkflowFieldDefinition, WorkflowSettingDefinition } from "./workflows/workflow-ir-types.js";
+import type { WorkflowMovePolicyInput } from "./workflows/workflow-extension-types.js";
+import { type CustomFieldRejection } from "./tasks/task-fields.js";
 // Side-effect import: registers the 14 built-in trait DEFINITIONS into the
 // shared trait registry on load (the flag-ON path resolves traits by id).
 import "./builtin-traits.js";
 // Step-inversion U12 (KTD-12): the legacy `parseStepsFromPrompt` path resolves
 // the `step-headings` parser through the registry (proving the registry path),
 // staying byte-identical with the direct extracted function.
-import type { StoredWorkflowRow, WorkflowDefinition, WorkflowDefinitionInput, WorkflowDefinitionUpdate, WorkflowNodeLayout } from "./workflow-definition-types.js";
+import type { StoredWorkflowRow, WorkflowDefinition, WorkflowDefinitionInput, WorkflowDefinitionUpdate, WorkflowNodeLayout } from "./workflows/workflow-definition-types.js";
 
 /** Tags WorkflowStep rows materialized by compiling a workflow so they can be
  *  filtered out of the user-facing step manager and cleaned up on re-selection. */
 export const WORKFLOW_COMPILED_STEP_TEMPLATE_PREFIX = "workflow:";
-import { GlobalSettingsStore } from "./global-settings.js";
-import { Database } from "./db.js";
-import { ArchiveDatabase } from "./archive-db.js";
+import { GlobalSettingsStore } from "./config/global-settings.js";
+import { Database } from "./db/db.js";
+import { ArchiveDatabase } from "./db/archive-db.js";
 import type { AsyncDataLayer, DbTransaction } from "./postgres/data-layer.js";
-import { MissionStore } from "./mission-store.js";
-import { AsyncMissionStore } from "./async-mission-store.js";
-import { AsyncIdeationStore } from "./async-ideation-store.js";
-import { reconcileSoftDeletedColumnDriftAsync } from "./task-store/async-self-healing.js";
-import { PluginStore } from "./plugin-store.js";
-import { InsightStore } from "./insight-store.js";
-import { ResearchStore } from "./research-store.js";
-import { ExperimentSessionStore } from "./experiment-session-store.js";
-import { TodoStore } from "./todo-store.js";
-import { AsyncTodoStore } from "./async-todo-store.js";
-import { AsyncInsightStore } from "./async-insight-store.js";
-import { AsyncResearchStore } from "./async-research-store.js";
-import { GoalStore } from "./goal-store.js";
-import { AsyncGoalStore } from "./async-goal-store.js";
-import { EvalStore } from "./eval-store.js";
-import { AsyncEvalStore } from "./async-eval-store.js";
-import { CentralCore } from "./central-core.js";
-import { SecretsStore } from "./secrets-store.js";
-import { getLatestFailedPreMergeReviewStep } from "./task-merge.js";
-import { createLogger } from "./logger.js";
-import { type UsageEventInput } from "./usage-events.js";
-import { assertNotLinkedWorktreeOfExistingProject, assertProjectRootDir } from "./project-root-guard.js";
-import { type DistributedTaskIdAllocator } from "./distributed-task-id.js";
-import { type TaskIdIntegrityReport } from "./task-id-integrity.js";
+import { withPlanningLifecycleAdvisoryLock } from "./postgres/advisory-locks.js";
+import { MissionStore } from "./missions/mission-store.js";
+import { AsyncMissionStore } from "./async-stores/async-mission-store.js";
+import { AsyncIdeationStore } from "./async-stores/async-ideation-store.js";
+import { reconcileSoftDeletedColumnDriftAsync } from "./task-store/async/async-self-healing.js";
+import { PluginStore } from "./stores/plugin-store.js";
+import { InsightStore } from "./insights/insight-store.js";
+import { ResearchStore } from "./research/research-store.js";
+import { ExperimentSessionStore } from "./eval/experiment-session-store.js";
+import { TodoStore } from "./stores/todo-store.js";
+import { AsyncTodoStore } from "./async-stores/async-todo-store.js";
+import { AsyncInsightStore } from "./async-stores/async-insight-store.js";
+import { AsyncResearchStore } from "./async-stores/async-research-store.js";
+import { GoalStore } from "./goals/goal-store.js";
+import { AsyncGoalStore } from "./async-stores/async-goal-store.js";
+import { EvalStore } from "./eval/eval-store.js";
+import { AsyncEvalStore } from "./async-stores/async-eval-store.js";
+import { CentralCore } from "./central/central-core.js";
+import { SecretsStore } from "./secrets/secrets-store.js";
+import { getLatestFailedPreMergeReviewStep } from "./merge/task-merge.js";
+import { createLogger } from "./process/logger.js";
+import { type UsageEventInput } from "./tasks/usage-events.js";
+import { assertNotLinkedWorktreeOfExistingProject, assertProjectRootDir } from "./central/project-root-guard.js";
+import { type DistributedTaskIdAllocator } from "./tasks/distributed-task-id.js";
+import { type TaskIdIntegrityReport } from "./tasks/task-id-integrity.js";
 
 // file. These are pure behavior-invariant moves — the extracted symbols are
 // byte-identical to their pre-extraction form. store.ts remains the facade and
@@ -92,7 +94,7 @@ import { pgRowToTaskRow as pgRowToTaskRowExternal, rowToTask as rowToTaskExterna
 import { moveTaskImpl, moveTaskIfImpl, handoffToReviewImpl, moveTaskInternalImpl, type MoveTaskIfResult } from "./task-store/moves.js";
 import { recordGoalCitationsImpl, insertTaskWithFtsRecoveryImpl2, assertTaskIdAvailableImpl, atomicWriteTaskJsonImpl2, createTaskWithDistributedReservationImpl, toStoredWorkflowStepImpl, ensureWorkflowStepForTemplateImpl, resolveEnabledWorkflowStepsImpl, setTaskBranchGroupImpl, getTaskColumnsImpl, prepareWorkflowMovePolicyPreflightImpl, updateTaskCustomFieldsImpl, listWorkflowPromptOverridesForProjectImpl, listWorkflowWorkItemsForTaskImpl, listDueWorkflowWorkItemsImpl, rewriteBlockedByResidueDependentsForRemovalImpl, getAllDocumentsImpl, deleteWorkflowStepImpl, toWorkflowDefinitionImpl, materializeDefaultWorkflowStepsImpl, reconcileTaskCustomFieldsForSchemaImpl, getTaskMovedCountsByDayImpl, getGoalStoreImpl, upsertTaskCommitAssociationImpl } from "./task-store/workflow-task-create-ops.js";
 import { applyLegacyWorkflowStepOverridesImpl, archiveDbImpl, assertNoDependencyCycleImpl, atomicCreateTaskJsonImpl, buildActiveTaskDependencyLookupImpl, buildArchivedAgentLogFieldsImpl, buildTaskIdIntegrityFallbackReportImpl, createBranchGroupImpl, dbImpl, detectAndCacheTaskIdIntegrityReportImpl, findLiveDependentsImpl, findLiveLineageChildrenImpl, getLegacyWorkflowStepSnapshotImpl, getMalformedTaskMetadataReasonImpl, getMergeQueuedTaskIdsAsyncImpl, insertRunAuditEventRowImpl, insertTaskImpl, invokeTaskCreatedHookImpl, isTaskArchivedAsyncImpl, isTaskArchivedImpl, isTaskIdPresentInArchivedTasksTableAsyncImpl, isTaskIdPresentInArchivedTasksTableImpl, logTaskCreateConflictImpl, maybeResolveTombstonedTaskIdImpl, mergeTaskIdIntegrityReportsImpl, optionalGroupIdSetImpl, patchTaskRowInTransactionImpl, readConfigFastImpl, readConfigImpl, readPromptForArchiveImpl, readTaskFromDbImpl, reconcileDistributedTaskIdStateOnOpenImpl, recordActivityFromListenerImpl, recordDependencyCycleRejectedAuditImpl, refreshTaskIdIntegrityReportImpl, resolveLocalNodeIdForTaskAllocationImpl, runTaskFtsWriteWithRecoveryImpl, scanAndRecordCitationsImpl, taskIdExistsAnywhereImpl, throwSoftDeletedWriteBlockedImpl, toBuiltInWorkflowStepImpl, trackDeferredTaskCreatedWorkImpl, upsertTaskImpl, withConfigLockImpl, withTaskLockImpl, withWorktreeAllocationLockImpl } from "./task-store/task-id-integrity.js";
-import { claimNextToolFailureRetryImpl, createTaskVerificationRequestImpl, claimTaskVerificationRequestImpl, finishTaskVerificationRequestImpl, clearNearDuplicateReferencesToFailSoftImpl, clearWorkflowRunStepInstancesAsyncImpl, clearWorkflowRunStepInstancesImpl, computeMovedSettingsTargetWorkflowIdsImpl, ensureBranchGroupForSourceImpl, ensurePrEntityForSourceImpl, findRecentTasksByContentFingerprintImpl, getActiveMergingTaskImpl, getActivePrEntityBySourceImpl, getBranchGroupByBranchNameImpl, getBranchGroupBySourceImpl, getBranchGroupImpl, getBranchProgressByTaskImpl, getMutationsForRunImpl, getPrEntityByNumberImpl, getPrEntityImpl, getPrThreadStateImpl, getTasksByAssignedAgentImpl, getWorkflowPromptOverridesAsyncImpl, getWorkflowSettingValuesAsyncImpl, getWorkflowSettingValuesImpl, getWorkflowSettingsProjectIdImpl, getWorkflowWorkItemImpl, insertCompletionHandoffWorkflowWorkAuditImpl, listActivePrEntitiesImpl, listBranchGroupsImpl, listPrThreadStatesImpl, listTasksByBranchGroupImpl, listWorkflowSettingValuesForProjectImpl, loadWorkflowRunBranchesImpl, loadWorkflowRunStepInstancesAsyncImpl, loadWorkflowRunStepInstancesImpl, markToolFailureRetryExhaustedAuditImpl, mergeCustomFieldPatchImpl, normalizeMergeRequestStateImpl, normalizeWorkflowWorkItemKindImpl, normalizeWorkflowWorkItemStateImpl, parseWorkflowPromptOverrideJsonImpl, recordPrThreadOutcomeImpl, resetAllStepsToPendingImpl, resetPromptCheckboxesImpl, resolveWorkflowMoveActorImpl, resolveWorkflowSettingDeclarationsImpl, saveWorkflowRunStepInstanceAsyncImpl, saveWorkflowRunStepInstanceImpl, transitionMergeRequestStateImpl, transitionWorkflowWorkItemSyncImpl, updateTaskImpl, updateWorkflowPromptOverridesImpl, upsertMergeRequestRecordImpl, workflowStateForMergeRequestStateImpl } from "./task-store/branch-and-pr-entities.js";
+import { claimNextToolFailureRetryImpl, createTaskVerificationRequestImpl, claimTaskVerificationRequestImpl, finishTaskVerificationRequestImpl, clearNearDuplicateReferencesToFailSoftImpl, clearWorkflowRunStepInstancesAsyncImpl, clearWorkflowRunStepInstancesImpl, computeMovedSettingsTargetWorkflowIdsImpl, ensureBranchGroupForSourceImpl, ensurePrEntityForSourceImpl, findRecentTasksByContentFingerprintImpl, getActiveMergingTaskImpl, getActivePrEntityBySourceImpl, getBranchGroupByBranchNameImpl, getBranchGroupBySourceImpl, getBranchGroupImpl, getBranchProgressByTaskImpl, getMutationsForRunImpl, getPrEntityByNumberImpl, getPrEntityImpl, getPrThreadStateImpl, getTasksByAssignedAgentImpl, getWorkflowPromptOverridesAsyncImpl, getWorkflowSettingValuesAsyncImpl, getWorkflowSettingValuesImpl, getWorkflowSettingsProjectIdImpl, getWorkflowWorkItemImpl, insertCompletionHandoffWorkflowWorkAuditImpl, listActivePrEntitiesImpl, listBranchGroupsImpl, listPrThreadStatesImpl, listTasksByBranchGroupImpl, listWorkflowSettingValuesForProjectImpl, loadWorkflowRunBranchesImpl, hasWorkflowRunStepInstancesForTaskImpl, loadWorkflowRunStepInstancesAsyncImpl, loadWorkflowRunStepInstancesImpl, markToolFailureRetryExhaustedAuditImpl, mergeCustomFieldPatchImpl, normalizeMergeRequestStateImpl, normalizeWorkflowWorkItemKindImpl, normalizeWorkflowWorkItemStateImpl, parseWorkflowPromptOverrideJsonImpl, recordPrThreadOutcomeImpl, resetAllStepsToPendingImpl, resetPromptCheckboxesImpl, resolveWorkflowMoveActorImpl, resolveWorkflowSettingDeclarationsImpl, saveWorkflowRunStepInstanceAsyncImpl, saveWorkflowRunStepInstanceImpl, transitionMergeRequestStateImpl, transitionWorkflowWorkItemSyncImpl, updateTaskImpl, updateWorkflowPromptOverridesImpl, upsertMergeRequestRecordImpl, workflowStateForMergeRequestStateImpl } from "./task-store/branch-and-pr-entities.js";
 import { addPrInfoImpl, addSteeringCommentImpl, archiveAllDoneImpl, cleanupStaleMergeQueueRowsImpl, clearCompletionHandoffAcceptedMarkerImpl, clearDoneTransientFieldsImpl, clearStaleExecutionStartBranchReferencesImpl, deleteTaskCommentImpl, deleteTaskDocumentImpl, emitUsageEventImpl, enqueueMergeQueueImpl, getAgentLogCountImpl, getAgentLogsImpl, getArtifactImpl, getArtifactsImpl, getAttachmentImpl, getCompletionHandoffAcceptedMarkerImpl, getTaskDocumentImpl, getTaskDocumentRevisionsImpl, getTaskDocumentsImpl, insertArtifactRowImpl, linkGithubIssueImpl, listWorkflowWorkItemsForTaskSyncImpl, moveToDoneImpl, parseDependenciesFromPromptImpl, parseFileScopeFromPromptImpl, parseStepsFromPromptImpl, peekMergeQueueHeadImpl, peekMergeQueueImpl, readPreArchiveColumnFromTaskFileImpl, recordPluginActivationImpl, recordRunAuditEventBackendImpl, removePrInfoByNumberImpl, resolvePrimaryPrInfoImpl, resolveUnarchiveTargetColumnImpl, rewriteLineageChildrenForRemovalImpl, runGitCommandImpl, stopWatchingImpl, syncAgentTaskLinkOnReassignmentImpl, updateArtifactImpl, updateGithubTrackingImpl, updatePrInfoByNumberImpl, updateTaskCommentImpl, upsertPrInfoByNumberImpl, writeArtifactDataImpl } from "./task-store/task-artifacts-ops.js";
 import { approveCliAutonomyImpl, approveWorkflowCliCommandImpl, cleanupOrphanedMaterializedStepsImpl, consumePluginGateVerdictsImpl, getAgentLogsByTimeRangeImpl, getDatabaseHealthImpl, getDistributedTaskIdAllocatorImpl, getExperimentSessionStoreImpl, getInReviewDurationEventsImpl, getMissionStoreImpl, getIdeationStoreImpl, getPluginStoreImpl, getSecretsStoreImpl, getSettingsSyncImpl, getTaskMergedTaskIdsImpl, getTaskWorkflowSelectionImpl, getImportTranslationImpl, recordImportTranslationImpl, pruneImportTranslationsImpl, type ImportTranslationCacheKey, type ImportTranslationCacheEntry, getVerificationCacheHitImpl, getWorkflowDefinitionImpl, healthCheckImpl, importLegacyAgentLogsOnceImpl, insertWorkflowDefinitionSyncImpl, isCliAutonomyApprovedImpl, isPluginInstalledImpl, isWorkflowCliCommandApprovedImpl, listWorkflowDefinitionsImpl, materializeExplicitWorkflowStepsImpl, materializeWorkflowStepsImpl, migrateActiveArchivedTasksToArchiveDbImpl, migrateLegacyArchiveEntriesToArchiveDbImpl, nextWorkflowDefinitionIdImpl, occupantsByColumnForWorkflowImpl, parseWorkflowLayoutImpl, pruneAgentLogFilesImpl, purgeTaskWorkflowSelectionRowsImpl, readAllWorkflowDefinitionsImpl, readRawProjectSettingsImpl, recordPluginGateVerdictImpl, recordVerificationCachePassImpl, removeMaterializedSelectionImpl, resolvePluginWorkflowStepImpl, resolveTaskWorkflowIrSyncImpl, revokeCliAutonomyImpl, selectTaskWorkflowAndReconcileImpl, writeTaskWorkflowSelectionImpl, getTaskWorkflowSelectionAsyncImpl,  } from "./task-store/workflow-definitions.js";
 import { getTaskCommitAssociationsByLineageIdImpl, replaceLegacyTaskCommitAssociationsImpl } from "./task-store/task-commit-associations.js";
@@ -100,25 +102,26 @@ import { findRecentTasksBySourceParentTaskIdImpl } from "./task-store/branch-and
 import { addTaskCommentImpl, applyBuiltInPromptOverridesAsyncImpl, applyBuiltInPromptOverridesSyncImpl, areAllDependenciesDoneImpl, artifactStoredNameImpl, assertWorkflowIrTraitsValidImpl, clearActivityLogImpl, clearTaskWorkflowSelectionImpl, deleteTaskByIdImpl, getDefaultWorkflowIdImpl, resolveOriginWorkflowOverrideIdImpl, type TaskOriginWorkflowKind, getInsightStoreImpl, getMergeQueuedTaskIdsImpl, getMergeRequestRecordImpl, getMergeRequestRecordAsyncImpl, getResearchStoreImpl, getTaskIdFromDirImpl, getTodoStoreImpl, getWorkflowWorkItemByIdentityImpl, hasActiveTaskImpl, invalidateConfigCacheAfterMigrationImpl, isTaskIdConflictErrorImpl, listLegacyAutoMergeStampCandidatesImpl, readTaskRowFromDbImpl, recordBranchGroupMemberLandedImpl, refreshDatabaseHealthAsyncImpl, refreshDatabaseHealthImpl, resolveTaskCustomFieldDefsSyncImpl, resolveWorkflowBypassGuardsImpl, serializeConfigForDiskImpl, setPluginWorkflowStepTemplatesImpl, shouldSkipWorkflowMovePoliciesImpl, suppressWatcherImpl, upsertTaskWithFtsRecoveryImpl } from "./task-store/task-store-helpers.js";
 import { getTaskSelectClauseImpl2, createTaskPersistSerializationContextImpl, getTaskPersistValuesImpl, getTaskPatchDescriptorsImpl, normalizeTaskFromDiskImpl, writeTaskJsonFileImpl, rowToPrEntityImpl, generatePrEntityIdImpl, readTaskForMoveImpl, rowToMergeQueueEntryImpl, rowToMergeRequestRecordImpl, rowToCompletionHandoffMarkerImpl, rowToWorkflowWorkItemImpl, rowToRunAuditEventImpl } from "./task-store/task-row-mappers.js";
 import { getTaskSelectClauseWithActivityLogLimitImpl, getChangedTaskColumnsImpl, getSoftDeletedWriteConflictImpl, readTaskJsonImpl, writeConfigImpl, _maybeAutoArchiveSameAgentDuplicateBackendImpl, updateBranchGroupImpl, updatePrEntityImpl, listTasksForGithubTrackingReconcileImpl, listTasksForGitlabTrackingReconcileImpl, renewCheckoutLeaseImpl, updateTaskAtomicImpl, resolveTaskWedgeNotificationEpisodeImpl, getWorkflowPromptOverridesImpl, updateWorkflowSettingValuesImpl, rollbackConfigurationImpl, cancelActiveWorkflowWorkItemsForTaskImpl, setCompletionHandoffAcceptedMarkerImpl, reconcileLegacyAutoMergeStampsImpl, recoverExpiredMergeQueueLeasesImpl, rewriteDependentsForRemovalImpl, cleanupBranchForTaskImpl, addAttachmentImpl, deleteAttachmentImpl, registerArtifactImpl, updatePrInfoImpl, unlinkGithubIssueImpl, cleanupArchivedTasksImpl, generatePromptFromArchiveEntryImpl, listWorkflowOccupantTaskIdsImpl, listApprovedCliAutonomyAdaptersImpl, closeImpl, getActivityLogImpl } from "./task-store/task-mutation-ops.js";
-import { getOrCreateForProjectImpl, listGoalCitationsImpl, atomicWriteTaskJsonWithAuditImpl, duplicateTaskImpl, listStrandedRefinementsImpl, tryClaimCheckoutImpl, evaluateWorkflowMovePoliciesImpl, recordRunAuditEventImpl, getRunAuditEventsImpl, dequeueMergeQueueOnColumnExitImpl, updateIssueInfoImpl, listWorkflowStepsImpl, getWorkflowStepImpl, createWorkflowDefinitionImpl, countActiveInCapacitySlotSyncImpl, countActiveInCapacitySlotAsyncImpl, generateSpecifiedPromptImpl, recordActivityImpl, getEvalStoreImpl } from "./task-store/project-store-ops.js";
+import { getOrCreateForProjectImpl, listGoalCitationsImpl, atomicWriteTaskJsonWithAuditImpl, type PlanningDependencyInvalidation, duplicateTaskImpl, listStrandedRefinementsImpl, tryClaimCheckoutImpl, evaluateWorkflowMovePoliciesImpl, recordRunAuditEventImpl, getRunAuditEventsImpl, dequeueMergeQueueOnColumnExitImpl, updateIssueInfoImpl, listWorkflowStepsImpl, getWorkflowStepImpl, createWorkflowDefinitionImpl, countActiveInCapacitySlotSyncImpl, countActiveInCapacitySlotAsyncImpl, generateSpecifiedPromptImpl, recordActivityImpl, getEvalStoreImpl } from "./task-store/project-store-ops.js";
 import { markLegacyAutoMergeStampsOnceImpl, appendAgentLogImpl, importLegacyAgentLogsImpl, cleanupNoOpTaskMovedActivityRowsOnceImpl, backfillCommitAssociationDiffStatsImpl } from "./task-store/workflow-integrity.js";
 import { saveWorkflowRunBranchImpl, clearNearDuplicateReferencesToImpl, selectNextTaskForAgentImpl, pauseTaskImpl, clearLinkedAgentTaskIdsImpl, listArtifactsImpl, rehomeOccupantImpl, type RehomeOccupantResult } from "./task-store/branch-group-ops.js";
 import { taskToArchiveEntryImpl, deleteTaskBackendImpl, deleteTaskIfBackendImpl, archiveTaskBackendImpl, unarchiveTaskImpl, restoreFromArchiveImpl, listArchivedTasksImpl } from "./task-store/archive-lifecycle-2.js";
-import { pruneOperationalLogsAsync, pruneAgentLogFilesAsync, type OperationalLogPruneResult } from "./task-store/async-maintenance.js";
-import { reconcilePhantomCommittedReservationsAsync } from "./task-store/async-phantom-reservations.js";
-import { resolveTaskSymbolsForTask, type TaskSymbolResolution } from "./task-symbol-resolution.js";
+import { pruneOperationalLogsAsync, pruneAgentLogFilesAsync, type OperationalLogPruneResult } from "./task-store/async/async-maintenance.js";
+import { reconcilePhantomCommittedReservationsAsync } from "./task-store/async/async-phantom-reservations.js";
+import { resolveTaskSymbolsForTask, type TaskSymbolResolution } from "./tasks/task-symbol-resolution.js";
 import { acquireSymbolLocksAsync, inspectSymbolLockConflictsAsync, reconcileStaleSymbolLocksAsync, releaseSymbolLocksAsync, renewSymbolLocksAsync } from "./task-store/symbol-locks.js";
-import type { AcquireSymbolLocksResult, ReconcileStaleSymbolLocksResult, ReleaseSymbolLocksResult, RenewSymbolLocksResult, SymbolLockConflict, SymbolLockOwner } from "./symbol-lock-types.js";
-import { queryRunAuditEvents } from "./task-store/async-audit.js";
+import type { AcquireSymbolLocksResult, ReconcileStaleSymbolLocksResult, ReleaseSymbolLocksResult, RenewSymbolLocksResult, SymbolLockConflict, SymbolLockOwner } from "./tasks/symbol-lock-types.js";
+import { queryRunAuditEvents } from "./task-store/async/async-audit.js";
 import { isValidMergeRequestTransitionImpl, releaseMergeQueueLeaseImpl, collectMergeDetailsImpl, applyPrMergedTransitionImpl } from "./task-store/merge-queue-ops-2.js";
 import { upsertWorkflowWorkItemImpl, replaceActiveTaskWorkflowContinuationImpl, seedStrandedPlanReviewContinuationImpl, transitionWorkflowWorkItemImpl, acquireWorkflowWorkItemLeaseImpl } from "./task-store/workflow-workitems-ops-2.js";
 import { getSettingsImpl, getSettingsFastImpl, getSettingsByScopeImpl, getSettingsByScopeFastImpl } from "./task-store/settings-ops-2.js";
-import { runPluginColumnTransitionHooksImpl, logEntryImpl } from "./task-store/audit-ops.js";
+import { runPluginColumnTransitionHooksImpl, checkAndRecordUnplannedExecutionBlockImpl, logEntryImpl, transitionQueuedEpisodeImpl, type QueuedEpisodeTransition } from "./task-store/audit-ops.js";
 import { clearWorkflowRunBranchesImpl, projectMergeRequestToWorkflowWorkItemImpl, createCompletionHandoffWorkflowWorkImpl } from "./task-store/workflow-workitems-ops.js";
 import { flushAgentLogBufferImpl, appendAgentLogBatchImpl } from "./task-store/agent-logs.js";
 import { refineTaskImpl, updateTaskDependenciesImpl } from "./task-store/update-task-deps.js";
 import { createWorkflowStepImpl, updateWorkflowStepImpl, updateWorkflowDefinitionImpl, deleteWorkflowDefinitionImpl, setDefaultWorkflowIdImpl, selectTaskWorkflowImpl } from "./task-store/workflow-ops.js";
-import { initImpl, setupActivityLogListenersImpl, reconcileOrphanedTaskDirsImpl, watchImpl, checkForChangesImpl, migrateAgentLogEntriesImpl, migrateMovedSettingsImpl, recoverStaleTransitionPendingImpl, migrateLegacyWorkflowStepsImpl, emitTaskLifecycleEventSafelyImpl } from "./task-store/lifecycle-ops.js";
+import { initImpl, setupActivityLogListenersImpl, reconcileOrphanedTaskDirsImpl, watchImpl, migrateAgentLogEntriesImpl, migrateMovedSettingsImpl, recoverStaleTransitionPendingImpl, migrateLegacyWorkflowStepsImpl, emitTaskLifecycleEventSafelyImpl } from "./task-store/lifecycle-ops.js";
+import { TaskDeletedOutboxConsumer } from "./task-store/task-deleted-outbox-consumer.js";
 import { updateStepImpl, startStepImpl, acquireMergeQueueLeaseImpl, mergeTaskImpl } from "./task-store/merge-queue-ops.js";
 import { addCommentImpl, publishArchivedTaskDocumentAdditionImpl, upsertTaskDocumentImpl } from "./task-store/comments-ops.js";
 import { deleteTaskImpl, archiveTaskImpl, type DeleteTaskIfResult } from "./task-store/archive-lifecycle.js";
@@ -128,9 +131,9 @@ import { createTaskBackendImpl, _createTaskInternalBackendImpl, createTaskImpl, 
 import { getTaskImpl, listTasksImpl, searchTasksImpl, listTasksModifiedSinceImpl, getTaskVerificationRequestAsyncImpl } from "./task-store/reads.js";
 import { updateTaskUnlockedImpl } from "./task-store/task-update.js";
 import { __setTaskActivityLogLimitsForTesting } from "./task-store/comments.js";
-import { declaresAnyLifecycleTrait, resolveReviewColumns, resolveTaskLifecycleColumns, type LifecycleColumns } from "./workflow-lifecycle-traits.js";
+import { declaresAnyLifecycleTrait, resolveReviewColumns, resolveTaskLifecycleColumns, type LifecycleColumns } from "./workflows/workflow-lifecycle-traits.js";
 import { resolveProjectColumnsForRoles } from "./project-lane-vocabulary.js";
-import { resolveWorkflowIrForTask } from "./workflow-ir-resolver.js";
+import { resolveWorkflowIrForTask } from "./workflows/workflow-ir-resolver.js";
 // FNXC:RuntimeBackendAsync 2026-06-24-10:15:
 // Async helper imports for backend-mode (AsyncDataLayer/PostgreSQL) delegation.
 // persistence/allocator/settings/search/lifecycle/merge/archive helpers preserve
@@ -142,7 +145,13 @@ import type { BranchGroupRow, PrEntityRow, TaskDocumentRow, ArtifactRow, TaskDoc
 /** Database row shape for the tasks table (all columns). */
 
 export interface TaskStoreEvents {
-  "task:created": [task: Task];
+  /*
+  FNXC:PlanningModeScheduling 2026-08-03-09:44:
+  Task creation can select a custom workflow whose planning lanes do not use legacy names.
+  Creation emits its resolved lanes after the selection is durable, so synchronous triage wake
+  listeners observe the same authoritative lifecycle vocabulary as task:moved listeners.
+  */
+  "task:created": [task: Task, meta?: { lanes?: TaskMoveLanes }];
   /*
   FNXC:WorkflowEvents 2026-07-31-21:00 (fleet — the emitter carries the lanes):
   `lanes` is the moving task's RESOLVED lifecycle columns, attached by the emitter.
@@ -169,7 +178,13 @@ export interface TaskStoreEvents {
   unchanged; absent metadata is unknown, never a legacy-lane claim.
   */
   "task:updated": [task: Task, meta?: { lanes?: TaskMoveLanes }];
-  "task:deleted": [task: Task, meta?: { githubIssueAction?: GithubIssueAction }];
+  /*
+  FNXC:CrossProcessDeleteObservation 2026-08-01-11:39:
+  Observed outbox delivery is at-least-once, including a crash-window duplicate. The explicit
+  marker lets listener paths suppress writer-owned accumulating effects while bridge/cache work
+  remains idempotent; event identity makes duplicate provenance inspectable without payload prose.
+  */
+  "task:deleted": [task: Task, meta?: { githubIssueAction?: GithubIssueAction; closureContext?: TaskDeleteClosureContext; observed?: boolean; outboxEventId?: string }];
   "task:merged": [result: MergeResult];
   "settings:updated": [data: { settings: Settings; previous: Settings }];
   "workflow:setting-values-updated": [data: {
@@ -196,6 +211,9 @@ export const storeLog = createLogger("task-store");
 export const coreLog = createLogger("core");
 export const TASK_BRANCH_CONTEXT_METADATA_KEY = "fusionBranchContext";
 
+/** Per-project/task FIFO tails used only where an in-memory store has no PostgreSQL session lock. */
+const planningLifecycleLocks = new Map<string, Promise<void>>();
+
 export type TaskDependencyMutation =
   | { operation: "add"; dependency: string }
   | { operation: "remove"; dependency: string }
@@ -207,7 +225,7 @@ export type TaskDependencyMutation =
 // re-imported at the top of this file and re-exported below for back-compat.
 
 // `parseStepHeadings` re-exported here for back-compat; extracted to step-parsers.ts (KTD-12).
-export { parseStepHeadings } from "./step-parsers.js";
+export { parseStepHeadings } from "./tasks/step-parsers.js";
 
 // Re-export extracted symbols (VAL-DECOMPOSE-002: facade preserves every public method signature).
 export {
@@ -373,8 +391,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   public static readonly DEFAULT_WORKFLOW_POOL_ID = DEFAULT_WORKFLOW_POOL_ID;
 
   /** FNXC:RuntimeBackendInjection 2026-06-24-14:20: Backend-mode factory. */
-  static async getOrCreateForProject( projectId?: string, centralCore?: CentralCore, globalSettingsDir?: string, asyncLayer?: AsyncDataLayer, ): Promise<TaskStore> {
-    return getOrCreateForProjectImpl(this, projectId, centralCore, globalSettingsDir, asyncLayer);
+  static async getOrCreateForProject( projectId?: string, centralCore?: CentralCore, globalSettingsDir?: string, asyncLayer?: AsyncDataLayer, consumerId?: string, ): Promise<TaskStore> {
+    return getOrCreateForProjectImpl(this, projectId, centralCore, globalSettingsDir, asyncLayer, consumerId);
   }
 
   /** FNXC:PostgresRuntimeStorage 2026-07-14-18:47: Task metadata is authoritative in PostgreSQL; task document/blob files remain on disk. */
@@ -383,14 +401,15 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   public configPath: string;
   public _db: Database | null = null;
   public activityListenersWired = false;
-  /** When true, activity-log listeners skip recording (set by checkForChanges polling so re-emitted events don't double-log). In-process emit path remains sole source of truth. */
-  public suppressActivityLogForPollingEmit = false;
   public _archiveDb: ArchiveDatabase | null = null;
 
   /**
    * FNXC:PostgresRuntimeStorage 2026-07-14-18:47: Production TaskStores receive an AsyncDataLayer and delegate all persistence to PostgreSQL. A missing layer is a construction error; retained sync members exist only until compatibility tests and types are removed.
    */
   public readonly asyncLayer: AsyncDataLayer | null = null;
+  /** Explicitly absent means cross-process lifecycle observation is disabled. */
+  public readonly consumerId: string | null;
+  private taskDeletedOutboxConsumer: TaskDeletedOutboxConsumer | null = null;
   private pluginPostgresSchemaExecutor: ((contracts: readonly LoadedPluginSchemaContract[]) => Promise<void>) | null = null;
 
   /*
@@ -458,16 +477,12 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   public workflowDefinitionsCache: WorkflowDefinition[] | null = null;
   public _pluginWorkflowStepTemplates: Array<{ pluginId: string; template: WorkflowStepTemplate }> = [];
   public globalSettingsStore: GlobalSettingsStore;
-  public pollInterval: ReturnType<typeof setInterval> | null = null;
-  public pollingInProgress = false;
-  public lastKnownModified: number = 0;
-  public lastPollTime: string | null = null;
   public donePauseBackfillDone = false;
   public startupSlimListMemo = new Map<string, { expiresAt: number; promise: Promise<Task[]> }>();
   public static readonly STARTUP_SLIM_LIST_MEMO_TTL_MS = 2_500;
 
   public get isWatching(): boolean {
-    return this.watcher !== null || this.pollInterval !== null;
+    return this.watcher !== null;
   }
   public missionStore: MissionStore | AsyncMissionStore | null = null;
   public ideationStore: AsyncIdeationStore | null = null;
@@ -523,7 +538,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   }
 
   /** FNXC:RuntimeBackendInjection 2026-06-24-14:05: asyncLayer → backend mode (PostgreSQL, no SQLite); absent → legacy SQLite. */
-  constructor( public rootDir: string, globalSettingsDir?: string, options?: { asyncLayer?: AsyncDataLayer }, ) {
+  constructor( public rootDir: string, globalSettingsDir?: string, options?: { asyncLayer?: AsyncDataLayer; consumerId?: string }, ) {
     super();
     this.setMaxListeners(100);
     assertProjectRootDir(rootDir, "TaskStore");
@@ -532,6 +547,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     this.tasksDir = join(this.fusionDir, "tasks");
     this.configPath = join(this.fusionDir, "config.json");
     this.asyncLayer = options?.asyncLayer ?? null;
+    this.consumerId = options?.consumerId ?? null;
     const resolvedGlobalSettingsDir = globalSettingsDir
       ?? (process.env.VITEST === "true" ? join(rootDir, ".fusion-global-settings") : undefined);
     this.globalSettingsDir = resolvedGlobalSettingsDir;
@@ -542,13 +558,46 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   Safe lifecycle emission invokes listeners directly to isolate listener failures, so it bypasses
   EventEmitter.emit. Decorate this path too; otherwise the hot update surfaces silently miss lanes.
   */
-  public emitTaskLifecycleEventSafely( event: "task:created" | "task:updated", args: TaskStoreEvents["task:created"] | TaskStoreEvents["task:updated"], ): boolean {
+  public emitTaskLifecycleEventSafely( event: "task:created" | "task:updated" | "task:deleted", args: TaskStoreEvents["task:created"] | TaskStoreEvents["task:updated"] | TaskStoreEvents["task:deleted"], ): boolean {
     if (event === "task:updated" && args.length === 1) {
       const task = args[0] as Task;
       const lanes = this.laneCache.get(task.id);
       if (lanes !== undefined) return emitTaskLifecycleEventSafelyImpl(this, event, [task, { lanes }]);
     }
     return emitTaskLifecycleEventSafelyImpl(this, event, args);
+  }
+
+  /** Dispatch a committed outbox row without replaying delete-writer side effects. */
+  public emitObservedTaskDeleted(
+    task: Task,
+    outboxEventId: string,
+    metadata: Pick<NonNullable<TaskStoreEvents["task:deleted"][1]>, "githubIssueAction" | "closureContext"> = {},
+  ): boolean {
+    /*
+    FNXC:CrossProcessDeleteObservation 2026-08-01-13:03:
+    Observed delivery must retain the delete's integration intent while marking it replay-safe.
+    Bridges can report the original split handoff/action, but listener-owned GitHub/GitLab mutation
+    paths must not repeat a committed writer's effects during at-least-once crash-window delivery.
+    */
+    this.taskCache.delete(task.id);
+    return emitTaskLifecycleEventSafelyImpl(this, "task:deleted", [task, {
+      ...metadata,
+      observed: true,
+      outboxEventId,
+    }]);
+  }
+
+  /** Start durable task:deleted observation only for explicitly named backend consumers. */
+  async startTaskDeletedOutboxConsumer(): Promise<void> {
+    if (!this.asyncLayer || !this.consumerId || this.taskDeletedOutboxConsumer) return;
+    this.taskDeletedOutboxConsumer = new TaskDeletedOutboxConsumer(this);
+    await this.taskDeletedOutboxConsumer.start();
+  }
+
+  async stopTaskDeletedOutboxConsumer(): Promise<void> {
+    const consumer = this.taskDeletedOutboxConsumer;
+    this.taskDeletedOutboxConsumer = null;
+    await consumer?.stop();
   }
 
   /**
@@ -768,6 +817,40 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   public withTaskLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
     return withTaskLockImpl(this, id, fn);
   }
+
+  /**
+   * FNXC:PlanningDependencyReseed 2026-08-04-00:30:
+   * Dependency re-specification must serialize ahead of its task lock so the
+   * planner finalization and mutation cannot both publish contradictory
+   * handoffs. PostgreSQL persistence already makes the inner writes atomic;
+   * this FIFO is the compatibility fallback used by in-process/test stores.
+   */
+  public async withPlanningLifecycleLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const backend = this.asyncLayer?.backend;
+    if (this.asyncLayer && backend) {
+      return await withPlanningLifecycleAdvisoryLock({
+        projectId: this.asyncLayer.projectId ?? this.rootDir,
+        taskId: id,
+        directSessionUrl: backend.directSessionUrl ?? null,
+        provenance: backend.directSessionProvenance ?? null,
+        runtimeUrl: backend.runtimeUrl,
+        migrationUrl: backend.migrationUrl,
+      }, fn);
+    }
+    const projectId = this.asyncLayer?.projectId ?? this.rootDir;
+    const key = `${projectId}:${id}`;
+    const prior = planningLifecycleLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    planningLifecycleLocks.set(key, current);
+    await prior;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (planningLifecycleLocks.get(key) === current) planningLifecycleLocks.delete(key);
+    }
+  }
   public getTaskIdFromDir(dir: string): string {
     return getTaskIdFromDirImpl(this, dir);
   }
@@ -828,7 +911,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     }
   }
   /** Work items own no symbol column; their taskId is the sole declaration source. */
-  async resolveTaskSymbolsForWorkItem(workItem: Pick<import("./types/merge-queue.js").WorkflowWorkItem, "taskId">): Promise<TaskSymbolResolution> {
+  async resolveTaskSymbolsForWorkItem(workItem: Pick<import("./types/merge/merge-queue.js").WorkflowWorkItem, "taskId">): Promise<TaskSymbolResolution> {
     return this.resolveTaskSymbols(workItem.taskId);
   }
   async setTaskDeclaredSymbols(taskId: string, symbols: readonly string[]): Promise<Task> {
@@ -854,8 +937,8 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   public async atomicWriteTaskJson(dir: string, task: Task): Promise<void> {
     return atomicWriteTaskJsonImpl2(this, dir, task);
   }
-  public async atomicWriteTaskJsonWithAudit( dir: string, task: Task, auditInput?: RunAuditEventInput, ): Promise<void> {
-    return atomicWriteTaskJsonWithAuditImpl(this, dir, task, auditInput);
+  public async atomicWriteTaskJsonWithAudit( dir: string, task: Task, auditInput?: RunAuditEventInput, planningInvalidation?: PlanningDependencyInvalidation, ): Promise<void> {
+    return atomicWriteTaskJsonWithAuditImpl(this, dir, task, auditInput, planningInvalidation);
   }
   /*
   FNXC:TaskTiming 2026-07-15-00:00:
@@ -1007,7 +1090,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   /**
    * FNXC:RuntimeTaskOrchestrationAsync 2026-06-24-13:25:
    */
-  public async _createTaskInternalBackend( input: TaskCreateInput, title: string | undefined, resolvedWorkflowSteps: string[] | undefined, id: string, options?: { createdAt?: string; updatedAt?: string; promptOverride?: string; invokeTaskCreatedHook?: boolean; resolvedEntryColumn?: string; onProposalClaimConflict?: (task: Task) => void; }, ): Promise<Task> {
+  public async _createTaskInternalBackend( input: TaskCreateInput, title: string | undefined, resolvedWorkflowSteps: string[] | undefined, id: string, options?: { createdAt?: string; updatedAt?: string; promptOverride?: string; invokeTaskCreatedHook?: boolean; resolvedEntryColumn?: string; onProposalClaimConflict?: (task: Task) => void; deferTaskCreatedEvent?: boolean; onTaskInserted?: (task: Task) => void; }, ): Promise<Task> {
     return _createTaskInternalBackendImpl(this, input, title, resolvedWorkflowSteps, id, options);
   }
 
@@ -1023,7 +1106,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   async createTaskWithReservedId( input: TaskCreateInput, options: { taskId: string; createdAt?: string; updatedAt?: string; prompt?: string; applyDefaultWorkflowSteps?: boolean; invokeTaskCreatedHook?: boolean; }, ): Promise<Task> {
     return createTaskWithReservedIdImpl(this, input, options);
   }
-  public async _createTaskInternal( input: TaskCreateInput, title: string | undefined, resolvedWorkflowSteps: string[] | undefined, id: string, options?: { createdAt?: string; updatedAt?: string; promptOverride?: string; invokeTaskCreatedHook?: boolean; resolvedEntryColumn?: string; onProposalClaimConflict?: (task: Task) => void; }, ): Promise<Task> {
+  public async _createTaskInternal( input: TaskCreateInput, title: string | undefined, resolvedWorkflowSteps: string[] | undefined, id: string, options?: { createdAt?: string; updatedAt?: string; promptOverride?: string; invokeTaskCreatedHook?: boolean; resolvedEntryColumn?: string; onProposalClaimConflict?: (task: Task) => void; deferTaskCreatedEvent?: boolean; onTaskInserted?: (task: Task) => void; }, ): Promise<Task> {
     /*
     FNXC:SqliteDualPathCleanup 2026-07-26-14:05:
     Task create is PostgreSQL-only (layer.transactionImmediate + insertTaskRowInTransaction). The former sync SQLite _createTaskInternalImpl arm is deleted; production always injects AsyncDataLayer.
@@ -1199,6 +1282,11 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
     return saveWorkflowRunStepInstanceImpl(this, state);
   }
 
+/** True when any graph run has persisted step-instance evidence for this task. */
+  async hasWorkflowRunStepInstancesForTask(taskId: string): Promise<boolean> {
+    return hasWorkflowRunStepInstancesForTaskImpl(this, taskId);
+  }
+
 /** Load persisted step-instance run-state for a run (crash-resume; KTD-6). */
   async loadWorkflowRunStepInstances( taskId: string, runId: string, ): Promise<import("./types.js").WorkflowRunStepInstance[]> {
     return loadWorkflowRunStepInstancesImpl(this, taskId, runId);
@@ -1356,9 +1444,25 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
         return { wedgeNotification: { ...prior, status: "resolved", transitionedAt: new Date().toISOString() } };
       }
       if (prior?.status === "active" && prior.reasonKey === reasonKey) return null;
+
+      const now = Date.now();
+      const lastNotifiedAtByReason = Object.fromEntries(Object.entries(prior?.lastNotifiedAtByReason ?? {}).filter(([, timestamp]) => {
+        const notifiedAt = Date.parse(timestamp);
+        return Number.isFinite(notifiedAt) && notifiedAt <= now && now - notifiedAt < WEDGE_RENOTIFY_COOLDOWN_MS;
+      }));
       const episodeId = randomUUID();
-      result = { episodeId, claimed: true };
-      return { wedgeNotification: { reasonKey, episodeId, status: "active", transitionedAt: new Date().toISOString() } };
+      const suppressed = reasonKey in lastNotifiedAtByReason;
+      if (!suppressed) lastNotifiedAtByReason[reasonKey] = new Date(now).toISOString();
+      result = suppressed ? { claimed: false } : { episodeId, claimed: true };
+      return {
+        wedgeNotification: {
+          reasonKey,
+          episodeId,
+          status: "active",
+          transitionedAt: new Date(now).toISOString(),
+          ...(Object.keys(lastNotifiedAtByReason).length > 0 ? { lastNotifiedAtByReason } : {}),
+        },
+      };
     });
     return result;
   }
@@ -1604,6 +1708,12 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   // FNXC:StepLifecycle 2026-07-22-10:30: Execution callers need the locked start verdict; updateStep retains its legacy Task-only contract.
   async startStep( id: string, stepIndex: number, options?: { source?: "graph" }, ): Promise<import("./task-store/merge-queue-ops.js").StepStartResult> {
     return startStepImpl(this, id, stepIndex, options);
+  }
+  async checkAndRecordUnplannedExecutionBlock(id: string, episode: string): Promise<boolean> {
+    return checkAndRecordUnplannedExecutionBlockImpl(this, id, episode);
+  }
+  async transitionQueuedEpisode(id: string, transition: QueuedEpisodeTransition): Promise<import("./task-store/audit-ops.js").QueuedEpisodeTransitionResult> {
+    return transitionQueuedEpisodeImpl(this, id, transition);
   }
   async logEntry(id: string, action: string, outcome?: string, runContext?: RunMutationContext): Promise<Task> {
     return logEntryImpl(this, id, action, outcome, runContext);
@@ -2206,7 +2316,7 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
   /**
    * FNXC:RuntimeLifecycleAsync 2026-06-24-12:05:
    */
-  public async deleteTaskBackend( id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext; }, ): Promise<Task> {
+  public async deleteTaskBackend( id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; closureContext?: TaskDeleteClosureContext; auditContext?: TaskDeleteAuditContext; }, ): Promise<Task> {
     return deleteTaskBackendImpl(this, id, options);
   }
 
@@ -2217,13 +2327,13 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
    */
   public async recordRunAuditEventBackend( tx: DbTransaction, event: { domain: string; mutationType: string; target: string; taskId: string; agentId: string; runId: string; metadata: Record<string, unknown>; }, ): Promise<void> {    return recordRunAuditEventBackendImpl(this, tx, event);
   }
-  async deleteTask( id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext; }, ): Promise<Task> {
+  async deleteTask( id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; closureContext?: TaskDeleteClosureContext; auditContext?: TaskDeleteAuditContext; }, ): Promise<Task> {
     return deleteTaskImpl(this, id, options);
   }
   async deleteTaskIf(
     id: string,
     predicate: (live: Task) => boolean | Promise<boolean>,
-    options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; auditContext?: TaskDeleteAuditContext },
+    options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; allowResurrection?: boolean; githubIssueAction?: GithubIssueAction; closureContext?: TaskDeleteClosureContext; auditContext?: TaskDeleteAuditContext },
   ): Promise<DeleteTaskIfResult> {
     /*
     FNXC:SqliteDualPathCleanup 2026-07-26-14:05:
@@ -2305,9 +2415,6 @@ export class TaskStore extends EventEmitter<TaskStoreEvents> {
 
   async watch(): Promise<void> {
     return watchImpl(this);
-  }
-  public async checkForChanges(): Promise<void> {
-    return checkForChangesImpl(this);
   }
   stopWatching(): void {
     return stopWatchingImpl(this);

@@ -7,27 +7,33 @@
  * instance as its first parameter and performs byte-identical work.
  */
 import {type TaskStore, storeLog} from "../store.js";
-import {toTaskMoveLanes} from "../workflow-lifecycle-traits.js";
-import {resolveWorkflowIrForTask} from "../workflow-ir-resolver.js";
-import {resolveTaskLifecycleColumns} from "../workflow-lifecycle-traits.js";
+import {
+  resolveLifecycleColumns,
+  resolveTaskLifecycleColumns,
+  toTaskMoveLanes,
+  type TaskMoveLanes,
+} from "../workflows/workflow-lifecycle-traits.js";
+import {resolveWorkflowIrForTask} from "../workflows/workflow-ir-resolver.js";
 import {InvalidFileScopeError} from "./errors.js";
 import {mkdir, readFile, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {existsSync} from "node:fs";
 import type {Task, Column, TaskLogEntry, RunMutationContext} from "../types.js";
-import {validateCustomFieldPatch, CustomFieldRejectionError} from "../task-fields.js";
+import {validateCustomFieldPatch, CustomFieldRejectionError} from "../tasks/task-fields.js";
 import "../builtin-traits.js";
-import {normalizeTaskPriority} from "../task-priority.js";
-import {validateNodeOverrideChange, resolveNodeOverrideLanes} from "../node-override-guard.js";
-import {isTaskTerminalNodeIdAsync} from "../workflow-ir-resolver.js";
-import {extractTaskIdTokens, normalizeTitleForTaskId} from "../task-title-id-drift.js";
-import {buildBootstrapPrompt} from "../mesh-task-replication.js";
+import {normalizeTaskPriority} from "../tasks/task-priority.js";
+import {validateNodeOverrideChange, resolveNodeOverrideLanes} from "../mesh/node-override-guard.js";
+import {isTaskTerminalNodeIdAsync} from "../workflows/workflow-ir-resolver.js";
+import {extractTaskIdTokens, normalizeTitleForTaskId} from "../tasks/task-title-id-drift.js";
+import {buildBootstrapPrompt} from "../mesh/mesh-task-replication.js";
 import {validateFileScopeInPromptContent} from "../task-store/file-scope.js";
 import {__setTaskActivityLogLimitsForTesting, isBootstrapPromptStub, rewriteHeadingLine, rewriteMissionSection} from "../task-store/comments.js";
-import {applyOriginalDescription} from "../original-description-policy.js";
+import {applyOriginalDescription} from "../tasks/original-description-policy.js";
 import {normalizeTaskReviewState} from "../task-store/review-state.js";
-import {hasOwnDeclaredSymbols, normalizeDeclaredSymbols, extractDeclaredSymbolsFromPrompt, resolveTaskSymbolsForTask} from "../task-symbol-resolution.js";
+import {hasOwnDeclaredSymbols, normalizeDeclaredSymbols, extractDeclaredSymbolsFromPrompt, resolveTaskSymbolsForTask} from "../tasks/task-symbol-resolution.js";
 import {assertValidProviderInstanceId} from "../provider-instance.js";
+import {supersedePlanReviewResults} from "../planner/plan-approval.js";
+import {PLAN_REVIEW_GROUP_ID} from "../workflows/builtin-plan-review-group.js";
 
 export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updates: Parameters<TaskStore["updateTask"]>[1], runContext?: RunMutationContext,): Promise<Task> {
   /* FNXC:CredentialInstanceSelection 2026-08-01-05:43: validate task authoring input before persistence; ids are stored but runtime credential resolution remains unchanged. */
@@ -49,6 +55,9 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
       const dir = store.taskDir(id);
       const task = await store.readTaskJson(dir);
       const wasFailed = task.status === "failed";
+      const preUpdatePlanReviewResults = task.workflowStepResults?.filter(
+        (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID,
+      );
 
       // Capture title/description before mutation so the PROMPT.md stub
       // detector below can compare against the exact wrapper bytes that the
@@ -158,10 +167,15 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
       if (updates.workspaceWorktrees !== undefined) {
         task.workspaceWorktrees = updates.workspaceWorktrees;
       }
-      // Detect new dependencies being added to a todo task → auto-move to triage
+      // New dependencies re-seed hold-lane tasks and exhausted Plan Review cap parks.
       let movedToTriage = false;
+      let respecifyFromColumn: string | undefined;
+      let respecifyMoveLanes: TaskMoveLanes | undefined;
+      let previousDependencies: string[] | undefined;
+      let planningInvalidatedAt: string | undefined;
       if (updates.dependencies !== undefined) {
-        const oldDeps = new Set((task.dependencies ?? []).map((dependency) => dependency.trim()).filter(Boolean));
+        previousDependencies = (task.dependencies ?? []).map((dependency) => dependency.trim()).filter(Boolean);
+        const oldDeps = new Set(previousDependencies);
         const normalizedDependencies = updates.dependencies.map((dependency) => dependency.trim()).filter(Boolean);
         const hasNewDeps = normalizedDependencies.some((d) => !oldDeps.has(d));
         task.dependencies = normalizedDependencies;
@@ -183,21 +197,50 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
         — the card's current column — so the move becomes a no-op while the status reset and the log
         entry still record the re-specification. When the workflow will not resolve, the column is
         left ALONE: refusing to move is recoverable, writing a column that may not exist is not.
+
+        FNXC:WorkflowEvents 2026-08-03-02:01:
+        The task:moved emit below used to fire on every re-seed with hardcoded from=todo/to=triage,
+        including default-board no-ops where intake===hold. That announced a deleted column and
+        required laneCache on every dependency edit. Match update-task-deps: emit only when the
+        column actually changed, with the real endpoints.
+
+        FNXC:WorkflowEvents 2026-08-03-02:16:
+        Resolve the task IR once for both the hold/intake decision and the task:moved lanes payload.
+        A second resolveWorkflowIrForTask that failed after a successful relocation used to emit
+        from/to for a custom board with lanes:undefined, and self-healing fell back to legacy lane
+        ids for board-stall / fan-out. Reuse the same IR (or withhold the event when lanes are absent).
         */
-        const depLanes = hasNewDeps
-          ? await resolveTaskLifecycleColumns(store, id).catch(() => undefined)
+        const respecifyIr = hasNewDeps
+          ? await resolveWorkflowIrForTask(store, id).catch(() => undefined)
           : undefined;
+        respecifyMoveLanes = toTaskMoveLanes(respecifyIr);
+        const depLanes = respecifyIr ? resolveLifecycleColumns(respecifyIr) : undefined;
         /* DELIBERATE-LITERAL — the unresolvable-workflow default for the SOURCE lane only; the
            destination below never falls back to a literal. Reviewed 2026-07-31-02:40. */
         const holdLane = depLanes === undefined ? "todo" : depLanes.hold;
-        if (hasNewDeps && holdLane !== undefined && task.column === holdLane) {
+        const isPlanReviewCapPark = task.status === "awaiting-approval"
+          && task.awaitingApprovalReason === "plan-review-replan-cap";
+        const shouldRespecify = hasNewDeps
+          && ((holdLane !== undefined && task.column === holdLane) || isPlanReviewCapPark);
+        if (shouldRespecify) {
           const intakeLane = depLanes?.intake;
+          respecifyFromColumn = task.column;
           const relocating = intakeLane !== undefined && intakeLane !== task.column;
           if (relocating) {
             task.column = intakeLane;
             task.columnMovedAt = new Date().toISOString();
           }
-          task.status = undefined;
+          /*
+          FNXC:PlanningDependencyReseed 2026-08-04-06:35:
+          A new dependency invalidates a plan that is still in the hold lane or parked after
+          exhausting Plan Review in a distinct review column. The
+          prior null reset raced an in-flight planner after it wrote PROMPT.md but
+          before its final handoff, leaving a real specification that neither
+          planning discovery nor release could claim.  `needs-replan` is the
+          graph-owned durable re-entry signal: it preserves prompt authority and
+          makes the interrupted planner's stale finalizer harmless.
+          */
+          planningInvalidatedAt = new Date().toISOString();
           const depLogEntry: TaskLogEntry = {
             timestamp: new Date().toISOString(),
             action: relocating
@@ -230,6 +273,13 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
         task.status = undefined;
       } else if (updates.status !== undefined) {
         task.status = updates.status;
+      }
+      // FNXC:PlanApproval 2026-08-03-19:03: `null` clears the fingerprint;
+      // `undefined` preserves it by omitting the field from this merge.
+      if (updates.approvedPlanFingerprint === null) {
+        task.approvedPlanFingerprint = undefined;
+      } else if (updates.approvedPlanFingerprint !== undefined) {
+        task.approvedPlanFingerprint = updates.approvedPlanFingerprint;
       }
       /*
       FNXC:PlanApproval 2026-08-01-04:39:
@@ -787,6 +837,37 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
       } else if (updates.workflowStepResults !== undefined) {
         task.workflowStepResults = updates.workflowStepResults;
       }
+      if (planningInvalidatedAt !== undefined) {
+        /*
+        FNXC:PlanningDependencyReseed 2026-08-04-06:35:
+        Dependency invalidation is authoritative over every field in the same
+        generic updateTask patch. Apply it after the ordinary status, approval,
+        and workflow-result merge so a dashboard PATCH containing dependencies
+        plus stale current-episode fields cannot undo the replan fence. The
+        persistence transaction below also retires the pending continuation.
+
+        Preserve the pre-patch Plan Review projection when that same patch clears
+        or replaces workflowStepResults without a Plan Review row. Dropping that
+        audit projection lets the graph reconstruct the old pass from its durable
+        completion log and incorrectly release the newly invalidated plan.
+        */
+        task.status = "needs-replan";
+        task.approvedPlanFingerprint = undefined;
+        task.awaitingApprovalReason = undefined;
+        const patchedResultsRetainPlanReview = task.workflowStepResults?.some(
+          (result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID,
+        ) === true;
+        const resultsWithPriorPlanReview = patchedResultsRetainPlanReview
+          ? (task.workflowStepResults ?? [])
+          : [
+              ...(task.workflowStepResults ?? []),
+              ...(preUpdatePlanReviewResults ?? []),
+            ];
+        task.workflowStepResults = supersedePlanReviewResults(
+          resultsWithPriorPlanReview.length > 0 ? resultsWithPriorPlanReview : undefined,
+          planningInvalidatedAt,
+        );
+      }
       if (updates.mergeDetails === null) {
         task.mergeDetails = undefined;
       } else if (updates.mergeDetails !== undefined) {
@@ -901,6 +982,9 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
       }
 
       // When runContext is provided, record audit event atomically with task mutation
+      const planningInvalidation = movedToTriage
+        ? {expectedCurrentDependencies: previousDependencies ?? []}
+        : undefined;
       if (runContext) {
         await store.atomicWriteTaskJsonWithAudit(dir, task, {
           taskId: task.id,
@@ -913,9 +997,9 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
             updatedFields: Object.keys(updates).filter((k) => (updates as Record<string, unknown>)[k] !== undefined),
             ...(titleNormalized ? { titleNormalized: true } : {}),
           },
-        });
+        }, planningInvalidation);
       } else {
-        await store.atomicWriteTaskJson(dir, task);
+        await store.atomicWriteTaskJsonWithAudit(dir, task, undefined, planningInvalidation);
       }
 
       /*
@@ -1003,19 +1087,34 @@ export async function updateTaskUnlockedImpl(store: TaskStore, id: string, updat
         }
       }
 
-      if (movedToTriage) {
+      if (
+        movedToTriage
+        && respecifyFromColumn !== undefined
+        && respecifyFromColumn !== task.column
+        && respecifyMoveLanes
+      ) {
         /* FNXC:WorkflowEvents 2026-07-31-23:10 (fleet — the last two emitters):
            #3109 attached lanes at moves.ts and #3120 at the archive/completion emits. This one and
            `update-task-deps.ts` were still sending `lanes: undefined`, and a listener reads absence as
            "unknown" and falls back to `resolveTaskParkedColumnsSync` — the DEFAULT board under
            PostgreSQL. So these two paths kept the pre-#3109 behaviour while the listeners read as
-           resolved. */
-        const lanes = toTaskMoveLanes(await resolveWorkflowIrForTask(store, id).catch(() => undefined));
-        store.laneCache.set(task.id, lanes);
-        store.emit("task:moved", { task, from: "todo" as Column, to: "triage" as Column, source: "engine", lanes });
+           resolved.
+
+           FNXC:WorkflowEvents 2026-08-03-02:01: only announce a real column change; endpoints are the
+           resolved hold/intake pair, never the deleted `triage` literal.
+
+           FNXC:WorkflowEvents 2026-08-03-02:16: emit only when respecifyMoveLanes is present from the
+           same IR used for the relocation — never a second IR lookup that can fail after the move. */
+        store.laneCache.set(task.id, respecifyMoveLanes);
+        store.emit("task:moved", {
+          task,
+          from: respecifyFromColumn as Column,
+          to: task.column as Column,
+          source: "engine",
+          lanes: respecifyMoveLanes,
+        });
       }
       store.emitTaskLifecycleEventSafely("task:updated", [task]);
       return task;
     }
   }
-

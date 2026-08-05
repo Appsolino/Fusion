@@ -239,6 +239,100 @@ describe("SettingsModal", () => {
       });
     });
 
+    /*
+    FNXC:ExecutorEscalation 2026-08-03-05:43:
+    The original Scheduling text fields accepted incomplete provider/model pairs. The project-scoped picker must instead present one provider-qualified selection, save both legacy keys together, and clear both keys together.
+    */
+    it("selects and clears the executor escalation model as one project-scoped pair", async () => {
+      mockFetchModels.mockResolvedValue({
+        models: MODEL_FIXTURE,
+        favoriteProviders: [],
+        favoriteModels: [],
+      });
+      mockFetchSettings.mockResolvedValue({
+        ...defaultSettings,
+        executorEscalationProvider: "anthropic",
+        executorEscalationModelId: "claude-sonnet-4-5",
+      });
+      mockFetchSettingsByScope.mockResolvedValue({
+        global: defaultSettings,
+        project: {
+          executorEscalationProvider: "anthropic",
+          executorEscalationModelId: "claude-sonnet-4-5",
+        },
+      });
+
+      renderModal({ initialSection: "project-models" });
+      await waitForSettingsModalReady();
+
+      const selector = screen.getByLabelText("Executor Escalation Model");
+      expect(selector).toHaveTextContent("Claude Sonnet 4.5");
+      await settingsModalUser.click(selector);
+      await settingsModalUser.click(await screen.findByText("GPT-4o"));
+      fireEvent.click(document.querySelector(".modal-close") as HTMLButtonElement);
+
+      await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executorEscalationProvider: "openai",
+          executorEscalationModelId: "gpt-4o",
+        }),
+        undefined,
+      ));
+
+      cleanup();
+      mockUpdateSettings.mockClear();
+      renderModal({ initialSection: "project-models" });
+      await waitForSettingsModalReady();
+      await settingsModalUser.click(screen.getByLabelText("Executor Escalation Model"));
+      await settingsModalUser.click(await screen.findByText("No escalation model"));
+      fireEvent.click(document.querySelector(".modal-close") as HTMLButtonElement);
+
+      await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executorEscalationProvider: null,
+          executorEscalationModelId: null,
+        }),
+        undefined,
+      ));
+    });
+
+    it("disables the escalation selector while the catalog is loading or empty", async () => {
+      let resolveModels: ((value: { models: typeof MODEL_FIXTURE; favoriteProviders: string[]; favoriteModels: string[] }) => void) | undefined;
+      mockFetchModels.mockImplementation(() => new Promise((resolve) => {
+        resolveModels = resolve;
+      }));
+
+      renderModal({ initialSection: "project-models" });
+      await waitForSettingsModalReady();
+
+      expect(screen.getByLabelText("Executor Escalation Model")).toBeDisabled();
+      resolveModels?.({ models: MODEL_FIXTURE, favoriteProviders: [], favoriteModels: [] });
+      await waitFor(() => expect(screen.getByLabelText("Executor Escalation Model")).not.toBeDisabled());
+    });
+
+    it("treats incomplete legacy escalation pairs as unset and removes Scheduling model inputs", async () => {
+      mockFetchModels.mockResolvedValue({
+        models: MODEL_FIXTURE,
+        favoriteProviders: [],
+        favoriteModels: [],
+      });
+      mockFetchSettings.mockResolvedValue({
+        ...defaultSettings,
+        executorEscalationProvider: "anthropic",
+      });
+
+      renderModal({ initialSection: "project-models" });
+      await waitForSettingsModalReady();
+
+      expect(screen.getByLabelText("Executor Escalation Model")).toHaveTextContent("No escalation model");
+      await settingsModalUser.click(screen.getByRole("button", { name: "Scheduling" }));
+
+      expect(screen.queryByLabelText("Escalation provider")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Escalation model ID")).not.toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Escalate after tool-failure retries" })).toBeInTheDocument();
+      expect(screen.getByLabelText("Escalation node ID")).toBeInTheDocument();
+    });
+
     it("renders and saves OpenRouter advanced settings", async () => {
       mockFetchModels.mockResolvedValue({
         models: MODEL_FIXTURE,
@@ -1254,6 +1348,64 @@ describe("SettingsModal", () => {
       }
     });
 
+    it("preserves sibling providers and named accounts while polling a named OAuth login", async () => {
+      const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+      mockFetchAuthStatus
+        .mockResolvedValueOnce({
+          providers: [
+            {
+              id: "anthropic-subscription",
+              name: "Anthropic Subscription",
+              authenticated: false,
+              type: "oauth",
+              instanceId: "work",
+              instances: [
+                { instanceId: "work", label: "Work", isDefault: true, authenticated: false, type: "oauth" },
+                { instanceId: "personal", label: "Personal", isDefault: false, authenticated: false, type: "oauth" },
+              ],
+            },
+            { id: "github", name: "GitHub", authenticated: false, type: "oauth" },
+          ],
+        })
+        .mockResolvedValueOnce({
+          providers: [
+            {
+              id: "anthropic-subscription",
+              name: "Anthropic Subscription",
+              authenticated: false,
+              type: "oauth",
+              instanceId: "work",
+              loginInProgress: true,
+              instances: [{ instanceId: "work", label: "Work", isDefault: true, authenticated: false, type: "oauth" }],
+            },
+          ],
+        });
+      mockLoginProvider.mockResolvedValueOnce({ url: "https://claude.ai/oauth/authorize" });
+
+      renderModal();
+      await waitForSettingsModalReady();
+      await settingsModalUser.click(screen.getByRole("button", { name: "Authentication" }));
+      vi.useFakeTimers();
+
+      try {
+        const instances = screen.getByTestId("auth-instances-anthropic-subscription");
+        fireEvent.click(within(instances).getAllByRole("button", { name: "Login" })[0]);
+
+        await act(async () => {
+          await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+
+        expect(mockLoginProvider).toHaveBeenCalledWith("anthropic-subscription", "work");
+        expect(mockFetchAuthStatus).toHaveBeenLastCalledWith({ provider: "anthropic-subscription", instance: "work" });
+        expect(openSpy).toHaveBeenCalledWith("https://claude.ai/oauth/authorize", "_blank");
+        expect(screen.getByText("Personal")).toBeInTheDocument();
+        expect(screen.getByTestId("auth-provider-icon-github")).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("shows incomplete toast when Anthropic Subscription OAuth stops without authentication", async () => {
       const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
       const addToast = vi.fn();
@@ -1557,6 +1709,26 @@ describe("SettingsModal", () => {
       await settingsModalUser.click(within(apiKeyCard).getByRole("button", { name: "Clear" }));
 
       expect(mockClearApiKey).toHaveBeenCalledWith("anthropic-api-key");
+    });
+
+    it("routes named credential instances through their matching auth actions", async () => {
+      mockFetchAuthStatus.mockResolvedValue({
+        providers: [
+          { id: "anthropic-subscription", name: "Anthropic Subscription", authenticated: true, type: "oauth", instanceId: "work" },
+          { id: "anthropic-api-key", name: "Anthropic API Key", authenticated: true, type: "api_key", instanceId: "billing", keyHint: "sk-•••••work" },
+        ],
+      });
+
+      render(<SettingsModal onClose={noop} addToast={vi.fn()} />);
+      await settingsModalUser.click(await screen.findByRole("button", { name: "Authentication" }));
+
+      const subscriptionCard = screen.getByTestId("auth-provider-icon-anthropic-subscription").closest(".auth-provider-card") as HTMLElement;
+      const apiKeyCard = screen.getByTestId("auth-provider-icon-anthropic-api-key").closest(".auth-provider-card") as HTMLElement;
+      await settingsModalUser.click(within(subscriptionCard).getByRole("button", { name: "Logout" }));
+      await settingsModalUser.click(within(apiKeyCard).getByRole("button", { name: "Clear" }));
+
+      expect(mockLogoutProvider).toHaveBeenCalledWith("anthropic-subscription", "work");
+      expect(mockClearApiKey).toHaveBeenCalledWith("anthropic-api-key", "billing");
     });
 
     it("scrolls settings content to top after API key save succeeds", async () => {

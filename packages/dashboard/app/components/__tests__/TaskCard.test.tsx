@@ -1100,6 +1100,69 @@ describe("TaskCard", () => {
     }
   });
 
+  it("isolates mobile menu actions from card detail while intentional card taps still open it", async () => {
+    const cleanupGeometry = mockBoardContextMenuGeometry();
+    const onOpenDetail = vi.fn();
+    const onUnpauseTask = vi.fn(async () => makeTask());
+    const onPauseTask = vi.fn(async () => makeTask({ paused: true }));
+    try {
+      const { rerender } = render(
+        <TaskCard
+          task={makeTask({ paused: true, userPaused: true })}
+          onOpenDetail={onOpenDetail}
+          addToast={noop}
+          onUnpauseTask={onUnpauseTask}
+          onPauseTask={onPauseTask}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("card-menu-btn-FN-001"));
+      await waitFor(() => expectBoardContextMenuPortaled());
+      const unpause = screen.getByRole("menuitem", { name: "Unpause" });
+      fireEvent.pointerDown(unpause, { pointerType: "touch", pointerId: 1 });
+      fireEvent.touchStart(unpause, { touches: [{ clientX: 20, clientY: 20 }] });
+      fireEvent.pointerUp(unpause, { pointerType: "touch", pointerId: 1 });
+      await waitFor(() => expect(onUnpauseTask).toHaveBeenCalledWith("FN-001"));
+      expect(onUnpauseTask).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(onOpenDetail).not.toHaveBeenCalled();
+
+      rerender(
+        <TaskCard
+          task={makeTask({ paused: false, userPaused: false })}
+          onOpenDetail={onOpenDetail}
+          addToast={noop}
+          onUnpauseTask={onUnpauseTask}
+          onPauseTask={onPauseTask}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("card-menu-btn-FN-001"));
+      await waitFor(() => expectBoardContextMenuPortaled());
+      const pause = screen.getByRole("menuitem", { name: "Pause" });
+      fireEvent.pointerDown(pause, { pointerType: "touch", pointerId: 2 });
+      fireEvent.touchStart(pause, { touches: [{ clientX: 20, clientY: 20 }] });
+      fireEvent.pointerUp(pause, { pointerType: "touch", pointerId: 2 });
+      await waitFor(() => expect(onPauseTask).toHaveBeenCalledWith("FN-001"));
+      expect(onPauseTask).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(onOpenDetail).not.toHaveBeenCalled();
+
+      const card = document.querySelector(".card") as HTMLElement;
+      fireEvent.touchStart(card, {
+        touches: [{ clientX: 20, clientY: 20 }],
+        changedTouches: [{ clientX: 20, clientY: 20 }],
+      });
+      fireEvent.touchEnd(card, {
+        touches: [],
+        changedTouches: [{ clientX: 20, clientY: 20 }],
+      });
+      expect(onOpenDetail).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanupGeometry();
+    }
+  });
+
   it("suppresses native text selection when touch long-press opens the board card context menu", async () => {
     vi.useFakeTimers();
     const cleanupGeometry = mockBoardContextMenuGeometry();
@@ -2409,7 +2472,9 @@ describe("TaskCard", () => {
     expect(screen.getByText("executing")).toBeDefined();
   });
 
-  it("FN-8493 renders Revising, not Replan, for a bare needs-replan Board card", () => {
+  it("FN-8493 renders the idle Queued to revise label, not Replan, for a bare needs-replan Board card", () => {
+    // FNXC:TaskActivity 2026-08-01-17:53: needs-replan holds no concurrency slot, so the card is
+    // idle — it renders the descriptive waiting label instead of the live "Revising" copy.
     render(
       <TaskCard
         task={makeTask({ column: "triage", status: "needs-replan" })}
@@ -2418,8 +2483,25 @@ describe("TaskCard", () => {
       />,
     );
 
-    expect(screen.getByText("Revising")).toHaveClass("card-status-badge");
+    expect(screen.getByText("Queued to revise")).toHaveClass("card-status-badge");
     expect(screen.queryByText("Replan")).not.toBeInTheDocument();
+  });
+
+  it("shows Planning when a live planner log reaches a needs-replan board row before its status update", () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          column: "triage",
+          status: "needs-replan",
+          recentAgentActivityAt: new Date().toISOString(),
+        })}
+        onOpenDetail={noop}
+        addToast={noop}
+      />,
+    );
+
+    expect(screen.getByText("Planning")).toHaveClass("card-status-badge");
+    expect(screen.queryByText("Queued to revise")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -2909,7 +2991,9 @@ describe("TaskCard", () => {
     expect(headerBadges.contains(badge)).toBe(true);
   });
 
-  it("renders an active Planning badge when a status-null triage card has fresh planner activity", () => {
+  it("does not glow a status-null triage card on fresh planner logs alone", () => {
+    // FNXC:TaskActivity 2026-08-01-17:53: a log line is not a concurrency slot; the pulsing
+    // Planning badge requires the authoritative planning status the engine counts.
     const recentAgentActivityAt = new Date().toISOString();
     const { container } = render(
       <TaskCard
@@ -2919,8 +3003,8 @@ describe("TaskCard", () => {
       />,
     );
 
-    expect(container.querySelector(".card")).toHaveClass("agent-active");
-    expect(screen.getByLabelText("Planning")).toHaveClass("card-status-badge", "pulsing");
+    expect(container.querySelector(".card")).not.toHaveClass("agent-active");
+    expect(container.querySelector(".card-status-badge")).toBeNull();
   });
 
   it("does not render a status badge when a status-null triage card has no fresh planner activity", () => {
@@ -2931,7 +3015,9 @@ describe("TaskCard", () => {
     expect(container.querySelector(".card-status-badge")).toBeNull();
   });
 
-  it("keeps board replan cards glowing and their status badge pulsing", () => {
+  it("does not glow board replan cards — a parked replan holds no concurrency slot", () => {
+    // FNXC:TaskActivity 2026-08-01-17:53: FN-8494's replan chrome is removed so lane counts
+    // and glow can never exceed the live-agent population; the badge stays, statically.
     const { container } = render(
       <TaskCard
         task={makeTask({ id: "FN-8494-board", column: "triage", status: "needs-replan" })}
@@ -2940,8 +3026,9 @@ describe("TaskCard", () => {
       />,
     );
 
-    expect(container.querySelector(".card")).toHaveClass("agent-active");
-    expect(screen.getByText("Revising")).toHaveClass("card-status-badge", "pulsing");
+    expect(container.querySelector(".card")).not.toHaveClass("agent-active");
+    expect(screen.getByText("Queued to revise")).toHaveClass("card-status-badge");
+    expect(screen.getByText("Queued to revise")).not.toHaveClass("pulsing");
   });
 
   it.each([
@@ -3000,11 +3087,11 @@ describe("TaskCard", () => {
     expect(container.querySelector(".awaiting-approval--plan-review-replan-cap")).toBeNull();
   });
 
-  it("renders a distinct review-budget-exhausted badge when awaitingApprovalReason is plan-review-replan-cap", () => {
+  it("renders review-budget approval metadata outside the intake column", () => {
     const { container } = render(
       <TaskCard
         task={makeTask({
-          column: "triage",
+          column: "todo",
           status: "awaiting-approval",
           awaitingApprovalReason: "plan-review-replan-cap",
         } as any)}

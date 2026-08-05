@@ -1,5 +1,5 @@
 import type { AgentLogEntry, AgentRole, SteeringComment, Task, TaskDetail } from "@fusion/core";
-import { isCompleteColumnRole, isReviewColumnRole, isWipColumnRole } from "../utils/columnRoles";
+import { isCompleteColumnRole, isWipColumnRole } from "../utils/columnRoles";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -21,6 +21,7 @@ import { formatRelativeTimeAgo } from "../utils/relativeTimeAgo";
 import { ProviderIcon } from "./ProviderIcon";
 import { clampChatInputHeight, resolveChatInputOverflowY } from "../utils/chatInputAutosize";
 import { formatAgentLogTimingLabels, markdownComponents } from "./AgentLogViewer";
+import { ToolCallDetails } from "./ToolCallDetails";
 import { parseRuntimeModelMarker } from "./effective-model-resolution";
 import "./TaskChatTab.css";
 
@@ -476,7 +477,14 @@ function TaskChatToolEntry({ entry }: { entry: AgentLogEntry }) {
         <TaskChatTimestamp timestamp={entry.timestamp} label="Tool entry timestamp" />
       </div>
       <div className="task-chat-entry-text">{entry.text}</div>
-      {entry.detail ? <pre className="task-chat-tool-detail">{linkifyFilePaths(entry.detail)}</pre> : null}
+      <ToolCallDetails
+        className="task-chat-tool-detail-block"
+        resultValue={entry.detail}
+        argumentsLabel={t("taskChat.arguments", "Arguments")}
+        resultLabel=""
+        resultIsError={entry.type === "tool_error"}
+        renderValue={linkifyFilePaths}
+      />
     </article>
   );
 }
@@ -522,18 +530,15 @@ function TaskChatToolInvocation({ row }: { row: Extract<TaskChatToolGroupRow, { 
         <TaskChatTimestamp timestamp={completion?.timestamp ?? row.call.timestamp} label="Tool invocation timestamp" />
       </div>
       <div className="task-chat-entry-text">{row.call.text}</div>
-      {row.call.detail ? (
-        <div className="task-chat-tool-detail-block">
-          <div className="task-chat-tool-detail-label">{t("taskChat.arguments", "Arguments")}</div>
-          <pre className="task-chat-tool-detail">{linkifyFilePaths(row.call.detail)}</pre>
-        </div>
-      ) : null}
-      {completion?.detail ? (
-        <div className="task-chat-tool-detail-block">
-          <div className="task-chat-tool-detail-label">{completion.type === "tool_error" ? t("taskChat.error", "Error") : t("taskChat.result", "Result")}</div>
-          <pre className="task-chat-tool-detail">{linkifyFilePaths(completion.detail)}</pre>
-        </div>
-      ) : null}
+      <ToolCallDetails
+        className="task-chat-tool-detail-block"
+        argumentsValue={row.call.detail}
+        resultValue={completion?.detail}
+        argumentsLabel={t("taskChat.arguments", "Arguments")}
+        resultLabel={completion?.type === "tool_error" ? t("taskChat.error", "Error") : t("taskChat.result", "Result")}
+        resultIsError={completion?.type === "tool_error"}
+        renderValue={linkifyFilePaths}
+      />
     </article>
   );
 }
@@ -581,13 +586,10 @@ function TaskChatToolGroup({ entries }: { entries: AgentLogEntry[] }) {
 }
 
 /*
- FNXC:Chat-Thinking 2026-07-15-10:33:
- Chat thinking (reasoning) blocks render collapsed by default so the response is scannable without manually closing each block; the summary remains an expand-on-click affordance. (FN-7974)
-
- FNXC:Chat-Thinking 2026-07-16-18:05:
- FN-8171 keeps the scannable collapsed default for idle task columns, but opens Live Activity thinking for in-progress and in-review tasks so operators can follow active or awaiting-review reasoning at a glance. The expanded block remains user-collapsible.
+FNXC:Chat-Thinking 2026-08-04-08:15:
+FN-8780 requires every newly mounted Task Detail Activity thinking segment to start expanded, regardless of workflow column, so operators can read reasoning immediately. State remains controlled after mount: the summary still lets operators collapse or reopen a segment, and stable segment identity preserves that choice during streaming.
 */
-function TaskChatThinking({ entries, defaultOpen = false }: { entries: AgentLogEntry[]; defaultOpen?: boolean }) {
+function TaskChatThinking({ entries, defaultOpen = true }: { entries: AgentLogEntry[]; defaultOpen?: boolean }) {
   const { t } = useTranslation("app");
   const [open, setOpen] = useState(defaultOpen);
   const combinedThinkingText = entries.map((entry) => entry.text).join("");
@@ -617,12 +619,12 @@ function TaskChatThinking({ entries, defaultOpen = false }: { entries: AgentLogE
   );
 }
 
-function TaskChatSegmentView({ segment, defaultOpen }: { segment: TaskChatSegment; defaultOpen?: boolean }) {
+function TaskChatSegmentView({ segment }: { segment: TaskChatSegment }) {
   if (segment.kind === "tool") {
     return <TaskChatToolGroup entries={segment.entries} />;
   }
   if (segment.kind === "thinking") {
-    return <TaskChatThinking entries={segment.entries} defaultOpen={defaultOpen} />;
+    return <TaskChatThinking entries={segment.entries} />;
   }
   return <TaskChatText entries={segment.entries} />;
 }
@@ -667,14 +669,6 @@ export function TaskChatTab({ task, columnFlags, projectId, active, addToast, on
   const [optimisticMessages, setOptimisticMessages] = useState<UserChatMessage[]>([]);
   const [isTranscriptAtBottom, setIsTranscriptAtBottom] = useState(true);
   const isTranscriptAtBottomRef = useRef(true);
-  /*
-  FNXC:WorkflowResolvedColumns 2026-07-30-02:10 (batch-dashboard-app):
-  WIP and REVIEW roles, resolved. This decides whether the thinking transcript is expanded by
-  default — open while work is live, collapsed once it is not. Keyed on the literals, a renamed
-  board collapsed it for every card, so an operator watching an active run had to expand it by hand
-  on every task, every time.
-  */
-  const thinkingDefaultOpen = isWipColumnRole(columnFlags, task.column) || isReviewColumnRole(columnFlags, task.column);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const previousEntryCountRef = useRef(0);
   const previousScrollHeightRef = useRef(0);
@@ -1098,7 +1092,7 @@ export function TaskChatTab({ task, columnFlags, projectId, active, addToast, on
                     A genuinely new segment always has a different startIndex, so identity stays correct without the volatile suffix.
                     */
                     const segmentKey = `${segment.kind}-${segment.startIndex}`;
-                    return <TaskChatSegmentView key={segmentKey} segment={segment} defaultOpen={thinkingDefaultOpen} />;
+                    return <TaskChatSegmentView key={segmentKey} segment={segment} />;
                   })}
                 </div>
               </section>

@@ -345,19 +345,16 @@ required responsive acceptance lane, so the test must not remain excluded from d
 */
 const quarantinedDashboardTests: string[] = [
   /*
-  FNXC:DashboardTestQuarantine 2026-07-30-12:30:
-  Wall-clock off-by-one-millisecond: the freshness clock case asserts exact epoch equality against a
-  value derived from a second real-clock read. 1 failure in 3 identical runs, with the change under
-  test (PR #2731) living in a different hook and provably unrelated — stashing it did not stop the
-  variance. Quarantined on sight rather than appeased; the fix is fake timers, not a tolerance.
-  */
-  "app/hooks/__tests__/useTasks-hydration-freshness.test.ts",
-  /*
   FNXC:DashboardTestQuarantine 2026-08-01-05:17:
   FN-8647 observed the real Pi ModelRuntime Kimi K3 catalog test timing out in 2/6
   loaded CI samples. Quarantine it with the ledger row rather than widen its 15s
   budget; the reusable beforeAll seam is landed, while FN-8669 owns the budget
   decision and CI re-measurement before the deletion deadline.
+
+  FNXC:DashboardTestQuarantine 2026-08-04-06:33:
+  FN-8774 must retain the Kimi K3 route test, its exclusion, and its ledger row
+  through the 2026-08-15 deletion-ratchet deadline. Do not delete dashboard
+  /api/models coverage or remove the paired quarantine records before then.
   */
   "src/__tests__/register-model-routes-kimi-k3-supplemental.test.ts",
   /*
@@ -550,7 +547,7 @@ export default defineConfig({
       "@fusion/dashboard/app/components/TaskCard": resolve(__dirname, "app/components/TaskCard.tsx"),
       "@fusion/dashboard/app/components/ViewHeader": resolve(__dirname, "app/components/ViewHeader.tsx"),
       // FNXC:Quality 2026-07-19-12:00: Keep the Quality plugin's tokenized artifact-media bridge resolvable under host Vitest just as it is in the production dashboard bundle.
-      "@fusion/dashboard/app/api/task-content": resolve(__dirname, "app/api/task-content.ts"),
+      "@fusion/dashboard/app/api/tasks/task-content": resolve(__dirname, "app/api/tasks/task-content.ts"),
       "@fusion/dashboard/app/plugins/types": resolve(__dirname, "app/plugins/types.ts"),
       "@fusion/dashboard/app/utils/projectStorage": resolve(__dirname, "app/utils/projectStorage.ts"),
       "@fusion/dashboard/app/utils/taskStuck": resolve(__dirname, "app/utils/taskStuck.ts"),
@@ -664,6 +661,14 @@ export default defineConfig({
       "@fusion-plugin-examples/omp-runtime": resolve(
         __dirname,
         "../../plugins/fusion-plugin-omp-runtime/src/index.ts",
+      ),
+      "@fusion-plugin-examples/todos/dashboard-view": resolve(
+        __dirname,
+        "../../plugins/fusion-plugin-todos/src/dashboard-view.tsx",
+      ),
+      "@fusion-plugin-examples/todos": resolve(
+        __dirname,
+        "../../plugins/fusion-plugin-todos/src/index.ts",
       ),
       "@fusion-plugin-examples/roadmap/roadmap-suggestions": resolve(
         __dirname,

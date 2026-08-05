@@ -6,6 +6,7 @@ regex. The now-universal Oversight overflow trigger's aria-label is
 "Oversight actions", which also matches `/actions/i` and made every such
 query ambiguous once the trigger stopped being a mobile-only affordance.
 */
+import { useState } from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -25,6 +26,28 @@ import {
 import { TaskDetailModal, TaskDetailContent } from "../TaskDetailModal";
 import { FileBrowserProvider } from "../../context/FileBrowserContext";
 import { readBoardWorkflowSelection, removeBoardWorkflowSelection, writeBoardWorkflowSelection } from "../../utils/boardWorkflowSelection";
+import type { Task } from "@fusion/core";
+
+function PauseDetailHarness({ mobileHeaderMode }: { mobileHeaderMode?: "back" }) {
+  const [task, setTask] = useState(() => makeTask({ id: "FN-UNPAUSE", column: "todo", paused: true, userPaused: true }));
+  const onUnpauseTask = vi.fn(async () => ({ ...task, paused: false, userPaused: false } as Task));
+
+  return (
+    <TaskDetailContent
+      task={task}
+      mobileHeaderMode={mobileHeaderMode}
+      embedded
+      onRequestClose={noop}
+      onMoveTask={noopMove}
+      onDeleteTask={noopDelete}
+      onMergeTask={noopMerge}
+      onOpenDetail={noopOpenDetail}
+      onUnpauseTask={onUnpauseTask}
+      onTaskUpdated={setTask}
+      addToast={noop}
+    />
+  );
+}
 
 setupTaskDetailModalHooks();
 
@@ -497,12 +520,14 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Approval needed before implementation")).toBeTruthy();
       expect(screen.getByText(/require a human decision before work starts/i)).toBeTruthy();
 
-      fireEvent.click(bannerApprove);
+      const user = userEvent.setup();
+      await user.click(bannerApprove);
       await waitFor(() => {
         expect(mockApprovePlan).toHaveBeenCalledWith("FN-001", undefined);
       });
 
-      fireEvent.click(bannerReject);
+      mockConfirm.mockResolvedValueOnce(true);
+      await user.click(bannerReject);
       await waitFor(() => {
         expect(mockRejectPlan).toHaveBeenCalledWith("FN-001", undefined);
       });
@@ -513,11 +538,11 @@ describe("TaskDetailModal", () => {
      * Replan-cap escalations must explain that Plan Review did not converge so the
      * operator knows why approval is required (not a generic require-all gate).
      */
-    it("explains Plan Review non-convergence when awaitingApprovalReason is plan-review-replan-cap", () => {
+    it("offers both decisions in a split Plan Review column after the replan cap", () => {
       render(
         <TaskDetailModal
           task={makeTask({
-            column: "triage",
+            column: "todo",
             status: "awaiting-approval",
             awaitingApprovalReason: "plan-review-replan-cap",
             prompt: "# Task Spec",
@@ -538,6 +563,8 @@ describe("TaskDetailModal", () => {
       expect(banner.contains(screen.getByTestId("detail-plan-approval-banner-actions"))).toBe(true);
       expect(banner.contains(screen.getByTestId("detail-plan-approval-banner-approve"))).toBe(true);
       expect(banner.contains(screen.getByTestId("detail-plan-approval-banner-reject"))).toBe(true);
+      expect(screen.getByTestId("detail-plan-approval-footer-approve")).toBeTruthy();
+      expect(screen.getByTestId("detail-plan-approval-footer-reject")).toBeTruthy();
       expect(screen.getByText("Approval needed: Plan Review did not converge")).toBeTruthy();
       expect(screen.getByText(/exhausted|without approving|stopped the replan loop/i)).toBeTruthy();
     });
@@ -932,10 +959,8 @@ describe("TaskDetailModal", () => {
 
     });
 
-    it("mobile task popup Actions menu selects a tapped item once and dismisses", async () => {
-      const { pauseTask } = await import("../../api");
-      const mockPauseTask = vi.mocked(pauseTask);
-      mockPauseTask.mockResolvedValueOnce(makeTask({ id: "FN-001", paused: true }) as Task);
+    it("mobile task popup Actions menu selects the shared pause callback once and dismisses", async () => {
+      const onPauseTask = vi.fn().mockResolvedValue(makeTask({ id: "FN-001", paused: true }) as Task);
       const addToast = vi.fn();
 
       render(
@@ -948,6 +973,7 @@ describe("TaskDetailModal", () => {
           onDeleteTask={noopDelete}
           onMergeTask={noopMerge}
           onOpenDetail={noopOpenDetail}
+          onPauseTask={onPauseTask}
           addToast={addToast}
         />,
       );
@@ -957,8 +983,8 @@ describe("TaskDetailModal", () => {
 
       fireEvent.pointerUp(pauseItem, { pointerType: "touch", pointerId: 1 });
 
-      await waitFor(() => expect(mockPauseTask).toHaveBeenCalledWith("FN-001", undefined));
-      expect(mockPauseTask).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onPauseTask).toHaveBeenCalledWith("FN-001"));
+      expect(onPauseTask).toHaveBeenCalledTimes(1);
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
       expect(addToast).toHaveBeenCalledWith("Paused FN-001", "success");
     });
@@ -1134,9 +1160,8 @@ describe("TaskDetailModal", () => {
       expect(screen.getByRole("menuitem", { name: "Unpause" })).toBeTruthy();
     });
 
-    it("renders Unpause for userPaused-only tasks and unpauses once", async () => {
-      const { unpauseTask } = await import("../../api");
-      const mockUnpauseTask = vi.mocked(unpauseTask);
+    it("renders Unpause for userPaused-only tasks and calls the shared lifecycle once", async () => {
+      const onUnpauseTask = vi.fn().mockResolvedValue(makeTask({ id: "FN-001", paused: false, userPaused: false }) as Task);
 
       render(
         <TaskDetailModal
@@ -1147,6 +1172,7 @@ describe("TaskDetailModal", () => {
           onDeleteTask={noopDelete}
           onMergeTask={noopMerge}
           onOpenDetail={noopOpenDetail}
+          onUnpauseTask={onUnpauseTask}
           addToast={noop}
         />,
       );
@@ -1155,17 +1181,28 @@ describe("TaskDetailModal", () => {
       await userEvent.click(screen.getByRole("menuitem", { name: "Unpause" }));
 
       await waitFor(() => {
-        expect(mockUnpauseTask).toHaveBeenCalledTimes(1);
-        expect(mockUnpauseTask).toHaveBeenCalledWith("FN-001", undefined);
+        expect(onUnpauseTask).toHaveBeenCalledTimes(1);
+        expect(onUnpauseTask).toHaveBeenCalledWith("FN-001");
       });
     });
 
+    it.each([undefined, "back"] as const)("immediately renders the confirmed unpause state for %s detail presentation", async (mobileHeaderMode) => {
+      const user = userEvent.setup();
+      render(<PauseDetailHarness mobileHeaderMode={mobileHeaderMode} />);
+
+      await user.click(screen.getByRole("button", { name: "Actions" }));
+      await user.click(screen.getByRole("menuitem", { name: "Unpause" }));
+
+      await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Unpause" })).toBeNull());
+      await user.click(screen.getByRole("button", { name: "Actions" }));
+      expect(screen.getByRole("menuitem", { name: "Pause" })).toBeTruthy();
+    });
+
     it("renders actionable Unpause button for agent-assigned paused tasks", async () => {
-      const { fetchAgent, unpauseTask } = await import("../../api");
+      const { fetchAgent } = await import("../../api");
       const mockFetchAgent = vi.mocked(fetchAgent);
-      const mockUnpauseTask = vi.mocked(unpauseTask);
+      const onUnpauseTask = vi.fn().mockResolvedValue(makeTask({ id: "FN-ASSIGNED", paused: false }) as Task);
       mockFetchAgent.mockResolvedValue({ id: "agent-1", name: "Agent 1", role: "executor", state: "active" } as any);
-      mockUnpauseTask.mockClear();
 
       render(
         <TaskDetailModal
@@ -1176,6 +1213,7 @@ describe("TaskDetailModal", () => {
           onDeleteTask={noopDelete}
           onMergeTask={noopMerge}
           onOpenDetail={noopOpenDetail}
+          onUnpauseTask={onUnpauseTask}
           addToast={noop}
         />,
       );
@@ -1188,8 +1226,8 @@ describe("TaskDetailModal", () => {
       await userEvent.click(screen.getByRole("menuitem", { name: "Unpause" }));
 
       await waitFor(() => {
-        expect(mockUnpauseTask).toHaveBeenCalledTimes(1);
-        expect(mockUnpauseTask).toHaveBeenCalledWith("FN-ASSIGNED", undefined);
+        expect(onUnpauseTask).toHaveBeenCalledTimes(1);
+        expect(onUnpauseTask).toHaveBeenCalledWith("FN-ASSIGNED");
       });
     });
 
@@ -1222,11 +1260,10 @@ describe("TaskDetailModal", () => {
     });
 
     it("renders actionable Pause button for agent-assigned tasks that are not paused", async () => {
-      const { fetchAgent, pauseTask } = await import("../../api");
+      const { fetchAgent } = await import("../../api");
       const mockFetchAgent = vi.mocked(fetchAgent);
-      const mockPauseTask = vi.mocked(pauseTask);
+      const onPauseTask = vi.fn().mockResolvedValue(makeTask({ id: "FN-ASSIGNED", paused: true }) as Task);
       mockFetchAgent.mockResolvedValue({ id: "agent-1", name: "Agent 1", role: "executor", state: "active" } as any);
-      mockPauseTask.mockClear();
 
       render(
         <TaskDetailModal
@@ -1237,6 +1274,7 @@ describe("TaskDetailModal", () => {
           onDeleteTask={noopDelete}
           onMergeTask={noopMerge}
           onOpenDetail={noopOpenDetail}
+          onPauseTask={onPauseTask}
           addToast={noop}
         />,
       );
@@ -1249,8 +1287,8 @@ describe("TaskDetailModal", () => {
       await userEvent.click(screen.getByRole("menuitem", { name: "Pause" }));
 
       await waitFor(() => {
-        expect(mockPauseTask).toHaveBeenCalledTimes(1);
-        expect(mockPauseTask).toHaveBeenCalledWith("FN-ASSIGNED", undefined);
+        expect(onPauseTask).toHaveBeenCalledTimes(1);
+        expect(onPauseTask).toHaveBeenCalledWith("FN-ASSIGNED");
       });
     });
 
@@ -1742,5 +1780,101 @@ describe("TaskDetailModal", () => {
     });
   });
 
+
+  describe("Definition prompt freshness", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("shares the slim-task initial load with the first visible Definition refresh", async () => {
+      const { fetchTaskDetail } = await import("../../api");
+      const mockFetchDetail = vi.mocked(fetchTaskDetail);
+      mockFetchDetail.mockReset();
+      mockFetchDetail.mockResolvedValue(makeTask({ id: "FN-slim", column: "triage", status: "planning", prompt: "# Authoritative prompt" }));
+      const slimTask = { ...makeTask({ id: "FN-slim", column: "triage", status: "planning" }) } as Partial<TaskDetail>;
+      delete slimTask.prompt;
+
+      render(<TaskDetailContent task={slimTask as TaskDetail} initialTab="definition" onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+
+      await waitFor(() => expect(screen.getByText("Authoritative prompt")).toBeTruthy());
+      expect(mockFetchDetail).toHaveBeenCalledTimes(1);
+      expect(mockFetchDetail).toHaveBeenCalledWith("FN-slim", undefined);
+    });
+
+    it("refreshes on show, re-entry, and visible planning polls", async () => {
+      vi.useFakeTimers();
+      const { fetchTaskDetail, fetchTaskPrompt } = await import("../../api");
+      const mockFetchDetail = vi.mocked(fetchTaskDetail);
+      const mockFetchPrompt = vi.mocked(fetchTaskPrompt);
+      mockFetchDetail.mockClear();
+      mockFetchPrompt.mockReset();
+      mockFetchPrompt
+        .mockResolvedValueOnce({ id: "FN-fresh", prompt: "# First revision" })
+        .mockResolvedValueOnce({ id: "FN-fresh", prompt: "# Polled revision" })
+        .mockResolvedValueOnce({ id: "FN-fresh", prompt: "# Re-entered revision" });
+
+      render(<TaskDetailContent task={makeTask({ id: "FN-fresh", column: "triage", status: "planning", prompt: "" })} projectId="project-fresh" initialTab="definition" onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText("First revision")).toBeTruthy();
+      expect(mockFetchPrompt).toHaveBeenCalledWith("FN-fresh", "project-fresh");
+      expect(mockFetchDetail).not.toHaveBeenCalled();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(screen.getByText("Polled revision")).toBeTruthy();
+      expect(mockFetchPrompt).toHaveBeenCalledTimes(2);
+      expect(mockFetchDetail).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText("Activity"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+      expect(mockFetchPrompt).toHaveBeenCalledTimes(2);
+      expect(mockFetchDetail).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByText("Plan"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText("Re-entered revision")).toBeTruthy();
+      expect(mockFetchPrompt).toHaveBeenCalledTimes(3);
+      expect(mockFetchPrompt).toHaveBeenLastCalledWith("FN-fresh", "project-fresh");
+      expect(mockFetchDetail).not.toHaveBeenCalled();
+    });
+
+    it("keeps an inline edit buffer stable while a Plan Review refresh arrives", async () => {
+      vi.useFakeTimers();
+      const { fetchTaskPrompt } = await import("../../api");
+      const mockFetchPrompt = vi.mocked(fetchTaskPrompt);
+      mockFetchPrompt.mockReset();
+      mockFetchPrompt
+        .mockResolvedValueOnce({ id: "FN-edit", prompt: "# Server revision" })
+        .mockResolvedValueOnce({ id: "FN-edit", prompt: "# New server revision" });
+
+      render(<TaskDetailContent task={makeTask({ id: "FN-edit", column: "todo", prompt: "# Initial", workflowStepResults: [{ workflowStepId: "plan-review", status: "pending", startedAt: "2026-08-03T02:00:00Z" }] })} initialTab="definition" onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText("Server revision")).toBeTruthy();
+
+      fireEvent.click(screen.getByText("Edit"));
+      const textarea = document.querySelector(".spec-editor-textarea") as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "# Local operator edit" } });
+      const sameTextarea = textarea;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(mockFetchPrompt).toHaveBeenCalledTimes(2);
+      expect(document.querySelector(".spec-editor-textarea")).toBe(sameTextarea);
+      expect(textarea.value).toBe("# Local operator edit");
+    });
+
+    it("ignores a late planning response after the task changes", async () => {
+      const { fetchTaskPrompt } = await import("../../api");
+      const mockFetchPrompt = vi.mocked(fetchTaskPrompt);
+      let resolveFirst: (response: { id: string; prompt?: string }) => void = () => {};
+      mockFetchPrompt.mockReset();
+      mockFetchPrompt
+        .mockImplementationOnce(() => new Promise<{ id: string; prompt?: string }>((resolve) => { resolveFirst = resolve; }))
+        .mockResolvedValueOnce({ id: "FN-current", prompt: "# Current task" });
+      const props = { initialTab: "definition" as const, onMoveTask: noopMove, onDeleteTask: noopDelete, onMergeTask: noopMerge, onOpenDetail: noopOpenDetail, addToast: noop };
+      const view = render(<TaskDetailContent {...props} task={makeTask({ id: "FN-old", column: "triage", status: "planning", prompt: "# Old task" })} />);
+      view.rerender(<TaskDetailContent {...props} task={makeTask({ id: "FN-current", column: "triage", status: "planning", prompt: "" })} />);
+      await waitFor(() => expect(screen.getByText("Current task")).toBeTruthy());
+      await act(async () => { resolveFirst({ id: "FN-old", prompt: "# Stale task" }); });
+      expect(screen.queryByText("Stale task")).toBeNull();
+      expect(screen.getByText("Current task")).toBeTruthy();
+    });
+  });
 
 });

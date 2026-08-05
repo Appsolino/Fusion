@@ -12,7 +12,7 @@ query ambiguous once the trigger stopped being a mobile-only affordance.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, cleanup, within } from "@testing-library/react";
 
 // FNXC:Markdown 2026-06-23-03:30: Mock the heavy `mermaid` library so the shared
 // markdown pipeline's MermaidDiagram resolves without loading the real renderer.
@@ -23,6 +23,7 @@ vi.mock("mermaid", () => ({
   },
 }));
 import userEvent from "@testing-library/user-event";
+
 import {
   makeTask,
   noop,
@@ -35,15 +36,226 @@ import {
   mockUsePluginUiSlots,
   expectBaseRule,
   readDashboardStylesSource,
+  resetTaskDetailFetchMock,
   setupTaskDetailModalHooks,
+  taskDetailSseSubscriptions,
 } from "./TaskDetailModal.test-helpers";
 import { TaskDetailModal, TaskDetailContent } from "../TaskDetailModal";
 import * as dashboardApi from "../../api";
 import { FileBrowserProvider } from "../../context/FileBrowserContext";
+import type { Task } from "@fusion/core";
+
+/*
+FNXC:TaskDetailOptimisticOpening 2026-08-05-07:39:
+A running task deliberately exposes its raw runtime status in two ownership regions: the modal
+header's lifecycle badge and the Stats panel's Runtime status row. Optimistic-opening assertions
+must scope the Stats claim to its named semantic region, then assert one row there and the expected
+two owned values overall; this catches a duplicated Stats panel without treating legitimate header
+context as a production rendering defect.
+*/
+function expectSingleStatsRuntimeStatus(status: string) {
+  const statsPanel = screen.getByRole("region", { name: "Task execution statistics" });
+  expect(within(statsPanel).getByText(status)).toBeInTheDocument();
+  expect(within(statsPanel).getAllByText(status)).toHaveLength(1);
+  expect(screen.getByTestId("task-detail-status-badge")).toHaveTextContent(status);
+  expect(screen.getAllByText(status)).toHaveLength(2);
+}
 
 setupTaskDetailModalHooks();
 
 describe("TaskDetailModal", () => {
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-02:55:
+  A real rendered detail host receives a newer queued-overlap detail and then the stale Todo row
+  produced by a scheduler resync. Rerender without remounting proves the visible lifecycle badge
+  never oscillates and the retained prompt/log survive the slim stale payload.
+  */
+  it("keeps the rendered queued-overlap lifecycle through a stale scheduler rerender", async () => {
+    const queued = makeTask({
+      id: "FN-QUEUED",
+      column: "in-progress",
+      status: "queued",
+      overlapBlockedBy: "FN-OWNER",
+      prompt: "# Preserved prompt",
+      log: [{ timestamp: "2026-08-05T10:02:00.000Z", action: "Queued behind file overlap" }],
+      updatedAt: "2026-08-05T10:02:00.000Z",
+      columnMovedAt: "2026-08-05T10:02:00.000Z",
+    });
+    const staleTodo = makeTask({
+      id: queued.id,
+      column: "todo",
+      status: undefined,
+      prompt: undefined,
+      log: [],
+      updatedAt: "2026-08-05T10:00:00.000Z",
+      columnMovedAt: "2026-08-05T10:00:00.000Z",
+    });
+    const props = {
+      initialTab: "definition" as const,
+      onClose: noop,
+      onMoveTask: noopMove,
+      onDeleteTask: noopDelete,
+      onMergeTask: noopMerge,
+      onOpenDetail: noopOpenDetail,
+      addToast: noop,
+    };
+
+    const { rerender } = render(<TaskDetailModal {...props} task={queued} />);
+    expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
+
+    rerender(<TaskDetailModal {...props} task={staleTodo} />);
+
+    expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
+    expect(screen.getByText("Preserved prompt")).toBeInTheDocument();
+  });
+
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-04:05:
+  Definition ticks must not publish a full task snapshot. Drive repeated planning ticks against
+  the production detail host and preserve the queued lifecycle and resolved workflow badge node.
+  */
+  it("keeps queued lifecycle and workflow badge continuous across prompt-only ticks", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValue({
+        flagEnabled: true, defaultWorkflowId: "builtin:coding",
+        workflows: [{ id: "builtin:coding", name: "Coding", columns: [], fields: [] }], taskWorkflowIds: {},
+      });
+      const promptFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+      promptFetch.mockResolvedValue({ id: "FN-POLL", prompt: "# Updated definition" });
+      const fullFetch = vi.mocked(dashboardApi.fetchTaskDetail);
+      const queued = makeTask({ id: "FN-POLL", column: "in-progress", status: "queued", prompt: "# Initial definition", workflowStepResults: [{ workflowStepId: "plan-review", status: "running", startedAt: "2026-08-05T00:00:00.000Z" }] });
+      render(<TaskDetailContent embedded active initialTab="definition" task={queued} onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+
+      await act(async () => {});
+      const badge = screen.getByTestId("task-detail-workflow-badge");
+      const initialPromptRequests = promptFetch.mock.calls.length;
+      expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
+      for (let tick = 1; tick <= 3; tick++) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(fullFetch).not.toHaveBeenCalled();
+        expect(promptFetch).toHaveBeenCalledTimes(initialPromptRequests + tick);
+        expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
+        expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
+      }
+      expect(screen.getByText("Updated definition")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-05:01:
+  Done cards use the same Definition timer as queued work. Keep both the resolved workflow badge and
+  applicable Actions control mounted through every narrow response so the fix cannot merely hide the
+  queued Todo rollback while completed-task controls still flash.
+  */
+  it("keeps done workflow badge and action controls continuous across prompt-only ticks", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValue({
+        flagEnabled: true, defaultWorkflowId: "builtin:coding",
+        workflows: [{ id: "builtin:coding", name: "Coding", columns: [], fields: [] }], taskWorkflowIds: {},
+      });
+      vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValue({ id: "FN-DONE-POLL", prompt: "# Refreshed definition" });
+      const done = makeTask({ id: "FN-DONE-POLL", column: "done", status: "done", prompt: "# Original definition", workflowStepResults: [{ workflowStepId: "plan-review", status: "running", startedAt: "2026-08-05T00:00:00.000Z" }] });
+      render(<TaskDetailContent embedded active initialTab="definition" task={done} onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+
+      await act(async () => {});
+      const badge = screen.getByTestId("task-detail-workflow-badge");
+      const actions = screen.getByRole("button", { name: "Actions" });
+      const initialPromptRequests = vi.mocked(dashboardApi.fetchTaskPrompt).mock.calls.length;
+      for (let tick = 1; tick <= 3; tick++) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(dashboardApi.fetchTaskDetail).not.toHaveBeenCalled();
+        expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledTimes(initialPromptRequests + tick);
+        expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
+        expect(screen.getByRole("button", { name: "Actions" })).toBe(actions);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("revalidates column actions without clearing same-task workflow metadata", async () => {
+    const payload = {
+      flagEnabled: true, defaultWorkflowId: "wf-columns", taskWorkflowIds: {},
+      workflows: [{ id: "wf-columns", name: "Column workflow", columns: [
+        { id: "in-progress", name: "Building", flags: { countsTowardWip: true } },
+        { id: "done", name: "Shipped", flags: { complete: true } },
+      ], fields: [] }],
+    };
+    let settleColumnMove: (value: typeof payload) => void = () => undefined;
+    vi.mocked(dashboardApi.fetchBoardWorkflows)
+      .mockResolvedValueOnce(payload)
+      .mockImplementationOnce(() => new Promise<typeof payload>((resolve) => { settleColumnMove = resolve; }));
+    const task = makeTask({ id: "FN-COLUMN-MOVE", column: "in-progress", status: "queued" });
+    const props = { embedded: true, active: true, initialTab: "definition" as const, onMoveTask: noopMove, onDeleteTask: noopDelete, onMergeTask: noopMerge, onOpenDetail: noopOpenDetail, addToast: noop };
+    const { rerender } = render(<TaskDetailContent {...props} task={task} />);
+
+    const badge = await screen.findByTestId("task-detail-workflow-badge");
+    const actions = screen.getByRole("button", { name: "Actions" });
+    const initialMoveLabel = document.querySelector<HTMLButtonElement>(".detail-move-btn")?.getAttribute("aria-label");
+    rerender(<TaskDetailContent {...props} task={{ ...task, column: "done", status: "done" }} />);
+
+    expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
+    expect(screen.getByRole("button", { name: "Actions" })).toBe(actions);
+    await act(async () => { settleColumnMove(payload); });
+    await waitFor(() => expect(document.querySelector<HTMLButtonElement>(".detail-move-btn")?.getAttribute("aria-label")).not.toBe(initialMoveLabel));
+  });
+
+  it("keeps a prompt-only response when slim initial detail resolves later", async () => {
+    let resolveDetail: (detail: TaskDetail) => void = () => undefined;
+    vi.mocked(dashboardApi.fetchTaskDetail).mockImplementationOnce(() => new Promise<TaskDetail>((resolve) => {
+      resolveDetail = resolve;
+    }));
+    vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValueOnce({ id: "FN-slim-prompt", prompt: "# Newer narrow prompt" });
+    const slimTask = makeTask({ id: "FN-slim-prompt", prompt: undefined }) as Task;
+
+    render(<TaskDetailContent embedded active initialTab="definition" task={slimTask} onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+    await waitFor(() => expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledWith("FN-slim-prompt", undefined));
+
+    await act(async () => {
+      resolveDetail(makeTask({ id: "FN-slim-prompt", prompt: "# Older full prompt" }));
+    });
+
+    expect(await screen.findByText("Newer narrow prompt")).toBeInTheDocument();
+    expect(screen.queryByText("Older full prompt")).toBeNull();
+  });
+
+  it("revalidates selected workflow metadata after its workflow SSE revision", async () => {
+    vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValueOnce({
+      flagEnabled: true, defaultWorkflowId: "builtin:coding",
+      workflows: [{ id: "builtin:coding", name: "Coding", columns: [], fields: [] }],
+      taskWorkflowIds: { "FN-workflow-revision": "builtin:coding" },
+    });
+    let resolveRevalidation: (payload: Awaited<ReturnType<typeof dashboardApi.fetchBoardWorkflows>>) => void = () => undefined;
+    vi.mocked(dashboardApi.fetchBoardWorkflows).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRevalidation = resolve;
+    }));
+    render(<TaskDetailContent embedded active task={makeTask({ id: "FN-workflow-revision", column: "todo" })} onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+
+    expect(await screen.findByText("Coding")).toBeInTheDocument();
+    const badge = screen.getByTestId("task-detail-workflow-badge");
+    const workflowSubscription = taskDetailSseSubscriptions.find((subscription) => subscription.options.events?.["workflow:updated"]);
+    expect(workflowSubscription).toBeDefined();
+
+    await act(async () => {
+      workflowSubscription?.options.events?.["workflow:updated"](new MessageEvent("workflow:updated"));
+    });
+    expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
+    expect(screen.getByText("Coding")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveRevalidation({
+        flagEnabled: true, defaultWorkflowId: "wf-docs",
+        workflows: [{ id: "wf-docs", name: "Docs", columns: [], fields: [] }],
+        taskWorkflowIds: { "FN-workflow-revision": "wf-docs" },
+      });
+    });
+    expect(await screen.findByText("Docs")).toBeInTheDocument();
+  });
+
   describe("workflow timestamp badge", () => {
     const workflowPayload = {
       flagEnabled: true,
@@ -212,17 +424,23 @@ describe("TaskDetailModal", () => {
     });
   });
 
-  it("renders clickable file links in markdown inline code while preserving code wrappers", async () => {
+  it("keeps refreshed prompt and summary file links interactive in code wrappers", async () => {
     const openFile = vi.fn();
+    const initialDetail = makeTask({
+      column: "done",
+      summary: "See `packages/dashboard/app/App.tsx:25:3` for context.",
+      prompt: "# Prompt\n\nInspect `packages/dashboard/app/App.tsx:11`.",
+    });
+    vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValue({
+      id: initialDetail.id,
+      prompt: "# Prompt\n\nInspect `packages/dashboard/app/App.tsx:12`.",
+    });
+
     render(
       <FileBrowserProvider openFile={openFile}>
         <TaskDetailModal
           initialTab="definition"
-          task={makeTask({
-            column: "done",
-            summary: "See `packages/dashboard/app/App.tsx:12` for context.",
-            prompt: "# Prompt\n\nInspect `packages/dashboard/app/App.tsx:12`."
-          })}
+          task={initialDetail}
           onClose={noop}
           onMoveTask={noopMove}
           onDeleteTask={noopDelete}
@@ -233,14 +451,25 @@ describe("TaskDetailModal", () => {
       </FileBrowserProvider>,
     );
 
-    const fileLinks = screen.getAllByRole("button", { name: "packages/dashboard/app/App.tsx:12" });
-    expect(fileLinks.length).toBeGreaterThan(0);
-    const code = fileLinks[0]?.closest("code");
-    expect(code).toBeTruthy();
-    expect(code?.querySelector("button.file-path-link")).toBe(fileLinks[0]);
+    /*
+    FNXC:DashboardTests 2026-08-05-04:05:
+    Definition refresh updates only its prompt tree. Query after the narrow response settles so
+    this integration test clicks the live prompt link, then assert the separately rendered
+    completed-summary surface retains the same FileBrowser contract.
+    */
+    await waitFor(() => expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledWith("FN-099", undefined));
+    const promptLink = await screen.findByRole("button", { name: "packages/dashboard/app/App.tsx:12" });
+    expect(screen.queryByRole("button", { name: "packages/dashboard/app/App.tsx:11" })).toBeNull();
+    expect(promptLink.closest("code")?.querySelector("button.file-path-link")).toBe(promptLink);
+    await userEvent.click(promptLink);
 
-    await userEvent.click(fileLinks[0]!);
-    expect(openFile).toHaveBeenCalledWith("packages/dashboard/app/App.tsx", { line: 12, col: undefined });
+    await userEvent.click(screen.getByRole("button", { name: "Summary" }));
+    const summaryLink = screen.getByRole("button", { name: "packages/dashboard/app/App.tsx:25:3" });
+    expect(summaryLink.closest("code")?.querySelector("button.file-path-link")).toBe(summaryLink);
+    await userEvent.click(summaryLink);
+
+    expect(openFile).toHaveBeenNthCalledWith(1, "packages/dashboard/app/App.tsx", { line: 12, col: undefined });
+    expect(openFile).toHaveBeenNthCalledWith(2, "packages/dashboard/app/App.tsx", { line: 25, col: 3 });
   });
 
   /*
@@ -2076,6 +2305,12 @@ describe("TaskDetailModal", () => {
       />,
     );
 
+    const expectNoStandaloneTitleToggle = () => {
+      expect(document.querySelector(".detail-description-toggle")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show less" })).toBeNull();
+    };
+
     beforeEach(() => {
       setTitleLayout({ scrollHeight: 120, clientHeight: 40 });
       Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
@@ -2105,9 +2340,13 @@ describe("TaskDetailModal", () => {
       }
     });
 
-    it("collapses long triage title by default with Show more button and expands on demand", async () => {
+    it("toggles a long triage title directly without a standalone affordance", async () => {
+      /*
+      FNXC:TaskDetailTitle 2026-08-04-18:00:
+      Every TaskDetailModal lifecycle column and title fallback shares this definition header. An overflowed title alone owns expansion for pointer, touch, and keyboard users; short and fallback headings retain no empty control or legacy Show more/Show less shell, while Summarize remains separate.
+      */
       const longTitle = "Triage title ".repeat(25);
-      const { container } = renderDetail({
+      renderDetail({
         column: "triage",
         title: longTitle,
         description: "Triage planning context",
@@ -2116,28 +2355,45 @@ describe("TaskDetailModal", () => {
       const h2 = document.querySelector("h2.detail-title");
       expect(h2?.textContent).toBe(longTitle);
       expect(h2).toHaveClass("detail-title--collapsed");
-      const toggle = await screen.findByRole("button", { name: "Show more" });
-      expect(toggle).toHaveClass("detail-description-toggle");
+      const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      expect(titleControl).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
 
-      await userEvent.click(toggle);
+      await userEvent.click(titleControl);
 
       expect(document.querySelector("h2.detail-title")?.textContent).toBe(longTitle);
       expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
-      expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Collapse task title" })).toHaveAttribute("aria-expanded", "true");
+      expectNoStandaloneTitleToggle();
+
+      await userEvent.click(screen.getByRole("button", { name: "Collapse task title" }));
+
+      expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
+      expect(screen.getByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
-    it("collapses long triage description by default when title is missing", async () => {
+    it("supports keyboard activation through the title control", async () => {
+      renderDetail({ title: "Keyboard title ".repeat(25) });
+
+      const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      titleControl.focus();
+      await userEvent.keyboard("{Enter}");
+
+      expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
+      expect(screen.getByRole("button", { name: "Collapse task title" })).toHaveAttribute("aria-expanded", "true");
+      expectNoStandaloneTitleToggle();
+    });
+
+    it("collapses a long triage description fallback by default when title is missing", async () => {
       const longDescription = "Triage description ".repeat(20);
-      const { container } = renderDetail({
-        column: "triage",
-        title: undefined,
-        description: longDescription,
-      });
+      renderDetail({ column: "triage", title: undefined, description: longDescription });
 
       const h2 = document.querySelector("h2.detail-title");
       expect(h2?.textContent).toBe(longDescription);
       expect(h2).toHaveClass("detail-title--collapsed");
-      expect(await screen.findByRole("button", { name: "Show more" })).toHaveClass("detail-description-toggle");
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
     it("uses the title, description, and id fallback chain for the clamped heading", async () => {
@@ -2160,39 +2416,40 @@ describe("TaskDetailModal", () => {
       renderDetail({ title: "Title wins", description: "Description loses" });
       expect(document.querySelector("h2.detail-title")?.textContent).toBe("Title wins");
       expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
-      expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toBeInTheDocument();
+      expectNoStandaloneTitleToggle();
       cleanup();
 
       setTitleLayout({ scrollHeight: 40, clientHeight: 40 });
       renderDetail({ title: undefined, description: "Description fallback" });
       expect(document.querySelector("h2.detail-title")?.textContent).toBe("Description fallback");
-      expect(document.querySelector(".detail-description-toggle")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Expand task title" })).toBeNull();
+      expectNoStandaloneTitleToggle();
       cleanup();
 
       renderDetail({ id: "FN-FALLBACK", title: undefined, description: undefined });
       expect(document.querySelector("h2.detail-title")?.textContent).toBe("FN-FALLBACK");
-      expect(document.querySelector(".detail-description-toggle")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Expand task title" })).toBeNull();
+      expectNoStandaloneTitleToggle();
     });
 
     it.each(["todo", "in-progress", "in-review", "done", "archived"] as const)(
-      "collapses overflowing non-triage %s title by default",
+      "collapses overflowing non-triage %s titles with a title-owned control",
       async (column) => {
         const longTitle = `${column} title `.repeat(25);
-        const { container } = renderDetail({
-          column,
-          title: longTitle,
-        });
+        renderDetail({ column, title: longTitle });
 
         const h2 = document.querySelector("h2.detail-title");
         expect(h2?.textContent).toBe(longTitle);
         expect(h2).toHaveClass("detail-title--collapsed");
-        expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+        expect(await screen.findByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+        expectNoStandaloneTitleToggle();
       },
     );
 
-    it("does not render an empty toggle shell when the title fits within two lines", () => {
+    it("does not render an empty title control when the title fits within two lines", () => {
       setTitleLayout({ scrollHeight: 40, clientHeight: 40 });
-      const { container } = renderDetail({
+      renderDetail({
         title: "Short title",
         description: "This is a longer description that is not shown as the heading while title is present",
       });
@@ -2200,41 +2457,17 @@ describe("TaskDetailModal", () => {
       const h2 = document.querySelector("h2.detail-title");
       expect(h2?.textContent).toBe("Short title");
       expect(h2).toHaveClass("detail-title--collapsed");
-      expect(document.querySelector(".detail-description-toggle")).toBeNull();
-    });
-
-    it("collapses again when Show less is clicked", async () => {
-      const longDescription = "C".repeat(250);
-      const { container } = renderDetail({
-        title: undefined,
-        description: longDescription,
-      });
-
-      const toggle = await screen.findByRole("button", { name: "Show more" });
-      await userEvent.click(toggle);
-      expect(document.querySelector("h2.detail-title")?.textContent).toBe(longDescription);
-      expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
-
-      await userEvent.click(screen.getByRole("button", { name: "Show less" }));
-
-      const h2 = document.querySelector("h2.detail-title");
-      expect(h2?.textContent).toBe(longDescription);
-      expect(h2).toHaveClass("detail-title--collapsed");
-      expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Expand task title" })).toBeNull();
+      expectNoStandaloneTitleToggle();
     });
 
     it("resets to collapsed when switching from a non-triage task to a triage task", async () => {
       const todoDescription = "G".repeat(250);
       const triageDescription = "H".repeat(250);
-      const { container, rerender } = render(
+      const { rerender } = render(
         <TaskDetailModal
           initialTab="definition"
-          task={makeTask({
-            id: "FN-TODO",
-            column: "todo",
-            title: undefined,
-            description: todoDescription,
-          })}
+          task={makeTask({ id: "FN-TODO", column: "todo", title: undefined, description: todoDescription })}
           onClose={noop}
           onMoveTask={noopMove}
           onDeleteTask={noopDelete}
@@ -2244,18 +2477,13 @@ describe("TaskDetailModal", () => {
         />,
       );
 
-      await userEvent.click(await screen.findByRole("button", { name: "Show more" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Expand task title" }));
       expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
 
       rerender(
         <TaskDetailModal
           initialTab="definition"
-          task={makeTask({
-            id: "FN-TRIAGE",
-            column: "triage",
-            title: undefined,
-            description: triageDescription,
-          })}
+          task={makeTask({ id: "FN-TRIAGE", column: "triage", title: undefined, description: triageDescription })}
           onClose={noop}
           onMoveTask={noopMove}
           onDeleteTask={noopDelete}
@@ -2269,39 +2497,40 @@ describe("TaskDetailModal", () => {
         expect(document.querySelector("h2.detail-title")?.textContent).toBe(triageDescription);
       });
       expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
-      expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
     it("keeps the editing title form unaffected by the read-only clamp", async () => {
       const longTitle = "Editable title ".repeat(25);
-      const { container } = renderDetail({
-        column: "todo",
-        title: longTitle,
-        description: "Editable description",
-      });
+      renderDetail({ column: "todo", title: longTitle, description: "Editable description" });
 
-      expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Edit task" }));
 
       expect(document.querySelector("h2.detail-title")).toBeNull();
-      expect(document.querySelector(".detail-description-toggle")).toBeNull();
+      expectNoStandaloneTitleToggle();
       expect(screen.getByLabelText("Title")).toHaveValue(longTitle);
     });
 
-    it("keeps the summarize-title affordance aligned next to the clamped title", async () => {
-      const { container } = renderDetail({
+    it("keeps the summarize-title affordance distinct from title expansion", async () => {
+      renderDetail({
         column: "todo",
         title: "Summarize me ".repeat(25),
         description: "Description available for summarization",
       });
 
       expect(document.querySelector(".detail-heading-row h2.detail-title--collapsed")).toBeInTheDocument();
-      expect(screen.getByTestId("summarize-title-btn")).toBeInTheDocument();
-      expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+      const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      const summarizeButton = screen.getByTestId("summarize-title-btn");
+      expect(summarizeButton).not.toBe(titleControl);
+      await userEvent.click(summarizeButton);
+      expect(titleControl).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
     it("keeps the clamp available in chat-expanded layout", async () => {
-      const { container } = render(
+      render(
         <TaskDetailContent
           task={makeTask({
             column: "todo",
@@ -2321,7 +2550,8 @@ describe("TaskDetailModal", () => {
 
       expect(document.querySelector(".task-detail-content--chat-expanded")).toBeInTheDocument();
       expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
-      expect(await screen.findByRole("button", { name: "Show more" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toBeInTheDocument();
+      expectNoStandaloneTitleToggle();
     });
 
     it("has desktop and mobile CSS rules that preserve the two-line title clamp", () => {
@@ -2329,8 +2559,11 @@ describe("TaskDetailModal", () => {
       expect(css).toContain(".detail-title--collapsed");
       expectBaseRule(css, ".detail-title--collapsed", "-webkit-line-clamp: 2");
       expectBaseRule(css, ".detail-title--collapsed", "line-clamp: 2");
+      expectBaseRule(css, ".detail-title-control", "width: 100%");
+      expectBaseRule(css, ".detail-title-control:focus-visible", "box-shadow: var(--focus-ring-strong)");
       expect(css).toContain("@media (max-width: 768px)");
       expectBaseRule(css, ".detail-title", "font-size: 16px");
+      expect(css).not.toContain(".detail-description-toggle");
     });
   });
 
@@ -2370,8 +2603,40 @@ describe("TaskDetailModal", () => {
 
   describe("optimistic opening with Task", () => {
     beforeEach(async () => {
+      await resetTaskDetailFetchMock();
+      vi.mocked(dashboardApi.fetchTaskPrompt).mockReset();
+      vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValue({ id: "FN-099", prompt: "# Task FN-099" });
+    });
+
+    it("restores a resolved detail Promise after an override is reset", async () => {
       const { fetchTaskDetail } = await import("../../api");
-      vi.mocked(fetchTaskDetail).mockReset();
+      const mockFetch = vi.mocked(fetchTaskDetail);
+      mockFetch.mockReset();
+      mockFetch.mockResolvedValueOnce(makeTask({ id: "FN-override", prompt: "# Override" }));
+
+      await expect(mockFetch("FN-override", undefined)).resolves.toMatchObject({ id: "FN-override" });
+      await resetTaskDetailFetchMock();
+
+      /*
+      FNXC:DashboardTests 2026-08-04-15:05:
+      The reproducing reset sequence must never leave Definition refresh with
+      Vitest's undefined return value instead of the API's Promise contract.
+      */
+      render(
+        <TaskDetailModal
+          initialTab="definition"
+          task={makeTask({ prompt: "# Restored default prompt" })}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      await waitFor(() => expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledWith("FN-099", undefined));
+      await waitFor(() => expect(screen.queryByText("Restored default prompt")).toBeNull());
     });
 
     it("renders immediately when opened with a Task prop (no prompt)", async () => {
@@ -2465,9 +2730,9 @@ describe("TaskDetailModal", () => {
       });
     });
 
-    it("does NOT call fetchTaskDetail when prop is already a TaskDetail with prompt", async () => {
-      const { fetchTaskDetail } = await import("../../api");
-      const mockFetch = vi.mocked(fetchTaskDetail);
+    it("uses a prompt-only Definition refresh when prop is already a TaskDetail with prompt", async () => {
+      const mockPromptFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+      const mockFetch = vi.mocked(dashboardApi.fetchTaskDetail);
 
       const detail: TaskDetail = {
         id: "FN-202",
@@ -2495,10 +2760,122 @@ describe("TaskDetailModal", () => {
         />,
       );
 
-      // Give a tick for any async operations
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // A full detail skips the full client; Definition reads only its prompt.
+      await waitFor(() => expect(mockPromptFetch).toHaveBeenCalledWith("FN-202", undefined));
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
 
-      expect(mockFetch).not.toHaveBeenCalledWith("FN-202", undefined);
+    it("retains the last good prompt when Definition refresh rejects", async () => {
+      const mockFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+      const detail = makeTask({ id: "FN-202-rejected", prompt: "# Last good prompt" });
+      mockFetch.mockRejectedValueOnce(new Error("refresh failed"));
+
+      render(
+        <TaskDetailModal
+          initialTab="definition"
+          task={detail}
+          onClose={noop}
+          onMoveTask={noopMove}
+          onDeleteTask={noopDelete}
+          onMergeTask={noopMerge}
+          onOpenDetail={noopOpenDetail}
+          addToast={noop}
+        />,
+      );
+
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledWith("FN-202-rejected", undefined));
+      expect(screen.getByText("Last good prompt")).toBeInTheDocument();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    /*
+    FNXC:TaskDetailPlan 2026-08-04-15:21:
+    Definition refresh is lifecycle-owned, not modal-owned: embedded kept-alive hosts
+    must defer while hidden, refresh immediately on reveal, keep one request during a
+    pending interval tick, and stop polling again when hidden. Exercise that actual
+    visibility sequence so a mock-default repair cannot hide a broken refresh fence.
+    */
+    it("defers embedded refresh while inactive, deduplicates pending interval work, and resumes on re-show", async () => {
+      vi.useFakeTimers();
+      try {
+        const mockFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+        let resolveFirstRequest: (detail: { id: string; prompt?: string }) => void = () => undefined;
+        mockFetch.mockImplementationOnce(() => new Promise<{ id: string; prompt?: string }>((resolve) => {
+          resolveFirstRequest = resolve;
+        }));
+        mockFetch.mockResolvedValueOnce({ id: "FN-lifecycle", prompt: "# Interval refresh" });
+        mockFetch.mockResolvedValue({ id: "FN-lifecycle", prompt: "# Re-shown refresh" });
+        const props = {
+          embedded: true,
+          initialTab: "definition" as const,
+          task: makeTask({ id: "FN-lifecycle", status: "planning", prompt: "# Initial prompt" }),
+          onMoveTask: noopMove,
+          onDeleteTask: noopDelete,
+          onMergeTask: noopMerge,
+          onOpenDetail: noopOpenDetail,
+          addToast: noop,
+        };
+
+        const { rerender } = render(<TaskDetailContent {...props} active={false} />);
+        expect(mockFetch).not.toHaveBeenCalled();
+
+        rerender(<TaskDetailContent {...props} active />);
+        await act(async () => {});
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+
+        await act(async () => { resolveFirstRequest({ id: "FN-lifecycle", prompt: "# First refresh" }); });
+        expect(screen.getByText("First refresh")).toBeInTheDocument();
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+
+        rerender(<TaskDetailContent {...props} active={false} />);
+        await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+
+        rerender(<TaskDetailContent {...props} active />);
+        await act(async () => {});
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("fences a cancelled embedded refresh after a visible task switch", async () => {
+      const mockFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+      let resolveStaleRequest: (detail: { id: string; prompt?: string }) => void = () => undefined;
+      let resolveCurrentRequest: (detail: { id: string; prompt?: string }) => void = () => undefined;
+      mockFetch
+        .mockImplementationOnce(() => new Promise<{ id: string; prompt?: string }>((resolve) => { resolveStaleRequest = resolve; }))
+        .mockImplementationOnce(() => new Promise<{ id: string; prompt?: string }>((resolve) => { resolveCurrentRequest = resolve; }));
+      const sharedProps = {
+        embedded: true,
+        initialTab: "definition" as const,
+        onMoveTask: noopMove,
+        onDeleteTask: noopDelete,
+        onMergeTask: noopMerge,
+        onOpenDetail: noopOpenDetail,
+        addToast: noop,
+      };
+      const staleTask = makeTask({ id: "FN-stale-detail", prompt: "# Stale initial" });
+      const currentTask = makeTask({ id: "FN-current-detail", prompt: "# Current initial" });
+
+      const { rerender } = render(<TaskDetailContent {...sharedProps} task={staleTask} active />);
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledWith("FN-stale-detail", undefined));
+
+      rerender(<TaskDetailContent {...sharedProps} task={staleTask} active={false} />);
+      rerender(<TaskDetailContent {...sharedProps} task={currentTask} active />);
+      await waitFor(() => expect(mockFetch).toHaveBeenCalledWith("FN-current-detail", undefined));
+
+      await act(async () => { resolveCurrentRequest({ id: "FN-current-detail", prompt: "# Current response" }); });
+      expect(await screen.findByText("Current response")).toBeInTheDocument();
+
+      await act(async () => { resolveStaleRequest({ id: "FN-stale-detail", prompt: "# Stale response" }); });
+      expect(screen.queryByText("Stale response")).toBeNull();
+      expect(screen.getByText("Current response")).toBeInTheDocument();
     });
 
     it("shows loading state in spec area when detailLoading is true", async () => {
@@ -2543,7 +2920,7 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Execution Details")).toBeInTheDocument();
       expect(screen.getByText("Loading token statistics…")).toBeDefined();
       expect(screen.getAllByText("Fast").length).toBeGreaterThan(0);
-      expect(screen.getByText("executing")).toBeInTheDocument();
+      expectSingleStatsRuntimeStatus("executing");
     });
 
     it("shows spec content after fetchTaskDetail resolves", async () => {
@@ -2633,7 +3010,7 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Execution mode")).toBeInTheDocument();
       expect(screen.getByText("Runtime status")).toBeInTheDocument();
       expect(screen.getAllByText("Fast").length).toBeGreaterThan(0);
-      expect(screen.getByText("executing")).toBeInTheDocument();
+      expectSingleStatsRuntimeStatus("executing");
       expect(screen.getByText((1200).toLocaleString())).toBeInTheDocument();
       expect(screen.getByText((450).toLocaleString())).toBeInTheDocument();
       expect(screen.getByText((210).toLocaleString())).toBeInTheDocument();

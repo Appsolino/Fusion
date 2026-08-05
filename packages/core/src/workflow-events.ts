@@ -35,7 +35,7 @@ test can assert on delivery without polling. Production code must not await
 transition, which is the coupling the bus exists to remove.
 */
 
-import { createLogger } from "./logger.js";
+import { createLogger } from "./process/logger.js";
 import {
   findWorkflowEventShapeViolations,
   type WorkflowLifecycleEvent,

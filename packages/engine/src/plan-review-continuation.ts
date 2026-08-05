@@ -2,20 +2,33 @@ import {
   ACTIVE_WORKFLOW_WORK_ITEM_STATES,
   computeWorkflowIrPin,
   isTaskBlockedOnApproval,
+  isPlanReviewSatisfied,
   isUnplannedSeedPrompt,
-  PLAN_REVIEW_GROUP_ID,
   type Task,
   type TaskStore,
   type WorkflowIr,
   type WorkflowWorkItem,
 } from "@fusion/core";
-import { resolvePreReleasePlanReviewNode } from "./hold-release.js";
+import { resolvePreReleasePlanReviewNode } from "./execution/hold-release.js";
+import {
+  classifyPersistedPlanHandoff,
+  LEGACY_NULL_PLAN_HANDOFF_STALE_MS,
+} from "./planning-handoff-recovery.js";
 
 export type StrandedHoldContinuationReason =
   | "not-hold-column" | "no-pre-release-review" | "active-continuation"
   | "plan-review-passed" | "seed-prompt" | "prompt-missing" | "triage-owned"
+  | "planning-recovery-owned"
   | "awaiting-approval"
   | "paused" | "engine-paused" | "live" | "too-fresh" | "auto-merge-off" | "ready";
+
+/** The durable outcome of resuming a manually approved pre-release Plan Review. */
+export type ApprovedPlanReviewHandoffResult = {
+  resumed: boolean;
+  reason: "seeded" | "not-plan-in-place" | "awaiting-approval" | "paused" | "needs-replan"
+    | "active-continuation" | "plan-review-passed";
+  workItemId?: string;
+};
 
 /**
  * FNXC:StrandedHoldContinuation 2026-07-26-12:00:
@@ -84,6 +97,36 @@ export async function seedPreReleasePlanReviewContinuation(
 }
 
 /**
+ * FNXC:PlanApprovalDispatch 2026-08-05-01:57:
+ * Dashboard approval clears the human hold but does not own Plan Review's verdict or capacity
+ * boundary. This public engine seam resumes the graph by atomically seeding its normal runnable
+ * continuation only after approval is durable. The conditional store writer serializes every
+ * concurrent continuation writer, preserves terminal history, and refuses duplicate active work.
+ *
+ * Approval callers must hold `withPlanningLifecycleLock` around their state transition and this
+ * handoff. A failed seed leaves ordinary stranded-continuation recovery as the restart owner;
+ * this seam never manufactures a satisfied review result or a capacity continuation.
+ */
+export async function resumeApprovedPlanReviewHandoff(
+  store: TaskStore,
+  task: Task,
+  ir: WorkflowIr,
+): Promise<ApprovedPlanReviewHandoffResult> {
+  const node = resolvePreReleasePlanReviewNode(ir);
+  if (!node || node.column !== task.column) return { resumed: false, reason: "not-plan-in-place" };
+  if (isTaskBlockedOnApproval(task)) return { resumed: false, reason: "awaiting-approval" };
+  if (task.paused === true || task.userPaused === true) return { resumed: false, reason: "paused" };
+  if (task.status === "needs-replan") return { resumed: false, reason: "needs-replan" };
+
+  const seeded = await seedPreReleasePlanReviewContinuation(store, task, ir, { atomic: true });
+  if (seeded.seeded) return { resumed: true, reason: "seeded", workItemId: seeded.workItemId };
+  return {
+    resumed: false,
+    reason: seeded.reason ?? "not-plan-in-place",
+  };
+}
+
+/**
  * FNXC:StrandedHoldContinuation 2026-07-26-12:00:
  * This pure shared definition prevents the hold-release warning and recovery
  * sweep from drifting. `active-continuation` and `plan-review-passed` are quiet
@@ -91,8 +134,12 @@ export async function seedPreReleasePlanReviewContinuation(
  * tokens represent an audit-worthy race loss from the conditional store op.
  */
 export function evaluateStrandedHoldContinuation(input: {
-  task: Pick<Task, "id" | "title" | "description" | "column" | "status" | "paused" | "userPaused" | "pausedReason">;
-  columnFlags: { hold?: boolean };
+  task: Pick<Task,
+    | "id" | "title" | "description" | "column" | "status" | "paused" | "userPaused" | "pausedReason"
+    | "approvedPlanFingerprint" | "awaitingApprovalReason" | "workflowStepResults" | "updatedAt" | "steps"
+    | "worktree" | "firstExecutionAt" | "executionStartedAt"
+  >;
+  columnFlags: { hold?: boolean; intake?: boolean };
   ir: WorkflowIr;
   continuations: WorkflowWorkItem[];
   stepResults: Task["workflowStepResults"];
@@ -102,15 +149,32 @@ export function evaluateStrandedHoldContinuation(input: {
   live: boolean;
   stalenessMs: number;
   graceMs: number;
+  now?: number;
 }): { stranded: boolean; candidate: boolean; reason: StrandedHoldContinuationReason } {
   if (!input.columnFlags.hold) return { stranded: false, candidate: false, reason: "not-hold-column" };
   const review = resolvePreReleasePlanReviewNode(input.ir);
   if (!review || review.column !== input.task.column) return { stranded: false, candidate: false, reason: "no-pre-release-review" };
   if (input.continuations.some((item) => ACTIVE_WORKFLOW_WORK_ITEM_STATES.includes(item.state))) return { stranded: false, candidate: false, reason: "active-continuation" };
-  if (input.stepResults?.some((result) => result.workflowStepId === PLAN_REVIEW_GROUP_ID && result.status === "passed")) return { stranded: false, candidate: false, reason: "plan-review-passed" };
+  if (input.stepResults?.some(isPlanReviewSatisfied)) return { stranded: false, candidate: false, reason: "plan-review-passed" };
   if (input.promptContent === null) return { stranded: false, candidate: false, reason: "prompt-missing" };
   if (isUnplannedSeedPrompt(input.promptContent, input.task.id, input.task.title, input.task.description)) return { stranded: false, candidate: false, reason: "seed-prompt" };
   if (input.task.status === "planning" || input.task.status === "needs-replan") return { stranded: false, candidate: false, reason: "triage-owned" };
+  /*
+  FNXC:PlanningDependencyReseed 2026-08-04-04:10:
+  A pre-U11 planning handoff can have a real PROMPT, persisted parsed steps, and
+  null status before lifecycle recovery publishes approval/continuation state.
+  On a merged intake+hold lane that shape also looks like a stranded Plan Review
+  continuation. Give the conservative legacy shape to exactly one owner: planning
+  lifecycle recovery. Ordinary null-status held cards remain continuation-owned.
+  */
+  if (input.columnFlags.intake && classifyPersistedPlanHandoff(input.task, {
+    now: input.now ?? Date.now(),
+    hasLivePlanningWork: input.live,
+    legacyStaleMs: LEGACY_NULL_PLAN_HANDOFF_STALE_MS,
+    requirePersistedSteps: true,
+  }) === "legacy-null") {
+    return { stranded: false, candidate: false, reason: "planning-recovery-owned" };
+  }
   /*
   FNXC:PlanApprovalHold 2026-07-27-19:30 (U7 / R4):
   An approval-held card is not stranded — it is exactly where the operator's

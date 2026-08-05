@@ -1,7 +1,126 @@
-import { describe, expect, it } from "vitest";
-import { createSmokeHtml } from "../../scripts/browser-layout-smoke.mjs";
+import { describe, expect, it, vi } from "vitest";
+import { createSmokeHtml, prepareBrowserSmoke } from "../../scripts/browser-layout-smoke.mjs";
 
 describe("browser layout smoke fixture", () => {
+  /*
+  FNXC:DashboardBrowserSmoke 2026-08-04-12:24:
+  Client CSS preparation may run a multi-minute build, so it must finish before Chrome's supervised lifetime begins. Otherwise the 60-second browser cap can expire before the fixture or any named geometry assertion is reached.
+  */
+  it("prepares the fixture before starting the supervised browser lifetime", async () => {
+    const events: string[] = [];
+    const fixture = { server: {}, url: "http://127.0.0.1:1234/" };
+    const launched = { browser: {}, userDataDir: "/tmp/browser-smoke", wsUrl: "ws://browser" };
+    let resolveFixture!: (value: typeof fixture) => void;
+    const fixtureReady = new Promise<typeof fixture>((resolve) => {
+      resolveFixture = resolve;
+    });
+
+    const preparing = prepareBrowserSmoke("/browser", {
+      startFixture: async () => {
+        events.push("fixture:start");
+        const result = await fixtureReady;
+        events.push("fixture:ready");
+        return result;
+      },
+      launch: async () => {
+        events.push("browser:launch");
+        return launched;
+      },
+    });
+
+    await Promise.resolve();
+    expect(events).toEqual(["fixture:start"]);
+
+    resolveFixture(fixture);
+    await expect(preparing).resolves.toEqual({ fixture, launched });
+    expect(events).toEqual(["fixture:start", "fixture:ready", "browser:launch"]);
+  });
+
+  /*
+  FNXC:DashboardBrowserSmoke 2026-08-04-13:29:
+  A browser launch failure remains the primary diagnostic even when fixture cleanup also fails. Cleanup must still receive the prepared fixture, and its secondary failure must remain observable without replacing the launch error.
+  */
+  it("preserves a browser launch failure when fixture cleanup also fails", async () => {
+    const fixture = { server: null as never, url: "http://127.0.0.1:1234/" };
+    const launchError = new Error("browser launch failed");
+    const cleanupError = new Error("fixture cleanup failed");
+    const closeFixture = vi.fn(async () => {
+      throw cleanupError;
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await expect(prepareBrowserSmoke("/browser", {
+        startFixture: async () => fixture,
+        launch: async () => {
+          throw launchError;
+        },
+        closeFixture,
+      })).rejects.toBe(launchError);
+      expect(closeFixture).toHaveBeenCalledOnce();
+      expect(closeFixture).toHaveBeenCalledWith(fixture);
+      expect(warn).toHaveBeenCalledWith(
+        "[dashboard-browser-smoke] fixture cleanup after browser launch failure also failed:",
+        cleanupError,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("includes standalone and embedded Git Manager shell fixtures", () => {
+    const html = createSmokeHtml();
+    for (const hook of [
+      "git-manager-standalone",
+      "git-manager-standalone-body",
+      "git-manager-standalone-modal",
+      "git-manager-standalone-header",
+      "git-manager-standalone-close",
+      "git-manager-standalone-layout",
+      "git-manager-standalone-content",
+      "git-manager-embedded-host",
+      "git-manager-embedded-modal",
+      "git-manager-embedded-header",
+      "git-manager-embedded-close",
+      "git-manager-embedded-layout",
+      "git-manager-embedded-content",
+    ]) {
+      expect(html).toContain(`data-smoke="${hook}"`);
+    }
+    expect(html).toContain("floating-window--git-manager");
+    expect(html).toContain("gm-modal--embedded");
+  });
+
+  it("includes standalone, embedded, and detail GitHub Import shell fixtures", () => {
+    const html = createSmokeHtml();
+    for (const hook of [
+      "github-import-standalone", "github-import-standalone-body", "github-import-standalone-modal",
+      "github-import-standalone-header", "github-import-standalone-close", "github-import-standalone-controls",
+      "github-import-standalone-list", "github-import-standalone-pagination", "github-import-standalone-footer",
+      "github-import-embedded-host", "github-import-embedded-modal", "github-import-embedded-header",
+      "github-import-embedded-content", "github-import-detail", "github-import-detail-body",
+      "github-import-detail-panel", "github-import-detail-close",
+    ]) {
+      expect(html).toContain(`data-smoke="${hook}"`);
+    }
+    expect(html).toContain("floating-window--github-import");
+    expect(html).toContain("github-import-modal--embedded");
+    expect(html).toContain("floating-window--github-import-detail");
+  });
+
+  /*
+  FNXC:PlanReviewReplan 2026-08-04-06:35 FN-8768:
+  Keep both production approval surfaces in the real-browser fixture; the executable smoke checks
+  their shared responsive containment rather than treating the presence of markup as layout proof.
+  */
+  it("includes the Plan Review replan-cap approval card and detail surfaces", () => {
+    const html = createSmokeHtml();
+    expect(html).toContain('data-smoke="plan-review-replan-cap-approval"');
+    expect(html).toContain("awaiting-approval--plan-review-replan-cap");
+    expect(html).toContain("detail-plan-approval-banner--replan-cap");
+    expect(html).toContain("Plan Review needs approval");
+  });
+
   it("includes PR flow fixture sections and class hooks", () => {
     const html = createSmokeHtml();
     expect(html).toContain('data-smoke="pr-create-modal"');
@@ -43,5 +162,16 @@ describe("browser layout smoke fixture", () => {
     for (const label of ["Save", "Guardar", "Enregistrer", "저장", "保存", "儲存"]) {
       expect(html).toContain(label);
     }
+  });
+
+  /*
+  FNXC:ListView 2026-08-03-07:00:
+  The mobile List smoke fixture must carry the production list-view--single-pane marker without coupling the regression to HTML attribute order or spacing.
+  */
+  it("marks the mobile List fixture as the production single-pane surface", () => {
+    const html = createSmokeHtml();
+    const listSectionTag = html.match(/<section\b[^>]*\bdata-smoke="list"[^>]*>/)?.[0];
+    expect(listSectionTag).toBeDefined();
+    expect(listSectionTag).toMatch(/\bclass="[^"]*\blist-view--single-pane\b[^"]*"/);
   });
 });

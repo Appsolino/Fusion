@@ -12,7 +12,7 @@ import {
   summarizeVerificationFailureOutput,
   __testOnlyReapVerificationProcessGroup,
   type RunVerificationOptions,
-} from "../run-verification-tool.js";
+} from "../execution/run-verification-tool.js";
 
 // Some tests use platform-appropriate shell syntax. On Windows, sh-style
 // quoting and pipes through `printf` are different — these tests are skipped

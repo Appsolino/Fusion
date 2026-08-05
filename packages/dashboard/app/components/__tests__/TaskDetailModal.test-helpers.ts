@@ -32,6 +32,7 @@ vi.mock("../../api", async (importOriginal) => {
     repairOverlapBlocker: vi.fn().mockResolvedValue({ repaired: true, statusCleared: false, reason: "repaired", message: "Repaired", task: makeTask() }),
     summarizeTitle: vi.fn().mockResolvedValue("Generated Title"),
     fetchTaskDetail: vi.fn().mockResolvedValue(makeTask()),
+    fetchTaskPrompt: vi.fn().mockResolvedValue({ id: "FN-099", prompt: "# Task FN-099" }),
     // FNXC:DashboardTests 2026-07-19-01:20: FN-8296 TaskDetail polls verification request status.
     fetchTaskVerificationRequest: vi.fn().mockResolvedValue(null),
     fetchAgentLogs: vi.fn().mockResolvedValue([]),
@@ -228,6 +229,25 @@ export function makeTask(overrides: Partial<TaskDetail> = {}): TaskDetail {
   } as TaskDetail;
 }
 
+/*
+FNXC:DashboardTests 2026-08-05-07:32:
+FN-8803 confirms initial slim-task hydration uses `fetchTaskDetail`, while visible
+Definition refresh uses `fetchTaskPrompt`. Both mocks must retain Promise-returning
+defaults after an individual test resets them, so later tests cannot leak an impossible
+undefined response into either production request boundary.
+*/
+export async function resetTaskDetailFetchMock(): Promise<void> {
+  const { fetchTaskDetail } = await import("../../api");
+  vi.mocked(fetchTaskDetail).mockReset();
+  vi.mocked(fetchTaskDetail).mockResolvedValue(makeTask());
+}
+
+export async function resetTaskPromptFetchMock(): Promise<void> {
+  const { fetchTaskPrompt } = await import("../../api");
+  vi.mocked(fetchTaskPrompt).mockReset();
+  vi.mocked(fetchTaskPrompt).mockResolvedValue({ id: "FN-099", prompt: "# Task FN-099" });
+}
+
 export const noop = vi.fn();
 export const noopMove = vi.fn(async () => ({}) as Task);
 export const noopDelete = vi.fn(async () => ({}) as Task);
@@ -259,7 +279,10 @@ export function loadDashboardCss(): string {
 }
 
 export function setupTaskDetailModalHooks(): void {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // FNXC:DashboardTests 2026-08-05-07:32: Every TaskDetailModal suite begins with Promise-returning full-detail and narrow-prompt contracts; tests layer pending/rejected/custom responses after these resets.
+    await resetTaskDetailFetchMock();
+    await resetTaskPromptFetchMock();
     mockConfirm.mockReset();
     mockConfirmWithChoice.mockReset();
     mockConfirmWithCheckbox.mockReset();

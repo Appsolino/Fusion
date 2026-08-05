@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Stub out the per-machine singleton lock so tests with fake working dirs
 // (e.g. /mapped/...) don't try to mkdir or bind real sockets.
-vi.mock("../engine-singleton-lock.js", () => ({
+vi.mock("../project/engine-singleton-lock.js", () => ({
   acquireEngineSingleton: vi.fn().mockResolvedValue({
     release: vi.fn().mockResolvedValue(undefined),
     socketPath: "/tmp/test.sock",
@@ -18,6 +18,7 @@ vi.mock("../project-engine.js", () => {
     ProjectEngine: vi.fn().mockImplementation(function (config: any) {
       return {
         start: vi.fn().mockResolvedValue(undefined),
+        beginDrain: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
         getTaskStore: vi.fn().mockReturnValue({ projectId: config.projectId }),
         getHeartbeatMonitor: vi.fn().mockReturnValue(undefined),
@@ -40,8 +41,9 @@ import { ProjectEngine } from "../project-engine.js";
 import {
   acquireEngineSingleton,
   EngineAlreadyRunningError,
-} from "../engine-singleton-lock.js";
+} from "../project/engine-singleton-lock.js";
 import type { RegisteredProject, CentralCore } from "@fusion/core";
+import { ScopedAgentSemaphore } from "../concurrency/concurrency.js";
 
 function createMockCentralCore(projects: RegisteredProject[]): CentralCore {
   const projectMap = new Map(projects.map((p) => [p.id, p]));
@@ -294,6 +296,37 @@ describe("ProjectEngineManager", () => {
   });
 
   describe("stopAll", () => {
+    it("closes admission on every engine before asynchronous shutdown work", async () => {
+      const manager = new ProjectEngineManager(centralCore);
+      await manager.startAll();
+      const engineA = manager.getEngine("proj_aaa")!;
+      engineA.beginDrain = vi.fn();
+
+      manager.beginDrain();
+
+      expect(engineA.beginDrain).toHaveBeenCalledOnce();
+      await expect(manager.ensureEngine("proj_aaa")).rejects.toThrow(
+        "ProjectEngineManager is stopped",
+      );
+      expect(centralCore.markLocalNodeOffline).not.toHaveBeenCalled();
+    });
+
+    it("continues draining other engines when one engine throws", async () => {
+      const manager = new ProjectEngineManager(centralCore);
+      await manager.startAll();
+      const engineA = manager.getEngine("proj_aaa")!;
+      const engineB = manager.getEngine("proj_bbb")!;
+      engineA.beginDrain = vi.fn(() => {
+        throw new Error("drain failed");
+      });
+      engineB.beginDrain = vi.fn();
+
+      expect(() => manager.beginDrain()).not.toThrow();
+
+      expect(engineA.beginDrain).toHaveBeenCalledOnce();
+      expect(engineB.beginDrain).toHaveBeenCalledOnce();
+    });
+
     it("stops all engines and clears state", async () => {
       const manager = new ProjectEngineManager(centralCore);
       await manager.startAll();
