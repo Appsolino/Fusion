@@ -108,8 +108,12 @@ export function classifyFailure(raw) {
     };
   }
 
-  if (/AUTO3_TERMINAL_STATUS=DEPLOYED[\s\S]*AUTO3_TERMINAL_STATUS=(FAILED|BLOCKED|ROLLED_BACK|CRITICAL)/i.test(log)
-    || /false\s+DEPLOYED|first match.*DEPLOYED|script source.*AUTO3_TERMINAL/i.test(log)) {
+  // #105: Do NOT treat echoed workflow/shell source (DEPLOYED branch then later
+  // ROLLED_BACK/FAILED echo) as a terminal-marker-parse incident. Only explicit
+  // first-match / false-DEPLOYED bug language, or a dedicated failureClass, opens
+  // this class. Runtime marker ordering is handled by parseLastTerminalMarker
+  // (last valid runtime marker wins).
+  if (/false\s+DEPLOYED|first match.*DEPLOYED|script source.*AUTO3_TERMINAL|false-deployed-from-script-source/i.test(log)) {
     return {
       failureClass: FAILURE_CLASS.TERMINAL_MARKER_PARSE,
       component: "terminal-marker-parser",

@@ -72,15 +72,18 @@ Labeled-event auto-launch for S1A additionally requires repository variable / en
 
 ## Physical evidence (without deploy access)
 
-Compare when available:
+Compare when available (precedence — #105):
 
-1. AUTO-2 parent JSON / claimed terminal  
-2. AUTO-3 child conclusion  
-3. Last structured `AUTO3_TERMINAL_STATUS` marker  
-4. AUTO-3 evidence artifact (`schemaVersion: 1`)  
-5. Expected merged SHA  
+1. Dedicated AUTO-3 terminal file (`auto3-terminal.txt`)  
+2. Structured AUTO-3 evidence artifact (`schemaVersion: 1`)  
+3. Final deploy JSON receipt from `auto3-deploy`  
+4. Last *runtime* `AUTO3_TERMINAL_STATUS` marker (ignore echoed workflow/shell source)  
+5. Workflow conclusion only as secondary context — never as sole physical proof  
 
-Evidence artifact fields: `sourceSha`, `releaseId`, `applicationVersion`, `terminal`, `highestMigration`, `health`, `enginePaused`, `hostPAccessed`, `previousRelease`, `recordedUtc`.
+Evidence artifact fields: `sourceSha`, `releaseId`, `applicationVersion`, `terminal`, `highestMigration`, `health`, `enginePaused`, `hostPAccessed`, `previousRelease`, `previousReleaseRestored`, `recordedUtc`.
+
+`DEPLOYED` requires `health` and `enginePaused` (derived from receipt keys or explicit reason phrases such as `health ok` / `engine paused` — never invented).  
+`ROLLED_BACK` requires previous-release restoration evidence (`previousRelease` identity and/or `previous release restored` reason). Missing physical fields stay `null` and yield needs-evidence, not false success.
 
 ## S0 forbidden
 

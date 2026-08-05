@@ -1,0 +1,14 @@
+OFF_HOST_TARGET_NOT_CONFIGURED
+{
+  "status": "DEPLOYED",
+  "reasons": [
+    "candidate active",
+    "health ok",
+    "engine paused",
+    "release=auto3-0.75.1-beta.1-7c62e652e56d"
+  ],
+  "profile": "staging",
+  "deployedHostP": false,
+  "recordedUtc": "2026-08-05T15:24:59Z"
+}
+AUTO3_TERMINAL_STATUS=DEPLOYED

@@ -1,0 +1,12 @@
+AUTO3_ROLLBACK: deliberate post-activation smoke failure
+{
+  "status": "ROLLED_BACK",
+  "reasons": [
+    "deliberate post-activation smoke failure",
+    "previous release restored"
+  ],
+  "profile": "proof",
+  "deployedHostP": false,
+  "recordedUtc": "2026-08-05T15:51:27Z"
+}
+AUTO3_TERMINAL_STATUS=ROLLED_BACK

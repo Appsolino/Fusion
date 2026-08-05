@@ -1,0 +1,2 @@
+{ "status": "DEPLOYED", broken
+AUTO3_TERMINAL_STATUS=DEPLOYED

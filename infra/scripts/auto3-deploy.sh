@@ -418,6 +418,11 @@ rollback() {
     sleep 2
   done
   if [[ "$healthy" == "1" ]]; then
+    # FNXC:AppsolinoStewardS0 2026-08-05: populate factual receipt fields for steward (#105).
+    EVIDENCE_HEALTH="ok"
+    if [[ "$PROFILE" == "staging" ]] || [[ "$PROFILE" == "proof" ]]; then
+      EVIDENCE_ENGINE_PAUSED="true"
+    fi
     write_result ROLLED_BACK "$(python3 -c 'import json,sys; print(json.dumps([sys.argv[1],"previous release restored"]))' "$why")"
     exit 4
   fi
