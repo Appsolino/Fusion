@@ -20,7 +20,7 @@
       "description": "Allow S1B repair-PR generation"
     },
     "s2Enabled": {
-      "enabled": false,
+      "enabled": true,
       "envOverride": "STEWARD_S2_ENABLED",
       "description": "Allow S2 low-risk exact-head auto-merge"
     },
