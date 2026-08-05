@@ -84,6 +84,17 @@ export async function runCursorReviewer(input) {
       new Date(Date.now() + 6 * 3600_000).toISOString(),
   };
 
+  for (const k of ["blockingFindings", "nonBlockingFindings", "requiredChanges", "evidenceChecked"]) {
+    if (!Array.isArray(art[k])) art[k] = [];
+  }
+  if (!art.authorityCheck || typeof art.authorityCheck !== "object") {
+    art.authorityCheck = {
+      hostP: false,
+      production: false,
+      destructiveData: false,
+      secretExpansion: false,
+    };
+  }
   try {
     return validateVerdict(art, {
       expectModel: REVIEW_MODEL,
