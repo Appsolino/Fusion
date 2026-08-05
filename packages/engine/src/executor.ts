@@ -12,11 +12,11 @@ const WORKFLOW_THINKING_LEVEL_SET: ReadonlySet<string> = new Set(THINKING_LEVELS
 import { basename, delimiter, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { DEFAULT_PROVIDER_INSTANCE_ID, type ProviderInstanceRef, type TaskStore, type Task, type TaskDetail, type TaskTokenUsage, type StepStatus, type Settings, type WorkflowStep, type MissionStore, type AsyncMissionStore, type Slice, type AgentState, type AgentCapability, type RunMutationContext, type AgentHeartbeatConfig, type Agent, type AgentMemoryInclusionMode, type ProjectSettings, type MergeResult, type WorkflowIrNode, type WorkflowIrNodeKind, type WorkflowStepResult as CoreWorkflowStepResult, type ThinkingLevel } from "@fusion/core";
+import { DEFAULT_PROVIDER_INSTANCE_ID, type ProviderInstanceRef, type TaskStore, type Task, type TaskDetail, type TaskTokenUsage, type StepStatus, type Settings, type WorkflowStep, type MissionStore, type AsyncMissionStore, type Slice, type AgentState, type AgentCapability, type RunMutationContext, type AgentHeartbeatConfig, type Agent, type AgentMemoryInclusionMode, type ProjectSettings, type MergeResult, type WorkflowIrNode, type WorkflowIrNodeKind, type WorkflowStepResult as CoreWorkflowStepResult, type WorkflowReviewFinding, type ThinkingLevel } from "@fusion/core";
 import { getUnmetSchedulingDependencies } from "./scheduler.js";
 import type { ImplementationExit, ImplementationExitReporter } from "./executor/implementation-exit.js";
 import { emitWorkflowLifecycleEvent } from "@fusion/core";
-import { resolveTaskLifecycleColumns, resolveProjectColumnsForRoles, resolveWipTargetForTask, resolveTerminalColumns, RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, columnsWithFlag, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveLifecycleColumns, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, DEFAULT_MAX_POST_REVIEW_FIXES, COMPLETION_SUMMARY_NODE_ID, PLAN_REVIEW_GROUP_ID, upsertWorkflowStepResult, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel, resolveValidatorFallbackModel, parseExplicitDuplicateMarker, nonExecutableDuplicateRedirectReason } from "@fusion/core";
+import { resolveTaskLifecycleColumns, resolveProjectColumnsForRoles, resolveWipTargetForTask, resolveTerminalColumns, RetryStormError, serializeRetryStormError, evaluateCompletedPromotionFailureProvenance, evaluateSkipBypassTaint, resolveWorkflowIrForTask, columnsWithFlag, evaluateForeachMergeProof, resolveCompleteColumn, resolveMergeOrchestrationColumn, resolveReboundTarget, resolveLifecycleColumns, resolveColumnAgentBinding, resolveEffectiveAgent, instanceNodeId, getWorkflowExtensionRegistry, getBuiltinWorkflow, parseNoOpCompletionMarker, allowsAutoMergeProcessing, resolveEffectiveAutoMerge, isLiveSharedBranchGroupMemberIntegration, resolveMaxAutoMergeRetries, resolveMaxConsecutiveToolFailureRetries, resolveConsecutiveToolFailureRetryBackoffMs, resolveConsecutiveToolFailureThreshold, resolveExecutorEscalationTarget, resolveOptionalStepRevisionBudget, resolveOptionalReviewRevisionBudget, DEFAULT_MAX_POST_REVIEW_FIXES, COMPLETION_SUMMARY_NODE_ID, PLAN_REVIEW_GROUP_ID, upsertWorkflowStepResult, normalizeWorkflowReviewFindings, AWAITING_APPROVAL_PAUSE_REASON, THINKING_LEVELS, ACTIVE_WORKFLOW_WORK_ITEM_STATES, AgentStore, resolveExecutorFallbackModel, resolveValidatorFallbackModel, parseExplicitDuplicateMarker, nonExecutableDuplicateRedirectReason } from "@fusion/core";
 import {
   BLOCKED_THRASH_LIMIT,
   buildExternalBlockMetadataPatch,
@@ -58,6 +58,7 @@ import {
   WORKFLOW_DRIFT_PARK_CONTEXT_KEY,
   WORKFLOW_NODE_ENGINE_PAUSE_ABORT_KIND,
   WORKFLOW_OPTIONAL_GROUP_CONTEXT_KEY,
+  WORKFLOW_REVIEW_KIND_CONTEXT_KEY,
 } from "./workflows/workflow-graph-executor.js";
 import type { WorkflowNodePreparationRequirement, WorkflowNodeResult } from "./workflows/workflow-graph-executor.js";
 import { workflowNodeRequiresWorktree } from "./workflows/workflow-node-execution-needs.js";
@@ -1277,6 +1278,8 @@ export interface WorkflowStepOutcome {
   verdict?: "APPROVE" | "APPROVE_WITH_NOTES" | "REVISE";
   /** Notes extracted from structured JSON output (distinct from raw output). */
   notes?: string;
+  /** Normalized independently actionable feedback from a review-kind node. */
+  findings?: WorkflowReviewFinding[];
   /** Set when the call exceeded `settings.workflowStepTimeoutMs`. Signals the
    *  caller to escalate to the fallback model rather than treat the failure
    *  as a generic revision request. */
@@ -1297,7 +1300,7 @@ export type WorkflowStepResult =
   | { allPassed: false; revisionRequested: false; feedback: string; stepName: string }
   | { allPassed: false; revisionRequested: true; feedback: string; stepName: string };
 
-export function parseWorkflowStepVerdict(rawOutput: string): { verdict: "APPROVE" | "APPROVE_WITH_NOTES" | "REVISE"; notes: string } | null {
+export function parseWorkflowStepVerdict(rawOutput: string): { verdict: "APPROVE" | "APPROVE_WITH_NOTES" | "REVISE"; notes: string; findings?: WorkflowReviewFinding[] } | null {
   const trimmed = rawOutput.trim();
   const candidates: string[] = [];
   const fencedMatches = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
@@ -1312,7 +1315,7 @@ export function parseWorkflowStepVerdict(rawOutput: string): { verdict: "APPROVE
 
   for (let i = candidates.length - 1; i >= 0; i -= 1) {
     try {
-      const parsed = JSON.parse(candidates[i]) as { verdict?: unknown; notes?: unknown };
+      const parsed = JSON.parse(candidates[i]) as { verdict?: unknown; notes?: unknown; findings?: unknown };
       if (!parsed || typeof parsed.verdict !== "string") continue;
       /*
       FNXC:ReviewLeniency 2026-07-01-23:30:
@@ -1326,9 +1329,11 @@ export function parseWorkflowStepVerdict(rawOutput: string): { verdict: "APPROVE
         verdict = "REVISE";
       }
       if (!verdict) continue;
+      const findings = normalizeWorkflowReviewFindings(parsed.findings);
       return {
         verdict,
         notes: typeof parsed.notes === "string" ? parsed.notes : "",
+        ...(findings ? { findings } : {}),
       };
     } catch {
       // continue
@@ -1376,18 +1381,21 @@ export function parseWorkflowStepOutput(rawOutput: string): {
   output: string;
   verdict?: "APPROVE" | "APPROVE_WITH_NOTES" | "REVISE";
   notes?: string;
+  findings?: WorkflowReviewFinding[];
   malformed?: boolean;
 };
 export function parseWorkflowStepOutput(rawOutput: string, options: { requireVerdict: false }): {
   output: string;
   verdict?: "APPROVE" | "APPROVE_WITH_NOTES" | "REVISE";
   notes?: string;
+  findings?: WorkflowReviewFinding[];
   malformed?: boolean;
 };
 export function parseWorkflowStepOutput(rawOutput: string, options: { requireVerdict?: boolean } = {}): {
   output: string;
   verdict?: "APPROVE" | "APPROVE_WITH_NOTES" | "REVISE";
   notes?: string;
+  findings?: WorkflowReviewFinding[];
   malformed?: boolean;
 } {
   const trimmed = rawOutput.trim();
@@ -1397,6 +1405,7 @@ export function parseWorkflowStepOutput(rawOutput: string, options: { requireVer
       output: parsed.notes || "",
       verdict: parsed.verdict,
       notes: parsed.notes,
+      ...(parsed.findings ? { findings: parsed.findings } : {}),
     };
   }
 
@@ -9660,6 +9669,11 @@ export class TaskExecutor {
     const optionalGroupId = typeof graphContext?.[WORKFLOW_OPTIONAL_GROUP_CONTEXT_KEY] === "string"
       ? graphContext[WORKFLOW_OPTIONAL_GROUP_CONTEXT_KEY]
       : undefined;
+    const declaredReviewKind = cfg.reviewKind === "plan" || cfg.reviewKind === "code"
+      ? cfg.reviewKind
+      : graphContext?.[WORKFLOW_REVIEW_KIND_CONTEXT_KEY] === "plan" || graphContext?.[WORKFLOW_REVIEW_KIND_CONTEXT_KEY] === "code"
+        ? graphContext[WORKFLOW_REVIEW_KIND_CONTEXT_KEY]
+        : undefined;
     /*
     FNXC:FastOptionalSteps 2026-06-30-09:14:
     Fast skips top-level custom prompt/script/gate review bodies by default, but an enabled optional-group template is explicit operator intent. The graph marks those template nodes so Browser Verification and custom optional groups still run under fast mode.
@@ -9931,6 +9945,9 @@ export class TaskExecutor {
     if (optionalGroupId) {
       (step as WorkflowStep & { optionalGroupId?: string }).optionalGroupId = optionalGroupId;
     }
+    if (declaredReviewKind) {
+      (step as WorkflowStep & { reviewKind?: "plan" | "code" }).reviewKind = declaredReviewKind;
+    }
     if (cfg.reviewCanFixInline === true) {
       (step as WorkflowStep & { reviewCanFixInline?: boolean }).reviewCanFixInline = true;
     }
@@ -9957,9 +9974,19 @@ export class TaskExecutor {
     // sets FUSION_HEADLESS=1 only when this is explicitly true.
     const unattended = this.graphUnattendedRuns.has(live.id);
 
-    const outcome = mode === "script"
+    let outcome: WorkflowStepOutcome = mode === "script"
       ? await this.executeScriptWorkflowStep(live, step, worktreePath, settings, nodeEnv)
       : await this.executeWorkflowStep(live, step, worktreePath, settings, nodeEnv, { unattended });
+    /*
+     * FNXC:WorkflowReviewFindings 2026-08-05-06:29:
+     * Script nodes retain their exit-code verdict semantics, but an explicitly classified review
+     * script may attach the same trailing JSON findings as prompt nodes. Unmarked scripts never
+     * gain review metadata merely because their output happens to contain a findings key.
+     */
+    if (declaredReviewKind && typeof outcome.output === "string") {
+      const parsedReviewOutput = parseWorkflowStepOutput(outcome.output, { requireVerdict: false });
+      if (parsedReviewOutput.findings?.length) outcome = { ...outcome, findings: parsedReviewOutput.findings };
+    }
 
     // Skill-emitted await-input (U6): if the skill asked the user a blocking
     // question via the ===FUSION_AWAIT_INPUT=== sentinel, park the task
@@ -9998,6 +10025,8 @@ export class TaskExecutor {
     const contextPatch: Record<string, unknown> = {};
     if (typeof stepOutput === "string") contextPatch.output = stepOutput;
     if (typeof stepNotes === "string" && stepNotes) contextPatch.notes = stepNotes;
+    const stepFindings = (outcome as WorkflowStepOutcome).findings;
+    if (stepFindings?.length) contextPatch.findings = stepFindings;
     if (cfg.summaryTarget === "task" && typeof stepOutput === "string" && stepOutput.trim()) {
       /*
        * FNXC:WorkflowCompletion 2026-06-29-11:09:
@@ -18875,6 +18904,7 @@ ${scopeGuard}
     const unattended = stepOptions?.unattended === true;
     const workflowStepMetadata = workflowStep as WorkflowStep & {
       optionalGroupId?: string;
+      reviewKind?: "plan" | "code";
       reviewCanFixInline?: boolean;
       requireExternalIntegrationEvidence?: boolean;
     };
@@ -19060,6 +19090,7 @@ CRITICAL SCOPING RULES — read before doing anything else:
     const isSkillStep = typeof workflowStep.skillName === "string" && workflowStep.skillName.trim().length > 0;
     const isSummaryProjectionStep = (workflowStep as WorkflowStep & { summaryTarget?: string }).summaryTarget === "task";
     const requireVerdict = !isSummaryProjectionStep && (workflowStep.gateMode === "gate" || !isSkillStep);
+    const reviewFindingsContract = workflowStepMetadata.reviewKind === "plan" || workflowStepMetadata.reviewKind === "code";
     const verdictBlock = requireVerdict
       ? `
 
@@ -19067,7 +19098,9 @@ CRITICAL SCOPING RULES — read before doing anything else:
 
 When your review is complete, your final line MUST be a single JSON object (no markdown fences):
 
-{"verdict":"APPROVE|APPROVE_WITH_NOTES|REVISE","notes":"..."}
+${reviewFindingsContract
+    ? "{\"verdict\":\"APPROVE|APPROVE_WITH_NOTES|REVISE\",\"notes\":\"...\",\"findings\":[{\"id\":\"stable-id\",\"title\":\"concise issue\",\"body\":\"actionable detail\",\"filePath\":\"optional/path\",\"line\":1,\"severity\":\"low|medium|high|critical\"}]}"
+    : "{\"verdict\":\"APPROVE|APPROVE_WITH_NOTES|REVISE\",\"notes\":\"...\"}"}
 
 Rules:
 - Output exactly one trailing JSON object and stop.
@@ -19499,6 +19532,7 @@ You have access to the file system to review changes.${inlineFixBlock}${verdictB
             output: parsed.output,
             verdict: parsed.verdict,
             notes: parsed.notes,
+            ...(parsed.findings ? { findings: parsed.findings } : {}),
           };
         }
 
