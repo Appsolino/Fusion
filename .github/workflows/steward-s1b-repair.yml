@@ -1,0 +1,84 @@
+# FNXC:AppsolinoStewardS1B 2026-08-05:
+# S1B repair-PR agent — App write for branch/PR only; never merges; never Host P.
+name: Steward S1B Repair
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Steward incident issue number"
+        required: true
+        type: string
+      occurrence:
+        description: "Occurrence id (workflow-run:…)"
+        required: true
+        type: string
+      dry_run:
+        description: "If true, plan only"
+        required: true
+        type: boolean
+        default: false
+      existing_repair_pr:
+        description: "Optional existing repair PR to reuse"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  issues: read
+
+concurrency:
+  group: steward-s1b-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    name: S1B repair worktree + PR
+    runs-on: [self-hosted, appsolino-fusion]
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: read
+
+      - name: Run S1B
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          S1B_GITHUB_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          OCCURRENCE: ${{ inputs.occurrence }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          EXISTING_REPAIR_PR: ${{ inputs.existing_repair_pr }}
+        run: |
+          set -euo pipefail
+          export PATH="${HOME}/.local/bin:/usr/local/bin:${PATH}"
+          test "$(whoami)" = "fusion"
+          node infra/scripts/steward/s1b/run-s1b-cli.mjs \
+            --issue="$ISSUE_NUMBER" \
+            --occurrence="$OCCURRENCE" \
+            --dry-run="$DRY_RUN" \
+            --existing-repair-pr="$EXISTING_REPAIR_PR" \
+            | tee /tmp/s1b-result.json
+          action="$(python3 -c 'import json;print(json.load(open("/tmp/s1b-result.json")).get("action"))')"
+          echo "action=$action"
+          case "$action" in
+            planned|repair-pr-opened|repair-pr-reused|noop-duplicate|skipped) ;;
+            *) echo "::error::unexpected S1B action $action"; exit 1 ;;
+          esac

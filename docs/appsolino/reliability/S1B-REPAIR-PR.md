@@ -1,6 +1,6 @@
 # Steward S1B — Repair PR Agent
 
-**Status:** IMPLEMENTING (programme [#78](https://github.com/Appsolino/Fusion/issues/78)) — **gate OFF**  
+**Status:** IMPLEMENTING (programme [#78](https://github.com/Appsolino/Fusion/issues/78)) — **gate ENABLING (this activation PR)**  
 **Ledger:** [`../CURRENT-STATE.md`](../CURRENT-STATE.md)
 
 S1B creates **one** bounded repair PR from an accepted S1A assessment. It does not merge, deploy, or access Host P.
