@@ -1,0 +1,9 @@
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:23:11.3281253Z if echo "$OUT" | grep -q '"status": "DEPLOYED"'; then
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:23:11.3281677Z   echo "AUTO3_TERMINAL_STATUS=DEPLOYED"
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:23:11.3285012Z if echo "$OUT" | grep -q '"status": "ROLLED_BACK"'; then
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:23:11.3285455Z   echo "AUTO3_TERMINAL_STATUS=ROLLED_BACK"
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:23:11.3293324Z echo "AUTO3_TERMINAL_STATUS=FAILED"
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:24:59.5512011Z   "status": "DEPLOYED",
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:24:59.5513086Z     "health ok",
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:24:59.5513443Z     "engine paused",
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:24:59.5532360Z AUTO3_TERMINAL_STATUS=DEPLOYED

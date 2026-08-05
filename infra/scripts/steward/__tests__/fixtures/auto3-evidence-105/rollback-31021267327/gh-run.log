@@ -1,0 +1,6 @@
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:49:11.1268735Z   echo "AUTO3_TERMINAL_STATUS=DEPLOYED"
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:49:11.1272771Z   echo "AUTO3_TERMINAL_STATUS=ROLLED_BACK"
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:49:11.1280539Z echo "AUTO3_TERMINAL_STATUS=FAILED"
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:51:27.3782361Z   "status": "ROLLED_BACK",
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:51:27.3783719Z     "previous release restored"
+Trusted Host D deploy	Deploy via dedicated identity (no candidate scripts)	2026-08-05T15:51:27.3837063Z AUTO3_TERMINAL_STATUS=ROLLED_BACK

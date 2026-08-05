@@ -7,7 +7,10 @@
  */
 import { normalizeEvidence } from "./normalize-evidence.mjs";
 import { FAILURE_CLASS } from "./policy.mjs";
-import { parseLastTerminalMarker } from "./parse-deploy-evidence.mjs";
+import {
+  assessAuto3EvidenceCompleteness,
+  parseLastTerminalMarker,
+} from "./parse-deploy-evidence.mjs";
 import { childTerminalFromRun, parentTerminalFromRun } from "./build-handoffs.mjs";
 import {
   isExpectedNonIncidentConclusion,
@@ -147,6 +150,8 @@ export function evaluateLiveObservation(input) {
     });
   }
 
+  // Prefer structured evidence over free-form markers. Marker disagreement only
+  // when a *runtime* marker exists and conflicts with evidence.
   if (marker && evidenceTerminal && marker !== evidenceTerminal) {
     return normalizeEvidence({
       workflowName: input.workflowName || "Upstream AUTO-3 Deploy",
@@ -202,11 +207,43 @@ export function evaluateLiveObservation(input) {
     });
   }
 
+  // Incomplete physical fields on DEPLOYED / unrestored ROLLED_BACK → needs-evidence.
+  // Never treat workflow conclusion alone as physical success (#105).
+  if (evidence && evidenceTerminal) {
+    const completeness = assessAuto3EvidenceCompleteness({
+      terminal: evidenceTerminal,
+      health: evidence.health,
+      enginePaused: evidence.enginePaused,
+      previousRelease: evidence.previousRelease,
+      previousReleaseRestored: evidence.previousReleaseRestored,
+      hostPAccessed: evidence.hostPAccessed,
+      reasons: Array.isArray(evidence.reasons) ? evidence.reasons : [],
+    });
+    if (completeness.needsEvidence) {
+      return normalizeEvidence({
+        workflowName: input.workflowName || "Upstream AUTO-3 Deploy",
+        workflowFamily: "auto3",
+        runId: input.runId,
+        attempt: input.attempt || 1,
+        terminalStatus: evidenceTerminal,
+        success: false,
+        failureClass: FAILURE_CLASS.NEEDS_TRIAGE,
+        forceIncident: true,
+        errorMessage: `auto3-evidence-incomplete:${completeness.missing.join(",")}`,
+        evidenceArtifact: evidence,
+        sourceSha: input.expectedSourceSha,
+        releaseId: evidence.releaseId,
+        logText,
+      });
+    }
+  }
+
   // Genuine success only when conclusion success AND evidence (if present) agrees.
   const conclusionSuccess = String(input.conclusion || "").toLowerCase() === "success";
   const evidenceOk = !evidenceTerminal
     || evidenceTerminal === "DEPLOYED"
-    || evidenceTerminal === "IDEMPOTENT_NOOP";
+    || evidenceTerminal === "IDEMPOTENT_NOOP"
+    || evidenceTerminal === "ROLLED_BACK";
 
   // Unknown finalize action with insufficient evidence → needs-triage (not fake success/FAILED).
   if (finalize.action && expectedAuto3ChildForAction(finalize.action) === null) {
@@ -251,6 +288,25 @@ export function evaluateLiveObservation(input) {
       success: true,
       parentRunId: input.parentRunId,
       childRunId: input.childRunId,
+      evidenceArtifact: evidence,
+    });
+  }
+
+  // Controlled rollback with complete restoration evidence is a successful proof terminal.
+  if (
+    conclusionSuccess
+    && evidenceTerminal === "ROLLED_BACK"
+    && evidence
+  ) {
+    return normalizeEvidence({
+      workflowName: input.workflowName || "Upstream AUTO-3 Deploy",
+      workflowFamily: "auto3",
+      runId: input.runId,
+      attempt: input.attempt || 1,
+      terminalStatus: "ROLLED_BACK",
+      success: true,
+      sourceSha: input.expectedSourceSha,
+      releaseId: evidence.releaseId,
       evidenceArtifact: evidence,
     });
   }

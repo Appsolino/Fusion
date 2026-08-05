@@ -1,0 +1,8 @@
+# workflow source only — no runtime marker
+if echo "$OUT" | grep -q '"status": "DEPLOYED"'; then
+  echo "AUTO3_TERMINAL_STATUS=DEPLOYED"
+fi
+if echo "$OUT" | grep -q '"status": "ROLLED_BACK"'; then
+  echo "AUTO3_TERMINAL_STATUS=ROLLED_BACK"
+fi
+echo "AUTO3_TERMINAL_STATUS=FAILED"

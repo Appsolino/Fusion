@@ -31,5 +31,5 @@
 ```text
 DONE:    Programme #78 Host-D autonomy path (dual-review → gates → absorb → AUTO-3)
 HOLD:    Host P / production — PROHIBITED
-OPEN:    steward #105 terminal-marker-parse (AUTO-3 evidence field nulls)
+OPEN:    (none blocking) — #105 repair in flight when this doc trails main
 ```

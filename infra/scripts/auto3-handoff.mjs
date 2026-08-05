@@ -106,16 +106,27 @@ export function mapAuto3RunToTerminal(input) {
 
 /**
  * Parse AUTO3_TERMINAL_STATUS=... from workflow logs.
- * Prefer the LAST marker. GitHub Actions --log includes the script source that
- * echoes candidate markers (DEPLOYED/IDEMPOTENT/…); taking the first match made
- * parent waiters report DEPLOYED after a real FAILED/BLOCKED deploy (PR #55 child
- * 30705088925).
+ * Prefer the LAST *runtime* marker. GitHub Actions --log includes the script
+ * source that echoes candidate markers (DEPLOYED/IDEMPOTENT/…); those echoes
+ * must not count (#105 / PR #55 child 30705088925).
  * @param {string} logText
  */
 export function parseAuto3TerminalMarker(logText) {
-  const matches = [...String(logText || "").matchAll(/AUTO3_TERMINAL_STATUS=([A-Z_]+)/g)];
-  if (!matches.length) return null;
-  return matches[matches.length - 1][1];
+  // Local import avoided at module top to keep handoff usable in light tests;
+  // duplicated runtime-line rules stay in sync with parse-deploy-evidence.mjs.
+  const lines = String(logText || "").split(/\r?\n/);
+  /** @type {string|null} */
+  let last = null;
+  for (const raw of lines) {
+    let s = String(raw || "").replace(/\u001b\[[0-9;]*m/g, "");
+    const gha = /^[^\t]+\t[^\t]+\t\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(.*)$/.exec(s);
+    if (gha) s = gha[1];
+    if (!/AUTO3_TERMINAL_STATUS=/.test(s)) continue;
+    if (/\becho\b/.test(s) || /\bgrep\b/.test(s) || /^\s*if\b/.test(s) || /^\s*#/.test(s)) continue;
+    const m = /^\s*AUTO3_TERMINAL_STATUS=([A-Z_]+)\s*$/.exec(s.trim());
+    if (m) last = m[1];
+  }
+  return last;
 }
 
 /**
