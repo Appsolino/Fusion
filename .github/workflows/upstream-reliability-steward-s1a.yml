@@ -101,7 +101,9 @@ jobs:
           LABEL_NAME: ${{ github.event.label.name || '' }}
           ISSUE_NUMBER_EVENT: ${{ github.event.issue.number || '' }}
           ISSUE_NUMBER_INPUT: ${{ inputs.issue_number || '' }}
-          S1A_AUTO_HANDOFF: ${{ vars.S1A_AUTO_HANDOFF || 'false' }}
+          # Only inject when repo var is set. An explicit 'false' default would
+          # override activation-policy.json via envOverride and keep Gate A dead.
+          S1A_AUTO_HANDOFF: ${{ vars.S1A_AUTO_HANDOFF }}
         run: |
           set -euo pipefail
           MODE="live"

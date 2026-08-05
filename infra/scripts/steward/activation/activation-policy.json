@@ -4,7 +4,7 @@
   "killSwitch": false,
   "gates": {
     "s1aAutoHandoff": {
-      "enabled": false,
+      "enabled": true,
       "envOverride": "S1A_AUTO_HANDOFF",
       "description": "Allow labeled steward/needs-expert events to launch S1A live analyze"
     },

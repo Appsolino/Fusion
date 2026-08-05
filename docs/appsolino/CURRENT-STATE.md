@@ -2,7 +2,7 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-04T11:50:00Z
+**Last updated UTC:** 2026-08-05T06:33:45Z
 
 | Field | Value |
 | --- | --- |
@@ -10,8 +10,8 @@
 | Documentation closure merge SHA | `1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0` (PR #77) |
 | Programme tracking | Issue [#78](https://github.com/Appsolino/Fusion/issues/78) · ledger `infra/scripts/steward/programme/ledger.json` |
 | Live `main` SHA | **Resolve dynamically** (`git fetch origin && git rev-parse origin/main`) — not stored here |
-| Control plane | PR #80 **MERGED** (`672cb61898ab…`) — Cursor dual-review on main; gates OFF |
-| Active upstream sync | [PR #82](https://github.com/Appsolino/Fusion/pull/82) (`993a2f9d866d`) — supersedes closed #81/#68/#57/#60 |
+| Control plane | PR #80/#83/#85/#86 on main — Cursor dual-review; Gate A activation pending |
+| Active upstream sync | [PR #84](https://github.com/Appsolino/Fusion/pull/84) (`6f939a08a03f`) — supersedes closed #82 |
 | Owner gate #79 | **CLOSED (not_planned / SUPERSEDED)** — Cursor-only dual review; no xAI key |
 | Active Host D release | `auto3-0.74.0-beta.6-16f24ed3b473` |
 | Source SHA | `16f24ed3b47321cc1b5aa693b2fac7e13a00b379` (PR #55 absorb) |
@@ -25,14 +25,13 @@
 ## Owner priority
 
 ```text
-NOW:     Land gh-compat/Cursor-secret fix → re-run trusted-main dual-review proof on #82 (merge=false)
-NEXT:    Gate A/B → S1B/S2/S3 → merge #82 → AUTO-3
+NOW:     Trusted-main dual-review proof on #84 (merge=false) + Gate A proof
+NEXT:    Gate B → S1B/S2/S3 → merge #84 → AUTO-3 Host D
 HOLD:    Host P / production — PROHIBITED
 DONE:    S0 ACCEPTED; S1A MANUAL LIVE PROOF PASS (issue #74)
-DONE:    Owner chose Cursor-only review; #79 closed not_planned
-DONE:    PR #80 bootstrap owner merge (677465de… → main 672cb618…)
-DONE:    One active upstream sync: PR #82 only
-NOTE:    Activation gates remain OFF; first proof may end merge-blocked (s3-gate-disabled)
+DONE:    PR #83 gh-compat + #85 cursor-auth + #86 stdin E2BIG
+DONE:    One active upstream sync: PR #84 only (supersedes #82)
+NOTE:    This PR enables s1aAutoHandoff only
 NOTE:    Engine stays paused. Host P untouched / prohibited.
 ```
 
@@ -41,10 +40,10 @@ NOTE:    Engine stays paused. Host P untouched / prohibited.
 | Item | Value |
 | --- | --- |
 | S0 status | **ACCEPTED** |
-| S1A status | **IMPLEMENTED / MANUAL ACTIVE** — auto handoff gated OFF until programme Gate A/B |
+| S1A status | **AUTO HANDOFF ENABLING (Gate A)** — other gates OFF |
 | S1B status | **IMPLEMENTING** (programme #78) — not yet activated |
 | S2 / S3 | **IMPLEMENTING** under programme — not yet activated |
-| Automatic S1A handoff | **OFF** (`activation-policy.json` + optional env overrides) |
+| Automatic S1A handoff | **ON (this PR)** — s1aAutoHandoff only; S0 handoff / S1B/S2/S3 remain OFF |
 | Dual review | **CURSOR-ONLY** (implementer/reviewer/approver) — no xAI |
 | Engine | **paused** |
 | Host P | **prohibited** |

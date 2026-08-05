@@ -52,11 +52,19 @@ describe("activation gates", () => {
     assert.equal(summary.effective.s0HandoffS1a, false);
   });
 
-  it("default policy keeps auto handoff off", () => {
+  it("default policy enables Gate A auto handoff only", () => {
     const summary = summarizeActivation({ env: {} });
     assert.equal(summary.killSwitch, false);
-    assert.equal(summary.effective.s1aAutoHandoff, false);
+    assert.equal(summary.effective.s1aAutoHandoff, true);
+    assert.equal(summary.effective.s0HandoffS1a, false);
     assert.equal(summary.effective.s1bEnabled, false);
+    assert.equal(summary.effective.s2Enabled, false);
+    assert.equal(summary.effective.s3Enabled, false);
+  });
+
+  it("explicit env false overrides policy enable", () => {
+    const summary = summarizeActivation({ env: { S1A_AUTO_HANDOFF: "false" } });
+    assert.equal(summary.effective.s1aAutoHandoff, false);
   });
 });
 
