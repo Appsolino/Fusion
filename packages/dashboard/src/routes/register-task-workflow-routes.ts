@@ -60,6 +60,7 @@ import {
   isEphemeralAgent,
   parseExplicitDuplicateMarker,
   resolveWorkflowIrForTask,
+  resolveWorkflowIrForTaskWithProvenance,
   resolveReviewColumns,
   workflowHasColumn,
   workflowPlansInColumn,
@@ -816,7 +817,8 @@ function buildReviewerAgentItemId(input: { index: number; reviewType: "plan" | "
 }
 
 const CURRENT_WORKFLOW_REVIEW_STEP_IDS = new Set(["code-review", "plan-review"]);
-const CURRENT_WORKFLOW_REVIEW_STATUSES = new Set<WorkflowStepResult["status"]>(["passed", "failed", "advisory_failure"]);
+const CURRENT_WORKFLOW_REVIEW_STATUSES = new Set<WorkflowStepResult["status"]>(["passed", "failed"]);
+const LEGACY_WORKFLOW_REVIEW_STATUSES = new Set<WorkflowStepResult["status"]>(["passed", "failed", "advisory_failure"]);
 function parseTaskReviewVerdict(value: string | undefined): TaskReviewVerdict | undefined {
   switch (value) {
     case "APPROVE":
@@ -836,19 +838,65 @@ function parseTaskReviewVerdict(value: string | undefined): TaskReviewVerdict | 
  * current, terminal, verdict-bearing results win over compatibility-only reviewer prose/activity
  * parsing. Their persisted identity produces canonical ids so GET, refresh, and address reconstruct
  * the same server-owned feedback; address snapshots and steering must never trust client prose.
- * Custom step names, historical attempts, pending/skipped, superseded, and bypassed results remain
- * non-selectable until workflow results gain an authoritative persisted review-kind marker.
+ * Explicit `reviewKind` results may also qualify when terminal and nonblank; custom names,
+ * verdicts, and gate modes remain non-semantic. Historical attempts, pending/skipped,
+ * superseded, and bypassed results are non-selectable.
  */
-function isCurrentWorkflowReviewResult(result: WorkflowStepResult): result is WorkflowStepResult & { verdict: TaskReviewVerdict } {
-  return CURRENT_WORKFLOW_REVIEW_STEP_IDS.has(result.workflowStepId)
-    && CURRENT_WORKFLOW_REVIEW_STATUSES.has(result.status)
-    && result.verdict !== undefined
-    && result.supersededAt === undefined
+function hasCurrentWorkflowReviewIdentity(result: WorkflowStepResult): boolean {
+  return result.supersededAt === undefined
+    && result.supersededReason === undefined
     && result.bypassedBy === undefined
     && result.bypassedAt === undefined
     && result.bypassReason === undefined
     && result.bypassedFromStatus === undefined
     && result.bypassedFromVerdict === undefined;
+}
+
+function isCurrentMarkedWorkflowReviewResult(result: WorkflowStepResult): result is WorkflowStepResult & { reviewKind: "plan" | "code" } {
+  return CURRENT_WORKFLOW_REVIEW_STATUSES.has(result.status)
+    && hasCurrentWorkflowReviewIdentity(result)
+    && Boolean(result.output?.trim() || result.notes?.trim())
+    && (result.reviewKind === "plan" || result.reviewKind === "code")
+    && (result.source === "node" || result.source === "optional-group");
+}
+
+async function getDeclaredTopLevelReviewResultSources(task: Task, store: TaskStore): Promise<Map<string, WorkflowStepResult["source"]>> {
+  const resolved = await resolveWorkflowIrForTaskWithProvenance(store, task.id);
+  if (resolved.source !== "selection") return new Map();
+
+  /*
+  FNXC:WorkflowReviewKind 2026-08-05-06:14:
+  A persisted marker is authoritative only for a node and result source that the task's selected
+  workflow declares at the top level. Resolve exact node identities instead of reserving punctuation: custom node IDs
+  may legitimately contain `::` or `#<number>:`, while template instances have no matching top-level
+  declaration and remain outside this task's currentness/addressing contract.
+  */
+  return new Map(resolved.ir.nodes.flatMap((node): Array<[string, WorkflowStepResult["source"]]> => {
+    if (node.kind === "optional-group") return [[node.id, "optional-group"]];
+    if (node.kind === "prompt" || node.kind === "gate" || node.kind === "script") return [[node.id, "node"]];
+    return [];
+  }));
+}
+
+function isCurrentLegacyWorkflowReviewResult(result: WorkflowStepResult): boolean {
+  // Historical built-ins predate reviewKind. Preserve FN-8793's deliberately narrow
+  // id-and-verdict compatibility contract without applying marked-custom requirements.
+  return CURRENT_WORKFLOW_REVIEW_STEP_IDS.has(result.workflowStepId)
+    && result.reviewKind === undefined
+    && LEGACY_WORKFLOW_REVIEW_STATUSES.has(result.status)
+    && result.verdict !== undefined
+    && hasCurrentWorkflowReviewIdentity(result);
+}
+
+function getWorkflowReviewKind(
+  result: WorkflowStepResult,
+  declaredTopLevelReviewResultSources: ReadonlyMap<string, WorkflowStepResult["source"]>,
+): "plan" | "code" | undefined {
+  if (isCurrentMarkedWorkflowReviewResult(result) && declaredTopLevelReviewResultSources.get(result.workflowStepId) === result.source) return result.reviewKind;
+  if (isCurrentLegacyWorkflowReviewResult(result)) {
+    return result.workflowStepId === "plan-review" ? "plan" : "code";
+  }
+  return undefined;
 }
 
 function buildWorkflowReviewItemId(task: Task, result: WorkflowStepResult): string {
@@ -859,6 +907,7 @@ function buildWorkflowReviewItemId(task: Task, result: WorkflowStepResult): stri
     phase: result.phase,
     status: result.status,
     verdict: result.verdict,
+    reviewKind: result.reviewKind,
     completedAt: result.completedAt,
     startedAt: result.startedAt,
     output: result.output,
@@ -867,17 +916,18 @@ function buildWorkflowReviewItemId(task: Task, result: WorkflowStepResult): stri
   return `workflow-review-${createHash("sha256").update(identity).digest("hex").slice(0, 24)}`;
 }
 
-function buildWorkflowReviewItems(task: Task): TaskReviewItem[] {
+async function buildWorkflowReviewItems(task: Task, store: TaskStore): Promise<TaskReviewItem[]> {
+  const declaredTopLevelReviewResultSources = await getDeclaredTopLevelReviewResultSources(task, store);
   return (task.workflowStepResults ?? [])
-    .filter(isCurrentWorkflowReviewResult)
-    .map((result): TaskReviewItem => {
-      const reviewType = result.workflowStepId === "plan-review" ? "plan" as const : "code" as const;
+    .flatMap((result): TaskReviewItem[] => {
+      const reviewType = getWorkflowReviewKind(result, declaredTopLevelReviewResultSources);
+      if (!reviewType) return [];
       const body = result.output?.trim() || result.notes?.trim() || "No written feedback was provided by this review step.";
       const timestamp = result.completedAt ?? result.startedAt ?? task.updatedAt ?? task.createdAt;
-      return {
+      return [{
         itemId: buildWorkflowReviewItemId(task, result),
         sourceMode: "reviewer-agent",
-        title: `${result.workflowStepName || result.workflowStepId} ${result.verdict}`,
+        title: `${result.workflowStepName || result.workflowStepId} ${result.verdict ?? result.status}`,
         body,
         author: "reviewer-agent",
         createdAt: timestamp,
@@ -886,7 +936,7 @@ function buildWorkflowReviewItems(task: Task): TaskReviewItem[] {
         verdict: result.verdict,
         reviewType,
         progressStatus: null,
-      };
+      }];
     })
     .sort((a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? "") || a.itemId.localeCompare(b.itemId));
 }
@@ -899,7 +949,7 @@ function buildDirectReviewSummary(items: TaskReviewItem[]): TaskReviewSummary | 
 }
 
 async function buildDirectTaskReviewData(task: Task, store: TaskStore): Promise<TaskReviewData> {
-  const structuredItems = buildWorkflowReviewItems(task);
+  const structuredItems = await buildWorkflowReviewItems(task, store);
   if (structuredItems.length > 0) {
     return {
       mode: "reviewer-agent",
