@@ -9,7 +9,7 @@
       "description": "Allow labeled steward/needs-expert events to launch S1A live analyze"
     },
     "s0HandoffS1a": {
-      "enabled": false,
+      "enabled": true,
       "envOverride": "STEWARD_S0_HANDOFF_S1A",
       "envTrueValue": "1",
       "description": "Allow S0 to attach steward/needs-expert on new incidents"
