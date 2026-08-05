@@ -57,11 +57,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           RISK: ${{ inputs.risk }}
-          CURSOR_API_KEY: ${{ secrets.S1A_CURSOR_API_KEY }}
+          # Match S1A wiring — either secret name may be present on the host.
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY || secrets.S1A_CURSOR_API_KEY || '' }}
+          S1A_CURSOR_API_KEY: ${{ secrets.S1A_CURSOR_API_KEY || secrets.CURSOR_API_KEY || '' }}
         run: |
           set -euo pipefail
           if [[ -n "${APPSOLINO_AUTOMATION_APP_PRIVATE_KEY:-}" || -n "${HOST_D_DEPLOY_SSH_KEY:-}" ]]; then
             echo "::error::review job must not receive App or Host credentials"
+            exit 1
+          fi
+          if [[ -z "${CURSOR_API_KEY:-}${S1A_CURSOR_API_KEY:-}" ]]; then
+            echo "::error::CURSOR_API_KEY / S1A_CURSOR_API_KEY missing — cannot run Cursor dual review"
             exit 1
           fi
           node <<'NODE'

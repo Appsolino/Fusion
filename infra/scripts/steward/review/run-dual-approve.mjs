@@ -10,25 +10,12 @@ import { runCursorReviewer } from "./reviewer.mjs";
 import { runCursorApprover } from "./approver.mjs";
 import { assertNoXaiRequirement } from "./policy.mjs";
 import { buildEvidenceBundle } from "./evidence.mjs";
+import { fetchPullRequestMeta } from "./gh-pr.mjs";
 import {
   evaluateDualApprovalMerge,
   exactHeadMergeArgv,
   ALLOWED_REPO,
 } from "../merge/exact-head.mjs";
-
-/**
- * @param {string[]} args
- * @param {{ token?: string }} [opts]
- */
-function ghJson(args, opts = {}) {
-  const env = { ...process.env };
-  if (opts.token) env.GH_TOKEN = opts.token;
-  const r = spawnSync("gh", args, { encoding: "utf8", env });
-  if (r.status !== 0) {
-    throw new Error(`gh ${args.join(" ")} failed: ${(r.stderr || r.stdout || "").slice(0, 400)}`);
-  }
-  return JSON.parse(r.stdout || "null");
-}
 
 /**
  * @param {{
@@ -52,18 +39,11 @@ export async function runDualCursorApproveMaybeMerge(input) {
   const repo = input.repository || ALLOWED_REPO;
   if (repo !== ALLOWED_REPO) throw new Error("cross-repository target rejected");
 
-  const pr = ghJson(
-    [
-      "pr",
-      "view",
-      String(input.prNumber),
-      "--repo",
-      repo,
-      "--json",
-      "number,state,baseRefOid,headRefOid,baseRefName,headRefName,url,statusCheckRollup",
-    ],
-    { token: input.appToken },
-  );
+  const pr = fetchPullRequestMeta({
+    prNumber: input.prNumber,
+    repo,
+    token: input.appToken,
+  });
   const headSha = String(pr.headRefOid || "");
   const baseSha = String(pr.baseRefOid || "");
   const diffProc = spawnSync(

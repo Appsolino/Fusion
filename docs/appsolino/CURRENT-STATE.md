@@ -2,7 +2,7 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-04T11:00:00Z
+**Last updated UTC:** 2026-08-04T11:50:00Z
 
 | Field | Value |
 | --- | --- |
@@ -10,6 +10,7 @@
 | Documentation closure merge SHA | `1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0` (PR #77) |
 | Programme tracking | Issue [#78](https://github.com/Appsolino/Fusion/issues/78) · ledger `infra/scripts/steward/programme/ledger.json` |
 | Live `main` SHA | **Resolve dynamically** (`git fetch origin && git rev-parse origin/main`) — not stored here |
+| Control plane | PR #80 **MERGED** (`672cb61898ab…`) — Cursor dual-review on main; gates OFF |
 | Active upstream sync | [PR #82](https://github.com/Appsolino/Fusion/pull/82) (`993a2f9d866d`) — supersedes closed #81/#68/#57/#60 |
 | Owner gate #79 | **CLOSED (not_planned / SUPERSEDED)** — Cursor-only dual review; no xAI key |
 | Active Host D release | `auto3-0.74.0-beta.6-16f24ed3b473` |
@@ -19,18 +20,19 @@
 | Staging health | `ok` / `0.74.0-beta.6` @ `127.0.0.1:4140` (`enginePaused=true`) |
 | Host P state | Deferred / untouched (**accessed=NO** — **prohibited**) |
 | Legacy production | DEGRADED / FROZEN |
-| Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** · PR #80 Cursor dual-review control plane (gates OFF) |
+| Operating mode | **CONTINUOUS UPSTREAM MAINTENANCE** · trusted-main dual-review proof next (gh-compat + Cursor secret) |
 
 ## Owner priority
 
 ```text
-NOW:     Bootstrap-owner-merge PR #80 after corrective dual-review head is green
-NEXT:    Prove Cursor dual-review on main → Gate A/B → S1B/S2/S3 → merge #82 → AUTO-3
+NOW:     Land gh-compat/Cursor-secret fix → re-run trusted-main dual-review proof on #82 (merge=false)
+NEXT:    Gate A/B → S1B/S2/S3 → merge #82 → AUTO-3
 HOLD:    Host P / production — PROHIBITED
 DONE:    S0 ACCEPTED; S1A MANUAL LIVE PROOF PASS (issue #74)
 DONE:    Owner chose Cursor-only review; #79 closed not_planned
+DONE:    PR #80 bootstrap owner merge (677465de… → main 672cb618…)
 DONE:    One active upstream sync: PR #82 only
-NOTE:    Activation gates remain OFF; PR #80 itself is bootstrap owner merge
+NOTE:    Activation gates remain OFF; first proof may end merge-blocked (s3-gate-disabled)
 NOTE:    Engine stays paused. Host P untouched / prohibited.
 ```
 
