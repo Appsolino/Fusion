@@ -172,7 +172,7 @@ export {
   type ResolveAgentMemoryInclusionModeInput,
   type ResolvedAgentMemoryInclusionMode,
 } from "./agents/agent-memory-mode.js";
-export type { TaskReviewData, TaskReviewSummary, TaskReviewItem } from "./types.js";
+export type { TaskReviewData, TaskReviewSummary, TaskReviewItem, TaskReviewVerdict, TaskReviewerType } from "./types.js";
 export type {
   TaskCommitAssociation,
   TaskCommitAssociationConfidence,

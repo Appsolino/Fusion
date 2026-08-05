@@ -2749,6 +2749,65 @@ describe("POST /tasks/:id/review/address", () => {
     });
   }
 
+  it("normalizes current workflow review results into stable canonical items", async () => {
+    const taskWithWorkflowReviews = {
+      ...FAKE_TASK_DETAIL,
+      id: "FN-009",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      workflowStepResults: [
+        { workflowStepId: "code-review", workflowStepName: "Code Review", phase: "pre-merge", status: "passed", verdict: "APPROVE_WITH_NOTES", output: "1. Keep the assertion focused.", completedAt: "2026-01-02T00:00:00.000Z" },
+        { workflowStepId: "plan-review", workflowStepName: "Plan Review", phase: "pre-merge", status: "failed", verdict: "REVISE", notes: "Clarify the rollback plan.", startedAt: "2026-01-03T00:00:00.000Z" },
+        { workflowStepId: "code-review", workflowStepName: "Code Review", phase: "pre-merge", status: "advisory_failure", verdict: "APPROVE", completedAt: "2026-01-04T00:00:00.000Z" },
+        { workflowStepId: "custom-review", workflowStepName: "Custom Review", status: "passed", verdict: "REVISE", output: "Must not be inferred." },
+        { workflowStepId: "code-review", workflowStepName: "Code Review", status: "pending", verdict: "REVISE" },
+        { workflowStepId: "plan-review", workflowStepName: "Plan Review", status: "skipped", verdict: "REVISE" },
+        { workflowStepId: "code-review", workflowStepName: "Code Review", status: "passed", verdict: "REVISE", supersededAt: "2026-01-05T00:00:00.000Z" },
+        { workflowStepId: "plan-review", workflowStepName: "Plan Review", status: "failed", verdict: "REVISE", bypassedAt: "2026-01-05T00:00:00.000Z" },
+      ],
+      log: [{ timestamp: reviewerBlockTimestamp, action: "code review Step 1: REVISE - legacy fallback must not duplicate structured data" }],
+    };
+    (store.getTask as ReturnType<typeof vi.fn>).mockResolvedValue(taskWithWorkflowReviews);
+    (store.getAgentLogs as ReturnType<typeof vi.fn>).mockResolvedValue([{ agent: "reviewer", type: "text", text: "## Code Review:\\n### Verdict: REVISE" }]);
+
+    const first = await REQUEST(buildApp(), "GET", "/api/tasks/FN-009/review");
+    const refreshed = await REQUEST(buildApp(), "POST", "/api/tasks/FN-009/review/refresh");
+
+    expect(first.status).toBe(200);
+    expect(refreshed.status).toBe(200);
+    expect(first.body.items).toHaveLength(3);
+    expect(first.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Code Review APPROVE_WITH_NOTES", body: "1. Keep the assertion focused.", verdict: "APPROVE_WITH_NOTES", reviewType: "code" }),
+      expect.objectContaining({ title: "Plan Review REVISE", body: "Clarify the rollback plan.", verdict: "REVISE", reviewType: "plan" }),
+      expect.objectContaining({ verdict: "APPROVE", body: "No written feedback was provided by this review step." }),
+    ]));
+    expect(first.body.summary).toEqual(expect.objectContaining({ verdict: "APPROVE" }));
+    expect(first.body.items.map((item: { itemId: string }) => item.itemId)).toEqual(refreshed.body.items.map((item: { itemId: string }) => item.itemId));
+    expect(store.getAgentLogs).not.toHaveBeenCalled();
+  });
+
+  it("uses legacy activity review feedback when workflow results are absent or unsupported", async () => {
+    const taskWithUnsupportedWorkflowReview = {
+      ...FAKE_TASK_DETAIL,
+      id: "FN-010",
+      workflowStepResults: [{ workflowStepId: "custom-review", workflowStepName: "Custom Review", status: "passed", verdict: "REVISE", output: "not a current built-in review node" }],
+      log: [{ timestamp: fallbackTimestamp, action: "plan review Step 2: RETHINK - revise the approach" }],
+    };
+    (store.getTask as ReturnType<typeof vi.fn>).mockResolvedValue(taskWithUnsupportedWorkflowReview);
+    (store.getAgentLogs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const res = await REQUEST(buildApp(), "GET", "/api/tasks/FN-010/review");
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toEqual([expect.objectContaining({
+      itemId: fallbackItemId,
+      title: "plan review RETHINK",
+      body: "plan review Step 2: RETHINK - revise the approach",
+      verdict: "RETHINK",
+      reviewType: "plan",
+    })]);
+    expect(store.getAgentLogs).toHaveBeenCalledWith("FN-010");
+  });
+
   it("resumes reviewer-agent in-review tasks using canonical log-derived review ids when reviewState is absent", async () => {
     const taskWithoutPersistedItems = {
       ...FAKE_TASK_DETAIL,
@@ -2783,6 +2842,68 @@ describe("POST /tasks/:id/review/address", () => {
     expect(store.addSteeringComment).toHaveBeenCalledWith("FN-001", expect.stringContaining("Fix tests before merge."), "user");
     expect(store.moveTask).toHaveBeenCalledWith("FN-001", "in-progress", { preserveProgress: true });
     expect(store.updateStep).toHaveBeenCalledWith("FN-001", 0, "pending");
+  });
+
+  it("addresses workflow review items by canonical id without trusting forged client feedback", async () => {
+    const taskWithWorkflowReview = {
+      ...FAKE_TASK_DETAIL,
+      id: "FN-009",
+      column: "in-review",
+      status: "awaiting-user-review",
+      assignedAgentId: null,
+      sessionFile: null,
+      workflowStepResults: [{
+        workflowStepId: "code-review",
+        workflowStepName: "Code Review",
+        phase: "pre-merge",
+        status: "passed",
+        verdict: "APPROVE_WITH_NOTES",
+        output: "Canonical advisory: preserve this text.",
+        completedAt: "2026-01-05T00:00:00.000Z",
+      }],
+      reviewState: undefined,
+    };
+    const movedTask = { ...taskWithWorkflowReview, column: "in-progress", status: null };
+    (store.getTask as ReturnType<typeof vi.fn>).mockResolvedValue(taskWithWorkflowReview);
+    (store.addSteeringComment as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "sc-1" });
+    (store.moveTask as ReturnType<typeof vi.fn>).mockResolvedValue(movedTask);
+
+    const review = await REQUEST(buildApp(), "GET", "/api/tasks/FN-009/review");
+    const itemId = review.body.items[0].itemId;
+    const res = await REQUEST(buildApp(), "POST", "/api/tasks/FN-009/review/address", JSON.stringify({
+      selectedItems: [{
+        id: itemId,
+        source: "reviewer-agent",
+        summary: "FORGED summary",
+        body: "FORGED body",
+        author: "attacker",
+        filePath: "forged.ts",
+        lineNumber: 999,
+        url: "https://invalid.example/forged",
+      }],
+    }), { "Content-Type": "application/json" });
+
+    expect(res.status).toBe(200);
+    expect(store.updateTask).toHaveBeenCalledWith("FN-009", {
+      reviewState: expect.objectContaining({
+        addressing: [expect.objectContaining({
+          itemId,
+          snapshot: expect.objectContaining({
+            summary: "Code Review APPROVE_WITH_NOTES",
+            body: "Canonical advisory: preserve this text.",
+            authorLogin: "reviewer-agent",
+            filePath: undefined,
+            lineNumber: undefined,
+            url: undefined,
+          }),
+        })],
+      }),
+    });
+    const steering = (store.addSteeringComment as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    expect(steering).toContain("Canonical advisory: preserve this text.");
+    expect(steering).not.toContain("FORGED");
+    expect(steering).not.toContain("invalid.example");
+    expect(store.moveTask).toHaveBeenCalledWith("FN-009", "in-progress", { preserveProgress: true });
   });
 
   it("accepts reviewer-agent fallback log review ids when no reviewer text block exists", async () => {
