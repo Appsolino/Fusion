@@ -34,7 +34,7 @@ import {
   isWipColumnRole,
 } from "../utils/columnRoles";
 import { resolveEffectiveAutoMerge } from "../../../core/src/merge/task-merge";
-import { uploadAttachment, deleteAttachment, updateTask, repairOverlapBlocker, pauseTask, unpauseTask, fetchTaskDetail, fetchTaskPrompt, fetchTaskVerificationRequest, fetchSettings, fetchTaskEffectiveSettings, fetchGlobalSettings, requestSpecRevision, rebuildTaskSpec, approvePlan, rejectPlan, refineTask, fetchWorkflowResults, assignTask, fetchAgents, fetchAgent, refreshPrStatus, fetchBoardWorkflows, updateTaskCustomFields, summarizeTitle, fetchWorkflowSettingValues, nudgeOverseer, stopOverseer, explainOverseer, fetchModels, fetchNodes, api } from "../api";
+import { uploadAttachment, deleteAttachment, updateTask, repairOverlapBlocker, fetchTaskDetail, fetchTaskPrompt, fetchTaskVerificationRequest, fetchSettings, fetchTaskEffectiveSettings, fetchGlobalSettings, requestSpecRevision, rebuildTaskSpec, approvePlan, rejectPlan, refineTask, fetchWorkflowResults, assignTask, fetchAgents, fetchAgent, refreshPrStatus, fetchBoardWorkflows, updateTaskCustomFields, summarizeTitle, fetchWorkflowSettingValues, nudgeOverseer, stopOverseer, explainOverseer, fetchModels, fetchNodes, api } from "../api";
 import type { RevertTaskOptions, RevertTaskResult, ModelInfo, NodeInfo } from "../api";
 import type { BoardWorkflowsPayload, WorkflowFieldDefinition, CustomFieldRejection } from "../api";
 import { WorkflowIcon } from "./WorkflowIcon";
@@ -394,6 +394,9 @@ export interface TaskDetailModalProps {
   onRevertTask?: (id: string, body?: RevertTaskOptions) => Promise<RevertTaskResult>;
   onMergeTask: (id: string) => Promise<MergeResult>;
   onRetryTask?: (id: string) => Promise<Task>;
+  /** Shared lifecycle operations reconcile confirmed rows before detail hosts render their next frame. */
+  onPauseTask?: (id: string) => Promise<Task>;
+  onUnpauseTask?: (id: string) => Promise<Task>;
   /*
   FNXC:ReviewLaneBypass 2026-07-09-00:00:
   Operator-only review-lane bypass (FN-7720). Only wired here (Task Detail) so
@@ -782,6 +785,8 @@ export function TaskDetailContent({
   onRevertTask,
   onMergeTask,
   onRetryTask,
+  onPauseTask,
+  onUnpauseTask,
   onBypassReview,
   onResetTask,
   onDuplicateTask,
@@ -3446,18 +3451,21 @@ export function TaskDetailContent({
 
   const handleTogglePause = useCallback(async () => {
     try {
-      if (isTaskPaused) {
-        await unpauseTask(task.id, projectId);
-        addToast(t("taskDetail.pause.unpaused", "Unpaused {{id}}", { id: task.id }), "success");
-      } else {
-        await pauseTask(task.id, projectId);
-        addToast(t("taskDetail.pause.paused", "Paused {{id}}", { id: task.id }), "success");
-      }
+      const lifecycleOperation = isTaskPaused ? onUnpauseTask : onPauseTask;
+      if (!lifecycleOperation) return;
+      const updatedTask = await lifecycleOperation(task.id);
+      onTaskUpdated?.(updatedTask);
+      addToast(
+        isTaskPaused
+          ? t("taskDetail.pause.unpaused", "Unpaused {{id}}", { id: task.id })
+          : t("taskDetail.pause.paused", "Paused {{id}}", { id: task.id }),
+        "success",
+      );
       requestClose();
     } catch (err) {
       addToast(getErrorMessage(err), "error");
     }
-  }, [isTaskPaused, task.id, requestClose, addToast]);
+  }, [isTaskPaused, onPauseTask, onTaskUpdated, onUnpauseTask, task.id, requestClose, addToast, t]);
 
   const handleApprovePlan = useCallback(async () => {
     try {

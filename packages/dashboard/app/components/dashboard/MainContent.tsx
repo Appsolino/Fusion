@@ -908,6 +908,8 @@ export function MainContent({
               onReviseTask={(task) => modalManager.openNewTaskWithDescription(task.description)}
               onMergeTask={mergeTask}
               onRetryTask={retryTask}
+              onPauseTask={pauseTask}
+              onUnpauseTask={unpauseTask}
               onResetTask={resetTask}
               onDuplicateTask={duplicateTask}
               /*

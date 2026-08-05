@@ -1113,74 +1113,59 @@ export function useTasks(options?: UseTasksOptions) {
   }, [projectId]);
 
   /*
-  FNXC:DashboardPauseState 2026-07-12-00:00:
-  FN-7861 makes pause and unpause user-visible state boundaries. After the API confirms either transition, patch shared hook state and the project SWR task cache immediately, mirroring retryTask/bypassReview, so Board/List/right-dock task renderers do not wait for SSE or polling to clear stale paused rendering.
+  FNXC:DashboardPauseState 2026-08-05-07:18:
+  Every lifecycle surface must publish the server-confirmed pause row to shared state before
+  waiting on SSE or polling. One reconciliation seam advances the fetch version, replaces only
+  the matching task, and safely refreshes the project cache, so detail, board, list, and dock
+  hosts cannot diverge after pause or unpause.
   */
-  const pauseTask = useCallback(async (id: string): Promise<Task> => {
-    const updatedTask = normalizeTask(await api.pauseTask(id, projectId));
+  const reconcileConfirmedTask = useCallback((confirmedTask: Task): Task => {
+    const confirmedRow = normalizeTask(confirmedTask);
+    const currentTask = tasksRef.current.find((task) => task.id === confirmedRow.id);
+    // A live event that arrived while the mutation was pending may be newer than its response.
+    // Start from the confirmed row so equal clocks retain the mutation, then admit only newer state.
+    const updatedTask = currentTask ? mergeIncomingTask(confirmedRow, currentTask) : confirmedRow;
     fetchVersionRef.current++;
-
-    const projectUpdatedTasks = (currentTasks: Task[]) => currentTasks.map((task) => (task.id === id ? updatedTask : task));
+    const replaceConfirmedTask = (currentTasks: Task[]) =>
+      currentTasks.map((task) => task.id === updatedTask.id ? mergeIncomingTask(updatedTask, task) : task);
 
     if (projectId) {
       const cacheKey = `${SWR_CACHE_KEYS.TASKS_PREFIX}${projectId}`;
       const cachedTasks = readCache<unknown>(cacheKey, { maxAgeMs: SWR_TASKS_MAX_AGE_MS });
       if (Array.isArray(cachedTasks)) {
-        const cacheContainsOnlyTaskRows = cachedTasks.every((task) => Boolean(task && typeof task === "object" && typeof (task as Task).id === "string"));
+        const cacheContainsOnlyTaskRows = cachedTasks.every((task) =>
+          Boolean(task && typeof task === "object" && typeof (task as Task).id === "string"),
+        );
         if (cacheContainsOnlyTaskRows) {
-          const nextCachedTasks = cachedTasks.map((task) => ((task as Task).id === id ? updatedTask : normalizeTask(task as Task)));
-          writeCache(cacheKey, nextCachedTasks.length > 500 ? nextCachedTasks.slice(0, 500) : nextCachedTasks, { maxBytes: 500_000 });
+          const nextCachedTasks = cachedTasks.map((task) =>
+            (task as Task).id === updatedTask.id ? updatedTask : normalizeTask(task as Task),
+          );
+          writeTaskCacheSnapshot(cacheKey, nextCachedTasks);
         } else {
           clearCache(cacheKey);
         }
       } else if (cachedTasks === null) {
-        const nextCurrentTasks = projectUpdatedTasks(tasksRef.current);
-        writeCache(cacheKey, nextCurrentTasks.length > 500 ? nextCurrentTasks.slice(0, 500) : nextCurrentTasks, { maxBytes: 500_000 });
+        writeTaskCacheSnapshot(cacheKey, replaceConfirmedTask(tasksRef.current));
       } else {
         clearCache(cacheKey);
       }
     }
 
-    setTasks((prev) => {
-      const next = projectUpdatedTasks(prev);
-      tasksRef.current = next;
-      return next;
+    setTasks((previousTasks) => {
+      const nextTasks = replaceConfirmedTask(previousTasks);
+      tasksRef.current = nextTasks;
+      return nextTasks;
     });
     return updatedTask;
   }, [projectId]);
+
+  const pauseTask = useCallback(async (id: string): Promise<Task> => {
+    return reconcileConfirmedTask(await api.pauseTask(id, projectId));
+  }, [projectId, reconcileConfirmedTask]);
 
   const unpauseTask = useCallback(async (id: string): Promise<Task> => {
-    const updatedTask = normalizeTask(await api.unpauseTask(id, projectId));
-    fetchVersionRef.current++;
-
-    const projectUpdatedTasks = (currentTasks: Task[]) => currentTasks.map((task) => (task.id === id ? updatedTask : task));
-
-    if (projectId) {
-      const cacheKey = `${SWR_CACHE_KEYS.TASKS_PREFIX}${projectId}`;
-      const cachedTasks = readCache<unknown>(cacheKey, { maxAgeMs: SWR_TASKS_MAX_AGE_MS });
-      if (Array.isArray(cachedTasks)) {
-        const cacheContainsOnlyTaskRows = cachedTasks.every((task) => Boolean(task && typeof task === "object" && typeof (task as Task).id === "string"));
-        if (cacheContainsOnlyTaskRows) {
-          const nextCachedTasks = cachedTasks.map((task) => ((task as Task).id === id ? updatedTask : normalizeTask(task as Task)));
-          writeCache(cacheKey, nextCachedTasks.length > 500 ? nextCachedTasks.slice(0, 500) : nextCachedTasks, { maxBytes: 500_000 });
-        } else {
-          clearCache(cacheKey);
-        }
-      } else if (cachedTasks === null) {
-        const nextCurrentTasks = projectUpdatedTasks(tasksRef.current);
-        writeCache(cacheKey, nextCurrentTasks.length > 500 ? nextCurrentTasks.slice(0, 500) : nextCurrentTasks, { maxBytes: 500_000 });
-      } else {
-        clearCache(cacheKey);
-      }
-    }
-
-    setTasks((prev) => {
-      const next = projectUpdatedTasks(prev);
-      tasksRef.current = next;
-      return next;
-    });
-    return updatedTask;
-  }, [projectId]);
+    return reconcileConfirmedTask(await api.unpauseTask(id, projectId));
+  }, [projectId, reconcileConfirmedTask]);
 
   const deleteTask = useCallback(async (
     id: string,

@@ -3641,6 +3641,8 @@ export function ListView({
                       onDeleteTask={onDeleteTask}
                       onMergeTask={onMergeTask}
                       onRetryTask={onRetryTask}
+                      onPauseTask={onPauseTask}
+                      onUnpauseTask={onUnpauseTask}
                       onResetTask={onResetTask}
                       onDuplicateTask={onDuplicateTask}
                       onPopOut={onPopOut ? () => onPopOut(selectedTaskSnapshot) : undefined}
