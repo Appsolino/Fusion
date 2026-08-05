@@ -1801,38 +1801,49 @@ describe("TaskDetailModal", () => {
 
     it("refreshes on show, re-entry, and visible planning polls", async () => {
       vi.useFakeTimers();
-      const { fetchTaskDetail } = await import("../../api");
+      const { fetchTaskDetail, fetchTaskPrompt } = await import("../../api");
       const mockFetchDetail = vi.mocked(fetchTaskDetail);
-      mockFetchDetail.mockReset();
-      mockFetchDetail
-        .mockResolvedValueOnce(makeTask({ id: "FN-fresh", column: "triage", status: "planning", prompt: "# First revision" }))
-        .mockResolvedValueOnce(makeTask({ id: "FN-fresh", column: "triage", status: "planning", prompt: "# Polled revision" }))
-        .mockResolvedValueOnce(makeTask({ id: "FN-fresh", column: "triage", status: "planning", prompt: "# Re-entered revision" }));
+      const mockFetchPrompt = vi.mocked(fetchTaskPrompt);
+      mockFetchDetail.mockClear();
+      mockFetchPrompt.mockReset();
+      mockFetchPrompt
+        .mockResolvedValueOnce({ id: "FN-fresh", prompt: "# First revision" })
+        .mockResolvedValueOnce({ id: "FN-fresh", prompt: "# Polled revision" })
+        .mockResolvedValueOnce({ id: "FN-fresh", prompt: "# Re-entered revision" });
 
-      render(<TaskDetailContent task={makeTask({ id: "FN-fresh", column: "triage", status: "planning", prompt: "" })} initialTab="definition" onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+      render(<TaskDetailContent task={makeTask({ id: "FN-fresh", column: "triage", status: "planning", prompt: "" })} projectId="project-fresh" initialTab="definition" onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
 
       await act(async () => { await vi.advanceTimersByTimeAsync(0); });
       expect(screen.getByText("First revision")).toBeTruthy();
+      expect(mockFetchPrompt).toHaveBeenCalledWith("FN-fresh", "project-fresh");
+      expect(mockFetchDetail).not.toHaveBeenCalled();
+
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
       expect(screen.getByText("Polled revision")).toBeTruthy();
+      expect(mockFetchPrompt).toHaveBeenCalledTimes(2);
+      expect(mockFetchDetail).not.toHaveBeenCalled();
 
       fireEvent.click(screen.getByText("Activity"));
       await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
-      expect(mockFetchDetail).toHaveBeenCalledTimes(2);
+      expect(mockFetchPrompt).toHaveBeenCalledTimes(2);
+      expect(mockFetchDetail).not.toHaveBeenCalled();
 
       fireEvent.click(screen.getByText("Plan"));
       await act(async () => { await vi.advanceTimersByTimeAsync(0); });
       expect(screen.getByText("Re-entered revision")).toBeTruthy();
+      expect(mockFetchPrompt).toHaveBeenCalledTimes(3);
+      expect(mockFetchPrompt).toHaveBeenLastCalledWith("FN-fresh", "project-fresh");
+      expect(mockFetchDetail).not.toHaveBeenCalled();
     });
 
     it("keeps an inline edit buffer stable while a Plan Review refresh arrives", async () => {
       vi.useFakeTimers();
-      const { fetchTaskDetail } = await import("../../api");
-      const mockFetchDetail = vi.mocked(fetchTaskDetail);
-      mockFetchDetail.mockReset();
-      mockFetchDetail
-        .mockResolvedValueOnce(makeTask({ id: "FN-edit", column: "todo", prompt: "# Server revision", workflowStepResults: [{ workflowStepId: "plan-review", status: "pending", startedAt: "2026-08-03T02:00:00Z" }] }))
-        .mockResolvedValueOnce(makeTask({ id: "FN-edit", column: "todo", prompt: "# New server revision", workflowStepResults: [{ workflowStepId: "plan-review", status: "pending", startedAt: "2026-08-03T02:00:00Z" }] }));
+      const { fetchTaskPrompt } = await import("../../api");
+      const mockFetchPrompt = vi.mocked(fetchTaskPrompt);
+      mockFetchPrompt.mockReset();
+      mockFetchPrompt
+        .mockResolvedValueOnce({ id: "FN-edit", prompt: "# Server revision" })
+        .mockResolvedValueOnce({ id: "FN-edit", prompt: "# New server revision" });
 
       render(<TaskDetailContent task={makeTask({ id: "FN-edit", column: "todo", prompt: "# Initial", workflowStepResults: [{ workflowStepId: "plan-review", status: "pending", startedAt: "2026-08-03T02:00:00Z" }] })} initialTab="definition" onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
       await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -1843,24 +1854,24 @@ describe("TaskDetailModal", () => {
       fireEvent.change(textarea, { target: { value: "# Local operator edit" } });
       const sameTextarea = textarea;
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-      expect(mockFetchDetail).toHaveBeenCalledTimes(2);
+      expect(mockFetchPrompt).toHaveBeenCalledTimes(2);
       expect(document.querySelector(".spec-editor-textarea")).toBe(sameTextarea);
       expect(textarea.value).toBe("# Local operator edit");
     });
 
     it("ignores a late planning response after the task changes", async () => {
-      const { fetchTaskDetail } = await import("../../api");
-      const mockFetchDetail = vi.mocked(fetchTaskDetail);
-      let resolveFirst: (detail: TaskDetail) => void = () => {};
-      mockFetchDetail.mockReset();
-      mockFetchDetail
-        .mockImplementationOnce(() => new Promise<TaskDetail>((resolve) => { resolveFirst = resolve; }))
-        .mockResolvedValueOnce(makeTask({ id: "FN-current", column: "triage", status: "planning", prompt: "# Current task" }));
+      const { fetchTaskPrompt } = await import("../../api");
+      const mockFetchPrompt = vi.mocked(fetchTaskPrompt);
+      let resolveFirst: (response: { id: string; prompt?: string }) => void = () => {};
+      mockFetchPrompt.mockReset();
+      mockFetchPrompt
+        .mockImplementationOnce(() => new Promise<{ id: string; prompt?: string }>((resolve) => { resolveFirst = resolve; }))
+        .mockResolvedValueOnce({ id: "FN-current", prompt: "# Current task" });
       const props = { initialTab: "definition" as const, onMoveTask: noopMove, onDeleteTask: noopDelete, onMergeTask: noopMerge, onOpenDetail: noopOpenDetail, addToast: noop };
       const view = render(<TaskDetailContent {...props} task={makeTask({ id: "FN-old", column: "triage", status: "planning", prompt: "# Old task" })} />);
       view.rerender(<TaskDetailContent {...props} task={makeTask({ id: "FN-current", column: "triage", status: "planning", prompt: "" })} />);
       await waitFor(() => expect(screen.getByText("Current task")).toBeTruthy());
-      await act(async () => { resolveFirst(makeTask({ id: "FN-old", column: "triage", status: "planning", prompt: "# Stale task" })); });
+      await act(async () => { resolveFirst({ id: "FN-old", prompt: "# Stale task" }); });
       expect(screen.queryByText("Stale task")).toBeNull();
       expect(screen.getByText("Current task")).toBeTruthy();
     });
