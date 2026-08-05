@@ -112,9 +112,9 @@ jobs:
           SHOULD="false"
 
           # Version-controlled policy + emergency KILL file (killSwitch wins).
-          ACT="$(node -e 'import("./infra/scripts/steward/activation/resolve-activation.mjs").then(m=>{const s=m.summarizeActivation(); process.stdout.write(JSON.stringify({kill:s.killSwitch,on:s.effective.s1aAutoHandoff}))}')"
+          ACT="$(node ./infra/scripts/steward/activation/print-gate.mjs s1aAutoHandoff)"
           echo "activation=${ACT}"
-          AUTO_ON="$(node -e 'const a=JSON.parse(process.argv[1]); process.stdout.write(a.on&&!a.kill?"true":"false")' "${ACT}")"
+          AUTO_ON="$(node -e 'const a=JSON.parse(process.argv[1]); process.stdout.write(a.on?"true":"false")' "${ACT}")"
 
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
             ISSUE="${ISSUE_NUMBER_INPUT}"
