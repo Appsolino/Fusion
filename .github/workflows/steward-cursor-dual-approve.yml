@@ -47,7 +47,8 @@ jobs:
       - name: Checkout trusted main
         uses: actions/checkout@v6
         with:
-          ref: main
+          # workflow_dispatch --ref main pins github.sha to tip at dispatch time
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -57,19 +58,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           RISK: ${{ inputs.risk }}
-          # Match S1A wiring — either secret name may be present on the host.
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY || secrets.S1A_CURSOR_API_KEY || '' }}
-          S1A_CURSOR_API_KEY: ${{ secrets.S1A_CURSOR_API_KEY || secrets.CURSOR_API_KEY || '' }}
+          # Inject secrets under alternate names. Empty `CURSOR_API_KEY: ''` would
+          # blank the self-hosted runner env and break interactive cursor-agent login
+          # (S1A treats the API key as optional when login already works).
+          SECRET_CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          SECRET_S1A_CURSOR_API_KEY: ${{ secrets.S1A_CURSOR_API_KEY }}
         run: |
           set -euo pipefail
+          export PATH="${HOME}/.local/bin:/usr/local/bin:${PATH}"
           if [[ -n "${APPSOLINO_AUTOMATION_APP_PRIVATE_KEY:-}" || -n "${HOST_D_DEPLOY_SSH_KEY:-}" ]]; then
             echo "::error::review job must not receive App or Host credentials"
             exit 1
           fi
-          if [[ -z "${CURSOR_API_KEY:-}${S1A_CURSOR_API_KEY:-}" ]]; then
-            echo "::error::CURSOR_API_KEY / S1A_CURSOR_API_KEY missing — cannot run Cursor dual review"
-            exit 1
+          if [[ -n "${SECRET_CURSOR_API_KEY:-}" ]]; then
+            export CURSOR_API_KEY="${SECRET_CURSOR_API_KEY}"
           fi
+          if [[ -n "${SECRET_S1A_CURSOR_API_KEY:-}" ]]; then
+            export S1A_CURSOR_API_KEY="${SECRET_S1A_CURSOR_API_KEY}"
+            export CURSOR_API_KEY="${CURSOR_API_KEY:-${SECRET_S1A_CURSOR_API_KEY}}"
+          fi
+          unset SECRET_CURSOR_API_KEY SECRET_S1A_CURSOR_API_KEY
+          if [[ -z "${CURSOR_API_KEY:-}${S1A_CURSOR_API_KEY:-}" ]]; then
+            if ! cursor-agent status 2>/dev/null | grep -qi 'logged in'; then
+              echo "::error::CURSOR_API_KEY / S1A_CURSOR_API_KEY missing and cursor-agent is not logged in"
+              exit 1
+            fi
+            echo "cursor-agent interactive login present — proceeding without API key secret"
+          fi
+          echo "trusted_checkout=$(git rev-parse HEAD)"
           node <<'NODE'
           import { writeFileSync } from "node:fs";
           import { runDualCursorApproveMaybeMerge } from "./infra/scripts/steward/review/run-dual-approve.mjs";
