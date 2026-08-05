@@ -6,18 +6,23 @@ This guide consolidates the detailed testing guidance moved from `AGENTS.md`.
 
 ## The merge gate
 
-CI blocks PRs on exactly four checks (`.github/workflows/pr-checks.yml`): **Lint, Typecheck, Build, Gate**. The Gate job runs the boot smoke (`scripts/boot-smoke.mjs`: CLI `--help` + a real `fn serve` answering `GET /api/health`) and `pnpm test:gate` (static process guards, curated `engine-core`, two PostgreSQL canaries, and the CI-shape test). Everything else — the 4-way shards, the engine slow tier, the dashboard inventory guard — runs NON-BLOCKING in `.github/workflows/full-suite.yml` on push to main.
+CI blocks PRs on exactly four checks (`.github/workflows/pr-checks.yml`): **Lint, Typecheck, Build, Gate**. The Gate job runs the boot smoke (`scripts/boot-smoke.mjs`: CLI `--help` + a real `fn serve` answering `GET /api/health`) and `pnpm test:gate`: 11 static policy validators, 22 curated `engine-core` files, three PostgreSQL canaries, four core unit files, then the CI-shape test. Everything else — the 4-way shards, the engine slow tier, the dashboard inventory guard — runs NON-BLOCKING in `.github/workflows/full-suite.yml` on push to main.
 
 Gate membership is the explicit allow-list in `packages/engine/vitest.config.ts` (`engine-core` project). Admission requires evidence of value (the test catches real regressions); tests never graduate in by default. A flaky gate test is evicted by deleting its allow-list line — the eviction PR does not need the flaky test to pass. The whole `engine-core` project must stay under ~60s wall-clock.
 
-<!-- FNXC:MergeGatePerformance 2026-07-22-15:35: FN-8497 restores the 8–10s gate band after a 23-file PG integration lane added 17s of serialized database-template work. Keep only the lifecycle and transactional-handoff canaries blocking; the other former members must remain enabled in the non-blocking core test lane and the structural policy test enforces that containment. -->
-**PostgreSQL gate policy:** `packages/core`'s `test:pg-gate` intentionally runs only `task-lifecycle-e2e.pg.test.ts` and `handoff-to-review-atomicity.pg.test.ts`, preserving real-backend lifecycle and atomic-handoff canaries. It runs concurrently with `engine-core` after the static guards; the root script waits for **both** lanes and propagates either failure before running CI-shape. Every other former PG gate member remains enabled and discovered by the non-blocking command `pnpm --filter @fusion/core test` (default config: `src/**/*.test.ts`, no PG quarantine exclusions). `scripts/__tests__/engine-vitest-gate-policy.test.mjs` pins the two canaries and fails if any removed member is deleted, undiscoverable, or hidden by the default lane's script/config.
+<!-- FNXC:MergeGatePerformance 2026-08-04-15:44: FN-8783 removes only independent static-validator scheduling overhead. The exact policy inventory, all 22 engine files, every PG/unit canary, their nonzero propagation, and CI-shape-after-success remain blocking; a timing win that weakens any of those contracts is not accepted. -->
+**Static-validator and lane ordering:** `test:gate:static` declares the 11 canonical, directly runnable read-only validators. `scripts/run-static-gate-checks.mjs` starts them concurrently and waits for **every** result, so zero, one, or multiple policy failures remain fail-closed and observable before tests start. It then starts `engine-core`, `test:pg-gate`, and `test:unit-gate` concurrently; the shell waits for all **three** and returns nonzero if any fail. CI-shape runs only after that successful wait.
+
+<!-- FNXC:MergeGatePerformance 2026-08-04-16:09: FN-8783 keeps engine-core's forks, worker budget, parallelism, bundle rebuild, and all 22 files while caching only Vitest transform artifacts between warm runs. This is never a test-result cache: every assertion and mock boundary remains evaluated for each invocation. -->
+**FN-8783 warm result:** The paired W32 protocol recorded in task document `FN-8783/docs` measured the complete-gate median at **15.4s baseline** and **10.2s candidate** across five serialized AB/BA pairs on the same macOS arm64 host (Node 26.3.0, pnpm 10.33.0, identical lockfile). The final engine-core transform-cache profile used one priming run (6.3s), then five warm runs (**5.1, 5.2, 5.1, 5.0, 5.2s; median 5.1s**) versus the pre-cache 6.2s focused engine-core result. The residual full-gate critical path is the unchanged concurrent engine/PG/unit/CI-shape work; task evidence records commands, SHAs, preparation, raw timing order, and coverage counts.
+
+**PostgreSQL and unit gate policy:** `packages/core`'s `test:pg-gate` intentionally runs `handoff-to-review-atomicity.pg.test.ts`, `task-lifecycle-e2e.pg.test.ts`, and `sync-workflow-ir-is-always-default.pg.test.ts`, preserving atomic-handoff, lifecycle, and default-IR real-backend canaries. `test:unit-gate` runs `task-merge.test.ts`, `legacy-adoption.test.ts`, `no-hardcoded-lifecycle-columns.test.ts`, and `sync-workflow-ir-callsite-allowlist.test.ts`. Every other former PG gate member remains enabled and discovered by the non-blocking command `pnpm --filter @fusion/core test` (default config: `src/**/*.test.ts`, no PG quarantine exclusions). `scripts/__tests__/engine-vitest-gate-policy.test.mjs` pins the exact three PG and four unit files, all waits, CI-shape ordering, and every engine/static member.
 
 <!-- FNXC:EngineTests 2026-07-08-03:00: FN-7667 decouples the engine-core gate's module graph from full-barrel growth so new feature modules don't silently inflate every gate fork's transform/import cost. -->
 **Gate-safe `@fusion/core` barrel:** the `engine-core` project resolves `@fusion/core` to `packages/core/src/index.gate.ts` (a project-scoped `resolve.alias`, not the root map), not the full `packages/core/src/index.ts` barrel. `index.gate.ts` is a byte-for-byte copy of the full barrel minus the `export ... from` statements for modules added to the barrel after the last re-audit baseline — i.e. it re-exports everything the full barrel does except genuinely new, gate-irrelevant feature modules (diffed against the prior baseline commit's barrel, not hand-picked from what gate *test* files import — production modules under test pull in far more of the barrel transitively than their own imports suggest). `engine-default`/`engine-reliability`/`engine-slow` are unaffected and keep resolving the full barrel. `@fusion/engine` is untouched (no gate file imports it). When adding a new barrel module that no gate test needs, mirror the exclusion in `index.gate.ts` rather than letting gate wall-time grow — see the FNXC comment at the top of `index.gate.ts` and `packages/engine/vitest.config.ts`'s `engine-core` project for the audit procedure.
 
 <!-- FNXC:EngineTests 2026-07-08-05:30: FN-7669 pre-bundles the gate-safe @fusion/core barrel to attack the FN-7668-identified import-phase-dominated wall-time cost. -->
-**Pre-bundled `@fusion/core` gate bundle:** FN-7668 profiled the gate's dominant wall-time cost as vitest/Vite SSR's **import-phase** — each of the 18 `pool:"forks"` OS processes independently re-resolves+evaluates the barrel closure from scratch with zero cross-fork sharing. `engine-core`'s `@fusion/core` alias now points at a single esbuild-bundled ESM file (`scripts/build-engine-core-gate-bundle.mjs`, entrypoint `packages/core/src/index.gate.ts`, `packages:"external"` so only the first-party closure — 220 files — is inlined) instead of directly at `index.gate.ts`'s source, collapsing 220 per-fork Vite SSR module-loader round-trips into 1 file load per fork. The bundle is **rebuilt fresh on every gate invocation** via the `engine-core` project's `globalSetup` (the builder's own esbuild dependency graph determines what gets bundled — never a hand-maintained file/symbol list, so there is no drift surface), and lives at `packages/core/.gate-bundle/core.mjs` — a gitignored, non-committed artifact placed as a **sibling of `packages/core/node_modules/`, deliberately not nested inside it**: nesting inside `node_modules` triggers Vite's SSR external-dep heuristic (loads the whole bundle via Node's native loader, bypassing Vite's mock-interception pipeline) and silently defeats `vi.mock` for imports nested inside the bundle (see the FNXC comment in the builder script for the full repro/fix). Measured A/B (5 alternating runs each, FN-7669 task docs): median real wall-time −5.5%, import-phase aggregate −14.0%, transform-phase aggregate −25.9%, with full coverage parity (335/335 gate tests, identical per-file counts) — a modest but real, reproducible, zero-downside win. `@fusion/engine` stays on the full (unbundled) barrel: no gate file imports it directly, so bundling it would be zero-benefit churn against the core↔engine circular-import DI. Bundling the `@fusion/engine` relative-import graph (`merger.ts` et al., the untouched remainder of FN-7668's ~430-file closure) is a natural, larger-payoff follow-up, filed separately.
+**Pre-bundled `@fusion/core` gate bundle:** FN-7668 profiled the gate's dominant wall-time cost as vitest/Vite SSR's **import-phase** — each fork worker independently re-resolves+evaluates the barrel closure from scratch with zero cross-fork sharing. `engine-core`'s `@fusion/core` alias now points at a single esbuild-bundled ESM file (`scripts/build-engine-core-gate-bundle.mjs`, entrypoint `packages/core/src/index.gate.ts`, `packages:"external"` so only the first-party closure — 220 files — is inlined) instead of directly at `index.gate.ts`'s source, collapsing 220 per-fork Vite SSR module-loader round-trips into 1 file load per fork. The bundle is **rebuilt fresh on every gate invocation** via the `engine-core` project's `globalSetup` (the builder's own esbuild dependency graph determines what gets bundled — never a hand-maintained file/symbol list, so there is no drift surface), and lives at `packages/core/.gate-bundle/core.mjs` — a gitignored, non-committed artifact placed as a **sibling of `packages/core/node_modules/`, deliberately not nested inside it**: nesting inside `node_modules` triggers Vite's SSR external-dep heuristic (loads the whole bundle via Node's native loader, bypassing Vite's mock-interception pipeline) and silently defeats `vi.mock` for imports nested inside the bundle (see the FNXC comment in the builder script for the full repro/fix). Measured A/B (5 alternating runs each, FN-7669 task docs): median real wall-time −5.5%, import-phase aggregate −14.0%, transform-phase aggregate −25.9%, with full coverage parity (335/335 gate tests, identical per-file counts) — a modest but real, reproducible, zero-downside win. `@fusion/engine` stays on the full (unbundled) barrel: no gate file imports it directly, so bundling it would be zero-benefit churn against the core↔engine circular-import DI. Bundling the `@fusion/engine` relative-import graph (`merger.ts` et al., the untouched remainder of FN-7668's ~430-file closure) is a natural, larger-payoff follow-up, filed separately.
 
 ## Weekly signal-per-second baseline
 
@@ -132,17 +137,16 @@ netted — a wrong classification stays visible instead of silently moving the b
 `scripts/lib/lifecycle-column-census-baseline.json`:
 
 - a **rise** fails hard — that is the ratchet's purpose, "no new guards";
-- a **drop** TIGHTENS the baseline automatically, reports what it lowered, and exits 0.
+- a **drop** reports that the baseline can be tightened and exits 0 without writing it.
 
-<!-- FNXC:LifecycleColumnCensus 2026-08-01-03:05: the drop behaviour was a hard failure and is not any more,
-because the drop is almost never the failing author's to fix. Eleven files dropped in one merge wave, none of
-those PRs re-recorded, and none of their authors did anything wrong; measured three times since CI began
-gating this. A permanently-red gate is a bigger hole than a stale allowance, because it gets ignored and then
-nothing is guarded at all. -->
-The tightened file must be **committed** — in CI the write is discarded with the runner, which is why the gate
-goes green rather than silently passing a stale allowance. `--strict --exact` restores hard failure on a drop,
-for the end state where the count is pinned and any divergence is a real event. `--strict --update-baseline`
-re-records unconditionally and prints `ACCEPTED RISES`, which is the only way to record a rise deliberately.
+<!-- FNXC:LifecycleColumnCensus 2026-08-01-23:23: Plain strict verification must stay read-only. Drops often
+come from another merge and should not redden the gate, but a check that rewrites the baseline turns every
+reader into an uncredited author. `--exact` catches drift at the pinned end state; explicit baseline recording
+keeps the diff attributable to the change that reviewed it. -->
+A dropped baseline must be **deliberately re-recorded and committed** with
+`--strict --update-baseline`. `--strict --exact` restores hard failure on a drop, for the end state where the
+count is pinned and any divergence is a real event. `--strict --update-baseline` re-records unconditionally
+and prints `ACCEPTED RISES`, which is the only way to record a rise deliberately.
 
 The regression suite is `packages/engine/src/__tests__/lifecycle-column-census.test.ts`. It pins
 each form the census must catch (all six ids, non-`column` locals, single quotes, negation,
@@ -208,6 +212,21 @@ wrapper or recombine the jsdom-heavy app/API projects, because the old combined 
 was SIGKILLed by heap pressure under workspace worker budgeting. The top-level
 `pretest` artifact bootstrap runs once before the orchestrator; lane subprocesses must
 not re-run `scripts/ensure-test-artifacts.mjs`.
+
+Use the exact aggregate command below to attempt all 15 app/API lanes, including after
+one or more lanes fail:
+
+```bash
+pnpm --filter @fusion/dashboard test -- --all
+```
+
+pnpm forwards that invocation as `-- --all`; the quality runner deliberately removes
+only the leading package-script separator and still rejects genuine unknown options.
+`--no-fail-fast` is an equivalent aggregate alias. Without either alias, the default is
+fail-fast for quick local feedback: remaining lanes are reported as **NOT RUN** with
+**UNKNOWN** status, never as passing. Aggregate mode attempts every lane exactly once;
+any failed or signal-terminated lane keeps the command nonzero and is named in the
+final failure summary. It must never print an all-passed summary when any lane failed.
 
 <!-- FNXC:TestInfrastructure 2026-06-21-12:21: FN-6854 applies the dashboard heap-runner pattern to the engine affected-package lane because a wide `vitest --changed` fan-out selected hundreds of real-git-heavy engine files and could be OS-SIGKILLed by heap pressure before Vitest returned a verdict. Keep the engine lane isolated, heap-capped, and lower-worker rather than raising concurrency or widening timeouts.
 
@@ -358,6 +377,9 @@ Flags:
 - `--strict` exits 1 when any entry is expired or near-deadline, for opt-in local or project-specific gates only. Do not wire this into `pretest`, `test:gate`, or other default blocking lanes without an explicit policy change.
 
 **Rescue** (before the clock runs out) requires both: evidence the test catches real regressions, and a root-cause fix for the flake. Stabilization passes — widened timeouts, retries, loosened assertions — are appeasement, not rescue, and are banned (for agents especially).
+
+<!-- FNXC:DashboardTestQuarantine 2026-08-04-18:43: FN-8788 decides that the Kimi K3 supplemental route test remains quarantined until its existing 2026-08-15 deadline. Keep the test, matching dashboard Vitest exclusion, and ledger entry together; do not treat an unquarantined timing observation as a root-cause fix or permission to delete them early. -->
+**2026-08-04 Kimi K3 disposition (FN-8788):** Retain `register-model-routes-kimi-k3-supplemental.test.ts`, its `packages/dashboard/vitest.config.ts` exclusion, and its `scripts/lib/test-quarantine.json` entry through 2026-08-15. Before that deadline, removal requires a rescue with regression-value evidence and a root-cause fix; otherwise apply the normal deletion-ratchet decision when the deadline is reached.
 
 ### Validate before excluding and preserve timeout budgets
 
@@ -631,6 +653,7 @@ When a test owns a process-wide singleton that has asynchronous owners (timers, 
 - Prefer fake timers over real polling/time waits (FN-2707 pattern: advance timers inside `act(...)`, restore with `afterEach(() => vi.useRealTimers())`).
 - Do **not** mask slowness by raising worker/concurrency knobs (`FUSION_TEST_TOTAL_WORKERS`, `FUSION_TEST_CONCURRENCY`, `VITEST_MAX_WORKERS`, workspace concurrency settings).
 - Do **not** add net-new real-network calls, real-`setTimeout` polling loops, or mock-the-world component shells when a narrower seam exists.
+- Real Pi SDK catalog tests in the engine package must use `src/__tests__/_model-runtime-fixture.ts`: warm its shared runtime in `beforeAll` and request a fresh registry rather than constructing `ModelRuntime` inside timed test bodies.
 - Use the canonical taxonomy in **What NOT to write** and **What TO keep unconditionally** when deciding trim vs keep.
 - See `docs/test-speed-audit-FN-5048.md` for the measured baseline offender list and optimization priorities.
 

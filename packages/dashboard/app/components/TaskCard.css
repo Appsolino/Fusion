@@ -267,7 +267,7 @@ Lock the id to the same chip-height row as .card-header-actions so the task id, 
 }
 
 .card-status-badge--queued-with-reason {
-  padding-inline-end: 0;
+  padding-inline-end: var(--space-xs);
 }
 
 /*
@@ -2163,3 +2163,7 @@ The three-dot menu is the sole card move/action entry point. Keep this shared bu
 .card-field-badge--overflow {
   font-weight: 600;
 }
+
+/* FNXC:TaskRevert 2026-08-01-19:51: Reverted tasks require visible resolution controls, not hover-only menu actions. */
+.card-reverted-actions { display: inline-flex; gap: var(--space-1); }
+.reverted-tasks-section { display: grid; gap: var(--space-2); padding: var(--space-3); }

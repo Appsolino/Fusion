@@ -1,6 +1,6 @@
-import { instanceNodeId } from "./column-agent-resolver.js";
+import { instanceNodeId } from "./agents/column-agent-resolver.js";
 import type { TaskStep, WorkflowRunStepInstance, WorkflowStepResult } from "./types.js";
-import type { WorkflowIr } from "./workflow-ir-types.js";
+import type { WorkflowIr } from "./workflows/workflow-ir-types.js";
 
 export interface ForeachMergeProofInput {
   ir: WorkflowIr;

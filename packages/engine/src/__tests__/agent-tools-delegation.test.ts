@@ -25,6 +25,8 @@ function createMockTaskStore(overrides: Partial<TaskStore> = {}): TaskStore {
   return {
     getMissionStore: vi.fn().mockReturnValue(missionStore),
     getSettings: vi.fn().mockResolvedValue({ autoSummarizeTitles: false }),
+    getDefaultWorkflowId: vi.fn().mockResolvedValue(undefined),
+    getWorkflowDefinition: vi.fn().mockResolvedValue(undefined),
     getRootDir: vi.fn().mockReturnValue("/project"),
     searchTasks: vi.fn().mockResolvedValue([]),
     findRecentTasksBySourceParentTaskId: vi.fn().mockResolvedValue([]),
@@ -221,7 +223,7 @@ describe("createDelegateTaskTool", () => {
     taskStore = createMockTaskStore();
   });
 
-  it("creates task with correct assignedAgentId, column todo, and description", async () => {
+  it("routes delegated tasks to the workflow-ready lane", async () => {
     const agent = createAgent({ id: "agent-001", name: "Bob" });
     vi.mocked(agentStore.getAgent).mockResolvedValue(agent);
     vi.mocked(taskStore.createTask).mockResolvedValue({
@@ -247,10 +249,10 @@ describe("createDelegateTaskTool", () => {
     expect(taskStore.createTask).toHaveBeenCalledWith(expect.objectContaining({
       description: "Write tests",
       dependencies: undefined,
-      column: "todo",
       assignedAgentId: "agent-001",
       source: expect.objectContaining({ sourceType: "api" }),
     }), expect.objectContaining({ settings: { autoSummarizeTitles: false } }));
+    expect(vi.mocked(taskStore.createTask).mock.calls[0]?.[0]).toMatchObject({ column: "todo" });
 
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain("Delegated to Bob (agent-001)");
@@ -291,6 +293,41 @@ describe("createDelegateTaskTool", () => {
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain("Delegated to Rita (agent-002): Linked existing FN-duplicate");
     expect(text).toContain("picked up by Rita on their next heartbeat cycle");
+  });
+
+  it("routes duplicates through a selected workflow's renamed ready lane", async () => {
+    const agent = createAgent({ id: "agent-002", name: "Rita" });
+    const existing = {
+      id: "FN-duplicate-renamed",
+      description: "Write tests",
+      mission_lineage: APPROVED_LINEAGE,
+      dependencies: [],
+      column: "inbox" as const,
+      assignedAgentId: "agent-001",
+      steps: [],
+      currentStep: 0,
+      log: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    vi.mocked(agentStore.getAgent).mockResolvedValue(agent);
+    vi.mocked(taskStore.findRecentTasksByContentFingerprint).mockResolvedValue([existing]);
+    vi.mocked(taskStore.getWorkflowDefinition).mockResolvedValue({
+      id: "WF-renamed",
+      name: "Renamed",
+      ir: lifecycleIr(RENAMED_VOCAB, "renamed"),
+    } as never);
+    vi.mocked(taskStore.updateTask).mockResolvedValue({ ...existing, assignedAgentId: "agent-002" });
+    vi.mocked(taskStore.moveTask).mockResolvedValue({ ...existing, assignedAgentId: "agent-002", column: "backlog" });
+
+    await createDelegateTaskTool(agentStore, taskStore).execute("session-1", {
+      agent_id: "agent-002",
+      description: "Write tests",
+      workflow_id: "WF-renamed",
+      mission_lineage: APPROVED_LINEAGE,
+    }, undefined as any, undefined as any, undefined as any);
+
+    expect(taskStore.moveTask).toHaveBeenCalledWith("FN-duplicate-renamed", "backlog");
   });
 
   it("does not mutate a same-owner duplicate canonical task", async () => {
@@ -746,6 +783,40 @@ describe("createDelegateTaskTool", () => {
     });
   }
 
+  for (const [label, completeColumn] of [["DEFAULT", "done"], ["RENAMED", RENAMED_VOCAB.complete]] as const) {
+    it(`does not select a completed same-agent task as a defined-feature bootstrap canonical (${label} complete lane: ${completeColumn})`, async () => {
+      const completed = {
+        id: "FN-completed", title: "Bootstrap feature", description: "Bootstrap the hand-authored feature",
+        sourceAgentId: "agent-001", dependencies: [], column: completeColumn, steps: [], currentStep: 0,
+        log: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      } as Task;
+      const ir = lifecycleIr(RENAMED_VOCAB, "agent-tools-complete");
+      const store = createMockTaskStore({
+        listTasks: vi.fn().mockResolvedValue([completed]),
+        ...(label === "RENAMED"
+          ? {
+              getTaskWorkflowSelectionAsync: (async () => ({ workflowId: "agent-tools-complete", stepIds: [] })) as never,
+              getTaskWorkflowSelection: (() => ({ workflowId: "agent-tools-complete", stepIds: [] })) as never,
+              getWorkflowDefinition: (async (id: string) => (id === "agent-tools-complete" ? { ir } : undefined)) as never,
+            }
+          : {}),
+      });
+      const validate = vi.fn().mockResolvedValue(undefined);
+
+      const result = await createAgentTask(store, {
+        title: "Bootstrap feature",
+        description: "Bootstrap the hand-authored feature",
+        source: { sourceType: "api", sourceAgentId: "agent-001" },
+        preflightSameAgentDuplicate: true,
+        validateDuplicateCanonical: validate,
+      } as TaskCreateInput & { preflightSameAgentDuplicate: boolean; validateDuplicateCanonical: (task: Task) => Promise<void> });
+
+      expect(result.wasDuplicate).toBe(false);
+      expect(validate).not.toHaveBeenCalled();
+      expect(store.createTask).toHaveBeenCalledOnce();
+    });
+  }
+
   it("serializes three concurrent paraphrased creates from one parent", async () => {
     const tasks: Task[] = [];
     vi.mocked(taskStore.findRecentTasksBySourceParentTaskId).mockImplementation(async () => tasks);
@@ -1071,10 +1142,10 @@ describe("createDelegateTaskTool", () => {
     expect(taskStore.createTask).toHaveBeenCalledWith(expect.objectContaining({
       description: "Integration test",
       dependencies: ["FN-010"],
-      column: "todo",
       assignedAgentId: "agent-001",
       source: expect.objectContaining({ sourceType: "api" }),
     }), expect.objectContaining({ settings: { autoSummarizeTitles: false } }));
+    expect(vi.mocked(taskStore.createTask).mock.calls[0]?.[0]).toMatchObject({ column: "todo" });
 
     const text = (result.content[0] as { text: string }).text;
     expect(text).toContain("depends on: FN-010");

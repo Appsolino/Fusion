@@ -262,6 +262,35 @@ FNXC:ChatModal 2026-06-22-14:49:
 On mobile/narrow app viewports, opening Quick Chat should present the full Chat modal as a full-screen sheet instead of a small draggable desktop window. Scope this to the chat FloatingWindow and override the inline desktop geometry only at the mobile breakpoint; desktop pop-out behavior remains movable/resizable.
 */
 /*
+FNXC:TaskDetailLayout 2026-08-03-19:36:
+FN-8766 keeps the desktop Task Detail popup's visible header/content edge symmetric while
+preserving the shared body's scrollbar clearance for every other FloatingWindow consumer. This
+headerless host owns its close button, so remove only its visible body gutter and move its desktop
+east resize hit areas outside the painted shell; the scrollbar remains fully usable and the close
+control does not sit behind a resize target. Tablet retains its existing touch geometry and phones
+remain full-screen sheets below.
+*/
+.floating-window--task-detail:not(.floating-window--tablet-viewport) {
+  overflow: visible;
+}
+
+.floating-window--task-detail:not(.floating-window--tablet-viewport) .floating-window__body {
+  margin-inline-end: 0;
+}
+
+.floating-window--task-detail:not(.floating-window--tablet-viewport) .floating-window__resize-handle--e {
+  right: calc(var(--space-sm) * -1);
+}
+
+.floating-window--task-detail:not(.floating-window--tablet-viewport) .floating-window__resize-handle--ne {
+  right: calc(var(--space-lg) * -1);
+}
+
+.floating-window--task-detail:not(.floating-window--tablet-viewport) .floating-window__resize-handle--se {
+  right: calc(var(--space-lg) * -1);
+}
+
+/*
 FNXC:ModalTouchGeometry 2026-07-26-13:25:
 FN-8606 migrated core and workflow dialogs share FloatingWindow's pointer contract. Their
 caller-owned headers remain the drag target on desktop/tablet; true phones and short sheets hide
@@ -452,6 +481,7 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
   */
   .floating-window--task-detail {
     inset: 0 !important;
+    overflow: hidden !important;
     width: 100vw !important;
     height: 100dvh !important;
     min-width: 0 !important;
@@ -482,11 +512,35 @@ all floating affordances so persisted desktop geometry cannot imply a draggable 
     margin-inline-end: 0;
   }
 
+  /*
+  FNXC:GitHubImport 2026-08-02-02:47:
+  FN-8722 makes the standalone GitHub Import host follow the full width-or-height
+  sheet contract. Its shared body gutter exists only to clear desktop resize handles;
+  once this predicate hides those handles, retaining the gutter shifts every shell
+  region left. Do not broaden this rule to embedded Import Tasks or the independent
+  detail window, and keep non-short tablet/desktop resize clearance intact.
+  */
+  .floating-window--github-import .floating-window__body {
+    margin-inline-end: 0;
+  }
+
   .floating-window--task-detail .task-detail-content--embedded,
   .floating-window--task-detail .task-detail-content--embedded > .modal-header {
     border-radius: 0;
     cursor: default;
     touch-action: auto;
+  }
+}
+
+@media (max-width: 767.98px) {
+  /*
+  FNXC:GitManagerMobileSpacing 2026-08-01-19:10:
+  FN-8702 keeps the shared desktop resize-handle clearance for tablet and desktop windows.
+  A standalone Git Manager phone sheet hides those handles, so only below the strict 768px
+  boundary its body clears the obsolete inline-end gutter and aligns its header and close control.
+  */
+  .floating-window--git-manager .floating-window__body {
+    margin-inline-end: 0;
   }
 }
 

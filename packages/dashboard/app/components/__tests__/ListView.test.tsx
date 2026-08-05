@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import { useEffect, useState } from "react";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ListView } from "../ListView";
+import { ListView, LIST_MINIMUM_SPLIT_LAYOUT_WIDTH } from "../ListView";
 import type { Task, TaskDetail } from "@fusion/core";
 import { scopedKey } from "../../utils/projectStorage";
 import { ALL_WORKFLOWS_BOARD_VIEW_ID, BOARD_WORKFLOW_SELECTION_STORAGE_KEY } from "../../utils/boardWorkflowSelection";
@@ -413,6 +413,33 @@ function mockDesktopViewport() {
   }));
 }
 
+function installControlledResizeObserver() {
+  const callbacks = new Set<ResizeObserverCallback>();
+  class ControlledResizeObserver {
+    constructor(private readonly observerCallback: ResizeObserverCallback) {
+      callbacks.add(observerCallback);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {
+      callbacks.delete(this.observerCallback);
+    }
+  }
+  const OriginalResizeObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = ControlledResizeObserver as unknown as typeof ResizeObserver;
+
+  return {
+    resize(width: number) {
+      for (const callback of callbacks) {
+        callback([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver);
+      }
+    },
+    restore() {
+      globalThis.ResizeObserver = OriginalResizeObserver;
+    },
+  };
+}
+
 /*
 FNXC:WorkflowColumns 2026-07-28-00:00 (U12 — R9):
 The default workflow's real lane set, used both as the resolved fetch value and as
@@ -575,8 +602,12 @@ describe("ListView unmapped-workflow self-heal", () => {
     renderListView({ tasks: [createMockTask({ id: "FN-905", column: "todo", title: "Slow repair" })] });
 
     await waitFor(() => expect(forcedCalls).toBe(1));
-    // Well past the retry delay, with the first attempt still in flight.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // FNXC:WorkflowBoard 2026-08-01-17:20: advance well past RETRY_DELAY_MS (250ms) deterministically with fake timers instead of a real 400ms wall wait. The repair re-arms only on settle, so no retry timer is pending while the first attempt is in flight — a regression that armed one would still fire here and fail the assertion, preserving the REVERT CHECK.
+    await act(async () => {
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(400);
+      vi.useRealTimers();
+    });
     expect(forcedCalls).toBe(1);
 
     await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
@@ -613,7 +644,12 @@ describe("ListView unmapped-workflow self-heal", () => {
     // Switch projects while the repair is still in flight, then let it settle.
     view.rerender(<ListView tasks={tasks} projectId="project-b" onMoveTask={vi.fn()} onOpenDetail={vi.fn()} addToast={mockAddToast} />);
     await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // FNXC:WorkflowBoard 2026-08-01-17:20: deterministic fake-timer advance past RETRY_DELAY_MS replaces a real 400ms wall wait. The settled continuation abandons on the project-id mismatch and arms no follow-up timer; a regression that dropped the projectIdRef guard would arm one and this advance would fire it, keeping the REVERT CHECK intact.
+    await act(async () => {
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(400);
+      vi.useRealTimers();
+    });
 
     // No follow-up may be issued for the project that is no longer displayed.
     expect(forcedProjects.filter((id) => id === "project-a")).toHaveLength(1);
@@ -646,7 +682,12 @@ describe("ListView unmapped-workflow self-heal", () => {
 
     view.unmount();
     await act(async () => { releaseFirstForced?.(); await Promise.resolve(); });
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    // FNXC:WorkflowBoard 2026-08-01-17:20: deterministic fake-timer advance past RETRY_DELAY_MS replaces a real 400ms wall wait. The settled continuation abandons on the mountedRef guard and arms no follow-up timer; a regression that dropped that guard would arm one and this advance would fire it, keeping the REVERT CHECK intact.
+    await act(async () => {
+      vi.useFakeTimers();
+      await vi.advanceTimersByTimeAsync(400);
+      vi.useRealTimers();
+    });
 
     expect(forcedCalls).toBe(1);
   });
@@ -793,7 +834,9 @@ describe("ListView", () => {
     viewportSpy.mockRestore();
   });
 
-  it("renders the active Planning badge for a fresh status-null triage card in grouped mobile cards", () => {
+  it("does not glow a fresh status-null triage card in grouped mobile cards", () => {
+    // FNXC:TaskActivity 2026-08-01-17:53: fresh planner logs alone are not a concurrency
+    // slot; the pulsing Planning badge requires the authoritative planning status.
     const viewportSpy = mockMobileViewport();
     try {
       renderListView({
@@ -805,14 +848,14 @@ describe("ListView", () => {
       });
 
       const card = screen.getByText("FN-8300-mobile").closest(".list-card") as HTMLElement;
-      expect(card).toHaveClass("agent-active");
-      expect(within(card).getByLabelText("Planning")).toHaveClass("list-status-badge", "pulsing");
+      expect(card).not.toHaveClass("agent-active");
+      expect(within(card).queryByLabelText("Planning")).not.toBeInTheDocument();
     } finally {
       viewportSpy.mockRestore();
     }
   });
 
-  it("renders the active Planning badge for a fresh status-null triage card in desktop table rows", () => {
+  it("does not glow a fresh status-null triage card in desktop table rows", () => {
     const viewportSpy = mockDesktopViewport();
     try {
       renderListView({
@@ -824,8 +867,8 @@ describe("ListView", () => {
       });
 
       const row = screen.getByText("FN-8300-desktop").closest("tr") as HTMLElement;
-      expect(row).toHaveClass("agent-active");
-      expect(within(row).getByLabelText("Planning")).toHaveClass("list-status-badge", "pulsing");
+      expect(row).not.toHaveClass("agent-active");
+      expect(within(row).queryByLabelText("Planning")).not.toBeInTheDocument();
     } finally {
       viewportSpy.mockRestore();
     }
@@ -2306,6 +2349,132 @@ describe("ListView", () => {
     viewportSpy.mockRestore();
   });
 
+  it("uses measured List width rather than tablet viewport classification for detail routing", async () => {
+    const viewportSpy = mockTabletViewport();
+    const resizeObserver = installControlledResizeObserver();
+    const task = createMockTask({ id: "FN-8754", title: "Measured tablet task" });
+    const onOpenDetail = vi.fn();
+
+    try {
+      renderListView({ tasks: [task], onOpenDetail });
+
+      // The constrained control remains the existing card/modal route.
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH - 1));
+      const constrainedCard = document.querySelector('.list-card[data-id="FN-8754"]') as HTMLElement;
+      fireEvent.keyDown(constrainedCard, { key: "Enter" });
+      expect(onOpenDetail).toHaveBeenCalledWith(task, { origin: "list-mobile" });
+      expect(screen.queryByTestId("list-split-detail")).toBeNull();
+
+      onOpenDetail.mockClear();
+      // At the named usable boundary, the same tablet surface owns the existing split detail.
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH));
+      const boundaryRow = document.querySelector('tr[data-id="FN-8754"]') as HTMLElement;
+      fireEvent.keyDown(boundaryRow, { key: " " });
+      expect(onOpenDetail).not.toHaveBeenCalled();
+      expect(screen.getAllByTestId("list-split-detail-content")).toHaveLength(1);
+      expect(screen.getByTestId("task-detail-content")).toHaveTextContent("FN-8754");
+      expect(screen.getByTestId("list-split-resize-handle")).toHaveAttribute("role", "separator");
+
+      // Above the boundary pointer opens use that same single embedded host.
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH + 1));
+      fireEvent.click(document.querySelector('tr[data-id="FN-8754"]') as HTMLElement);
+      expect(onOpenDetail).not.toHaveBeenCalled();
+      expect(screen.getAllByTestId("list-split-detail-content")).toHaveLength(1);
+    } finally {
+      resizeObserver.restore();
+      viewportSpy.mockRestore();
+    }
+  });
+
+  it("routes a constrained desktop List surface through the modal without split chrome", async () => {
+    const viewportSpy = mockDesktopViewport();
+    const resizeObserver = installControlledResizeObserver();
+    const task = createMockTask({ id: "FN-8754-desktop", title: "Constrained desktop task" });
+    const onOpenDetail = vi.fn();
+
+    try {
+      renderListView({ tasks: [task], onOpenDetail });
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH - 1));
+      fireEvent.click(document.querySelector('.list-card[data-id="FN-8754-desktop"]') as HTMLElement);
+
+      expect(onOpenDetail).toHaveBeenCalledWith(task, { origin: "list-mobile" });
+      expect(screen.queryByTestId("list-split-detail")).toBeNull();
+      expect(screen.queryByTestId("list-split-resize-handle")).toBeNull();
+    } finally {
+      resizeObserver.restore();
+      viewportSpy.mockRestore();
+    }
+  });
+
+  it("keeps phones single-pane when a synthetic List measurement is wide", async () => {
+    const viewportSpy = mockMobileViewport();
+    const resizeObserver = installControlledResizeObserver();
+    const task = createMockTask({ id: "FN-8754-mobile", title: "Phone task" });
+    const onOpenDetail = vi.fn();
+
+    try {
+      renderListView({ tasks: [task], onOpenDetail });
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH + 1));
+      fireEvent.click(document.querySelector('.list-card[data-id="FN-8754-mobile"]') as HTMLElement);
+
+      expect(onOpenDetail).toHaveBeenCalledWith(task, { origin: "list-mobile" });
+      expect(screen.queryByTestId("list-split-detail")).toBeNull();
+    } finally {
+      resizeObserver.restore();
+      viewportSpy.mockRestore();
+    }
+  });
+
+  it("keeps the explicit popup preference above measured tablet split routing", async () => {
+    const viewportSpy = mockTabletViewport();
+    const resizeObserver = installControlledResizeObserver();
+    const task = createMockTask({ id: "FN-8754-popup", title: "Popup wins" });
+    const onOpenDetail = vi.fn();
+    const onPopOut = vi.fn();
+
+    try {
+      renderListView({ tasks: [task], onOpenDetail, onPopOut, openMobileTasksInPopup: true });
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH + 1));
+      fireEvent.click(document.querySelector('tr[data-id="FN-8754-popup"]') as HTMLElement);
+
+      expect(onPopOut).toHaveBeenCalledWith(task);
+      expect(onOpenDetail).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("list-split-detail-content")).toBeNull();
+      expect(localStorage.getItem(scopedStorageKey("kb-dashboard-list-selected-task"))).toBeNull();
+    } finally {
+      resizeObserver.restore();
+      viewportSpy.mockRestore();
+    }
+  });
+
+  it("removes and restores split chrome across List width transitions without opening a modal", async () => {
+    const viewportSpy = mockTabletViewport();
+    const resizeObserver = installControlledResizeObserver();
+    const task = createMockTask({ id: "FN-8754-resize", title: "Resize task" });
+    const onOpenDetail = vi.fn();
+
+    try {
+      renderListView({ tasks: [task], onOpenDetail });
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH + 1));
+      fireEvent.click(document.querySelector('tr[data-id="FN-8754-resize"]') as HTMLElement);
+      expect(screen.getByTestId("task-detail-content")).toHaveTextContent("FN-8754-resize");
+
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH - 1));
+      expect(screen.queryByTestId("list-split-detail")).toBeNull();
+      expect(screen.queryByTestId("list-split-resize-handle")).toBeNull();
+      expect(onOpenDetail).not.toHaveBeenCalled();
+      expect(localStorage.getItem(scopedStorageKey("kb-dashboard-list-selected-task"))).toBe("FN-8754-resize");
+
+      await act(async () => resizeObserver.resize(LIST_MINIMUM_SPLIT_LAYOUT_WIDTH + 1));
+      expect(screen.getAllByTestId("list-split-detail-content")).toHaveLength(1);
+      expect(screen.getByTestId("task-detail-content")).toHaveTextContent("FN-8754-resize");
+      expect(onOpenDetail).not.toHaveBeenCalled();
+    } finally {
+      resizeObserver.restore();
+      viewportSpy.mockRestore();
+    }
+  });
+
   it("renders tablet List view as a single full-width pane without split chrome", () => {
     const viewportSpy = mockTabletViewport();
     const tasks = [createMockTask({ id: "FN-001", title: "Tablet task" })];
@@ -2620,14 +2789,16 @@ describe("ListView", () => {
     }
   });
 
-  it("FN-8493 renders Revising, not Replan, for bare needs-replan list rows on desktop and mobile", () => {
+  it("FN-8493 renders the idle Queued to revise label, not Replan, for bare needs-replan list rows on desktop and mobile", () => {
+    // FNXC:TaskActivity 2026-08-01-17:53: a parked replan is idle (no concurrency slot), so
+    // list rows show the descriptive waiting label rather than the live "Revising" copy.
     const task = createMockTask({ id: "FN-8493-needs-replan", column: "triage", status: "needs-replan" });
 
     const desktopViewport = mockDesktopViewport();
     try {
       const { unmount } = renderListView({ tasks: [task] });
       const row = screen.getByText(task.id).closest("tr") as HTMLElement;
-      expect(within(row).getByText("Revising")).toHaveClass("list-status-badge");
+      expect(within(row).getByText("Queued to revise")).toHaveClass("list-status-badge");
       expect(within(row).queryByText("Replan")).not.toBeInTheDocument();
       unmount();
     } finally {
@@ -2638,8 +2809,39 @@ describe("ListView", () => {
     try {
       renderListView({ tasks: [task] });
       const card = screen.getByText(task.id).closest(".list-card") as HTMLElement;
-      expect(within(card).getByText("Revising")).toHaveClass("list-status-badge");
+      expect(within(card).getByText("Queued to revise")).toHaveClass("list-status-badge");
       expect(within(card).queryByText("Replan")).not.toBeInTheDocument();
+    } finally {
+      mobileViewport.mockRestore();
+    }
+  });
+
+  it("shows Planning in desktop and mobile lists when planner liveness precedes the replan status update", () => {
+    const task = createMockTask({
+      id: "FN-8798-live-replan",
+      column: "triage",
+      status: "needs-replan",
+      recentAgentActivityAt: new Date().toISOString(),
+    });
+
+    const desktopViewport = mockDesktopViewport();
+    try {
+      const { unmount } = renderListView({ tasks: [task] });
+      const row = screen.getByText(task.id).closest("tr") as HTMLElement;
+      expect(within(row).getAllByText("Planning").find((element) => element.classList.contains("list-status-badge"))).toBeDefined();
+      unmount();
+    } finally {
+      desktopViewport.mockRestore();
+    }
+
+    const mobileViewport = mockMobileViewport();
+    try {
+      renderListView({ tasks: [task] });
+      const card = screen.getAllByText(task.id)
+        .map((element) => element.closest(".list-card"))
+        .find((element): element is HTMLElement => element instanceof HTMLElement);
+      expect(card).toBeDefined();
+      expect(within(card!).getAllByText("Planning").find((element) => element.classList.contains("list-status-badge"))).toBeDefined();
     } finally {
       mobileViewport.mockRestore();
     }
@@ -2657,8 +2859,6 @@ describe("ListView", () => {
   it.each([
     { status: "executing", column: "in-progress" as const, label: "executing" },
     { status: "merging-fix", column: "in-review" as const, label: "Merging fixes…" },
-    { status: "needs-replan", column: "triage" as const, label: "Revising" },
-    { status: "needs-replan", column: "todo" as const, label: "Revising" },
   ])("renders agent-active tasks with static highlight styling for $status", ({ status, column, label }) => {
     const tasks = [
       createMockTask({
@@ -2673,6 +2873,26 @@ describe("ListView", () => {
     const row = screen.getByText("FN-001").closest("tr");
     expect(row?.className).toContain("agent-active");
     expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it.each([
+    { status: "needs-replan", column: "triage" as const },
+    { status: "needs-replan", column: "todo" as const },
+  ])("does NOT highlight parked needs-replan rows ($column) — they hold no concurrency slot", ({ status, column }) => {
+    // FNXC:TaskActivity 2026-08-01-17:53: replan parks are waiting states; glow and lane
+    // counts must never exceed the live-agent population.
+    const tasks = [
+      createMockTask({
+        id: "FN-001",
+        status,
+        column,
+      }),
+    ];
+
+    renderListView({ tasks, globalPaused: false });
+
+    const row = screen.getByText("FN-001").closest("tr");
+    expect(row?.className).not.toContain("agent-active");
   });
 
   it("does not render agent-active when globalPaused is true", () => {
@@ -2942,19 +3162,13 @@ describe("ListView", () => {
     expect(singlePaneToolbarRule).toContain("justify-content: center");
   });
 
-  it("loads CSS fixture rules that apply single-pane non-clipping layout at tablet while keeping desktop split rules", () => {
+  it("keeps measured tablet split chrome visible while scoping card hiding to single-pane List", () => {
     const css = loadAllAppCss();
-    const splitHideRule = css.match(/@media\s*\(max-width:\s*1024px\)[\s\S]*?\.list-split-resize-handle,\s*\n\s*\.list-split-detail\s*\{[^}]*display:\s*none;[^}]*\}/)?.[0] ?? "";
-    const cardRule = css.match(/@media\s*\(max-width:\s*1024px\)[\s\S]*?\.list-table\s*\{[^}]*display:\s*none;[^}]*\}[\s\S]*?\.list-cards\s*\{[^}]*width:\s*100%;[^}]*\}/)?.[0] ?? "";
+    const singlePaneCardRule = css.match(/\.list-view--single-pane \.list-table\s*\{[^}]*display:\s*none;[^}]*\}/)?.[0] ?? "";
     const desktopSplitRule = css.match(/\.list-split-layout\s*\{[^}]*grid-template-columns:\s*auto 0 minmax\(0, 1fr\);[^}]*\}/)?.[0] ?? "";
 
-    expect(splitHideRule).toContain("max-width: 1024px");
-    expect(splitHideRule).toContain(".list-split-resize-handle");
-    expect(splitHideRule).toContain("display: none");
-    expect(cardRule).toContain(".list-table");
-    expect(cardRule).toContain("display: none");
-    expect(cardRule).toContain(".list-cards");
-    expect(cardRule).toContain("width: 100%");
+    expect(css).not.toMatch(/\.list-split-resize-handle,\s*\n\s*\.list-split-detail\s*\{[^}]*display:\s*none/);
+    expect(singlePaneCardRule).toContain("display: none");
     expect(desktopSplitRule).toContain("grid-template-columns: auto 0 minmax(0, 1fr)");
   });
 
@@ -5845,8 +6059,6 @@ describe("ListView - Bulk Selection", () => {
     it.each([
       { status: "executing", column: "in-progress" as const },
       { status: "merging-fix", column: "in-review" as const },
-      { status: "needs-replan", column: "triage" as const },
-      { status: "needs-replan", column: "todo" as const },
     ])("applies agent-active class to mobile cards for active states (%s)", ({ status, column }) => {
       mockMobileViewport();
 
@@ -5863,6 +6075,28 @@ describe("ListView - Bulk Selection", () => {
 
       const card = container.querySelector('.list-card[data-id="FN-001"]');
       expect(card?.className).toContain("agent-active");
+    });
+
+    it.each([
+      { status: "needs-replan", column: "triage" as const },
+      { status: "needs-replan", column: "todo" as const },
+    ])("does NOT apply agent-active to mobile cards for parked replans (%s)", ({ status, column }) => {
+      // FNXC:TaskActivity 2026-08-01-17:53: parked replans hold no concurrency slot.
+      mockMobileViewport();
+
+      const { container } = renderListView({
+        tasks: [
+          createMockTask({
+            id: "FN-001",
+            status,
+            column,
+          }),
+        ],
+        globalPaused: false,
+      });
+
+      const card = container.querySelector('.list-card[data-id="FN-001"]');
+      expect(card?.className).not.toContain("agent-active");
     });
 
     it("does not apply agent-active class to mobile cards when globalPaused is true", () => {

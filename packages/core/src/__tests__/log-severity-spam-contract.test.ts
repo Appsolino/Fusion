@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../process/logger.js";
 import { logSeverityManifest } from "../../../engine/src/__tests__/log-severity-manifest.js";
 
 /*

@@ -5,8 +5,8 @@ import {
   enrichRunningAgentTaskShapeFromFlags,
   isRunningAgentTask,
   isWaitingAgentTask,
-} from "../live-agent-count.js";
-import type { RunningAgentTaskShape } from "../live-agent-count.js";
+} from "../agents/live-agent-count.js";
+import type { RunningAgentTaskShape } from "../agents/live-agent-count.js";
 
 function task(overrides: Partial<RunningAgentTaskShape> & Pick<RunningAgentTaskShape, "column">): RunningAgentTaskShape {
   return { columnTerminalKind: "none", ...overrides };
@@ -28,6 +28,21 @@ describe("live agent count predicates", () => {
     expect(isRunningAgentTask(task({ column: "in-progress", columnCountsTowardWip: true, checkedOutBy: "agent-a" }))).toBe(true);
     expect(isRunningAgentTask(task({ column: "in-progress", columnCountsTowardWip: true, paused: true }))).toBe(false);
     expect(isRunningAgentTask(task({ column: "in-progress", columnCountsTowardWip: true, userPaused: true }))).toBe(false);
+  });
+
+  it("does not count failed WIP (or any failed row) as a live capacity holder", () => {
+    // Failed parks remain in WIP until rebound/operator action but must free maxWorktrees/maxConcurrent.
+    expect(isRunningAgentTask(task({ column: "in-progress", columnCountsTowardWip: true, status: "failed" }))).toBe(false);
+    expect(isRunningAgentTask(task({ column: "working", columnCountsTowardWip: true, status: "failed" }))).toBe(false);
+    expect(isRunningAgentTask(task({
+      column: "in-progress",
+      columnCountsTowardWip: true,
+      status: "failed",
+      workflowStepResults: [{ workflowStepId: "code-review", workflowStepName: "Code Review", status: "pending" as const, startedAt: "2026-08-01T00:00:00.000Z" }],
+    }))).toBe(false);
+    expect(isRunningAgentTask(task({ column: "in-review", columnIsReviewOrMerge: true, status: "failed" }))).toBe(false);
+    // Still Waiting only for intake/hold — failed WIP is neither running nor waiting.
+    expect(isWaitingAgentTask(task({ column: "in-progress", columnCountsTowardWip: true, status: "failed" }))).toBe(false);
   });
 
   it("counts only active review/merge statuses and excludes terminal columns", () => {

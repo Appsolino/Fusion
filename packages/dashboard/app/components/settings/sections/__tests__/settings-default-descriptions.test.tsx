@@ -220,8 +220,8 @@ const SETTING_DESCRIPTION_KEYS: Record<string, string> = {
   executorToolFailureRetryBackoffMs: "scheduling.executorToolFailureRetryBackoffMsHelp",
   executorToolFailureThreshold: "scheduling.executorToolFailureThresholdHelp",
   executorModelEscalationEnabled: "scheduling.executorModelEscalationEnabledHelp",
-  executorEscalationProvider: "scheduling.executorEscalationProviderHelp",
-  executorEscalationModelId: "scheduling.executorEscalationModelIdHelp",
+  executorEscalationProvider: "projectModels.executorEscalationModelHelp",
+  executorEscalationModelId: "projectModels.executorEscalationModelHelp",
   executorEscalationNodeId: "scheduling.executorEscalationNodeIdHelp",
   taskStuckTimeoutMs: "scheduling.timeoutInMinutesForDetectingStuckTasksWhen",
   staleHighFanoutBlockerAgeThresholdMs: "scheduling.escalateHighFanOutBlockersOnlyAfterThey",
@@ -364,6 +364,25 @@ const NOT_SURFACED_ALLOWLIST: Record<string, string> = {
   validatorModelId: "moved to workflow settings (U4)",
   validatorFallbackProvider: "moved to workflow settings (U4)",
   validatorFallbackModelId: "moved to workflow settings (U4)",
+
+  /*
+  FNXC:SettingsCredentialInstance 2026-08-01-17:06:
+  Credential-instance selectors are inline companions to their provider/model pickers. They inherit the provider default when unset, so each has no standalone Settings description while this narrow inventory keeps the default-description census complete.
+  */
+  defaultCredentialInstanceId: "inline companion for the global default model picker; unset inherits the provider default",
+  fallbackCredentialInstanceId: "inline companion for the global fallback model picker; unset inherits the provider default",
+  executionGlobalCredentialInstanceId: "inline companion for the global execution model picker; unset inherits the provider default",
+  planningGlobalCredentialInstanceId: "inline companion for the global planning model picker; unset inherits the provider default",
+  validatorGlobalCredentialInstanceId: "inline companion for the global validator model picker; unset inherits the provider default",
+  titleSummarizerGlobalCredentialInstanceId: "inline companion for the global title-summarizer model picker; unset inherits the provider default",
+  mergerGlobalCredentialInstanceId: "inline companion for the global merger model picker; unset inherits the provider default",
+  importTranslateGlobalCredentialInstanceId: "inline companion for the global import-translate model picker; unset inherits the provider default",
+  defaultCredentialInstanceIdOverride: "inline companion for the project default model picker; unset inherits the provider default",
+  titleSummarizerCredentialInstanceId: "inline companion for the project title-summarizer model picker; unset inherits the provider default",
+  titleSummarizerFallbackCredentialInstanceId: "inline companion for the project title-summarizer fallback model picker; unset inherits the provider default",
+  importTranslateCredentialInstanceId: "inline companion for the project import-translate model picker; unset inherits the provider default",
+  mergerCredentialInstanceId: "inline companion for the project merger model picker; unset inherits the provider default",
+  mergerFallbackCredentialInstanceId: "inline companion for the project merger fallback model picker; unset inherits the provider default",
 
   // Internal/engine bookkeeping, session state, or reliability telemetry — not
   // rendered as a plain user-facing description field anywhere in Settings.

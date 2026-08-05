@@ -971,6 +971,22 @@ describe("TaskChatTab", () => {
     expect(screen.getByText("ok")).toBeVisible();
   });
 
+  it("shows the complete long task activity payload after expanding its tool group", async () => {
+    const user = userEvent.setup();
+    const longCommand = `bash ${"argument ".repeat(12)}TASK_ACTIVITY_COMMAND_SUFFIX`;
+    const longResult = `result\n${"output ".repeat(45)}TASK_ACTIVITY_RESULT_SUFFIX`;
+    mockLogs([
+      makeEntry({ agent: "executor", type: "tool", text: "bash", detail: longCommand }),
+      makeEntry({ agent: "executor", type: "tool_result", text: "bash", detail: longResult }),
+    ]);
+    render(<TaskChatTab task={makeTask()} active addToast={vi.fn()} />);
+
+    await user.click(screen.getByText("1 tool call"));
+    const invocation = screen.getByTestId("task-chat-tool-invocation");
+    expect(invocation).toHaveTextContent("TASK_ACTIVITY_COMMAND_SUFFIX");
+    expect(invocation).toHaveTextContent("TASK_ACTIVITY_RESULT_SUFFIX");
+  });
+
   it("shows Bash tool duration in the expanded invocation and omits legacy timing labels", async () => {
     const user = userEvent.setup();
     mockLogs([
@@ -1133,7 +1149,26 @@ describe("TaskChatTab", () => {
     expect(within(standaloneEntry).getByLabelText("Tool entry timestamp")).toHaveTextContent(expectedTime);
   });
 
-  it("renders thinking in a collapsed-by-default expandable block for inactive tasks", async () => {
+  it.each([
+    ["WIP", "in-progress"],
+    ["review", "in-review"],
+    ["idle", "todo"],
+    ["planning", "triage"],
+    ["terminal", "done"],
+    ["archived", "archived"],
+  ] as const)("defaults thinking blocks open for %s tasks", (_state, column) => {
+    mockLogs([
+      makeEntry({ agent: "executor", type: "thinking", text: "Immediately readable reasoning" }),
+    ]);
+
+    render(<TaskChatTab task={makeTask({ column })} active addToast={vi.fn()} />);
+
+    const thinking = screen.getByTestId("task-chat-thinking");
+    expect(thinking).toHaveAttribute("open");
+    expect(screen.getByText("Immediately readable reasoning")).toBeVisible();
+  });
+
+  it("lets users collapse and reopen initially expanded thinking blocks", async () => {
     const user = userEvent.setup();
     mockLogs([
       makeEntry({ agent: "triage", type: "thinking", text: "I am considering options" }),
@@ -1142,57 +1177,20 @@ describe("TaskChatTab", () => {
     render(<TaskChatTab task={makeTask({ column: "done" })} active addToast={vi.fn()} />);
 
     const thinking = screen.getByTestId("task-chat-thinking");
-    expect(thinking).not.toHaveAttribute("open");
+    expect(thinking).toHaveAttribute("open");
     expect(within(thinking).getByText("Thinking")).toBeVisible();
-    expect(screen.getByText("I am considering options")).not.toBeVisible();
+    expect(screen.getByText("I am considering options")).toBeVisible();
     expect(within(thinking).getAllByTestId("task-chat-entry-thinking")).toHaveLength(1);
+
+    await user.click(within(thinking).getByText("Thinking"));
+
+    expect(thinking).not.toHaveAttribute("open");
+    expect(screen.getByText("I am considering options")).not.toBeVisible();
 
     await user.click(within(thinking).getByText("Thinking"));
 
     expect(thinking).toHaveAttribute("open");
     expect(screen.getByText("I am considering options")).toBeVisible();
-
-    await user.click(within(thinking).getByText("Thinking"));
-
-    expect(thinking).not.toHaveAttribute("open");
-    expect(screen.getByText("I am considering options")).not.toBeVisible();
-  });
-
-  it.each(["in-progress", "in-review"] as const)("defaults thinking blocks open for %s tasks", (column) => {
-    mockLogs([
-      makeEntry({ agent: "executor", type: "thinking", text: "Live reasoning" }),
-    ]);
-
-    render(<TaskChatTab task={makeTask({ column })} active addToast={vi.fn()} />);
-
-    expect(screen.getByTestId("task-chat-thinking")).toHaveAttribute("open");
-  });
-
-  it.each(["todo", "done", "triage", "archived"] as const)("keeps thinking blocks collapsed for %s tasks", (column) => {
-    mockLogs([
-      makeEntry({ agent: "executor", type: "thinking", text: "Historical reasoning" }),
-    ]);
-
-    render(<TaskChatTab task={makeTask({ column })} active addToast={vi.fn()} />);
-
-    expect(screen.getByTestId("task-chat-thinking")).not.toHaveAttribute("open");
-  });
-
-  it("lets users collapse auto-expanded thinking blocks", async () => {
-    const user = userEvent.setup();
-    mockLogs([
-      makeEntry({ agent: "executor", type: "thinking", text: "Active reasoning" }),
-    ]);
-
-    render(<TaskChatTab task={makeTask({ column: "in-progress" })} active addToast={vi.fn()} />);
-
-    const thinking = screen.getByTestId("task-chat-thinking");
-    expect(thinking).toHaveAttribute("open");
-
-    await user.click(within(thinking).getByText("Thinking"));
-
-    expect(thinking).not.toHaveAttribute("open");
-    expect(screen.getByText("Active reasoning")).not.toBeVisible();
   });
 
   it("renders consecutive thinking entries as one continuous section", () => {
@@ -1204,6 +1202,7 @@ describe("TaskChatTab", () => {
     render(<TaskChatTab task={makeTask()} active addToast={vi.fn()} />);
 
     const thinking = screen.getByTestId("task-chat-thinking");
+    expect(thinking).toHaveAttribute("open");
     const summary = thinking.querySelector("summary");
     expect(summary).toBeTruthy();
     expect(within(summary as HTMLElement).getByText("Thinking")).toBeVisible();
@@ -1218,7 +1217,7 @@ describe("TaskChatTab", () => {
   FNXC:TaskChatSegmentKey 2026-07-22-12:00:
   Segment keys must be kind + startIndex only. Embedding entries.length remounted the actively streaming segment on every appended entry, collapsing an expanded thinking block mid-stream.
   */
-  it("keeps an expanded thinking block expanded while entries stream into the same segment", async () => {
+  it("keeps a user-collapsed thinking block collapsed while entries stream into the same segment", async () => {
     const user = userEvent.setup();
     mockLogs([
       makeEntry({ agent: "executor", type: "thinking", text: "First streamed thought" }),
@@ -1227,9 +1226,9 @@ describe("TaskChatTab", () => {
     const { rerender } = render(<TaskChatTab task={makeTask({ column: "todo" })} active addToast={vi.fn()} />);
 
     const thinking = screen.getByTestId("task-chat-thinking");
-    expect(thinking).not.toHaveAttribute("open");
-    await user.click(within(thinking).getByText("Thinking"));
     expect(thinking).toHaveAttribute("open");
+    await user.click(within(thinking).getByText("Thinking"));
+    expect(thinking).not.toHaveAttribute("open");
 
     mockLogs([
       makeEntry({ agent: "executor", type: "thinking", text: "First streamed thought" }),
@@ -1237,8 +1236,8 @@ describe("TaskChatTab", () => {
     ]);
     rerender(<TaskChatTab task={makeTask({ column: "todo" })} active addToast={vi.fn()} />);
 
-    expect(screen.getByTestId("task-chat-thinking")).toHaveAttribute("open");
-    expect(screen.getByText(/Second streamed thought/)).toBeVisible();
+    expect(screen.getByTestId("task-chat-thinking")).not.toHaveAttribute("open");
+    expect(screen.getByText(/Second streamed thought/)).not.toBeVisible();
   });
 
   it("gives a genuinely new segment a fresh instance with defaultOpen applied", async () => {
@@ -1286,7 +1285,7 @@ describe("TaskChatTab", () => {
     expect(within(toolGroups[1]).getByLabelText("Tool names")).toHaveTextContent("second tool");
     expect(screen.getAllByTestId("task-chat-entry-text")).toHaveLength(1);
     expect(screen.getByText("plain response")).toBeVisible();
-    expect(screen.getByText("thinking between tools")).not.toBeVisible();
+    expect(screen.getByText("thinking between tools")).toBeVisible();
   });
 
   it("appends newly streamed entries from the hook without auto-opening tool groups", () => {
@@ -3015,7 +3014,7 @@ describe("TaskChatTab", () => {
     const thinkingRule = getCssRuleBlock(compactThinkingCss, ".task-chat-thinking");
     const thinkingSummaryRule = getCssRuleBlock(getCssAfter(css, ".task-chat-thinking {\n  border-color"), ".task-chat-thinking-summary");
     const thinkingBodyRule = getCssRuleBlock(getCssAfter(css, ".task-chat-tool-group-entries {\n  gap: var(--space-xs);\n  padding: 0 var(--space-xs) var(--space-xs);\n}"), ".task-chat-thinking-body");
-    const toolDetailRule = getCssRuleBlock(getCssAfter(css, ".task-chat-tool-detail {"), ".task-chat-tool-detail");
+    const toolDetailRule = getCssRuleBlock(readFileSync(resolve(__dirname, "../ToolCallDetails.css"), "utf8"), ".tool-call-details-value");
     const mobileCss = getCssAfter(css, "@media (max-width: 768px)");
     const mobileStandardBlockRule = getCssRuleBlock(mobileCss, ".task-chat-entry,\n  .task-chat-tool-group");
     const mobileThinkingRule = getCssRuleBlock(getCssAfter(mobileCss, ".task-chat-thinking {\n    padding"), ".task-chat-thinking");
@@ -3035,8 +3034,8 @@ describe("TaskChatTab", () => {
     expect(thinkingBodyRule).toContain("padding: 0 var(--space-sm) var(--space-sm)");
     expect(toolEntryRule).toContain("box-sizing: border-box");
     expect(toolEntryRule).toContain("padding: var(--space-sm)");
-    expect(toolDetailRule).toContain("box-sizing: border-box");
-    expect(toolDetailRule).toContain("padding: var(--space-xs)");
+    expect(toolDetailRule).toContain("max-inline-size: 100%");
+    expect(toolDetailRule).toContain("overflow-x: auto");
     expect(mobileStandardBlockRule).toContain("padding: var(--space-sm)");
     expect(mobileThinkingRule).toContain("padding: var(--space-xs)");
     expect(mobileToolEntryRule).toContain("padding: var(--space-xs)");
@@ -3094,8 +3093,9 @@ describe("TaskChatTab", () => {
     const entriesRule = getCssRuleBlock(getCssAfter(css, ".task-chat-tool-group-entries {\n  gap"), ".task-chat-tool-group-entries");
     const entryRule = getCssRuleBlock(css, ".task-chat-tool-entry");
     const kickerRule = getCssRuleBlock(css, ".task-chat-entry-kicker");
-    const detailLabelRule = getCssRuleBlock(css, ".task-chat-tool-detail-label");
-    const detailRule = getCssRuleBlock(getCssAfter(css, ".task-chat-tool-detail {"), ".task-chat-tool-detail");
+    const detailCss = readFileSync(resolve(__dirname, "../ToolCallDetails.css"), "utf8");
+    const detailLabelRule = getCssRuleBlock(detailCss, ".tool-call-details-label");
+    const detailRule = getCssRuleBlock(detailCss, ".tool-call-details-value");
     const chatSummaryRule = getCssRuleBlock(chatCss, ".chat-tool-calls-group-summary");
     const chatNamesRule = getCssRuleBlock(chatCss, ".chat-tool-calls-names");
     const mobileCss = getCssAfter(css, "@media (max-width: 768px)");
@@ -3125,10 +3125,10 @@ describe("TaskChatTab", () => {
     for (const [selector, readableToolTextRule] of [
       [".task-chat-tool-group-summary", summaryRule],
       [".task-chat-entry-kicker", kickerRule],
-      [".task-chat-tool-detail-label", detailLabelRule],
-      [".task-chat-tool-detail", detailRule],
+      [".tool-call-details-label", detailLabelRule],
+      [".tool-call-details-value", detailRule],
     ] as const) {
-      expect(readableToolTextRule, `${selector} uses readable tool-call typography`).toContain(READABLE_TASK_TOOL_FONT_SIZE);
+      expect(readableToolTextRule, `${selector} uses tokenized tool-call typography`).toMatch(/font-size: var\(--(?:space-md|font-size-xs)\)/);
       expect(readableToolTextRule, `${selector} does not restore the too-small calc`).not.toContain(TOO_SMALL_TASK_TOOL_FONT_SIZE);
     }
     expect(chatSummaryRule).toContain("padding: var(--space-xs)");

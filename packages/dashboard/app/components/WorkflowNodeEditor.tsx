@@ -4323,6 +4323,23 @@ function InnerEditor({
               ) : null}
 
               <fieldset className="wf-inspector-fields" disabled={isBuiltin}>
+              {/* FNXC:WorkflowReviewKind 2026-08-05-02:31: Only top-level result-producing
+                  nodes have an instance-safe current-result contract. Clearing this selector
+                  passes undefined through config cleanup instead of serializing a sentinel. */}
+              {!selectedNode.parentId && (selectedNode.data.kind === "prompt" || selectedNode.data.kind === "gate" || selectedNode.data.kind === "script" || selectedNode.data.kind === "optional-group") ? (
+                <label className="wf-field">
+                  <span>{t("workflowNodes.reviewKind", "Review kind")}</span>
+                  <select
+                    data-testid="wf-review-kind"
+                    value={String(selectedNode.data.config?.reviewKind ?? "")}
+                    onChange={(e) => updateSelectedData({ config: { reviewKind: e.target.value || undefined } })}
+                  >
+                    <option value="">{t("workflowNodes.notAReview", "Not a review")}</option>
+                    <option value="plan">{t("workflowNodes.planReview", "Plan review")}</option>
+                    <option value="code">{t("workflowNodes.codeReview", "Code review")}</option>
+                  </select>
+                </label>
+              ) : null}
               {selectedNode.data.kind === "prompt" ? (
                 <>
                   <label className="wf-field">
@@ -4364,8 +4381,15 @@ function InnerEditor({
                         )}
                         onChange={(value) => {
                           const { provider, modelId } = parseModelDropdownValue(value);
-                          updateSelectedData({ config: { modelProvider: provider || undefined, modelId: modelId || undefined } });
+                          updateSelectedData({ config: {
+                            modelProvider: provider || undefined,
+                            modelId: modelId || undefined,
+                            // FNXC:ModelDropdown 2026-08-01-10:45: Explicit node-model changes cannot retain an instance selected for the previous provider.
+                            credentialInstanceId: undefined,
+                          } });
                         }}
+                        credentialInstanceId={String(selectedNode.data.config?.credentialInstanceId ?? "")}
+                        onCredentialInstanceChange={(credentialInstanceId) => updateSelectedData({ config: { credentialInstanceId: credentialInstanceId || undefined } })}
                         /*
                          * FNXC:Settings-ThinkingLevel 2026-07-10-00:00:
                          * Prompt model nodes expose the shared inline thinking selector only for the model executor, persisting `config.thinkingLevel` with Default clearing the key.
@@ -5102,9 +5126,13 @@ function InnerEditor({
                             modelProvider: provider || undefined,
                             modelId: modelId || undefined,
                             model: value || undefined,
+                            // FNXC:ModelDropdown 2026-08-01-10:45: Review-node model changes clear the prior credential-instance override.
+                            credentialInstanceId: undefined,
                           },
                         });
                       }}
+                      credentialInstanceId={String(selectedNode.data.config?.credentialInstanceId ?? "")}
+                      onCredentialInstanceChange={(credentialInstanceId) => updateSelectedData({ config: { credentialInstanceId: credentialInstanceId || undefined } })}
                       /*
                        * FNXC:Settings-ThinkingLevel 2026-07-10-00:00:
                        * Step-review nodes share the model dropdown thinking selector so review sessions can pin reasoning effort with the same node > task > settings precedence as executor steps.

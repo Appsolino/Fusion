@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AgentLogger, summarizeToolArgs } from "../agent-logger.js";
+import { AgentLogger, summarizeToolArgs } from "../agents/agent-logger.js";
 import type { TaskStore } from "@fusion/core";
 
 const loggerWarnSpy = vi.hoisted(() => vi.fn());
@@ -551,7 +551,7 @@ describe("AgentLogger", () => {
       persistAgentToolOutput: true,
     });
 
-    const longError = "error:" + "y".repeat(1200);
+    const longError = "error:" + "y-".repeat(600);
     logger.onToolEnd("Read", true, longError);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -568,7 +568,7 @@ describe("AgentLogger", () => {
       persistAgentToolOutput: true,
     });
 
-    const longResult = "x".repeat(600);
+    const longResult = "x-".repeat(300);
     logger.onToolEnd("Bash", false, longResult);
     await vi.advanceTimersByTimeAsync(0);
 

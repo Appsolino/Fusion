@@ -9,7 +9,7 @@ import {
   isRecoverableMissingWorktreeReviewFailure,
   isRecoverableMissingWorktreeReviewFailureNoProgress,
   isRecoverableMissingWorktreeReviewFailureWithProgress,
-} from "../restart-recovery-coordinator.js";
+} from "../healing/restart-recovery-coordinator.js";
 
 function createTask(overrides: Partial<Task>): Task {
   return {

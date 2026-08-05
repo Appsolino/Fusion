@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { validateNodeOverrideChange, resolveNodeOverrideLanes } from "../node-override-guard.js";
+import { validateNodeOverrideChange, resolveNodeOverrideLanes } from "../mesh/node-override-guard.js";
 
 /*
 FNXC:WorkflowResolvedColumns 2026-07-30-22:35 (batch-core):

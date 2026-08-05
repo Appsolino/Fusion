@@ -114,6 +114,7 @@ It is excluded from shell-inset symmetry; FN-7581 Interventions remains at zero 
 .detail-body {
   padding: 0;
   min-width: 0;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-color: var(--border) transparent;
@@ -126,9 +127,16 @@ It is excluded from shell-inset symmetry; FN-7581 Interventions remains at zero 
   position: relative;
 }
 
+/*
+FNXC:TaskDetailTitleSpacing 2026-08-04-18:07:
+The shared task-detail wrapper intentionally uses a smaller block-start inset than its
+side and bottom inset so every modal, embedded, pop-out, and mobile shell keeps the
+user-facing title close to the ID toolbar without changing canonical content spacing.
+*/
 .detail-body-content {
   min-width: 0;
   padding: calc(var(--space-lg) + var(--space-xs));
+  padding-block-start: var(--space-md);
 }
 
 .detail-body::-webkit-scrollbar {
@@ -148,12 +156,19 @@ It is excluded from shell-inset symmetry; FN-7581 Interventions remains at zero 
   background: var(--text-muted);
 }
 
-/* When Activity → Raw Logs is active, switch to flex layout so the log section
-   can stretch to fill the remaining space above the action bar.
-   The detail-body itself should NOT scroll; the agent-log-viewer scrolls instead. */
+/* Activity views that delegate vertical scrolling use a flex body so their inner
+   section can stretch to the remaining space above the shared action bar. */
+/*
+FNXC:TaskDetailFeed 2026-08-04-08:12:
+FN-8779 requires long Activity Feed histories to scroll only inside Task Detail's
+shrinkable middle region. Keep the shared action footer outside this flex chain so it
+remains visible and operable in modal, floating, embedded, and mobile hosts.
+*/
+.detail-body--feed,
 .detail-body--agent-log {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow-y: hidden;
 }
 
@@ -174,6 +189,7 @@ the previous direct-child flex contract so the transcript and agent log still fi
   overflow-y: hidden;
 }
 
+.detail-body--feed > .detail-body-content,
 .detail-body--agent-log > .detail-body-content,
 .detail-body--chat > .detail-body-content,
 .detail-body--planner-chat > .detail-body-content {
@@ -217,6 +233,24 @@ Summarize-as-title is an in-field affordance, not a separate full-width row: it 
   min-width: 0;
 }
 
+.detail-title-control {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.detail-title-control:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-strong);
+  border-radius: var(--radius-sm);
+}
+
 .detail-summarize-title-btn {
   display: inline-flex;
   align-items: center;
@@ -246,22 +280,6 @@ Summarize-as-title is an in-field affordance, not a separate full-width row: it 
 .detail-summarize-title-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.detail-description-toggle {
-  display: block;
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  font-size: 13px;
-  padding: 2px 0;
-  margin-bottom: var(--space-md);
-  cursor: pointer;
-  text-align: left;
-}
-
-.detail-description-toggle:hover {
-  color: var(--text);
 }
 
 /*
@@ -1446,14 +1464,32 @@ for a "skipped" outcome upstream).
   color: var(--color-error);
 }
 
-/* Activity → Raw Logs: stretch to fill the remaining modal body height
-   so the log viewer uses all available space above the action bar. */
+/* Feed and Raw Logs stretch to fill the remaining modal body height so their
+   respective list viewers use the available space above the action bar. */
+.detail-section--feed,
 .detail-section--agent-log {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   margin-top: var(--space-lg);
+}
+
+.detail-section--feed > .detail-activity {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.detail-section--feed .detail-activity-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.task-detail-content > .modal-actions {
+  flex: 0 0 auto;
 }
 
 .detail-section--chat {
@@ -1549,7 +1585,6 @@ Planner Chat should not open expanded by default. When the user expands it, the 
   min-height: 0;
 }
 
-.task-detail-content--planner-chat-expanded .detail-description-toggle,
 .task-detail-content--planner-chat-expanded .detail-near-duplicate-banner,
 .task-detail-content--planner-chat-expanded .detail-plan-approval-banner,
 .task-detail-content--planner-chat-expanded .task-fields-section,
@@ -3446,6 +3481,7 @@ Live and Feed Activity expansion overlays the content instead of reserving a too
   */
   .detail-body {
     padding: 0;
+    min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
     scrollbar-width: none;
@@ -3453,6 +3489,7 @@ Live and Feed Activity expansion overlays the content instead of reserving a too
 
   .detail-body-content {
     padding: calc(var(--space-md) + var(--space-xs) / 2);
+    padding-block-start: var(--space-sm);
   }
 
   .detail-body::-webkit-scrollbar {

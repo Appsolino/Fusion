@@ -3,14 +3,14 @@ import {
   CODE_REVIEW_GROUP_ID,
   CODE_REVIEW_STEP_NODE_ID,
   codeReviewOptionalGroupNode,
-} from "../builtin-code-review-group.js";
-import { BUILTIN_CODING_WORKFLOW_IR } from "../builtin-coding-workflow-ir.js";
-import { BUILTIN_STEPWISE_CODING_WORKFLOW_IR } from "../builtin-stepwise-coding-workflow-ir.js";
-import { parseWorkflowIr, serializeWorkflowIr } from "../workflow-ir.js";
+} from "../workflows/builtin-code-review-group.js";
+import { BUILTIN_CODING_WORKFLOW_IR } from "../workflows/builtin-coding-workflow-ir.js";
+import { BUILTIN_STEPWISE_CODING_WORKFLOW_IR } from "../workflows/builtin-stepwise-coding-workflow-ir.js";
+import { parseWorkflowIr, serializeWorkflowIr } from "../workflows/workflow-ir.js";
 import {
   resolveDefaultOnOptionalGroupIds,
   resolveWorkflowOptionalSteps,
-} from "../workflow-optional-steps.js";
+} from "../workflows/workflow-optional-steps.js";
 
 /*
 FNXC:CodeReviewStep 2026-06-25-15:00:
@@ -43,6 +43,18 @@ describe("codeReviewOptionalGroupNode", () => {
     expect(prompt).not.toContain('"verdict":"FAIL"');
     expect(prompt).toMatch(/git diff/);
     expect(prompt).toMatch(/out of scope/i);
+    /*
+     * FNXC:CodeReviewSurfaceCoverage 2026-08-04-06:35:
+     * The built-in gate must trace requirements through production entry points,
+     * temporal state, and every UI/API/CLI/agent consumer rather than diff only.
+     */
+    expect(prompt).toContain("requirements ledger");
+    expect(prompt).toContain("real production entry point");
+    expect(prompt).toContain("## Symptom Verification");
+    expect(prompt).toContain("## Surface Enumeration");
+    expect(prompt).toContain("current state, version, or planning episode");
+    expect(prompt).toContain("bounded");
+    expect(prompt).toContain("UI, API, CLI, and agent consumers");
   });
 
   it("builds a DEFAULT-ON optional-group with the stable group id and distinct inner id", () => {

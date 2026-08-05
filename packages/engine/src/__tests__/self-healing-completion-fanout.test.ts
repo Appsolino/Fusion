@@ -16,8 +16,8 @@ vi.mock("node:fs", async (importOriginal) => {
 const { uniqueCommitsMock } = vi.hoisted(() => ({
   uniqueCommitsMock: vi.fn(async () => ({ commits: [], mainRef: "main", degraded: false })),
 }));
-vi.mock("../branch-conflicts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../branch-conflicts.js")>();
+vi.mock("../execution/branch-conflicts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../execution/branch-conflicts.js")>();
   return { ...actual, listUniqueBranchCommits: uniqueCommitsMock };
 });
 
@@ -70,6 +70,23 @@ function createStore(tasks: Task[], settings?: Partial<Settings>): TaskStore & E
       map.set(id, { ...task, ...patch } as Task);
       return map.get(id);
     }),
+    transitionQueuedEpisode: vi.fn(async (id: string, transition: { signature: string; blockedBy: string | null; overlapBlockedBy: string | null; action: string }) => {
+      const task = map.get(id)!;
+      const appended = !(task.status === "queued"
+        && (task.blockedBy ?? null) === transition.blockedBy
+        && (task.overlapBlockedBy ?? null) === transition.overlapBlockedBy
+        && task.queuedLogEpisodeSignature === transition.signature);
+      const updated = {
+        ...task,
+        status: "queued",
+        blockedBy: transition.blockedBy,
+        overlapBlockedBy: transition.overlapBlockedBy,
+        queuedLogEpisodeSignature: transition.signature,
+        log: appended ? [...(task.log ?? []), { timestamp: new Date().toISOString(), action: transition.action }] : task.log,
+      } as Task;
+      map.set(id, updated);
+      return { appended, task: updated };
+    }),
     moveTask: vi.fn(async (id: string, column: Task["column"]) => {
       const task = map.get(id)!;
       const from = task.column;
@@ -113,6 +130,26 @@ describe("self-healing completion fan-out", () => {
     );
   });
 
+  it("deduplicates concurrent completion fanout that leaves a dependent behind the same queue episode", async () => {
+    const blocker = makeTask("FN-B", { column: "done" });
+    const other = makeTask("FN-OTHER", { column: "todo" });
+    const dependent = makeTask("FN-DEPENDENT", {
+      column: "todo",
+      status: "queued" as any,
+      blockedBy: "FN-B",
+      dependencies: ["FN-B", "FN-OTHER"],
+    });
+    const store = createStore([blocker, other, dependent]);
+    const mgr = new SelfHealingManager(store, { rootDir: "/repo" });
+
+    await Promise.all([mgr.reconcileCompletedTask("FN-B"), mgr.reconcileCompletedTask("FN-B")]);
+
+    const updated = await store.getTask("FN-DEPENDENT");
+    expect(updated?.blockedBy).toBe("FN-OTHER");
+    expect(updated?.queuedLogEpisodeSignature).toBe("dependency:FN-OTHER");
+    expect(updated?.log?.filter((entry) => entry.action.includes("FN-4523"))).toHaveLength(1);
+  });
+
   it("prefers worktree hint and is idempotent when missing", async () => {
     (existsSyncMock as any).mockImplementation((p: string) => p === "/wt/fn-b");
     const blocker = makeTask("FN-B", { column: "done", branch: "fusion/fn-b" });
@@ -145,7 +182,29 @@ describe("self-healing completion fan-out", () => {
     expect(execMock.mock.calls.some((c) => String(c[0]).includes("git worktree remove --force") && String(c[0]).includes("/wt/fn-c"))).toBe(true);
     expect((await store.getTask("FN-C"))?.worktree).toBeNull();
     expect((await store.getTask("FN-C"))?.branch).toBeNull();
-    expect(out.branchRemoved).toBe(false);
+    /*
+    FNXC:StaleActiveBranchDoneSpam 2026-08-03-01:47:
+    Post-completion branch cleanup force-deletes even when the tip still has unique commits vs main
+    (squash/AI-merge shape). Previously this case expected branchRemoved=false and left fusion/* forever.
+    */
+    expect(out.branchRemoved).toBe(true);
+    expect(execMock.mock.calls.some((c) => String(c[0]).includes("git branch -D") && String(c[0]).includes("fusion/fn-c"))).toBe(true);
+  });
+
+  it("force-deletes completion branch when unique commits remain after squash", async () => {
+    uniqueCommitsMock.mockResolvedValue({
+      commits: [{ sha: "deadbeef", subject: "feat: pre-squash tip" }] as any,
+      mainRef: "main",
+      degraded: false,
+    });
+    const blocker = makeTask("FN-SQUASH", { column: "done", branch: "fusion/fn-squash" });
+    const store = createStore([blocker]);
+    const mgr = new SelfHealingManager(store, { rootDir: "/repo" });
+
+    const out = await mgr.reconcileCompletedTask("FN-SQUASH");
+    expect(out.branchRemoved).toBe(true);
+    expect(execMock.mock.calls.some((c) => String(c[0]).includes("git branch -D") && String(c[0]).includes("fusion/fn-squash"))).toBe(true);
+    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining("force-deleting post-completion"));
   });
 
   it("globalPause short-circuits", async () => {

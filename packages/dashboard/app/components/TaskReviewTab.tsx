@@ -1,6 +1,6 @@
 import "./TaskReviewTab.css";
 import { getErrorMessage, isReviewArtifact, type PrCheckStatus, type Task, type TaskDetail, type TaskReviewSummary } from "@fusion/core";
-import { resolveEffectiveAutoMerge } from "../../../core/src/task-merge";
+import { resolveEffectiveAutoMerge } from "../../../core/src/merge/task-merge";
 import { Bot, ExternalLink, GitPullRequest, User } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -54,6 +54,8 @@ type DisplayReviewItem = {
   body: string;
   author?: string;
   path?: string;
+  line?: number;
+  severity?: "low" | "medium" | "high" | "critical";
   createdAt?: string;
   status: "queued" | "in-progress" | "addressed" | "failed";
   addressing?: AddressingRecord;
@@ -131,6 +133,8 @@ function getDisplayReviewItems(review: ReviewState): DisplayReviewItem[] {
       body: item.body,
       author: item.author?.login,
       path: item.path,
+      line: item.line,
+      severity: item.severity,
       createdAt: item.createdAt,
       status: addressing?.status ?? "queued",
       addressing,
@@ -147,6 +151,8 @@ function getDisplayReviewItems(review: ReviewState): DisplayReviewItem[] {
       body: record.snapshot?.body ?? record.snapshot?.summary ?? record.itemId,
       author: record.snapshot?.authorLogin,
       path: record.snapshot?.filePath,
+      line: record.snapshot?.lineNumber,
+      severity: record.snapshot?.severity,
       createdAt: record.selectedAt,
       status: record.status,
       addressing: record,
@@ -615,7 +621,11 @@ export function TaskReviewTab({
                         ) : null}
                       </div>
                     ) : (
-                      <div className="task-review-tab__meta">{formatTimestamp(item.createdAt, t)}</div>
+                      <div className="task-review-tab__meta">
+                        {formatTimestamp(item.createdAt, t)}
+                        {item.path ? ` · ${item.path}${item.line ? `:${item.line}` : ""}` : ""}
+                        {item.severity ? ` · ${item.severity}` : ""}
+                      </div>
                     )}
                     {item.addressing ? (
                       <div className="task-review-tab__meta">

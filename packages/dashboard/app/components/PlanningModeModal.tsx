@@ -106,6 +106,18 @@ export function resetPlanningAutoRetryAttemptsForTests(): void {
 
 const MAX_PLANNING_CREATE_CLAIM_RETRIES = 20;
 
+const DUPLICATE_RESPONSE_GENERATION_MESSAGE = "Generation already in progress for this response";
+
+/**
+ * FNXC:PlanningTurnReconciliation 2026-08-03-07:27:
+ * The duplicate-response turn conflict means another request already owns this exact answer,
+ * not that the operator's plan failed. Rehydrate its durable question or generation progress
+ * silently; all other submission failures remain actionable in the shared error banner.
+ */
+function isDuplicateResponseGenerationConflict(error: unknown): boolean {
+  return getErrorMessage(error) === DUPLICATE_RESPONSE_GENERATION_MESSAGE;
+}
+
 function isPlanningCreateClaimConflict(error: unknown): boolean {
   return typeof error === "object"
     && error !== null
@@ -271,8 +283,8 @@ function resolveCompletePlanningResume(
 
   FNXC:PlanningMultiTask 2026-07-24-00:20:
   Sessions whose task already exists resume to plan review too, carrying the linked task for
-  the banner. Proceed without editing idempotently returns that task; editing rotates the
-  server-side creation epoch so the next Proceed creates a fresh task from the evolved plan.
+  the banner. Each explicit Proceed advances the server-side creation epoch, while transport
+  retries for that action retain the old linked-task token and reconcile its canonical task.
   */
   return { kind: "plan_review", summary, ...(createdTaskId ? { linkedTaskId: createdTaskId } : {}) };
 }
@@ -488,7 +500,8 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
   const [_activePlanPrompt, setActivePlanPrompt] = useState("");
   const [view, setView] = useState<ViewState>({ type: "initial" });
   const [error, setError] = useState<string | null>(null);
-  // FNXC:PlanningMultiTask 2026-07-24-00:20: latest task created from this plan, shown as a plan-review banner; editing the plan rotates the server-side creation epoch so Proceed can create another.
+  // FNXC:PlanningMultiTask 2026-08-03-18:32: Latest task created from this plan. Passing its id with the next explicit Proceed action
+  // advances the server-side creation epoch, whether or not the plan was edited.
   const [linkedTaskId, setLinkedTaskId] = useState<string | null>(null);
   // FNXC:PlanningMultiTask 2026-07-24-01:40: the just-created Task object, so the banner's View task works immediately after creation without waiting for the tasks prop to refresh (review finding).
   const [linkedTask, setLinkedTask] = useState<Task | null>(null);
@@ -768,6 +781,21 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     && (selectedSessionId !== null || planningSessions.length > 0);
   const [isRefineMenuOpen, setIsRefineMenuOpen] = useState(false);
   const [mobileWorkspaceTab, setMobileWorkspaceTab] = useState<"question" | "plan">("question");
+  /*
+  FNXC:PlanningMode 2026-08-03-09:21:
+  Mobile interviews earn a reversible Plan preview shortcut only after five actual completed
+  question-and-response pairs. Reasoning-only, malformed, and blank response records never
+  advance the threshold; Review plan only selects the already-mounted plan tab, so it neither
+  submits nor clears the operator's current answer and Questions can restore that same form.
+  */
+  const answeredQuestionCount = useMemo(() => conversationHistory.filter((entry) => (
+    typeof entry.question?.id === "string"
+    && entry.question.id.trim().length > 0
+    && entry.response !== null
+    && typeof entry.response === "object"
+    && !Array.isArray(entry.response)
+    && Object.keys(entry.response).length > 0
+  )).length, [conversationHistory]);
   /*
   FNXC:PlanningMode 2026-07-20-21:50:
   Refine accepts one freeform instruction instead of generated category choices. The instruction
@@ -2845,6 +2873,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
         }
       } catch (err) {
         const errorMessage = getErrorMessage(err) || t("planning.failedSubmitResponse", "Failed to submit response");
+        const isDuplicateResponseConflict = isDuplicateResponseGenerationConflict(err);
         /*
         FNXC:PlanningTurnReconciliation 2026-07-20-10:36:
         A rejected HTTP response is ambiguous: the server may have accepted the answer before
@@ -2876,7 +2905,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
               .map((entry) => entry.response)
               .filter((response): response is QuestionResponse => Boolean(response && typeof response === "object" && !Array.isArray(response))));
             setRunningSummary(summary);
-            setError(errorMessage);
+            setError(isDuplicateResponseConflict ? null : errorMessage);
             setWorkspaceQuestion(currentQuestion);
             setView({ type: "question", session: { sessionId, currentQuestion, summary } });
             return;
@@ -2890,7 +2919,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
             runningSummaryRef.current = summary;
             setConversationHistory(history);
             setRunningSummary(summary);
-            setError(errorMessage);
+            setError(isDuplicateResponseConflict ? null : errorMessage);
             setView({ type: "loading" });
             return;
           }
@@ -3183,6 +3212,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     try {
       const task = await createTaskAfterActiveClaim(() => createTaskFromPlanning(sessionId, summary, projectId, {
         ...(workflowId !== undefined ? { workflowId } : {}),
+        ...(linkedTaskId ? { previousTaskId: linkedTaskId } : {}),
       }));
       clearPlanningActiveSession(projectId);
       setLinkedTaskId(task.id);
@@ -3194,7 +3224,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     } finally {
       validateCreateInFlightRef.current = false;
     }
-  }, [projectId, t, workflowId, workspaceQuestion]);
+  }, [linkedTaskId, projectId, t, workflowId, workspaceQuestion]);
 
   const handleMobileKeyboardActionPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     /*
@@ -3228,7 +3258,10 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     validateCreateInFlightRef.current = true;
     setView({ type: "creating_task", session: view.session, summary: view.summary });
     try {
-      const task = await createTaskAfterActiveClaim(() => createTaskFromPlanning(view.session.sessionId, view.summary, projectId, { ...(workflowId !== undefined ? { workflowId } : {}) }));
+      const task = await createTaskAfterActiveClaim(() => createTaskFromPlanning(view.session.sessionId, view.summary, projectId, {
+        ...(workflowId !== undefined ? { workflowId } : {}),
+        ...(linkedTaskId ? { previousTaskId: linkedTaskId } : {}),
+      }));
       clearPlanningActiveSession(projectId);
       setLinkedTaskId(task.id);
       setLinkedTask(task);
@@ -3238,7 +3271,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     } finally {
       validateCreateInFlightRef.current = false;
     }
-  }, [projectId, t, view, workflowId]);
+  }, [linkedTaskId, projectId, t, view, workflowId]);
 
   const handleCreateTask = useCallback(async () => {
     if (view.type !== "summary") return;
@@ -3262,6 +3295,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
         Planning Mode saves must carry the workflow lane that opened the modal so created tasks do not land on the main board before appearing on the selected sub-board.
         */
         ...(workflowId !== undefined ? { workflowId } : {}),
+        ...(linkedTaskId ? { previousTaskId: linkedTaskId } : {}),
       });
       onTaskCreated(task);
       // Single-task creation should preserve completed planning history, so
@@ -3275,7 +3309,7 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
     } finally {
       setIsCreatingTask(false);
     }
-  }, [baseBranch, branchMode, branchName, editedSummary, view, projectId, workflowId, onTaskCreated, handleClose]);
+  }, [baseBranch, branchMode, branchName, editedSummary, view, projectId, workflowId, linkedTaskId, onTaskCreated, handleClose]);
 
   const handleStartBreakdown = useCallback(async () => {
     if (view.type !== "summary") return;
@@ -4097,6 +4131,8 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
                       ? conversationHistory.find((entry) => entry.question?.id === editingQuestionId)?.response
                       : undefined}
                     onSubmit={handleSubmitResponse}
+                    showMobilePlanReview={isMobile && answeredQuestionCount >= 5}
+                    onReviewPlan={() => setMobileWorkspaceTab("plan")}
                   />
                 </section>
               )}
@@ -4145,15 +4181,14 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
               {/*
               FNXC:PlanningMultiTask 2026-07-24-00:20:
               A plan that already produced a task stays a live work surface. The banner links the
-              latest created task; continuing to edit rotates the server-side creation epoch, so
-              Proceed creates a fresh task from the evolved plan (unedited Proceed replays return
-              the same task).
+              latest created task; the next explicit Proceed action advances the server-side
+              creation epoch so the plan can create another task without requiring an edit.
               */}
               {linkedTaskId && (
                 <div className="planning-linked-task-note" data-testid="planning-linked-task-note" role="status">
                   <CheckCircle size={16} />
                   <span>
-                    {t("planning.linkedTaskNote", "Task {{taskId}} was created from this plan. Keep refining to create another.", { taskId: linkedTaskId })}
+                    {t("planning.linkedTaskNote", "Task {{taskId}} was created from this plan. Proceed again to create another.", { taskId: linkedTaskId })}
                   </span>
                   {/* FNXC:PlanningMultiTask 2026-07-24-01:40: resolve the just-created Task object first so View task is enabled immediately after creation, before the tasks prop refreshes (mirrors the task_created view's view.task ?? tasks.find pattern). */}
                   <button
@@ -4198,8 +4233,8 @@ export function PlanningModeModal({ isOpen, onClose, onTaskCreated, onTasksCreat
                 {/*
                 FNXC:PlanningMultiTask 2026-07-24-00:20:
                 Task creation is not the end of the plan. Continue planning returns to the plan
-                review workspace where the plan stays readable and editable; edits rotate the
-                creation epoch so Proceed can create another task from the evolved plan.
+                review workspace where the plan stays readable and editable; the next Proceed
+                action creates another task, even when the plan is unchanged.
                 */}
                 {view.sessionId && runningSummary && (
                   <button
@@ -4313,12 +4348,16 @@ interface QuestionFormProps {
   question: PlanningQuestion;
   initialResponse?: QuestionResponse;
   onSubmit: (responses: QuestionResponse) => void;
+  /** Enables the parent-owned mobile Plan preview transition after five completed answers. */
+  showMobilePlanReview?: boolean;
+  /** Changes only the parent-owned workspace tab; it must not submit this form. */
+  onReviewPlan?: () => void;
   projectId?: string;
 }
 
 // FNXC:VoiceInput 2026-07-25-19:20: Export the real interview surface for dictation
 // contract tests instead of substituting a fixture that could drift from this textarea.
-export function QuestionForm({ question: rawQuestion, initialResponse, onSubmit, projectId }: QuestionFormProps) {
+export function QuestionForm({ question: rawQuestion, initialResponse, onSubmit, showMobilePlanReview = false, onReviewPlan, projectId }: QuestionFormProps) {
   const { t } = useTranslation("app");
   const question = normalizeQuestionOptions(rawQuestion);
   const questionOptions = question.options ?? [];
@@ -4667,9 +4706,16 @@ export function QuestionForm({ question: rawQuestion, initialResponse, onSubmit,
           onClick={handleSubmit}
           disabled={!isValid()}
         >
-          {t("planning.nextQuestion", "Next")}
+          {showMobilePlanReview
+            ? t("planning.nextQuestionAction", "Next question")
+            : t("planning.nextQuestion", "Next")}
           <ArrowRight size={16} className="icon-ml-4" />
         </button>
+        {showMobilePlanReview && (
+          <button className="btn" type="button" onClick={onReviewPlan}>
+            {t("planning.reviewPlan", "Review plan")}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchConfig, fetchSettings, updateSettings, updateGlobalSettings } from "../api";
 import type { GlobalSettings, ProjectSettings } from "@fusion/core";
-import { resolveMobileNavPrimaryItems } from "../../../core/src/mobile-nav-primary-items";
-import type { ModelPricingOverrides } from "../../../core/src/model-pricing";
+import { resolveMobileNavPrimaryItems } from "../../../core/src/board/mobile-nav-primary-items";
+import type { ModelPricingOverrides } from "../../../core/src/ai/model-pricing";
 import { setAutoReloadEnabled } from "../versionCheck";
 import { DEFAULT_DASHBOARD_KEYBOARD_SHORTCUTS, resolveDashboardKeyboardShortcuts, type DashboardKeyboardShortcutMap } from "../utils/keyboardShortcuts";
 
@@ -48,7 +48,6 @@ export interface UseAppSettingsResult {
   insightsEnabled: boolean;
   memoryEnabled: boolean;
   devServerEnabled: boolean;
-  todosEnabled: boolean;
   goalsEnabled: boolean;
   autoReloadOnVersionChange: boolean;
   toggleAutoMerge: () => Promise<void>;
@@ -109,7 +108,6 @@ export function useAppSettings(projectId?: string): UseAppSettingsResult {
   const [insightsEnabled, setInsightsEnabled] = useState(true);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [devServerEnabled, setDevServerEnabled] = useState(false);
-  const [todosEnabled, setTodosEnabled] = useState(true);
   const [goalsEnabled, setGoalsEnabled] = useState(true);
   const [autoReloadOnVersionChange, setAutoReloadOnVersionChangeState] = useState(true);
   const autoMergeRef = useRef(autoMerge);
@@ -197,7 +195,6 @@ export function useAppSettings(projectId?: string): UseAppSettingsResult {
       setInsightsEnabled(true);
       setMemoryEnabled(true);
       setDevServerEnabled(features.devServerView === true || features.devServer === true);
-      setTodosEnabled(true);
       setGoalsEnabled(true);
       // Sync the module-level auto-reload guard with the persisted setting
       const autoReload = settings.autoReloadOnVersionChange !== false;
@@ -223,7 +220,6 @@ export function useAppSettings(projectId?: string): UseAppSettingsResult {
     setDashboardKeyboardShortcuts(DEFAULT_DASHBOARD_KEYBOARD_SHORTCUTS);
     setDismissModalsOnOutsideClick(false);
     setPlanApprovalMode("workflow");
-    setTodosEnabled(true);
     setGoalsEnabled(true);
     void refresh();
   }, [refresh]);
@@ -376,7 +372,6 @@ export function useAppSettings(projectId?: string): UseAppSettingsResult {
     insightsEnabled,
     memoryEnabled,
     devServerEnabled,
-    todosEnabled,
     goalsEnabled,
     autoReloadOnVersionChange,
     toggleAutoMerge,

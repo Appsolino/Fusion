@@ -1,22 +1,16 @@
 {
-  "outcome": "merged",
-  "recordedAt": "2026-08-01T13:29:48Z",
+  "outcome": "conflict-resolved",
+  "recordedAt": "2026-08-05T07:42:00.000Z",
   "integrationBranch": "main",
-  "appsolinoSha": "168d8cbf39c4d9d0a1e05f11daf301223f585908",
-  "upstreamSha": "5786c87eff118231e58bb0877f2cb2252a346a8d",
-  "mergeBase": "71576d9536267a7835f352922a55831811717896",
-  "ahead": 93,
-  "behind": 29,
-  "conflictedFiles": [],
-  "resolvedConflicts": [
-    {
-      "file": "scripts/lib/lifecycle-column-census-baseline.json",
-      "resolution": "regenerated-from-merged-tree",
-      "note": "Regenerated with node scripts/lifecycle-column-census.mjs --strict --update-baseline after upstream merge"
-    }
+  "appsolinoSha": "24684a0eef5818ea7091fd8e319d3ebca1d72859",
+  "upstreamSha": "68e964383fc662d6e7c14d4b0328d722c007bbcc",
+  "mergeBase": "5786c87eff118231e58bb0877f2cb2252a346a8d",
+  "conflictedFiles": [
+    "packages/engine/src/executor.ts",
+    "scripts/lib/lifecycle-column-census-baseline.json"
   ],
-  "touchesWorkflows": false,
+  "resolution": "semantic-executor-auto4-correction-b + regenerated-lifecycle-baseline + agent-browser-download-artifact-v4-overlay",
+  "touchesWorkflows": true,
   "touchesMigrations": true,
-  "touchesLockfile": false,
-  "mutatesAppsolinoMain": false
+  "touchesLockfile": true
 }

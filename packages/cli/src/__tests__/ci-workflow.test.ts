@@ -230,18 +230,25 @@ describe("Merge gate (.github/workflows/pr-checks.yml)", () => {
   });
 
   /*
-  FNXC:CITestGate 2026-06-26-06:40:
-  The merge gate is the thin trusted CI surface. ci-workflow.test.ts must pin not only that the Gate job invokes `pnpm test:gate`, but also test:gate's internal composition (guards + engine test:core + cli test:ci-shape) and that engine test:core references the engine-core vitest project — otherwise a rename could hollow the gate while this CI-shape test stays green (FN-7059).
+  FNXC:CITestGate 2026-08-04-15:44:
+  FN-8783 runs independent read-only static validators concurrently, but they
+  still must all finish successfully before the curated lanes begin. Pin the
+  runner and its manifest composition separately: putting the exact inventory
+  only in test:gate would encourage a future serial regression, while checking
+  only the runner could hide a removed policy guard.
   */
-  it("pins test:gate to the audited guard scripts and curated suites", () => {
+  it("pins test:gate to the fail-closed guard runner and curated suites", () => {
     const testGateScript = rootPackageJson.scripts?.["test:gate"] ?? "";
+    const staticGateScript = rootPackageJson.scripts?.["test:gate:static"] ?? "";
 
-    expect(testGateScript).toContain("node scripts/check-no-" + "no" + "hup" + ".mjs"); // process-supervisor-allowlist: asserts the gate wires the checker; not a real spawn
-    expect(testGateScript).toContain("node scripts/check-no-kill-" + "40" + "40" + ".mjs"); // port-4040-allowlist: asserts the gate wires the checker; not a real port bind
-    expect(testGateScript).toContain("node scripts/check-no-test-timeout-appeasement.mjs");
-    expect(testGateScript).toContain("node scripts/check-changeset-format.mjs");
+    expect(testGateScript).toContain("node scripts/run-static-gate-checks.mjs");
+    expect(staticGateScript).toContain("node scripts/check-no-" + "no" + "hup" + ".mjs"); // process-supervisor-allowlist: asserts the gate wires the checker; not a real spawn
+    expect(staticGateScript).toContain("node scripts/check-no-kill-" + "40" + "40" + ".mjs"); // port-4040-allowlist: asserts the gate wires the checker; not a real port bind
+    expect(staticGateScript).toContain("node scripts/check-no-test-timeout-appeasement.mjs");
+    expect(staticGateScript).toContain("node scripts/check-changeset-format.mjs");
     expect(testGateScript).toContain("pnpm --filter @fusion/engine test:core");
     expect(testGateScript).toContain("pnpm --filter @fusion/core test:pg-gate");
+    expect(testGateScript).toContain("pnpm --filter @fusion/core test:unit-gate");
     expect(testGateScript).toContain("pnpm --filter @runfusion/fusion test:ci-shape");
   });
 
@@ -264,6 +271,11 @@ describe("Merge gate (.github/workflows/pr-checks.yml)", () => {
   skip-install pack jobs never create a pnpm store; setup-node must not enable
   cache: pnpm on that path or post-job cache save fails the whole job after a
   successful pack (agent-browser-install pack-fixture).
+
+  FNXC:CI 2026-08-03-06:26:
+  setup-node@v5+ also defaults package-manager-cache:true, which reintroduces the
+  same Path Validation Error even when cache is omitted — pin it false on the
+  no-install path (PR #3307 agent-browser pack fixture post-step).
   */
   it("disables pnpm store cache when skip-install is true", () => {
     const setupSteps = (compositeAction.runs?.steps ?? []).filter(
@@ -276,6 +288,7 @@ describe("Merge gate (.github/workflows/pr-checks.yml)", () => {
     expect(withoutCache?.if).toContain("skip-install");
     expect(withoutCache?.if).toContain("==");
     expect(withoutCache?.with?.cache).toBeUndefined();
+    expect(withoutCache?.with?.["package-manager-cache"]).toBe(false);
   });
 
   it("keeps lint as install + lint only, without Bun/setup build coupling", () => {
@@ -859,12 +872,11 @@ describe("Cross-platform agent-browser install workflow", () => {
     expect(content).toContain('dependencies["agent-browser"]');
     expect(content).toContain("agent-browser-version.txt");
     /*
-    FNXC:CI 2026-07-28-01:35:
-    Dependabot PR #2444 bumps actions/upload-artifact 4→7 on the agent-browser install workflow.
-    Gate pin must track the workflow pin; download-artifact stays at v4 until a paired bump.
+    FNXC:CI 2026-08-01-19:45:
+    The CI-shape contract tracks the artifact action pins used by the agent-browser install workflow.
     */
     expect(content).toContain("actions/upload-artifact@v7");
-    expect(content).toContain("actions/download-artifact@v4");
+    expect(content).toContain("actions/download-artifact@v8");
     expect(content).toContain("Packed Fusion manifest lost the exact agent-browser pin");
     expect(content).toContain("Packed Fusion manifest lost the agent-browser bin");
     expect(content).toContain("Packed Fusion tarball omitted agent-browser.mjs");

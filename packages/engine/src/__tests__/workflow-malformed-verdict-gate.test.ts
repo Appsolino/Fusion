@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { TaskDetail, WorkflowIrNode } from "@fusion/core";
 
 import { parseWorkflowStepOutput } from "../executor.js";
-import { createDefaultNodeHandlers } from "../workflow-node-handlers.js";
-import { WorkflowGraphExecutor } from "../workflow-graph-executor.js";
+import { createDefaultNodeHandlers } from "../workflows/workflow-node-handlers.js";
+import { WorkflowGraphExecutor } from "../workflows/workflow-graph-executor.js";
 
 /*
 FNXC:WorkflowGates 2026-06-17-18:27:
@@ -48,6 +48,18 @@ describe("workflow malformed-verdict gate", () => {
     });
     expect(parseWorkflowStepOutput("lorem ipsum")).toEqual({ output: "lorem ipsum", malformed: true });
     expect(parseWorkflowStepOutput("native skill output", { requireVerdict: false })).toEqual({ output: "native skill output" });
+  });
+
+  it("extracts only validated findings from the selected trailing verdict JSON", () => {
+    expect(parseWorkflowStepOutput('prose {"verdict":"REVISE","notes":"old"}\n{"verdict":"REVISE","notes":"new","findings":[{"id":"a","title":"Issue","body":"Fix it","line":3,"severity":"high"},{"id":"a","title":"Second","body":"Also fix"},{"title":"bad","body":""}]}')).toMatchObject({
+      verdict: "REVISE",
+      notes: "new",
+      findings: [
+        { id: "a", title: "Issue", body: "Fix it", line: 3, severity: "high" },
+        { id: "a-2", title: "Second", body: "Also fix" },
+      ],
+    });
+    expect(parseWorkflowStepOutput("REQUEST REVISION\n1. prose only").findings).toBeUndefined();
   });
 
   it("keeps a blocking graph gate with a genuine REVISE verdict from passing", async () => {

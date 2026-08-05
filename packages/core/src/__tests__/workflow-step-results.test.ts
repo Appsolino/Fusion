@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { upsertWorkflowStepResult, MAX_WORKFLOW_STEP_PRIOR_ATTEMPTS } from "../workflow-step-results.js";
+import { normalizeWorkflowReviewFindings, upsertWorkflowStepResult, MAX_WORKFLOW_STEP_PRIOR_ATTEMPTS } from "../workflows/workflow-step-results.js";
 import type { WorkflowStepResult } from "../types.js";
 
 function makeResult(overrides: Partial<WorkflowStepResult> = {}): WorkflowStepResult {
@@ -10,6 +10,28 @@ function makeResult(overrides: Partial<WorkflowStepResult> = {}): WorkflowStepRe
     ...overrides,
   };
 }
+
+describe("normalizeWorkflowReviewFindings", () => {
+  it("normalizes bounded populated findings with stable collision-free ids", () => {
+    expect(normalizeWorkflowReviewFindings([
+      { id: " issue ", title: " Title ", body: " Body ", filePath: " src/a.ts ", line: 4.8, severity: "high" },
+      { id: "issue", title: "Second", body: "Action", line: -1, severity: "unknown" },
+    ])).toEqual([
+      { id: "issue", title: "Title", body: "Body", filePath: "src/a.ts", line: 4, severity: "high" },
+      { id: "issue-2", title: "Second", body: "Action" },
+    ]);
+  });
+
+  it("drops malformed, empty, and oversized entries without fabricating findings", () => {
+    expect(normalizeWorkflowReviewFindings([
+      null,
+      { title: "", body: "body" },
+      { title: "title", body: "" },
+      { title: "x".repeat(241), body: "body" },
+      { title: "title", body: "x".repeat(4001) },
+    ])).toBeUndefined();
+  });
+});
 
 describe("upsertWorkflowStepResult", () => {
   it("appends when the step id is absent", () => {
@@ -43,12 +65,42 @@ describe("upsertWorkflowStepResult", () => {
     expect(next[0].priorAttempts?.[0].startedAt).toBe("T1");
   });
 
+  it("keeps replaced findings in read-only history while new findings remain current", () => {
+    const attempt1 = makeResult({ startedAt: "T1", findings: [{ id: "old", title: "Old", body: "Old body" }] });
+    const attempt2 = makeResult({ startedAt: "T2", findings: [{ id: "new", title: "New", body: "New body" }] });
+    const next = upsertWorkflowStepResult([attempt1], attempt2);
+    expect(next[0].findings?.map((finding) => finding.id)).toEqual(["new"]);
+    expect(next[0].priorAttempts?.[0].findings?.map((finding) => finding.id)).toEqual(["old"]);
+  });
+
   it("snapshots a replaced advisory_failure entry", () => {
     const attempt1 = makeResult({ startedAt: "T1", status: "advisory_failure", output: "advisory-1" });
     const attempt2 = makeResult({ startedAt: "T2", status: "passed", output: "attempt-2" });
     const next = upsertWorkflowStepResult([attempt1], attempt2);
     expect(next[0].priorAttempts).toHaveLength(1);
     expect(next[0].priorAttempts?.[0].output).toBe("advisory-1");
+  });
+
+  it("preserves superseded Plan Review evidence when the new planning episode starts", () => {
+    const oldPass = makeResult({
+      workflowStepId: "plan-review",
+      workflowStepName: "Plan Review",
+      startedAt: "T1",
+      status: "passed",
+      supersededAt: "T2",
+      supersededReason: "dependency-change",
+    });
+    const nextEpisode = makeResult({
+      workflowStepId: "plan-review",
+      workflowStepName: "Plan Review",
+      startedAt: "T3",
+      status: "pending",
+    });
+
+    const next = upsertWorkflowStepResult([oldPass], nextEpisode);
+
+    expect(next[0].status).toBe("pending");
+    expect(next[0].priorAttempts).toEqual([oldPass]);
   });
 
   it("does NOT snapshot when the replaced entry was passed/skipped/pending", () => {

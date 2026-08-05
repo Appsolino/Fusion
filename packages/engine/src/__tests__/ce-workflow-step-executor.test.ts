@@ -30,8 +30,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUILTIN_WORKFLOWS, type WorkflowIr } from "@fusion/core";
 import "./executor-test-helpers.js";
 import { TaskExecutor } from "../executor.js";
-import type { PluginRunner } from "../plugin-runner.js";
-import { WorkflowGraphExecutor } from "../workflow-graph-executor.js";
+import type { PluginRunner } from "../plugins/plugin-runner.js";
+import { WorkflowGraphExecutor } from "../workflows/workflow-graph-executor.js";
+import { WorktreeBaseRefreshError } from "../worktree/worktree-acquisition.js";
 import {
   createMockStore,
   mockedCreateFnAgent,
@@ -39,6 +40,49 @@ import {
   mockedExistsSync,
   resetExecutorMocks,
 } from "./executor-test-helpers.js";
+
+describe("typed worktree base refresh graph refusal", () => {
+  it("does not immediately retry or erase a code-node refresh reason", async () => {
+    /*
+    FNXC:WorktreeBaseRefresh 2026-08-01-16:33:
+    The graph must stop before its code handler/session when reuse cannot prove a current,
+    durable-aligned checkout. The refresh outcome remains routable rather than generic exception.
+    */
+    const handler = vi.fn();
+    const prepare = vi.fn().mockRejectedValue(new WorktreeBaseRefreshError({
+      kind: "base-reconciliation-required",
+      executionSafe: false,
+      durableBaseSha: "c0",
+      baseSha: "c1",
+    }));
+    const graph = new WorkflowGraphExecutor({
+      handlers: { code: handler },
+      prepareNodeExecution: prepare,
+      maxRetriesPerNode: 3,
+    });
+    const ir: WorkflowIr = {
+      version: "v2",
+      name: "typed-refresh-refusal",
+      columns: [{ id: "in-progress", name: "In Progress", traits: [] }],
+      nodes: [
+        { id: "start", kind: "start" },
+        { id: "execute", kind: "code", column: "in-progress", config: { source: "return {};" } },
+        { id: "end", kind: "end" },
+      ],
+      edges: [
+        { from: "start", to: "execute" },
+        { from: "execute", to: "end", condition: "success" },
+      ],
+    };
+
+    const result = await graph.run({ id: "FN-REFRESH", column: "in-progress", steps: [] } as any, {}, ir);
+
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("failure");
+    expect(result.context?.["node:execute:value"]).toBe("base-reconciliation-required");
+  });
+});
 
 type CapturedSession = {
   customTools?: Array<{ name?: string }>;
@@ -131,7 +175,7 @@ async function expectCapturedSkillBody(
   distinctiveBody: string,
 ) {
   const { DefaultResourceLoader } = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>("@earendil-works/pi-coding-agent");
-  const { createSkillsOverrideFromSelection, resolveSessionSkills } = await vi.importActual<typeof import("../skill-resolver.js")>("../skill-resolver.js");
+  const { createSkillsOverrideFromSelection, resolveSessionSkills } = await vi.importActual<typeof import("../cli-runtime/skill-resolver.js")>("../cli-runtime/skill-resolver.js");
   const requestedSkillNames = cap.last?.skillSelection?.requestedSkillNames;
   const selection = resolveSessionSkills({ projectRootDir, requestedSkillNames, sessionPurpose: "executor" });
   const loader = new DefaultResourceLoader({
@@ -1027,6 +1071,15 @@ Ship FIVE kinds. Do NOT add roadmap-item in this task.
       expect(cap.last?.systemPrompt).toContain("Ship FIVE kinds. Do NOT add roadmap-item in this task.");
       expect(cap.last?.systemPrompt).toContain("PROMPT.md is the authoritative current contract");
       expect(cap.last?.systemPrompt).toContain("Do not enforce superseded requirements from the original Task Description");
+      /*
+       * FNXC:CodeReviewSurfaceCoverage 2026-08-04-06:35:
+       * Review starts from changed files but follows necessary consumers and
+       * tests, then restarts the complete procedure after any inline repair.
+       */
+      expect(cap.last?.systemPrompt).toContain("modified-file list is the starting point");
+      expect(cap.last?.systemPrompt).toContain("necessary callers, selectors, shared helpers, consumers, and tests");
+      expect(cap.last?.systemPrompt).not.toContain("Review ONLY the files listed above");
+      expect(cap.last?.systemPrompt).toContain("restart the mandatory review procedure");
     });
 
     it("does not restore the historical task description when PROMPT.md is unavailable", async () => {

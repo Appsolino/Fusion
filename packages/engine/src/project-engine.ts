@@ -46,60 +46,61 @@ import {
   resolveReboundTargetForTask, REVIEW_ELIGIBLE_SENTINEL_COLUMN,
   clearMergeConfirmedTransientStatus,
 } from "@fusion/core";
-import { assemblePlannerOverseerRuntimeSnapshot } from "./planner-overseer-runtime-snapshot.js";
+import { assemblePlannerOverseerRuntimeSnapshot } from "./overseer/planner-overseer-runtime-snapshot.js";
+import { resolveIntegrationBranch } from "./merge/integration-branch.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { InProcessRuntime } from "./runtimes/in-process-runtime.js";
-import type { WorktreePool } from "./worktree-pool.js";
-import type { ProjectRuntimeConfig } from "./project-runtime.js";
-import { PrMonitor } from "./pr-monitor.js";
-import { PlannerOverseerMonitor, resolveExecutorStuckAfterMs } from "./planner-overseer.js";
-import { PlannerRecoveryController, type PlannerRecoveryHandlers } from "./planner-recovery-controller.js";
-import { evaluateOverseerHumanControl } from "./overseer-human-control-policy.js";
+import type { WorktreePool } from "./worktree/worktree-pool.js";
+import type { ProjectRuntimeConfig } from "./project/project-runtime.js";
+import { PrMonitor } from "./merge/pr-monitor.js";
+import { PlannerOverseerMonitor, resolveExecutorStuckAfterMs } from "./overseer/planner-overseer.js";
+import { PlannerRecoveryController, type PlannerRecoveryHandlers } from "./overseer/planner-recovery-controller.js";
+import { evaluateOverseerHumanControl } from "./overseer/overseer-human-control-policy.js";
 import {
   OverseerAdvisorService,
   createParsingOverseerAgent,
-} from "./overseer-advisor-service.js";
-import { extractAdvisorAssistantText } from "./overseer-advise-tool.js";
-import { createResolvedAgentSession } from "./agent-session-helpers.js";
-import type { PrNodeGithubOps } from "./pr-nodes.js";
-import { PrReconciler, type PrReconcileGithubOps } from "./pr-reconcile.js";
-import { PrCommentHandler } from "./pr-comment-handler.js";
-import { NtfyNotifier } from "./notifier.js";
+} from "./overseer/overseer-advisor-service.js";
+import { extractAdvisorAssistantText } from "./overseer/overseer-advise-tool.js";
+import { createResolvedAgentSession } from "./agents/agent-session-helpers.js";
+import type { PrNodeGithubOps } from "./merge/pr-nodes.js";
+import { PrReconciler, type PrReconcileGithubOps } from "./merge/pr-reconcile.js";
+import { PrCommentHandler } from "./merge/pr-comment-handler.js";
+import { NtfyNotifier } from "./util/notifier.js";
 import { NotificationService, OAuthAlertStateStore, OAuthExpiryMonitor, OAuthRefreshScheduler, OAuthValidityLogger } from "./notification/index.js";
 import type { NotificationChatStore } from "./notification/notification-service.js";
-import { GridlockDetector } from "./gridlock-detector.js";
-import { createFusionAuthStorage, getFusionOAuthAlertStatePath } from "./auth-storage.js";
-import { CronRunner, createAiPromptExecutor } from "./cron-runner.js";
-import type { RoutineRunner } from "./routine-runner.js";
+import { GridlockDetector } from "./healing/gridlock-detector.js";
+import { createFusionAuthStorage, getFusionOAuthAlertStatePath } from "./auth/auth-storage.js";
+import { CronRunner, createAiPromptExecutor } from "./scheduling/cron-runner.js";
+import type { RoutineRunner } from "./scheduling/routine-runner.js";
 import { sweepStaleAutostashes, VerificationError } from "./merger.js";
-import { runAiMerge, landWorkspaceTask, WorkspacePartialLandError, WorkspaceRepoLandBusyError } from "./merger-ai.js";
-import { promoteBranchGroup, type BranchGroupPromotionResult, type CreateGroupPrFn, type SyncGroupPrFn } from "./group-merge-coordinator.js";
+import { runAiMerge, landWorkspaceTask, WorkspacePartialLandError, WorkspaceRepoLandBusyError } from "./merge/merger-ai.js";
+import { promoteBranchGroup, type BranchGroupPromotionResult, type CreateGroupPrFn, type SyncGroupPrFn } from "./merge/group-merge-coordinator.js";
 import {
   persistedTopLevelAgentTaskIdsFromStore,
   projectAdmissionCoordinator,
   resolveActiveTaskCapacityLimit,
-} from "./concurrency.js";
-import { canStartNextMergeBody } from "./merge-reclaim-policy.js";
+} from "./concurrency/concurrency.js";
+import { canStartNextMergeBody } from "./merge/merge-reclaim-policy.js";
 import {
   registerProjectVerificationLimit,
   unregisterProjectVerificationLimit,
-} from "./verification-concurrency.js";
+} from "./concurrency/verification-concurrency.js";
 import { runtimeLog } from "./logger.js";
 import type { HeartbeatTriggerScheduler } from "./agent-heartbeat.js";
-import { ResearchOrchestrator } from "./research-orchestrator.js";
-import { ResearchRunDispatcher } from "./research-dispatcher.js";
-import { ResearchStepRunner } from "./research-step-runner.js";
+import { ResearchOrchestrator } from "./research/research-orchestrator.js";
+import { ResearchRunDispatcher } from "./research/research-dispatcher.js";
+import { ResearchStepRunner } from "./research/research-step-runner.js";
 import { ResearchProviderRegistry } from "./research/provider-registry.js";
-import { createRunAuditor, generateSyntheticRunId } from "./run-audit.js";
-import { finalizeProvenAutoMergeTask } from "./auto-merge-finalization.js";
-import { isTransientError } from "./transient-error-detector.js";
-import { classifyTransientMergeError } from "./transient-merge-error-classifier.js";
+import { createRunAuditor, generateSyntheticRunId } from "./util/run-audit.js";
+import { finalizeProvenAutoMergeTask } from "./merge/auto-merge-finalization.js";
+import { isTransientError } from "./errors/transient-error-detector.js";
+import { classifyTransientMergeError, MAX_AUTO_MERGE_TRANSIENT_RETRIES } from "./errors/transient-merge-error-classifier.js";
 import { TunnelProcessManager } from "./remote-access/tunnel-process-manager.js";
 import {
   deliverPostgresMigrationCompleteNoticeIfNeeded,
   deliverPostgresMigrationNoticeIfNeeded,
-} from "./postgres-migration-notice.js";
+} from "./project/postgres-migration-notice.js";
 import type {
   ExternalTunnelInfo,
   TunnelProvider,
@@ -565,7 +566,7 @@ export class ProjectEngine {
    *
    *  Readable (not private) so tests derive the cap from this single source of truth rather
    *  than hardcoding it — the FN-8004 bump broke two suites that had baked in the old `3`. */
-  static readonly MAX_AUTO_MERGE_TRANSIENT_RETRIES = 5;
+  static readonly MAX_AUTO_MERGE_TRANSIENT_RETRIES = MAX_AUTO_MERGE_TRANSIENT_RETRIES;
   private static readonly MERGE_REQUEST_RETRY_EXHAUSTED_AGE_MS = 30 * 60 * 1000;
   /** Cap on outer in-review→in-progress bounces caused by deterministic
    *  verification failures during auto-merge. After this many failed merges
@@ -650,7 +651,7 @@ export class ProjectEngine {
     */
     const projectId = this.config.projectId || this.config.workingDirectory;
     /*
-    FNXC:ConcurrencyAdmission 2026-08-06-16:20:
+    FNXC:ConcurrencyAdmission 2026-08-03-16:20:
     FN-8453/#2359 requires the actual durable merge queue to refresh on every
     project admission pass. A one-shot candidate only exists after this pump
     dequeues it, which lets a newer planning/execute candidate overtake an older
@@ -687,6 +688,7 @@ export class ProjectEngine {
           return [{
             taskId: task.id,
             projectId,
+            lane: "review",
             createdAt: task.createdAt,
             start: async () => {
               // Do not run merge work in the coordinator; hand the exact queued
@@ -1457,6 +1459,12 @@ export class ProjectEngine {
     runtimeLog.log(`ProjectEngine stopped for ${this.config.projectId}`);
   }
 
+  /** Stop new lifecycle admission while allowing active work to finish. */
+  beginDrain(): void {
+    this.shuttingDown = true;
+    this.runtime.beginDrain();
+  }
+
   // ── Public accessors ──
 
   /** Get the underlying InProcessRuntime. */
@@ -1788,7 +1796,7 @@ export class ProjectEngine {
    * `(stage, signal)` pair emits. Best-effort: any store/façade failure is
    * swallowed so it never breaks `PlannerOverseerMonitor#observeTask`/the poll.
    */
-  private async emitOverseerObservationDeduped(store: TaskStore, observation: import("./planner-overseer.js").OverseerStageObservation): Promise<void> {
+  private async emitOverseerObservationDeduped(store: TaskStore, observation: import("./overseer/planner-overseer.js").OverseerStageObservation): Promise<void> {
     try {
       const dedupKey = `${observation.stage}:${observation.signal}`;
       const last = this.plannerObservationEmitDedup.get(observation.taskId);
@@ -2909,13 +2917,22 @@ export class ProjectEngine {
    * older low-priority task would start before a later urgent one.
    */
   private async allowInReviewMergeProcessing(task: Pick<Task, "branchContext" | "autoMerge">, settings: Pick<Settings, "autoMerge">, store: Partial<Pick<TaskStore, "getBranchGroup">> = this.runtime.getTaskStore()): Promise<boolean> {
+    if (allowsAutoMergeProcessing(task, settings)) {
+      return true;
+    }
+
     const groupId = task.branchContext?.groupId?.trim();
     const branchGroup = groupId ? await store.getBranchGroup?.(groupId) : null;
+    if (!branchGroup || branchGroup.status !== "open" || !branchGroup.branchName.trim()) {
+      return false;
+    }
+
+    const projectDefaultBranch = await resolveIntegrationBranch(this.config.workingDirectory, settings as Settings);
     /*
     FNXC:AutoMergeHold 2026-07-09-16:53:
     FN-7750 / Runfusion#1980: shared-branch member integration may bypass the global `autoMerge:false` hold only while its group row is still open. Stale, finalized, abandoned, or missing groups must flow through the standalone manual-hold gate so no task provenance can solo auto-merge to main.
     */
-    return allowsAutoMergeProcessing(task, settings) || isLiveSharedBranchGroupMemberIntegration(task, branchGroup);
+    return isLiveSharedBranchGroupMemberIntegration(task, branchGroup, projectDefaultBranch);
   }
 
   private async emitLegacyAutoMergeStampAdvisory(store: TaskStore): Promise<void> {
@@ -3465,7 +3482,8 @@ export class ProjectEngine {
               FNXC:AutoMergeHold 2026-07-09-16:58:
               FN-7750: merge-confirmed fast-path rerouting to a branch-group integration branch is safe only for a live/open group. A missing or terminal group must leave the row on its stored standalone target instead of reviving a stale group route that could bypass the manual merge hold.
               */
-              const branchGroupForFastPath = isLiveSharedBranchGroupMemberIntegration(task, branchGroupForFastPathCandidate)
+              const fastPathDefaultBranch = await resolveIntegrationBranch(this.config.workingDirectory, settings);
+              const branchGroupForFastPath = isLiveSharedBranchGroupMemberIntegration(task, branchGroupForFastPathCandidate, fastPathDefaultBranch)
                 ? branchGroupForFastPathCandidate
                 : null;
               const routedFastPathTarget = branchGroupForFastPath?.branchName?.trim();
@@ -3906,7 +3924,7 @@ export class ProjectEngine {
           a merge IS an agent, so it still consumes one of the project's slots; it
           just no longer consumes a machine-wide slot too.
 
-          `admitOldest` already takes `semaphore` as optional and enforces
+          `admitNext` already takes `semaphore` as optional and enforces
           `maxConcurrent` independently of it (see its `claimed() + reservations >=
           maxConcurrent` check), so dropping the argument keeps per-project
           admission and oldest-first fairness exactly as they were.
@@ -3933,7 +3951,7 @@ export class ProjectEngine {
             FNXC:ConcurrencyAdmission 2026-08-01-01:50 (ROOT CAUSE — triage admission died during every merge):
             This lane previously ran `value = await start()` INSIDE its admission `start()` callback —
             i.e. the ENTIRE merge (git rebase, verification, landing: minutes, or forever when the
-            merge wedges) executed inside `admitOldest`'s single-flight drain. The coordinator is a
+            merge wedges) executed inside `admitNext`'s single-flight drain. The coordinator is a
             project-wide singleton and every caller awaits the previous drain, so triage's poll parked
             at `await existing` for the whole merge window, its `polling` re-entrance guard stayed
             closed, and every 15s tick + task:created wake dropped silently. Observed twice on the
@@ -3942,12 +3960,12 @@ export class ProjectEngine {
             the merge finished. With merge pinned at 1, every merge was a planning outage.
 
             The lane start now only CLAIMS the admission and returns; the merge body runs after
-            `admitOldest` settles, outside the drain. Capacity stays honest: the merge row's own
+            `admitNext` settles, outside the drain. Capacity stays honest: the merge row's own
             merging/landing status is what `claimed()` counts, and at-most-once merging is enforced
             by the merge lease, not by this drain. The transient admit→status-write gap is the same
             one every other lane (triage `void specifyTask`, scheduler `void schedule`) already has.
             */
-            await projectAdmissionCoordinator.admitOldest({
+            await projectAdmissionCoordinator.admitNext({
               projectId: cwd,
               maxConcurrent: resolveActiveTaskCapacityLimit({
                 maxConcurrent: admissionSettings.maxConcurrent ?? 2,
@@ -3959,6 +3977,7 @@ export class ProjectEngine {
               refresh: async () => [{
                 taskId,
                 projectId: cwd,
+                lane: "review",
                 createdAt: mergeCandidate?.createdAt,
                 start: async () => {
                   selected = true;
@@ -4072,6 +4091,10 @@ export class ProjectEngine {
             const agentStore = (this.runtime as any).agentStore;
 
             const usageLimitPauser = (this.runtime as any).usageLimitPauser;
+            // FNXC:CredentialInstanceRotation 2026-08-01-11:05:
+            // Preserve the runtime-owned rotator identity in downstream option bags;
+            // merger does not opt into rotation, so this is forwarding only.
+            const credentialRotator = (this.runtime as any).credentialRotator;
 
             const rawMerge = async () => {
               const abortSignal = this.claimActiveMerge(taskId);
@@ -4083,6 +4106,7 @@ export class ProjectEngine {
                 manual: hasManualResolver,
                 pool,
                 usageLimitPauser,
+                credentialRotator,
                 agentStore,
                 pluginRunner: this.getPluginRunner(),
                 signal: abortSignal,
