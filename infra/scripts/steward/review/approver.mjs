@@ -68,6 +68,7 @@ export async function runCursorApprover(input) {
     "authorityCheck.hostP/production/destructiveData/secretExpansion must be false.",
     `configuredProvider must be ${REVIEW_PROVIDER}; configuredModel must be ${REVIEW_MODEL}.`,
     "Set actualProvider/actualModel to the model you actually ran.",
+    "MUST set risk to the evidence.risk value (LOW or SENSITIVE) — never omit risk.",
   ].join(" ");
 
   const user = JSON.stringify(payload);
@@ -83,10 +84,13 @@ export async function runCursorApprover(input) {
     modelProbe: input.modelProbe,
   });
 
+  const parsed = result.parsed && typeof result.parsed === "object" ? result.parsed : {};
   const art = {
-    ...result.parsed,
+    ...parsed,
     schemaVersion: 1,
     role: "approver",
+    // Fill risk from evidence when the model omits it (common ask-mode collapse).
+    risk: parsed.risk || e.risk,
     repository: e.repository,
     baseSha: e.baseSha,
     headSha: e.headSha,
@@ -102,17 +106,52 @@ export async function runCursorApprover(input) {
     elapsedMs: result.elapsedMs,
     evidencePayloadHasDiffText: user.includes('"diffText"') && user.includes(e.diffText.slice(0, 32)),
     expiresAt:
-      result.parsed.expiresAt ||
+      parsed.expiresAt ||
       new Date(Date.now() + 6 * 3600_000).toISOString(),
   };
 
-  return validateVerdict(art, {
-    expectModel: REVIEW_MODEL,
-    expectHeadSha: e.headSha,
-    expectDiffSha256: e.diffSha256,
-    expectTestsSha256: e.testsSha256,
-    nowMs: input.nowMs ?? Date.now(),
-  });
+  try {
+    return validateVerdict(art, {
+      expectModel: REVIEW_MODEL,
+      expectHeadSha: e.headSha,
+      expectDiffSha256: e.diffSha256,
+      expectTestsSha256: e.testsSha256,
+      nowMs: input.nowMs ?? Date.now(),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      schemaVersion: 1,
+      role: art.role,
+      verdict: "REQUEST_CHANGES",
+      risk: art.risk || e.risk || "SENSITIVE",
+      repository: e.repository,
+      baseSha: e.baseSha,
+      headSha: e.headSha,
+      diffSha256: e.diffSha256,
+      testsSha256: e.testsSha256,
+      configuredProvider: REVIEW_PROVIDER,
+      configuredModel: REVIEW_MODEL,
+      actualProvider: art.actualProvider,
+      actualModel: art.actualModel,
+      modelFingerprint: art.modelFingerprint,
+      requestId: art.requestId,
+      sessionId: art.sessionId,
+      blockingFindings: [`verdict-validation: ${msg}`],
+      nonBlockingFindings: [],
+      requiredChanges: ["Return a complete schemaVersion=1 verdict JSON including risk"],
+      evidenceChecked: ["validation-failed"],
+      authorityCheck: {
+        hostP: false,
+        production: false,
+        destructiveData: false,
+        secretExpansion: false,
+      },
+      expiresAt: new Date(Date.now() + 6 * 3600_000).toISOString(),
+      elapsedMs: art.elapsedMs,
+      evidencePayloadHasDiffText: art.evidencePayloadHasDiffText,
+    };
+  }
 }
 
 /**
