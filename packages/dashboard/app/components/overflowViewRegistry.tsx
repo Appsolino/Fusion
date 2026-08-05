@@ -1,6 +1,5 @@
 import { Suspense, lazy, type ComponentType, type ReactNode } from "react";
 import {
-  CheckSquare,
   Folder,
   ListTodo,
   GitBranch,
@@ -30,7 +29,6 @@ Dev Server and Secrets are right-dock tools (moved off the left sidebar). They r
 */
 const DevServerView = lazy(() => import("./DevServerView").then((m) => ({ default: m.DevServerView })));
 const SecretsView = lazy(() => import("./SecretsView").then((m) => ({ default: m.SecretsView })));
-const TodoView = lazy(() => import("./TodoView").then((m) => ({ default: m.TodoView })));
 const PullRequestView = lazy(() => import("./PullRequestView").then((m) => ({ default: m.PullRequestView })));
 const ChatView = lazy(() => import("./ChatView").then((m) => ({ default: m.ChatView })));
 
@@ -43,7 +41,6 @@ export type OverflowViewKey =
   | "chat"
   | "devserver"
   | "secrets"
-  | "todos"
   | "pull-requests"
   | `plugin:${string}:${string}`;
 
@@ -81,6 +78,8 @@ export interface OverflowViewRenderProps {
   onOpenSettings?: (section?: string) => void;
   onOpenTaskDetail?: (taskId: string) => void;
   onOpenTaskInDock?: (task: Task | TaskDetail) => void;
+  /** Opens New Task with a reverted source task's original description. */
+  onReviseTask?: (task: Task | TaskDetail) => void;
   onDeleteTask?: (id: string, options?: { removeDependencyReferences?: boolean; removeLineageReferences?: boolean; githubIssueAction?: GithubIssueAction; allowResurrection?: boolean }) => Promise<Task>;
   onOpenDetail?: (task: Task | TaskDetail, initialTab?: DetailTaskTab) => void;
   onSendSelectionToTask?: (description: string) => void;
@@ -111,7 +110,6 @@ export interface OverflowViewEntry {
 export interface OverflowViewVisibilityOptions {
   experimentalFeatures?: OverflowViewFeatureState;
   showSkillsTab?: boolean;
-  todosEnabled?: boolean;
   pluginDashboardViews?: PluginDashboardViewEntry[];
 }
 
@@ -161,6 +159,7 @@ export const STATIC_OVERFLOW_VIEW_ENTRIES: readonly OverflowViewEntry[] = [
         columnFlagsByTaskId={props.columnFlagsByTaskId}
         projectId={props.projectId}
         onOpenTask={props.onOpenTaskInDock}
+        onReviseTask={props.onReviseTask}
         onDeleteTask={props.onDeleteTask}
         addToast={props.addToast}
         prAuthAvailable={false}
@@ -259,21 +258,6 @@ export const STATIC_OVERFLOW_VIEW_ENTRIES: readonly OverflowViewEntry[] = [
     render: (props) => wrapOverflowView(<SecretsView addToast={props.addToast} />),
   },
   {
-    key: "todos",
-    label: "Todos",
-    icon: CheckSquare,
-    testId: "right-dock-tab-todos",
-    isVisible: (options) => options.todosEnabled === true,
-    render: (props) => wrapOverflowView(
-      <TodoView
-        projectId={props.projectId}
-        addToast={props.addToast}
-        onPlanningMode={props.onPlanningMode}
-        onTaskCreated={props.onTaskCreated}
-      />,
-    ),
-  },
-  {
     key: "pull-requests",
     label: "Pull Requests",
     icon: GitPullRequest,
@@ -311,6 +295,8 @@ function buildPluginOverflowViewEntries(pluginDashboardViews: PluginDashboardVie
               openFile: props.openFile ?? (() => undefined),
               renderTaskCard: props.renderTaskCard,
               addToast: props.addToast,
+              openPlanningMode: props.onPlanningMode,
+              onTaskCreated: props.onTaskCreated,
             }}
           />,
         ),

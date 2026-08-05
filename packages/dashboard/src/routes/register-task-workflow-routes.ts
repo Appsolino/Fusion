@@ -9,6 +9,7 @@ const severityAuditLog = createLogger("dashboard-register-task-workflow-routes")
  * than turning one board load into thousands of file reads. Truncation is logged, never silent.
  */
 const AWAITING_PLANNING_ENRICH_LIMIT = 200;
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -21,6 +22,8 @@ import type {
   TaskReviewData,
   TaskReviewItem,
   TaskReviewSummary,
+  TaskReviewVerdict,
+  WorkflowStepResult,
   GithubIssueAction,
   DuplicateCandidate,
   DuplicateMatch,
@@ -52,6 +55,8 @@ import {
   reconcileDeterministicDuplicate,
   extractIntentSignature,
   findNearDuplicates,
+  isNearDuplicateCanonicalInactive,
+  resolveNearDuplicateCanonicalFlags,
   isEphemeralAgent,
   parseExplicitDuplicateMarker,
   resolveWorkflowIrForTask,
@@ -64,6 +69,7 @@ import {
   columnsWithFlag,
   resolveReboundTarget,
   resolveColumnFlags,
+  PLAN_REVIEW_GROUP_ID,
   TransitionRejectionError,
   ArchivedTaskDocumentPublicationRejectedError,
   TaskDocumentPreconditionFailedError,
@@ -95,6 +101,8 @@ import {
   // FN-8004 follow-up: shared with SelfHealingManager.recoverStaleMergingStatus so the manual
   // Retry gate and the automatic sweep agree on when a merge-active stamp is orphaned.
   isStaleMergeActiveStatus,
+  resumeApprovedPlanReviewHandoff,
+  type ApprovedPlanReviewHandoffResult,
   type AiUndoTaskResult,
   type PrepareRevertPrBranchResult,
   type PrepareWorkspaceRevertPrBranchesResult,
@@ -187,6 +195,28 @@ async function resolveIntakeColumnForTask(store: TaskStore, taskId: string): Pro
     return columnsWithFlag(ir, "intake")[0] ?? "triage";
   } catch {
     return "triage";
+  }
+}
+
+/**
+ * FNXC:PlanReviewReplan 2026-08-04-06:35 FN-8768:
+ * Plan approval normally belongs in workflow intake. An exhausted Plan Review stays where the
+ * review node ran, and both operator decisions must be accepted there. Keep approve/reject on one
+ * resolver so the UI cannot offer a choice that only one endpoint understands.
+ */
+async function resolvePlanApprovalColumnsForTask(
+  store: TaskStore,
+  task: Task,
+): Promise<{ approvalColumn: string; intakeColumn: string }> {
+  try {
+    const ir = await resolveWorkflowIrForTask(store, task.id);
+    const intakeColumn = columnsWithFlag(ir, "intake")[0] ?? "triage";
+    const approvalColumn = task.awaitingApprovalReason === "plan-review-replan-cap"
+      ? ir.nodes.find((node) => node.id === PLAN_REVIEW_GROUP_ID)?.column ?? intakeColumn
+      : intakeColumn;
+    return { approvalColumn, intakeColumn };
+  } catch {
+    return { approvalColumn: "triage", intakeColumn: "triage" };
   }
 }
 
@@ -733,6 +763,7 @@ function buildDuplicateQuery(title: string | undefined, description: string): st
 async function computeDuplicateMatches(
   scopedStore: TaskStore,
   input: { title?: string; description: string; limit?: number; threshold?: number },
+  classifyBlocker: (canonical: Pick<Task, "id" | "column" | "deletedAt">) => Promise<boolean>,
 ): Promise<DuplicateMatch[]> {
   const query = buildDuplicateQuery(input.title, input.description);
   if (query.length === 0) {
@@ -744,7 +775,12 @@ async function computeDuplicateMatches(
     includeArchived: false,
     limit: 20,
   });
-  const candidates: DuplicateCandidate[] = results.map((task) => ({
+  const eligibility = await Promise.all(results.map(async (task) => ({
+    task,
+    blocker: await classifyBlocker(task),
+  })));
+  const eligibleResults = eligibility.filter(({ blocker }) => blocker).map(({ task }) => task);
+  const candidates: DuplicateCandidate[] = eligibleResults.map((task) => ({
     id: task.id,
     title: task.title ?? "",
     description: task.description ?? "",
@@ -764,6 +800,14 @@ async function computeDuplicateMatches(
   );
 }
 
+async function isDuplicateBlocker(
+  store: TaskStore,
+  canonical: Pick<Task, "id" | "column" | "deletedAt">,
+): Promise<boolean> {
+  const flags = await resolveNearDuplicateCanonicalFlags(store, canonical);
+  return !isNearDuplicateCanonicalInactive(canonical, flags);
+}
+
 function buildReviewerAgentItemId(input: { index: number; reviewType: "plan" | "code"; step?: number; verdict?: string; createdAt?: string }): string {
   const stepPart = input.step ? `step-${input.step}` : "step-na";
   const verdictPart = (input.verdict ?? "unknown").toLowerCase();
@@ -771,7 +815,101 @@ function buildReviewerAgentItemId(input: { index: number; reviewType: "plan" | "
   return `reviewer-${input.reviewType}-${stepPart}-${verdictPart}-${timePart}-${input.index + 1}`;
 }
 
+const CURRENT_WORKFLOW_REVIEW_STEP_IDS = new Set(["code-review", "plan-review"]);
+const CURRENT_WORKFLOW_REVIEW_STATUSES = new Set<WorkflowStepResult["status"]>(["passed", "failed", "advisory_failure"]);
+function parseTaskReviewVerdict(value: string | undefined): TaskReviewVerdict | undefined {
+  switch (value) {
+    case "APPROVE":
+    case "APPROVE_WITH_NOTES":
+    case "REVISE":
+    case "RETHINK":
+    case "UNAVAILABLE":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * FNXC:TaskReview 2026-08-05-01:57:
+ * The current graph-owned Code Review and Plan Review ids are the only structured review sources:
+ * current, terminal, verdict-bearing results win over compatibility-only reviewer prose/activity
+ * parsing. Their persisted identity produces canonical ids so GET, refresh, and address reconstruct
+ * the same server-owned feedback; address snapshots and steering must never trust client prose.
+ * Custom step names, historical attempts, pending/skipped, superseded, and bypassed results remain
+ * non-selectable until workflow results gain an authoritative persisted review-kind marker.
+ */
+function isCurrentWorkflowReviewResult(result: WorkflowStepResult): result is WorkflowStepResult & { verdict: TaskReviewVerdict } {
+  return CURRENT_WORKFLOW_REVIEW_STEP_IDS.has(result.workflowStepId)
+    && CURRENT_WORKFLOW_REVIEW_STATUSES.has(result.status)
+    && result.verdict !== undefined
+    && result.supersededAt === undefined
+    && result.bypassedBy === undefined
+    && result.bypassedAt === undefined
+    && result.bypassReason === undefined
+    && result.bypassedFromStatus === undefined
+    && result.bypassedFromVerdict === undefined;
+}
+
+function buildWorkflowReviewItemId(task: Task, result: WorkflowStepResult): string {
+  const identity = JSON.stringify({
+    taskId: task.id,
+    workflowStepId: result.workflowStepId,
+    workflowStepName: result.workflowStepName,
+    phase: result.phase,
+    status: result.status,
+    verdict: result.verdict,
+    completedAt: result.completedAt,
+    startedAt: result.startedAt,
+    output: result.output,
+    notes: result.notes,
+  });
+  return `workflow-review-${createHash("sha256").update(identity).digest("hex").slice(0, 24)}`;
+}
+
+function buildWorkflowReviewItems(task: Task): TaskReviewItem[] {
+  return (task.workflowStepResults ?? [])
+    .filter(isCurrentWorkflowReviewResult)
+    .map((result): TaskReviewItem => {
+      const reviewType = result.workflowStepId === "plan-review" ? "plan" as const : "code" as const;
+      const body = result.output?.trim() || result.notes?.trim() || "No written feedback was provided by this review step.";
+      const timestamp = result.completedAt ?? result.startedAt ?? task.updatedAt ?? task.createdAt;
+      return {
+        itemId: buildWorkflowReviewItemId(task, result),
+        sourceMode: "reviewer-agent",
+        title: `${result.workflowStepName || result.workflowStepId} ${result.verdict}`,
+        body,
+        author: "reviewer-agent",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        reviewState: result.verdict,
+        verdict: result.verdict,
+        reviewType,
+        progressStatus: null,
+      };
+    })
+    .sort((a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? "") || a.itemId.localeCompare(b.itemId));
+}
+
+function buildDirectReviewSummary(items: TaskReviewItem[]): TaskReviewSummary | null {
+  const latest = items[0];
+  return latest
+    ? { summary: latest.title, verdict: latest.verdict }
+    : null;
+}
+
 async function buildDirectTaskReviewData(task: Task, store: TaskStore): Promise<TaskReviewData> {
+  const structuredItems = buildWorkflowReviewItems(task);
+  if (structuredItems.length > 0) {
+    return {
+      mode: "reviewer-agent",
+      refreshable: true,
+      fetchedAt: new Date().toISOString(),
+      summary: buildDirectReviewSummary(structuredItems),
+      items: structuredItems,
+    };
+  }
+
   const agentLogs = await store.getAgentLogs(task.id);
   const reviewerText = agentLogs.filter((entry) => entry.agent === "reviewer" && entry.type === "text").map((entry) => entry.text).join("\n");
   const fallbackLogs = (task.log ?? []).filter((entry) => REVIEW_STEP_RE.test(entry.action));
@@ -794,6 +932,8 @@ async function buildDirectTaskReviewData(task: Task, store: TaskStore): Promise<
       createdAt,
       updatedAt: createdAt,
       reviewState: verdict ?? null,
+      verdict: parseTaskReviewVerdict(verdict),
+      reviewType,
       progressStatus: null,
     });
   }
@@ -812,25 +952,20 @@ async function buildDirectTaskReviewData(task: Task, store: TaskStore): Promise<
         createdAt: entry.timestamp,
         updatedAt: entry.timestamp,
         reviewState: verdict ?? null,
+        verdict: parseTaskReviewVerdict(verdict),
+        reviewType,
         progressStatus: null,
       });
     });
   }
 
-  const sorted = [...items].sort((a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? ""));
-  const latest = sorted[0];
-  const summary: TaskReviewSummary | null = latest
-    ? {
-        summary: latest.title,
-        verdict: (latest.reviewState as "APPROVE" | "REVISE" | "RETHINK" | "UNAVAILABLE" | null | undefined) ?? undefined,
-      }
-    : null;
+  const sorted = [...items].sort((a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? "") || a.itemId.localeCompare(b.itemId));
 
   return {
     mode: "reviewer-agent",
     refreshable: true,
     fetchedAt: new Date().toISOString(),
-    summary,
+    summary: buildDirectReviewSummary(sorted),
     items: sorted,
   };
 }
@@ -1385,7 +1520,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         description: description.trim(),
         limit,
         threshold,
-      });
+      }, (canonical) => isDuplicateBlocker(scopedStore, canonical));
 
       res.json({ matches });
       return;
@@ -1553,6 +1688,15 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         source && typeof source === "object" && "sourceType" in source && typeof (source as { sourceType?: unknown }).sourceType === "string"
           ? source
           : { sourceType: "api" as const };
+      const duplicateBlockerVerdicts = new Map<string, Promise<boolean>>();
+      const classifyDuplicateBlocker = (canonical: Pick<Task, "id" | "column" | "deletedAt">): Promise<boolean> => {
+        const key = `${canonical.id}:${canonical.column}:${canonical.deletedAt ?? ""}`;
+        const existing = duplicateBlockerVerdicts.get(key);
+        if (existing) return existing;
+        const verdict = isDuplicateBlocker(scopedStore, canonical);
+        duplicateBlockerVerdicts.set(key, verdict);
+        return verdict;
+      };
 
       const requestedBranchMode = getBranchSelectionMode(branchSelection);
       const { branch: normalizedBranch, baseBranch: normalizedBaseBranch, sharedFeatureBranch } =
@@ -1645,7 +1789,11 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
 
       let matchesAfterAckFilter: DuplicateMatch[] = [];
       try {
-        if (deterministicGuard.action === "duplicate" && deterministicGuard.existing) {
+        if (
+          deterministicGuard.action === "duplicate"
+          && deterministicGuard.existing
+          && await classifyDuplicateBlocker(deterministicGuard.existing)
+        ) {
           throw conflict("duplicate_candidates", {
             matches: [{
               id: deterministicGuard.existing.id,
@@ -1663,7 +1811,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
           : await computeDuplicateMatches(scopedStore, {
               title: normalizedTitle,
               description: normalizedDescription,
-            });
+            }, classifyDuplicateBlocker);
         matchesAfterAckFilter = duplicateMatches.filter((match) => !acknowledgedDuplicateIds.includes(match.id));
         if (matchesAfterAckFilter.length > 0) {
           throw conflict("duplicate_candidates", { matches: matchesAfterAckFilter });
@@ -1692,11 +1840,17 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
             const fullRows = await scopedStore.listTasks({ slim: false, includeArchived: false });
             const byId = new Map(fullRows.map((row) => [row.id, row]));
             const candidateMap = new Map<string, NearDuplicateCandidate>();
-            for (const row of candidateRows) {
+            const classifiedRows = await Promise.all(candidateRows.map(async (row) => {
+              const full = byId.get(row.id);
+              return { row, full, blocker: full ? await classifyDuplicateBlocker(full) : true };
+            }));
+            for (const { row, full, blocker } of classifiedRows) {
               if (acknowledgedDuplicateIds.includes(row.id)) {
                 continue;
               }
-              const full = byId.get(row.id);
+              if (!blocker) {
+                continue;
+              }
               candidateMap.set(row.id, {
                 id: row.id,
                 title: row.title ?? "",
@@ -1749,7 +1903,11 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
           (explicitDuplicateMarker ? acknowledgedDuplicateIds.includes(explicitDuplicateMarker.canonicalId) : false);
         if (explicitDuplicateMarker && !explicitMarkerBypassed) {
           const canonical = await scopedStore.getTask(explicitDuplicateMarker.canonicalId).catch(() => null);
-          if (canonical && !canonical.deletedAt) {
+          if (
+            canonical
+            && !canonical.deletedAt
+            && await classifyDuplicateBlocker(canonical)
+          ) {
             try {
               // The intake guard runs before createTask, so there is no new task row yet.
               // Record against the canonical target to leave a traceable audit breadcrumb.
@@ -1875,6 +2033,10 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         fingerprint: bypassDuplicateCheck === true ? null : contentFingerprint,
         windowMs: 60_000,
         logger: runtimeLogger,
+        onDuplicate: async (canonical) =>
+          await classifyDuplicateBlocker(canonical)
+            ? "archive-created"
+            : "keep-created",
       });
         if (deterministicReconcile.outcome === "archived") {
           res.status(200).json(deterministicReconcile.canonical);
@@ -3341,6 +3503,8 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         planningModelId,
         nodeId,
         thinkingLevel,
+        credentialInstanceId,
+        validatorCredentialInstanceId,
       } = req.body;
 
       // Validate taskIds
@@ -3360,12 +3524,17 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       const hasPlanningModel = planningModelProvider !== undefined || planningModelId !== undefined;
       const hasNodeId = nodeId !== undefined;
       const hasThinkingLevel = thinkingLevel !== undefined;
-      if (!hasExecutorModel && !hasValidatorModel && !hasPlanningModel && !hasNodeId && !hasThinkingLevel) {
+      const hasCredentialInstance = credentialInstanceId !== undefined || validatorCredentialInstanceId !== undefined;
+      if (!hasExecutorModel && !hasValidatorModel && !hasPlanningModel && !hasNodeId && !hasThinkingLevel && !hasCredentialInstance) {
         throw badRequest("At least one model field, thinkingLevel, or nodeId must be provided");
       }
 
       if (nodeId !== undefined && nodeId !== null && typeof nodeId !== "string") {
         throw badRequest("nodeId must be a string, null, or undefined");
+      }
+      if ((credentialInstanceId !== undefined && credentialInstanceId !== null && typeof credentialInstanceId !== "string")
+        || (validatorCredentialInstanceId !== undefined && validatorCredentialInstanceId !== null && typeof validatorCredentialInstanceId !== "string")) {
+        throw badRequest("credential instance IDs must be strings, null, or undefined");
       }
       if (thinkingLevel !== undefined && thinkingLevel !== null && (typeof thinkingLevel !== "string" || !THINKING_LEVELS.includes(thinkingLevel as ThinkingLevel))) {
         throw badRequest(`thinkingLevel must be one of ${THINKING_LEVELS.join(", ")}, null, or undefined`);
@@ -3430,6 +3599,8 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         planningModelId?: string | null;
         nodeId?: string | null;
         thinkingLevel?: ThinkingLevel | null;
+        credentialInstanceId?: string | null;
+        validatorCredentialInstanceId?: string | null;
       } = {};
       if (validatedExecutor.provider !== undefined) {
         updates.modelProvider = validatedExecutor.provider;
@@ -3459,6 +3630,12 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       if (thinkingLevel !== undefined) {
         updates.thinkingLevel = thinkingLevel as ThinkingLevel | null;
       }
+      /*
+      FNXC:TaskBulkModels 2026-08-01-10:34:
+      Bulk model editing must persist explicit credential-instance choices and clear them on Default. Omitting unchanged lanes preserves the no-change sentinel rather than rewriting task overrides.
+      */
+      if (credentialInstanceId !== undefined) updates.credentialInstanceId = credentialInstanceId;
+      if (validatorCredentialInstanceId !== undefined) updates.validatorCredentialInstanceId = validatorCredentialInstanceId;
 
       // Update all tasks in parallel
       const updatePromises = taskIds.map(async (taskId) => {
@@ -3770,6 +3947,23 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
     }
   });
 
+  /*
+  FNXC:TaskDetailPlan 2026-08-05-04:05:
+  This literal route precedes /tasks/:id so Express cannot capture `prompt` as a task id.
+  Definition polling gets only identity plus PROMPT.md and cannot replace lifecycle or workflow state.
+  */
+  router.get("/tasks/:id/prompt", async (req, res) => {
+    try {
+      const { store: scopedStore } = await getProjectContext(req);
+      const task = await scopedStore.getTask(req.params.id);
+      res.json(task.prompt === undefined ? { id: task.id } : { id: task.id, prompt: task.prompt });
+    } catch (err: unknown) {
+      if (err instanceof ApiError) throw err;
+      if (isTaskLookupMiss(err)) throw notFound(`Task ${req.params.id} not found`);
+      rethrowAsApiError(err, "Internal server error");
+    }
+  });
+
   // Get single task with prompt content
   router.get("/tasks/:id", async (req, res) => {
     try {
@@ -3989,73 +4183,180 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
   router.post("/tasks/:id/approve-plan", async (req, res) => {
     try {
       const { store: scopedStore } = await getProjectContext(req);
-      const task = await scopedStore.getTask(req.params.id);
+      const updated = await scopedStore.withPlanningLifecycleLock(req.params.id, async () => {
+        /*
+         * FNXC:PlanningDependencyReseed 2026-08-04-06:35 FN-8768:
+         * The task read belongs inside the same lifecycle lock used by dependency mutation.
+         * Otherwise approval can validate an old hold, wait for dependency re-seed to publish
+         * needs-replan, and then erase that newer state.
+         */
+        const task = await scopedStore.getTask(req.params.id);
 
-      /*
-      FNXC:WorkflowResolvedColumns 2026-07-29-00:00 (U12 — P0, post-#2515):
-      Resolve the workflow's INTAKE column; do not name `triage`. #2515 removed `triage`
-      from the default lineage — the single pre-implementation column is now id `todo`
-      displayed as "Planning" — so comparing the card's column against the legacy
-      `triage` id became TRUE for every
-      default-workflow card and this route rejected all of them. A card parked
-      `awaiting-approval` could not be approved OR rejected (same guard below), i.e. it
-      was STUCK with no operator action able to release it. The guard did not stop
-      firing; it started firing on everything.
-      */
-      const approveIntakeColumn = await resolveIntakeColumnForTask(scopedStore, task.id);
-      /*
-      The resolved column ONLY — the legacy-`triage` disjunct this comment
-      used to justify is gone (PR #2614 review — greptile: the comment outlived the code).
-      It was a belt-and-braces widening added with the P0 fix, on the theory that a card
-      might still be sitting in `triage`. Nothing shipped declares that column since
-      #2515, so the disjunct only widened what the guard accepts, and re-adding it changed
-      no test in either direction. A guard that accepts a column no workflow declares is
-      not caution, it is an unreachable branch that reads like a requirement.
-      */
-      if (task.column !== approveIntakeColumn) {
-        throw badRequest(`Task must be in the '${approveIntakeColumn}' column to approve plan`);
-      }
-      if (task.status !== "awaiting-approval") {
-        throw badRequest("Task must have status 'awaiting-approval' to approve plan");
-      }
-      // FNXC:ReleaseAuthorizationGate 2026-07-09-00:00:
-      // The triage release-authorization gate was removed (it over-fired and stranded
-      // ordinary tasks). The approve-plan guard that refused any task carrying the legacy
-      // awaitingApprovalReason === "release-authorization" is gone too, so tasks parked by
-      // the old gate can now be approved normally instead of staying stuck with no exit.
+        /*
+        FNXC:WorkflowResolvedColumns 2026-07-29-00:00 (U12 — P0, post-#2515):
+        Resolve the workflow's INTAKE column; do not name `triage`. #2515 removed `triage`
+        from the default lineage — the single pre-implementation column is now id `todo`
+        displayed as "Planning" — so comparing the card's column against the legacy
+        `triage` id became TRUE for every
+        default-workflow card and this route rejected all of them. A card parked
+        `awaiting-approval` could not be approved OR rejected (same guard below), i.e. it
+        was STUCK with no operator action able to release it. The guard did not stop
+        firing; it started firing on everything.
+        */
+        const { approvalColumn: approveColumn } = await resolvePlanApprovalColumnsForTask(scopedStore, task);
+        /*
+        The resolved column ONLY — the legacy-`triage` disjunct this comment
+        used to justify is gone (PR #2614 review — greptile: the comment outlived the code).
+        It was a belt-and-braces widening added with the P0 fix, on the theory that a card
+        might still be sitting in `triage`. Nothing shipped declares that column since
+        #2515, so the disjunct only widened what the guard accepts, and re-adding it changed
+        no test in either direction. A guard that accepts a column no workflow declares is
+        not caution, it is an unreachable branch that reads like a requirement.
+        */
+        if (task.status !== "awaiting-approval") {
+          throw badRequest("Task must have status 'awaiting-approval' to approve plan");
+        }
+        const reboundColumn = await resolveReboundColumnForTask(scopedStore, task.id);
+        /*
+         * FNXC:PlanReviewReplan 2026-08-04-06:35 FN-8768:
+         * A split-column approval keeps the hold set while moving to rebound. Accept that lane on
+         * retry so a failure after the move cannot strand a safely blocked partial decision.
+         */
+        if (task.column !== approveColumn && task.column !== reboundColumn) {
+          throw badRequest(`Task must be in the '${approveColumn}' column to approve plan`);
+        }
+        // FNXC:ReleaseAuthorizationGate 2026-07-09-00:00:
+        // The triage release-authorization gate was removed (it over-fired and stranded
+        // ordinary tasks). The approve-plan guard that refused any task carrying the legacy
+        // awaitingApprovalReason === "release-authorization" is gone too, so tasks parked by
+        // the old gate can now be approved normally instead of staying stuck with no exit.
 
-      // Log the approval
-      await scopedStore.logEntry(task.id, "Plan approved by user");
+        /*
+         * FNXC:PlanApproval 2026-07-04-22:41:
+         * FN-7569 — persist a fingerprint of the exact PROMPT.md the operator just approved
+         * so a later re-specification (replan, plan-review retry, self-healing rebound) that
+         * produces the identical plan can skip re-parking at awaiting-approval. Read the
+         * on-disk PROMPT.md directly (best-effort) since the task row does not always carry
+         * full prompt text; a missing/unreadable file leaves the fingerprint unset and the
+         * manual gate falls back to today's always-re-park behavior for this task.
+         */
+        let approvedPlanFingerprint: string | undefined;
+        try {
+          const { readFile } = await import("node:fs/promises");
+          const { join } = await import("node:path");
+          const promptPath = join(scopedStore.getRootDir(), ".fusion", "tasks", task.id, "PROMPT.md");
+          const promptText = await readFile(promptPath, "utf8");
+          approvedPlanFingerprint = computePlanApprovalFingerprint(promptText);
+        } catch {
+          // No PROMPT.md to fingerprint (unusual for an awaiting-approval task) — leave unset.
+        }
 
-      /*
-       * FNXC:PlanApproval 2026-07-04-22:41:
-       * FN-7569 — persist a fingerprint of the exact PROMPT.md the operator just approved
-       * so a later re-specification (replan, plan-review retry, self-healing rebound) that
-       * produces the identical plan can skip re-parking at awaiting-approval. Read the
-       * on-disk PROMPT.md directly (best-effort) since the task row does not always carry
-       * full prompt text; a missing/unreadable file leaves the fingerprint unset and the
-       * manual gate falls back to today's always-re-park behavior for this task.
-       */
-      let approvedPlanFingerprint: string | undefined;
-      try {
-        const { readFile } = await import("node:fs/promises");
-        const { join } = await import("node:path");
-        const promptPath = join(scopedStore.getRootDir(), ".fusion", "tasks", task.id, "PROMPT.md");
-        const promptText = await readFile(promptPath, "utf8");
-        approvedPlanFingerprint = computePlanApprovalFingerprint(promptText);
-      } catch {
-        // No PROMPT.md to fingerprint (unusual for an awaiting-approval task) — leave unset.
-      }
+        /*
+        FNXC:PlanReviewApproval 2026-08-04-00:26:
+        Manual approval after the revision cap is durable evidence that the final REVISE was
+        accepted. Persist the audited bypass with the hold clear so no consumer can observe only
+        half of the operator decision and enqueue another Plan Review.
+        */
+        let approvedWorkflowStepResults: Task["workflowStepResults"] | undefined;
+        if (task.awaitingApprovalReason === "plan-review-replan-cap") {
+          const results = [...(task.workflowStepResults ?? [])];
+          let reviewIndex = -1;
+          for (let index = results.length - 1; index >= 0; index -= 1) {
+            const result = results[index];
+            if (
+              result.workflowStepId === PLAN_REVIEW_GROUP_ID
+              && (result.status === "failed" || result.status === "advisory_failure")
+              && result.verdict === "REVISE"
+            ) {
+              reviewIndex = index;
+              break;
+            }
+          }
+          if (reviewIndex === -1) {
+            const alreadyBypassed = results.some((result) =>
+              result.workflowStepId === PLAN_REVIEW_GROUP_ID
+              && result.status === "skipped"
+              && result.bypassedBy === "dashboard-operator"
+              && result.bypassedFromVerdict === "REVISE"
+            );
+            if (!alreadyBypassed) {
+              throw conflict("Cannot approve exhausted Plan Review: no failed REVISE result is available to override");
+            }
+          } else {
+            const prior = results[reviewIndex];
+            const bypassed = {
+              ...prior,
+              status: "skipped" as const,
+              bypassedBy: "dashboard-operator",
+              bypassedAt: new Date().toISOString(),
+              bypassReason: "Approved after Plan Review did not converge",
+              bypassedFromStatus: prior.status,
+              bypassedFromVerdict: prior.verdict,
+            };
+            delete bypassed.verdict;
+            results[reviewIndex] = bypassed;
+          }
+          approvedWorkflowStepResults = results;
+        }
 
-      // Move to todo and clear status
-      const reboundColumn = await resolveReboundColumnForTask(scopedStore, task.id);
-      const updated = await scopedStore.moveTask(task.id, reboundColumn);
-      await scopedStore.updateTask(task.id, {
-        status: undefined,
-        ...(approvedPlanFingerprint ? { approvedPlanFingerprint } : {}),
+        const approvalPatch = {
+          status: null,
+          approvedPlanFingerprint: approvedPlanFingerprint ?? null,
+          ...(approvedWorkflowStepResults ? { workflowStepResults: approvedWorkflowStepResults } : {}),
+        } satisfies Parameters<TaskStore["updateTask"]>[1];
+
+        if (task.column !== reboundColumn) {
+          /*
+           * FNXC:PlanReviewReplan 2026-08-04-06:35 FN-8768:
+           * Persist the decision evidence while the approval hold remains set,
+           * then preserve both across the rebound. Every interruption point is
+           * therefore non-schedulable and retryable; the final update below is
+           * the only operation that releases the hold.
+           */
+          await scopedStore.updateTask(task.id, {
+            ...approvalPatch,
+            status: "awaiting-approval",
+          });
+          await scopedStore.moveTask(task.id, reboundColumn, {
+            preserveStatus: true,
+            workflowMoveSource: "plan-approval",
+          });
+        } else {
+          // Preserve the historical same-column move behavior and its guards.
+          await scopedStore.moveTask(task.id, reboundColumn);
+        }
+        /*
+         * FNXC:PlanApproval 2026-08-03-18:53:
+         * Approval must clear the durable awaiting-approval hold with TaskStore's explicit
+         * null sentinel; undefined omits a field from the patch. Persist the current plan's
+         * fingerprint, or explicitly clear a prior fingerprint when PROMPT.md was unreadable,
+         * so a stale plan can never bypass a later manual approval gate.
+         */
+        const approved = await scopedStore.updateTask(task.id, approvalPatch);
+        /*
+         * FNXC:PlanApprovalDispatch 2026-08-05-01:57:
+         * Clearing awaiting-approval is only the first half of the operator decision. Resume the
+         * graph through the public engine seam while the planning lifecycle fence is still held so
+         * Plan Review creates its own runnable continuation and later capacity evidence. The route
+         * must never mark review passed or create a capacity continuation on the operator's behalf.
+         */
+        const approvedWorkflow = await resolveWorkflowIrForTask(scopedStore, approved.id);
+        const handoff: ApprovedPlanReviewHandoffResult = await resumeApprovedPlanReviewHandoff(
+          scopedStore,
+          approved,
+          approvedWorkflow,
+        );
+        // Keep the typed handoff result local: recovery owns retry after a post-approval seed failure.
+        void handoff;
+        // Activity logging is secondary to the now-durable decision. Do not turn
+        // a successful approval into a 500 if the bounded log append is unavailable.
+        await scopedStore.logEntry(task.id, "Plan approved by user").catch((error) => {
+          severityAuditLog.warn(`Failed to record plan approval activity for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        return approved;
       });
 
-      res.json({ ...updated, status: undefined, ...(approvedPlanFingerprint ? { approvedPlanFingerprint } : {}) });
+      res.json(updated);
     } catch (err: unknown) {
       if (err instanceof ApiError) {
         throw err;
@@ -4070,40 +4371,67 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
   router.post("/tasks/:id/reject-plan", async (req, res) => {
     try {
       const { store: scopedStore } = await getProjectContext(req);
-      const task = await scopedStore.getTask(req.params.id);
+      const updated = await scopedStore.withPlanningLifecycleLock(req.params.id, async () => {
+        /*
+         * FNXC:PlanningDependencyReseed 2026-08-04-06:35 FN-8768:
+         * Match approval's locked fresh-read invariant: a stale reject must not clear needs-replan.
+         */
+        const task = await scopedStore.getTask(req.params.id);
 
-      // Same P0 as approve-plan above: resolve the intake column rather than naming
-      // `triage`, which #2515 removed from the default lineage.
-      const rejectIntakeColumn = await resolveIntakeColumnForTask(scopedStore, task.id);
-      if (task.column !== rejectIntakeColumn) {
-        throw badRequest(`Task must be in the '${rejectIntakeColumn}' column to reject plan`);
-      }
-      if (task.status !== "awaiting-approval") {
-        throw badRequest("Task must have status 'awaiting-approval' to reject plan");
-      }
-      // FNXC:ReleaseAuthorizationGate 2026-07-09-00:00:
-      // Release-authorization gate removed — see the approve-plan handler above. A task
-      // carrying the legacy release-authorization hold can now be rejected normally.
+        /*
+         * FNXC:WorkflowResolvedColumns 2026-08-04-06:35 FN-8768:
+         * Match approve-plan by resolving the workflow-owned approval column rather than naming
+         * legacy `triage`; exhausted review may deliberately park outside intake.
+         */
+        const { approvalColumn: rejectColumn, intakeColumn } = await resolvePlanApprovalColumnsForTask(scopedStore, task);
+        const retryingPartialCapRejection = task.awaitingApprovalReason === "plan-review-replan-cap"
+          && task.column === intakeColumn;
+        if (task.column !== rejectColumn && !retryingPartialCapRejection) {
+          throw badRequest(`Task must be in the '${rejectColumn}' column to reject plan`);
+        }
+        if (task.status !== "awaiting-approval") {
+          throw badRequest("Task must have status 'awaiting-approval' to reject plan");
+        }
+        // FNXC:ReleaseAuthorizationGate 2026-07-09-00:00:
+        // Release-authorization gate removed — see the approve-plan handler above. A task
+        // carrying the legacy release-authorization hold can now be rejected normally.
 
-      // Log the rejection
-      await scopedStore.logEntry(task.id, "Plan rejected by user", "Specification will be regenerated");
+        // Log the rejection
+        await scopedStore.logEntry(task.id, "Plan rejected by user", "Specification will be regenerated");
 
-      // Clear status to return to normal triage state
-      /*
-       * FNXC:PlanApproval 2026-07-04-22:41:
-       * FN-7569 — clear any previously-recorded approval fingerprint alongside the status
-       * clear and PROMPT.md removal, so the regenerated plan is always treated as new and
-       * requires fresh manual approval (it must never inherit the rejected plan's fingerprint).
-       */
-      await scopedStore.updateTask(task.id, { status: undefined, approvedPlanFingerprint: null });
+        /*
+         * FNXC:PlanApproval 2026-08-03-19:03:
+         * Remove PROMPT.md before releasing the approval hold. If removal fails, the rejected
+         * plan must remain blocked rather than becoming schedulable with rejected content.
+         */
+        const { rm } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        const promptPath = join(scopedStore.getRootDir(), ".fusion", "tasks", task.id, "PROMPT.md");
+        await rm(promptPath, { force: true });
 
-      // Remove PROMPT.md to force regeneration
-      const { rm } = await import("node:fs/promises");
-      const { join } = await import("node:path");
-      const promptPath = join(scopedStore.getRootDir(), ".fusion", "tasks", task.id, "PROMPT.md");
-      await rm(promptPath, { force: true });
+        if (task.column !== intakeColumn) {
+          /*
+           * FNXC:PlanReviewReplan 2026-08-04-06:35 FN-8768:
+           * Keep awaiting-approval durable while a split-column cap park is rehomed to planning
+           * intake. If the final clear fails, the safely blocked intake row can retry this route;
+           * no interruption exposes rejected content to planning or execution.
+           */
+          await scopedStore.moveTask(task.id, intakeColumn, {
+            preserveStatus: true,
+            workflowMoveSource: "plan-approval",
+          });
+        }
 
-      const updated = await scopedStore.getTask(task.id);
+        // Clear status to return to normal triage state
+        /*
+         * FNXC:PlanApproval 2026-07-04-22:41:
+         * FN-7569 — clear any previously-recorded approval fingerprint alongside the status
+         * clear and PROMPT.md removal, so the regenerated plan is always treated as new and
+         * requires fresh manual approval (it must never inherit the rejected plan's fingerprint).
+         */
+        await scopedStore.updateTask(task.id, { status: null, approvedPlanFingerprint: null });
+        return await scopedStore.getTask(task.id);
+      });
       res.json(updated);
     } catch (err: unknown) {
       if (err instanceof ApiError) {
@@ -5846,20 +6174,13 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       type SelectedReviewItem = {
         id: string;
         source: "pr-review" | "reviewer-agent";
-        threadId?: string;
-        filePath?: string;
-        lineNumber?: number;
-        author?: string;
-        summary: string;
-        body: string;
-        url?: string;
       };
 
       const selectedItems: SelectedReviewItem[] = Array.isArray(req.body?.selectedItems)
         ? req.body.selectedItems.filter((value: unknown): value is SelectedReviewItem => {
             if (!value || typeof value !== "object") return false;
             const item = value as Record<string, unknown>;
-            return typeof item.id === "string" && item.id.trim().length > 0 && typeof item.summary === "string" && typeof item.body === "string";
+            return typeof item.id === "string" && item.id.trim().length > 0 && typeof item.source === "string";
           })
         : [];
 
@@ -5898,6 +6219,8 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         state: item.reviewState ?? undefined,
         isResolved: item.isResolved,
         source: item.sourceMode === "reviewer-agent" ? "reviewer-agent" as const : "github-pr" as const,
+        verdict: item.verdict,
+        reviewType: item.reviewType,
       }));
       const reviewState = {
         source: canonicalReviewData.mode,
@@ -5917,7 +6240,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       const now = new Date().toISOString();
       const selectedSet = new Set(selectedItems.map((item: SelectedReviewItem) => item.id));
       const canonicalIds = new Set(reviewState.items.map((item) => item.id));
-      const expectedSource = canonicalReviewData.mode === "pull-request" ? "pr-review" : "reviewer-agent";
+      const expectedSource: "pr-review" | "reviewer-agent" = canonicalReviewData.mode === "pull-request" ? "pr-review" : "reviewer-agent";
       const reviewSourceMismatch = selectedItems.find((item) => canonicalIds.has(item.id) && item.source !== expectedSource);
       if (reviewSourceMismatch) {
         throw badRequest("Selected review source does not match task review mode");
@@ -5927,8 +6250,25 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
         throw badRequest("selectedItems must reference existing review items");
       }
 
-      const modeSummary = `${reviewState.source === "pull-request" ? "pull-request" : "reviewer-agent"} · ${selectedItems.length} selected item(s)`;
-      const steeringItems = selectedItems.map((item: SelectedReviewItem, index: number) => {
+      const canonicalById = new Map(reviewState.items.map((item) => [item.id, item] as const));
+      const canonicalSelections = selectedItems.map((selected) => {
+        const item = canonicalById.get(selected.id);
+        if (!item) throw badRequest("selectedItems must reference existing review items");
+        return {
+          id: item.id,
+          source: expectedSource,
+          summary: item.summary ?? item.body.slice(0, 120),
+          body: item.body,
+          author: item.author.login,
+          filePath: item.path,
+          lineNumber: item.line,
+          threadId: item.threadId,
+          url: item.htmlUrl,
+        };
+      });
+
+      const modeSummary = `${reviewState.source === "pull-request" ? "pull-request" : "reviewer-agent"} · ${canonicalSelections.length} selected item(s)`;
+      const steeringItems = canonicalSelections.map((item, index) => {
         const location = item.filePath ? `${item.filePath}${typeof item.lineNumber === "number" ? `:${item.lineNumber}` : ""}` : undefined;
         const snippetSource = item.body.trim() || item.summary.trim();
         const snippet = snippetSource.length > 220 ? `${snippetSource.slice(0, 220)}…` : snippetSource;
@@ -5940,7 +6280,7 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
       const priorAddressingById = new Map(reviewState.addressing.map((record) => [record.itemId, record] as const));
       const nextAddressing = [
         ...reviewState.addressing.filter((record) => !selectedSet.has(record.itemId)),
-        ...selectedItems.map((item: SelectedReviewItem) => {
+        ...canonicalSelections.map((item) => {
           const existing = priorAddressingById.get(item.id);
           return {
             itemId: item.id,

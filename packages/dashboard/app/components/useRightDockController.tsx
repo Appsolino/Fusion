@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ColumnId, GithubIssueAction, MergeResult, Task, TaskDetail, WorkflowStep } from "@fusion/core";
-import { isNearDuplicateCanonicalInactive } from "../../../core/src/near-duplicate-canonical";
+import { isNearDuplicateCanonicalInactive } from "../../../core/src/duplicates/near-duplicate-canonical";
 import type { ToastType } from "../hooks/useToast";
 import type { DetailTaskTab } from "../hooks/useModalManager";
 import { fetchTaskDetail } from "../api";
@@ -9,6 +9,7 @@ import { getScopedItem } from "../utils/projectStorage";
 import { DOCK_FILES_CURRENT_KEY } from "./DockFilesView";
 import { TaskCard } from "./TaskCard";
 import { TaskDetailContent } from "./TaskDetailModal";
+import { mergeTaskSnapshot } from "../hooks/useTasks";
 import { RightDock, persistRightDockOpen, persistRightDockPinned, readStoredRightDockOpen, readStoredRightDockPinned } from "./RightDock";
 import { RightDockExpandModal } from "./RightDockExpandModal";
 import type { OverflowViewKey, OverflowViewRenderProps, OverflowViewVisibilityOptions } from "./overflowViewRegistry";
@@ -117,7 +118,8 @@ export function useRightDockController(input: RightDockControllerInput): RightDo
 
   const resolvedDockTask = useMemo(() => {
     if (!dockTaskSnapshot) return null;
-    return input.tasks.find((candidate) => candidate.id === dockTaskSnapshot.id) ?? dockTaskSnapshot;
+    const liveTask = input.tasks.find((candidate) => candidate.id === dockTaskSnapshot.id);
+    return liveTask ? mergeTaskSnapshot(dockTaskSnapshot, liveTask) : dockTaskSnapshot;
   }, [dockTaskSnapshot, input.tasks]);
 
   const toggle = useCallback(() => {
@@ -231,6 +233,13 @@ export function useRightDockController(input: RightDockControllerInput): RightDo
     DockTaskList rows must open through the controller's ordinary right-dock task route, not TaskCard's canonical full task modal. Thread one controller-level handler into registry render props so both compact and expanded Tasks lists share popup-setting routing and setting-off dock-detail behavior.
     */
     onOpenTaskInDock: openTaskFromDockList,
+    /*
+    FNXC:TaskRevert 2026-08-01-20:06:
+    Dock resolution uses the same New Task prefill owner as every other surface.
+    Keeping this callback in registry props lets compact and expanded dock hosts revise
+    the exact source description without introducing a second draft state.
+    */
+    onReviseTask: (task: Task | TaskDetail) => input.onSendSelectionToTask(task.description),
     onDeleteTask: input.onDeleteTask,
     onOpenDetail: input.openDetailTask,
     onSendSelectionToTask: input.onSendSelectionToTask,
@@ -256,6 +265,8 @@ export function useRightDockController(input: RightDockControllerInput): RightDo
       onRequestClose={closeDockTask}
       onOpenDetail={(value) => input.openDetailTask(value, "chat")}
       onMoveTask={input.onMoveTask}
+      /* FNXC:TaskRevert 2026-08-01-20:27: Right-dock task detail uses the shared New Task draft recovery for reverted tasks. */
+      onReviseTask={(task) => input.onSendSelectionToTask(task.description)}
       onDeleteTask={input.onDeleteTask}
       onArchiveTask={input.onArchiveTask}
       onRevertTask={input.onRevertTask}

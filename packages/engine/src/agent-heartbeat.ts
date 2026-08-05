@@ -17,8 +17,8 @@
  * - onTerminated: Called when a heartbeat run is terminated
  */
 
-import type { AgentStore, AgentHeartbeatRun, HeartbeatInvocationSource, AgentHeartbeatConfig, AgentBudgetStatus, Message, MessageStore, TaskStore, TaskDetail, AgentRole, Agent, InboxTask, RunMutationContext, Settings, AgentConfigRevision, ReflectionStore, ChatStore, ChatRoom, ChatRoomMessage, AgentMemoryInclusionMode } from "@fusion/core";
-import { AutoClaimSnapshotManager, resolveFreshAutoClaimCandidates, type AutoClaimCandidate } from "./auto-claim-snapshot.js";
+import { DEFAULT_PROVIDER_INSTANCE_ID, type AgentStore, type AgentHeartbeatRun, type HeartbeatInvocationSource, type AgentHeartbeatConfig, type AgentBudgetStatus, type Message, type MessageStore, type TaskStore, type TaskDetail, type AgentRole, type Agent, type InboxTask, type RunMutationContext, type Settings, type AgentConfigRevision, type ReflectionStore, type ChatStore, type ChatRoom, type ChatRoomMessage, type AgentMemoryInclusionMode } from "@fusion/core";
+import { AutoClaimSnapshotManager, resolveFreshAutoClaimCandidates, type AutoClaimCandidate } from "./scheduling/auto-claim-snapshot.js";
 import {
   ApprovalRequestStore,
   buildExecutionMemoryInstructions,
@@ -43,22 +43,22 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
 import { createTaskCreateTool, createTaskLogToolWithContext, createTaskLogsReadTool, createTaskDocumentWriteTool, createTaskDocumentReadTool, createTaskReadTools, createArtifactRegisterTool, createArtifactListTool, createArtifactViewTool, createListAgentsTool, createDelegateTaskTool, createTaskAssignTool, createGetAgentConfigTool, createUpdateAgentConfigTool, createAgentCreateTool, createAgentDeleteTool, createSendMessageTool, createReadMessagesTool, createPostRoomMessageTool, createMemoryTools, createGoalRetrievalTools, createMissionTools, createIdeationTools, createReadEvaluationsTool, createUpdateIdentityTool, createReflectOnPerformanceTool, createWebFetchTool, createWorkflowListTool, createWorkflowGetTool, createWorkflowValidateTool, createWorkflowSelectTool, createTaskPromoteTool, createWorkflowCreateTool, createWorkflowUpdateTool, createWorkflowDeleteTool, createWorkflowSettingsTool, createTraitListTool, createAskQuestionTool, createResearchTools, readAgentMemoryWorkspaceLongTerm, taskCreateParams } from "./agent-tools.js";
-import { AgentLogger } from "./agent-logger.js";
+import { AgentLogger } from "./agents/agent-logger.js";
 import {
   resolveAgentInstructionsWithRatings,
   buildPluginPromptSection,
   resolveAgentHeartbeatProcedure,
-} from "./agent-instructions.js";
-import { resolveHeartbeatPromptTemplate, resolveHeartbeatScopeDisciplineMode, selectHeartbeatProcedure } from "./heartbeat-procedure-resolver.js";
-import { buildPromptLayers, collapsePromptLayers } from "./prompt-layers.js";
-import { resolveAndEmitGoalContext } from "./goal-injection-diagnostics.js";
+} from "./agents/agent-instructions.js";
+import { resolveHeartbeatPromptTemplate, resolveHeartbeatScopeDisciplineMode, selectHeartbeatProcedure } from "./agents/heartbeat-procedure-resolver.js";
+import { buildPromptLayers, collapsePromptLayers } from "./execution/prompt-layers.js";
+import { resolveAndEmitGoalContext } from "./goals/goal-injection-diagnostics.js";
 import { createLogger, heartbeatLog, formatError } from "./logger.js";
-import { mergeEffectiveSettings, mergeProjectWorkflowModelLaneBaseline } from "./effective-settings.js";
+import { mergeEffectiveSettings, mergeProjectWorkflowModelLaneBaseline } from "./project/effective-settings.js";
 import {
   extractConcurrentSoftDeleteRaceDetails,
   isConcurrentSoftDeleteRaceError,
   isStaleWorktreeModuleResolutionError,
-} from "./transient-error-detector.js";
+} from "./errors/transient-error-detector.js";
 
 /**
  * FNXC:WorktreeAcquisition 2026-07-09-00:00:
@@ -87,20 +87,21 @@ FN-7672 requires durable agent error recovery to stay classification-gated: only
 FNXC:HeartbeatRecovery 2026-07-15-08:50:
 heartbeat-model-unavailable parks from assignment/on-demand runs were terminal until a human Retry, even when the next attempt succeeds with unchanged credentials (false "model unavailable" / registry / credential-probe blips). Admit those parks to the same bounded heartbeatErrorRecovery budget as error-state recovery so the engine auto-retries like operator Retry, while genuine missing credentials re-park after the budget exhausts.
 */
-import { acquireTaskWorktree } from "./worktree-acquisition.js";
-import { createRunAuditor, generateSyntheticRunId, type DatabaseMutationType, type EngineRunContext } from "./run-audit.js";
+import { acquireTaskWorktree, WorktreeBaseRefreshError } from "./worktree/worktree-acquisition.js";
+import { createRunAuditor, generateSyntheticRunId, type DatabaseMutationType, type EngineRunContext } from "./util/run-audit.js";
 import { promptWithFallback } from "./pi.js";
-import { withRateLimitRetry } from "./rate-limit-retry.js";
-import { buildAgentGatedActionSummary } from "./permanent-agent-gating.js";
-import { createResolvedAgentSession, extractRuntimeHint, resolveHeartbeatSessionModels, resolveExecutorFallbackThinkingLevel } from "./agent-session-helpers.js";
-import { resolveMcpServersForStore } from "./mcp-resolution.js";
-import type { AgentActionGateContext } from "./agent-action-gate.js";
-import { buildSessionSkillContextSync } from "./session-skill-context.js";
-import type { AgentReflectionService } from "./agent-reflection.js";
-import { trimPromptMd, trimTaskDescription, trimTriggeringComments } from "./heartbeat-prompt-trim.js";
-import { detectDeicticReference, extractAntecedentCandidates, renderAmbiguityPromptBlock, scoreReferentConfidence } from "./room-ambiguity.js";
-import { countActiveAgentMembers, decideRoomCoordination, detectTaskFilingIntent, renderRoomCoordinationPromptBlock } from "./room-coordination.js";
-import { evaluateParkedAgentTaskLink, isParkedTaskColumn, type AgentTaskLinkExecutionProof } from "./task-agent-sync.js";
+import { withRateLimitRetry } from "./errors/rate-limit-retry.js";
+import type { CredentialInstanceRotator } from "./credential-instance-rotation.js";
+import { buildAgentGatedActionSummary } from "./agents/permanent-agent-gating.js";
+import { createResolvedAgentSession, extractRuntimeHint, resolveHeartbeatSessionModels, resolveExecutorFallbackThinkingLevel } from "./agents/agent-session-helpers.js";
+import { resolveMcpServersForStore } from "./mcp/mcp-resolution.js";
+import type { AgentActionGateContext } from "./agents/agent-action-gate.js";
+import { buildSessionSkillContextSync } from "./cli-runtime/session-skill-context.js";
+import type { AgentReflectionService } from "./agents/agent-reflection.js";
+import { trimPromptMd, trimTaskDescription, trimTriggeringComments } from "./agents/heartbeat-prompt-trim.js";
+import { detectDeicticReference, extractAntecedentCandidates, renderAmbiguityPromptBlock, scoreReferentConfidence } from "./triage-domain/room-ambiguity.js";
+import { countActiveAgentMembers, decideRoomCoordination, detectTaskFilingIntent, renderRoomCoordinationPromptBlock } from "./triage-domain/room-coordination.js";
+import { evaluateParkedAgentTaskLink, isParkedTaskColumn, type AgentTaskLinkExecutionProof } from "./agents/task-agent-sync.js";
 
 /*
 FNXC:WorkflowLifecycleColumns 2026-07-28-09:25 (U11 conversion):
@@ -124,7 +125,7 @@ async function resolveHeartbeatReboundColumn(taskStore: TaskStore, taskId: strin
   }
 }
 import { classifyReportHealth } from "./reports-health.js";
-import { accumulateSessionTokenUsage, captureSessionTokenBaseline } from "./session-token-usage.js";
+import { accumulateSessionTokenUsage, captureSessionTokenBaseline } from "./execution/session-token-usage.js";
 
 const promptSizeLog = createLogger("prompt-size");
 
@@ -216,13 +217,15 @@ export interface HeartbeatMonitorOptions {
    *  When not provided, executeHeartbeat() will throw. */
   rootDir?: string;
   /** Plugin runner for runtime selection. When provided, enables plugin runtime lookup. */
-  pluginRunner?: import("./plugin-runner.js").PluginRunner;
+  pluginRunner?: import("./plugins/plugin-runner.js").PluginRunner;
   /** Optional ReflectionStore for evaluation-reading tools */
   reflectionStore?: ReflectionStore;
   /** Optional AgentReflectionService for fn_reflect_on_performance tool */
   reflectionService?: AgentReflectionService;
   /** Optional self-improvement service for periodic self-improve injection */
   selfImproveService?: SelfImproveServiceLike;
+  /** Runtime-owned coordinator shared with executor retries and pauser recovery. */
+  credentialRotator?: CredentialInstanceRotator;
   secretsStore?: Pick<import("@fusion/core").SecretsStore, "listEnvExportable">;
   /**
    * FNXC:WorktreeAcquisition 2026-07-09-00:00:
@@ -313,6 +316,8 @@ export interface AgentSession {
 interface TrackedAgent {
   agentId: string;
   session: AgentSession;
+  /** Cancels retry backoff when this tracked heartbeat is stopped or untracked. */
+  abortController?: AbortController;
   runId: string;
   lastSeen: number; // timestamp from Date.now()
   missedHeartbeatReported: boolean;
@@ -528,7 +533,7 @@ export {
   HEARTBEAT_NO_TASK_PROCEDURE_LITE,
   HEARTBEAT_NO_TASK_PROCEDURE_OFF,
   HEARTBEAT_NO_TASK_PROCEDURE,
-} from "./agent-heartbeat-prompts.js";
+} from "./agents/agent-heartbeat-prompts.js";
 import {
   HEARTBEAT_SYSTEM_PROMPT,
   HEARTBEAT_PROCEDURE_STRICT,
@@ -539,7 +544,7 @@ import {
   HEARTBEAT_NO_TASK_PROCEDURE_OFF,
   renderHeartbeatNoTaskProcedure,
   renderHeartbeatNoTaskSystemPrompt,
-} from "./agent-heartbeat-prompts.js";
+} from "./agents/agent-heartbeat-prompts.js";
 
 /* FNXC:AgentHeartbeat 2026-07-15-13:25: Keep recovery exports here so existing engine consumers retain the legacy public API after the extraction. */
 export {
@@ -557,7 +562,7 @@ export {
   isModelUnavailablePark,
   isModelUnavailableParkRecoveryEligible,
   isErrorRecoveryEligible,
-} from "./agent-heartbeat-error-recovery.js";
+} from "./agents/agent-heartbeat-error-recovery.js";
 import {
   MAX_HEARTBEAT_ERROR_RECOVERY_ATTEMPTS,
   HEARTBEAT_ERROR_RETRY_EXHAUSTED_PAUSE_REASON,
@@ -571,7 +576,7 @@ import {
   isModelUnavailablePark,
   isErrorRecoveryEligible,
   isHeartbeatManaged,
-} from "./agent-heartbeat-error-recovery.js";
+} from "./agents/agent-heartbeat-error-recovery.js";
 
 
 /** Parameter schema for the fn_heartbeat_done tool */
@@ -723,7 +728,7 @@ export class HeartbeatMonitor {
   private rootDir?: string;
   private messageStore?: MessageStore;
   private chatStore?: ChatStore;
-  private pluginRunner?: import("./plugin-runner.js").PluginRunner;
+  private pluginRunner?: import("./plugins/plugin-runner.js").PluginRunner;
   private reflectionStore?: ReflectionStore;
   private reflectionService?: AgentReflectionService;
   private selfImproveService?: SelfImproveServiceLike;
@@ -740,6 +745,7 @@ export class HeartbeatMonitor {
    * FN-8184 keeps the last settings-derived multiplier warm for synchronous
    * config resolution and reports-health so each applies it exactly once.
    */
+  private credentialRotator?: CredentialInstanceRotator;
   private cachedHeartbeatMultiplier = 1;
   private cachedHeartbeatMultiplierAt = 0;
 
@@ -766,6 +772,7 @@ export class HeartbeatMonitor {
     this.reflectionStore = options.reflectionStore;
     this.reflectionService = options.reflectionService;
     this.selfImproveService = options.selfImproveService;
+    this.credentialRotator = options.credentialRotator;
     this.snapshotManager = options.snapshotManager ?? (this.taskStore ? new AutoClaimSnapshotManager({ taskStore: this.taskStore }) : undefined);
     this.secretsStore = options.secretsStore;
   }
@@ -1398,10 +1405,17 @@ export class HeartbeatMonitor {
    * @param runId - The heartbeat run ID
    * @param sessionIdBefore - Optional session ID from before execution
    */
-  trackAgent(agentId: string, session: AgentSession, runId: string, sessionIdBefore?: string): void {
+  trackAgent(
+    agentId: string,
+    session: AgentSession,
+    runId: string,
+    sessionIdBefore?: string,
+    abortController?: AbortController,
+  ): void {
     const tracked: TrackedAgent = {
       agentId,
       session,
+      abortController,
       runId,
       lastSeen: Date.now(),
       missedHeartbeatReported: false,
@@ -1776,6 +1790,7 @@ export class HeartbeatMonitor {
     if (tracked) {
       heartbeatLog.log(`Stopping tracked run ${tracked.runId} for ${agentId}`);
 
+      tracked.abortController?.abort();
       try {
         tracked.session.dispose();
       } catch (error) {
@@ -1931,6 +1946,8 @@ export class HeartbeatMonitor {
    * @param agentId - The agent ID
    */
   untrackAgent(agentId: string): void {
+    const tracked = this.trackedAgents.get(agentId);
+    tracked?.abortController?.abort();
     this.trackedAgents.delete(agentId);
   }
 
@@ -2935,11 +2952,44 @@ export class HeartbeatMonitor {
               runContext,
               runInitCommand: false,
               secretsStore: this.secretsStore,
+              refreshStaleBase: true,
             });
             sessionCwd = acquisition.worktreePath;
           } catch (worktreeErr) {
             const detail = worktreeErr instanceof Error ? worktreeErr.message : String(worktreeErr);
+            const refreshKind = worktreeErr instanceof WorktreeBaseRefreshError
+              ? worktreeErr.refresh.kind
+              : undefined;
             heartbeatLog.warn(`Heartbeat worktree acquisition failed for ${agentId}: ${detail}`);
+
+            /*
+             * FNXC:WorktreeBaseRefresh 2026-08-01-16:33:
+             * Refresh refusals are deliberately recoverable pre-session parks, distinct from a
+             * broken acquisition. Their typed outcome remains in task/run records and is retried
+             * only on a later heartbeat after git state can change; never consume the generic
+             * three-strike acquisition budget or replace the reason with terminal failure.
+             */
+            if (refreshKind) {
+              if (!(await isTaskInTerminalLane(taskStore, taskDetail))) {
+                await taskStore.logEntry(
+                  taskDetail.id,
+                  `Worktree base refresh blocked heartbeat execution (${refreshKind})`,
+                  detail,
+                );
+                await taskStore.moveTask(
+                  taskDetail.id,
+                  await resolveHeartbeatReboundColumn(taskStore, taskDetail.id),
+                  { preserveProgress: true },
+                );
+              }
+              await this.completeRun(agentId, run.id, {
+                status: "completed",
+                resultJson: { reason: "worktree_base_refresh_blocked", refreshKind, detail },
+                stderrExcerpt: detail,
+                skipStateTransition: true,
+              });
+              return (await this.store.getRunDetail(agentId, run.id))!;
+            }
 
             /*
              * FNXC:WorktreeAcquisition 2026-07-09-00:00:
@@ -3021,7 +3071,8 @@ export class HeartbeatMonitor {
         }
 
         // Create agent session
-        const { session } = await createResolvedAgentSession({
+        const heartbeatRetryAbortController = new AbortController();
+        let { session } = await createResolvedAgentSession({
           sessionPurpose: "heartbeat",
           runtimeHint: extractRuntimeHint(agent.runtimeConfig),
           pluginRunner: this.pluginRunner,
@@ -3032,6 +3083,7 @@ export class HeartbeatMonitor {
           customTools: heartbeatTools,
           defaultProvider: heartbeatSessionModels.defaultProvider,
           defaultModelId: heartbeatSessionModels.defaultModelId,
+          ...(heartbeatSessionModels.credentialInstanceId ? { credentialInstanceId: heartbeatSessionModels.credentialInstanceId } : {}),
           fallbackProvider: heartbeatSessionModels.fallbackProvider,
           fallbackModelId: heartbeatSessionModels.fallbackModelId,
           fallbackThinkingLevel: resolveExecutorFallbackThinkingLevel(undefined, heartbeatModelSettings),
@@ -3069,7 +3121,13 @@ export class HeartbeatMonitor {
         }
 
         // Track for monitoring
-        this.trackAgent(agentId, { dispose: () => session.dispose() }, run.id);
+        this.trackAgent(
+          agentId,
+          { dispose: () => session.dispose() },
+          run.id,
+          undefined,
+          heartbeatRetryAbortController,
+        );
 
         try {
           // Build execution prompt
@@ -3517,12 +3575,80 @@ export class HeartbeatMonitor {
           FNXC:AgentHeartbeat 2026-07-12-21:05:
           PR #2027 review (side-effect replay): the retry re-prompts the SAME session, whose transcript already contains any tool calls completed before the failure, so the model continues from its partial work rather than blindly re-executing it — the same continuation semantics executor/triage/merger rely on under this wrapper. A rotation 401 additionally fails on the turn's FIRST provider call (the stale token never reaches a tool call), so the dominant retry case has no partial work to duplicate.
           */
-          await withRateLimitRetry(() => promptWithFallback(session, executionPrompt), {
+          let rotationEvent: import("./credential-instance-rotation.js").RotationEvent | undefined;
+          let rotationDeclined = false;
+          let activeInstanceId = heartbeatSessionModels.credentialInstanceId ?? DEFAULT_PROVIDER_INSTANCE_ID;
+          let dispatchedRotation = false;
+          /*
+          FNXC:CredentialInstanceRotation 2026-08-01-09:07:
+          A heartbeat rotates only after the shared retry classifier has identified a usage
+          limit. Read live task/settings state and use the tracked run's abort signal at every
+          retry boundary: a pause arriving mid-run must decline before opening an event. A fresh
+          session is then resolved for the offered instance rather than mutating credentials
+          on the live session.
+          */
+          await withRateLimitRetry(async () => promptWithFallback(session, executionPrompt), {
+            signal: heartbeatRetryAbortController.signal,
+            rotation: this.credentialRotator && heartbeatSessionModels.defaultProvider ? {
+              providerId: heartbeatSessionModels.defaultProvider,
+              nextInstance: async () => {
+                const [liveTask, liveSettings] = await Promise.all([
+                  taskId ? taskStore.getTask(taskId).catch(() => undefined) : Promise.resolve(undefined),
+                  taskStore.getSettings().catch(() => heartbeatModelSettings ?? ({} as Settings)),
+                ]);
+                if (rotationDeclined || heartbeatRetryAbortController.signal.aborted
+                  || (taskId && (!liveTask || liveTask.userPaused === true || liveTask.autoMerge === false))
+                  || liveSettings.globalPause === true || liveSettings.enginePaused === true) return undefined;
+                rotationEvent ??= await this.credentialRotator!.beginEvent({
+                  providerId: heartbeatSessionModels.defaultProvider!,
+                  startingInstanceId: activeInstanceId,
+                  lane: "agent-heartbeat",
+                  taskId,
+                  agentId,
+                });
+                if (!rotationEvent) { rotationDeclined = true; return undefined; }
+                // FNXC:CredentialInstanceRotation 2026-08-01-11:34: Credential inventory may resolve after an operator pauses the task or engine. Re-read control state before cooldown/audit/dispatch side effects.
+                const [postInventoryTask, postInventorySettings] = await Promise.all([
+                  taskId ? taskStore.getTask(taskId).catch(() => undefined) : Promise.resolve(undefined),
+                  taskStore.getSettings().catch(() => heartbeatModelSettings ?? ({} as Settings)),
+                ]);
+                if (heartbeatRetryAbortController.signal.aborted
+                  || (taskId && (!postInventoryTask || postInventoryTask.userPaused === true || postInventoryTask.autoMerge === false))
+                  || postInventorySettings.globalPause === true || postInventorySettings.enginePaused === true) return undefined;
+                this.credentialRotator!.markLimited({ providerId: heartbeatSessionModels.defaultProvider!, instanceId: activeInstanceId });
+                if (dispatchedRotation) rotationEvent.recordOutcome("rotation-failed-limit");
+                const next = await rotationEvent.next();
+                if (!next) { rotationEvent.finishExhausted(); return undefined; }
+                activeInstanceId = next.instanceId;
+                dispatchedRotation = true;
+                session.dispose();
+                const created = await createResolvedAgentSession({
+                  sessionPurpose: "heartbeat", runtimeHint: extractRuntimeHint(agent.runtimeConfig), pluginRunner: this.pluginRunner,
+                  cwd: sessionCwd, systemPrompt: systemPromptFinal, systemPromptLayers: heartbeatLayers, tools: "coding", customTools: heartbeatTools,
+                  defaultProvider: heartbeatSessionModels.defaultProvider, defaultModelId: heartbeatSessionModels.defaultModelId,
+                  credentialInstanceId: activeInstanceId, fallbackProvider: heartbeatSessionModels.fallbackProvider,
+                  fallbackModelId: heartbeatSessionModels.fallbackModelId,
+                  fallbackThinkingLevel: resolveExecutorFallbackThinkingLevel(undefined, heartbeatModelSettings), runAuditor: audit, settings: heartbeatModelSettings,
+                  mcpServers: heartbeatMcp.servers,
+                  onText: (delta) => { outputLength += delta.length; appendStdoutExcerpt(delta); agentLogger?.onText(delta); },
+                  onThinking: (delta) => agentLogger?.onThinking(delta),
+                  onToolStart: (name, args) => agentLogger?.onToolStart(name, args),
+                  onToolEnd: (name, isError, result) => { toolCallCount++; agentLogger?.onToolEnd(name, isError, result); },
+                  ...(skillContext.skillSelectionContext ? { skillSelection: skillContext.skillSelectionContext } : {}),
+                  ...(skillContext.additionalSkillPaths.length > 0 ? { additionalSkillPaths: skillContext.additionalSkillPaths } : {}),
+                  actionGateContext: this.buildActionGateContext(agent, taskId, run.id, heartbeatModelSettings?.defaultAgentPermissionPolicy),
+                  permanentAgentGating: this.buildPermanentAgentGatingContext(agent, taskId, run.id, heartbeatModelSettings?.defaultAgentPermissionPolicy),
+                });
+                session = created.session;
+                return next;
+              },
+            } : undefined,
             onRetry: (attempt, delayMs, retryError) => {
               const delaySec = Math.round(delayMs / 1000);
               heartbeatLog.warn(`Agent ${agentId} heartbeat prompt hit retryable provider error — retry ${attempt} in ${delaySec}s: ${retryError.message}`);
             },
           });
+          if (dispatchedRotation) rotationEvent?.recordOutcome("rotation-succeeded");
 
           // Capture real per-session token counts from pi-coding-agent's
           // SessionStats. Falls back to a 4-chars-per-token estimate of output
@@ -4838,13 +4964,18 @@ export class HeartbeatTriggerScheduler {
 
       try {
         if (!isHeartbeatManaged(agent)) {
-          heartbeatLog.log(`Assignment trigger skipped for ${agent.id} (ephemeral/internal)`);
+          /*
+          FNXC:EngineDiagnostics 2026-08-03-05:54:
+          Ephemeral/internal, disabled, and active-run skips are expected guard outcomes on
+          assignment events — not operator-actionable. Mirror timer-tick skip gates (debug).
+          */
+          heartbeatLog.debug(`Assignment trigger skipped for ${agent.id} (ephemeral/internal)`);
           return;
         }
 
         const runtimeConfig = (agent.runtimeConfig ?? {}) as { enabled?: boolean; allowParallelExecution?: boolean };
         if (runtimeConfig.enabled === false) {
-          heartbeatLog.log(`Assignment trigger skipped for ${agent.id} (disabled)`);
+          heartbeatLog.debug(`Assignment trigger skipped for ${agent.id} (disabled)`);
           return;
         }
 
@@ -4854,7 +4985,7 @@ export class HeartbeatTriggerScheduler {
         const activeRun = await this.store.getActiveHeartbeatRun(agent.id);
         if (activeRun) {
           this.pendingAssignments.set(agent.id, { taskId });
-          heartbeatLog.log(`Assignment trigger skipped for ${agent.id} (active run)`);
+          heartbeatLog.debug(`Assignment trigger skipped for ${agent.id} (active run)`);
           return;
         }
 

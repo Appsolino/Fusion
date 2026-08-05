@@ -72,7 +72,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-vi.mock("../worktree-pool.js", async () => {
+vi.mock("../worktree/worktree-pool.js", async () => {
   const { existsSync: fsExistsSync } = await import("node:fs");
   const { join: joinPath, resolve: resolvePath } = await import("node:path");
   return {
@@ -150,9 +150,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "../worktree-pool.js";
-import { activeSessionRegistry, executingTaskLock } from "../active-session-registry.js";
-import * as branchConflictModule from "../branch-conflicts.js";
+import { classifyTaskWorktree, getRegisteredWorktreeBranchMap, getRegisteredWorktreePaths, isUsableTaskWorktree, relocateReclaimableWorktreeIntoRoot, removeWorktree, resolveWorktreeBackend, scanIdleWorktrees, scanOrphanedBranches } from "../worktree/worktree-pool.js";
+import { activeSessionRegistry, executingTaskLock } from "../agents/active-session-registry.js";
+import * as branchConflictModule from "../execution/branch-conflicts.js";
 import { createLogger } from "../logger.js";
 import { NotificationService } from "../notification/notification-service.js";
 import { classifyOwnedLandedEvidence } from "../merger.js";
@@ -204,6 +204,7 @@ function createMockStore(overrides: Record<string, unknown> = {}): TaskStore & E
     } as unknown as Task),
     updateTask: vi.fn().mockResolvedValue({} as Task),
     logEntry: vi.fn().mockResolvedValue(undefined),
+    transitionQueuedEpisode: vi.fn().mockResolvedValue({ appended: true }),
     moveTask: vi.fn().mockResolvedValue(undefined),
     handoffToReview: vi.fn().mockResolvedValue(undefined),
     enqueueMergeQueue: vi.fn().mockResolvedValue(undefined),
@@ -8493,6 +8494,78 @@ describe("SelfHealingManager", () => {
   });
 
   describe("recoverApprovedTriageTasks", () => {
+    it("selects the stale legacy null-status persisted-plan handoff reported in #3325", async () => {
+      const legacy = {
+        id: "FN-8768-LEGACY",
+        column: "todo",
+        status: null,
+        paused: false,
+        approvedPlanFingerprint: undefined,
+        awaitingApprovalReason: undefined,
+        workflowStepResults: undefined,
+        steps: [{ title: "Implement", status: "pending" }],
+        log: [],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      } as unknown as Task;
+      const recoverFn = vi.fn().mockResolvedValue(true);
+      const recoveryStore = createMockStore({
+        listTasks: vi.fn().mockResolvedValue([legacy]),
+        getTask: vi.fn().mockResolvedValue(legacy),
+      });
+      const managerWithRecovery = new SelfHealingManager(recoveryStore, {
+        rootDir: "/tmp/test-project",
+        recoverApprovedTriageTask: recoverFn,
+        getPlanningTaskIds: () => new Set<string>(),
+      });
+      vi.setSystemTime(new Date("2026-01-01T00:31:00.000Z"));
+
+      await expect(managerWithRecovery.recoverApprovedTriageTasks()).resolves.toBe(1);
+      expect(recoverFn).toHaveBeenCalledWith(legacy);
+      managerWithRecovery.stop();
+    });
+
+    it.each([
+      ["recent", { updatedAt: "2026-01-01T00:04:30.000Z" }, new Set<string>()],
+      ["paused", { paused: true }, new Set<string>()],
+      ["user-paused", { userPaused: true }, new Set<string>()],
+      ["actively planning", {}, new Set(["FN-8768-CONTROL"])],
+      ["approval evidence", { approvedPlanFingerprint: "current-plan" }, new Set<string>()],
+      ["approval hold", { awaitingApprovalReason: "plan-review-replan-cap" }, new Set<string>()],
+      ["unsatisfied graph evidence", { workflowStepResults: [{ workflowStepId: "plan-review", workflowStepName: "Plan Review", status: "failed" }] }, new Set<string>()],
+      ["missing persisted steps", { steps: [] }, new Set<string>()],
+      ["worktree", { worktree: "/tmp/executing" }, new Set<string>()],
+      ["execution stamp", { firstExecutionAt: "2026-01-01T00:10:00.000Z" }, new Set<string>()],
+    ])("does not select a %s null-status task as the legacy handoff", async (_label, patch, planningIds) => {
+      const candidate = {
+        id: "FN-8768-CONTROL",
+        column: "todo",
+        status: null,
+        paused: false,
+        approvedPlanFingerprint: undefined,
+        awaitingApprovalReason: undefined,
+        workflowStepResults: undefined,
+        steps: [{ title: "Implement", status: "pending" }],
+        log: [],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        ...patch,
+      } as unknown as Task;
+      const recoverFn = vi.fn().mockResolvedValue(true);
+      const recoveryStore = createMockStore({
+        listTasks: vi.fn().mockResolvedValue([candidate]),
+        getTask: vi.fn().mockResolvedValue(candidate),
+      });
+      const managerWithRecovery = new SelfHealingManager(recoveryStore, {
+        rootDir: "/tmp/test-project",
+        recoverApprovedTriageTask: recoverFn,
+        getPlanningTaskIds: () => planningIds,
+      });
+      vi.setSystemTime(new Date("2026-01-01T00:31:00.000Z"));
+
+      await expect(managerWithRecovery.recoverApprovedTriageTasks()).resolves.toBe(0);
+      expect(recoverFn).not.toHaveBeenCalled();
+      managerWithRecovery.stop();
+    });
+
     it("recovers specified planning triage tasks that are not actively processing", async () => {
       const recoverFn = vi.fn().mockResolvedValue(true);
       const getPlanning = vi.fn().mockReturnValue(new Set<string>());
@@ -9405,6 +9478,22 @@ describe("FN-4538 overlapBlockedBy self-healing", () => {
       if (options?.column === "in-review") return tasks.filter((task) => task.column === "in-review");
       return tasks;
     });
+    (store.updateTask as ReturnType<typeof vi.fn>).mockImplementation(async (id: string, patch: Record<string, unknown>) => {
+      const task = tasks.find((candidate) => candidate.id === id)!;
+      Object.assign(task, patch);
+      return task;
+    });
+    (store.transitionQueuedEpisode as ReturnType<typeof vi.fn>).mockImplementation(async (id: string, transition: { signature: string; blockedBy: string | null; overlapBlockedBy: string | null; action: string }) => {
+      const task = tasks.find((candidate) => candidate.id === id)!;
+      const appended = !(task.status === "queued" && task.blockedBy === transition.blockedBy && task.overlapBlockedBy === transition.overlapBlockedBy && task.queuedLogEpisodeSignature === transition.signature);
+      await store.updateTask(id, { blockedBy: transition.blockedBy, status: "queued" });
+      task.blockedBy = transition.blockedBy;
+      task.overlapBlockedBy = transition.overlapBlockedBy;
+      task.status = "queued";
+      task.queuedLogEpisodeSignature = transition.signature;
+      if (appended) await store.logEntry(id, transition.action);
+      return { appended, task };
+    });
     return store;
   }
 
@@ -9483,7 +9572,7 @@ describe("FN-4538 overlapBlockedBy self-healing", () => {
     manager.stop();
   });
 
-  it("FN-6276: clearStaleBlockedBy resets preserved queued memo after blocker resolves", async () => {
+  it("FN-6276: recovery does not repeat a restored queued overlap episode", async () => {
     const overlapBlocker = makeTask("FN-ACTIVE", { column: "in-progress" });
     const target = makeTask("FN-TARGET", {
       column: "todo",
@@ -9507,11 +9596,11 @@ describe("FN-4538 overlapBlockedBy self-healing", () => {
     overlapBlocker.column = "in-progress";
     await manager.clearStaleBlockedBy();
 
-    expect((store.logEntry as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0] === "FN-TARGET" && call[1] === message)).toHaveLength(2);
+    expect((store.logEntry as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0] === "FN-TARGET" && call[1] === message)).toHaveLength(1);
     manager.stop();
   });
 
-  it("FN-6276: stop clears preserved queued memo so next pass logs again", async () => {
+  it("FN-8785: restart preserves an unchanged overlap episode without another log", async () => {
     const overlapBlocker = makeTask("FN-ACTIVE", { column: "in-progress" });
     const target = makeTask("FN-TARGET", {
       column: "todo",
@@ -9528,7 +9617,7 @@ describe("FN-4538 overlapBlockedBy self-healing", () => {
     manager.stop();
     await manager.clearStaleBlockedBy();
 
-    expect((store.logEntry as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0] === "FN-TARGET" && call[1] === message)).toHaveLength(2);
+    expect((store.logEntry as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0] === "FN-TARGET" && call[1] === message)).toHaveLength(1);
     manager.stop();
   });
 
@@ -11195,6 +11284,75 @@ describe("SelfHealingManager reclaimStaleActiveBranches (FN-4546)", () => {
     expect(recovered).toBe(0);
     expect(mockedExecSync).not.toHaveBeenCalledWith(expect.stringContaining("git branch -D \"fusion/fn-1001\""), expect.anything());
     expect(getSelfHealingLogger().warn).toHaveBeenCalledWith(expect.stringContaining("stale-active-branch-rescue-needed FN-1001"));
+  });
+
+  /*
+  FNXC:StaleActiveBranchDoneSpam 2026-08-03-01:47:
+  Done/complete-lane squash leftovers used to emit rescue-needed forever (unique tip SHAs vs main).
+  Complete columns must force-delete after the no-worktree gates pass, and must NOT warn rescue-needed.
+  */
+  it("force-deletes complete-lane branch with unique commits and does not warn rescue-needed", async () => {
+    getSelfHealingLogger().warn.mockClear();
+    mockedIsUsableTaskWorktree.mockResolvedValue(false);
+    (store.listTasks as any).mockResolvedValueOnce([
+      { id: "FN-1001", column: "done", checkedOutBy: null, userPaused: false, worktree: null, branch: "fusion/fn-1001", lineageId: "lin-done" },
+    ]);
+
+    mockedExecSync.mockImplementation((command: string) => {
+      if (command.includes("git branch --list 'fusion/*'")) return Buffer.from("  fusion/fn-1001\n");
+      if (command.includes("git rev-parse --verify") && command.includes("fusion/fn-1001")) return Buffer.from("abc123def456\n");
+      if (command.includes("git rev-list --count") && command.includes("fusion/fn-1001")) return Buffer.from("2\n");
+      return Buffer.from("");
+    });
+
+    const recovered = await manager.reclaimStaleActiveBranches();
+
+    expect(recovered).toBe(1);
+    expect(mockedExecSync).toHaveBeenCalledWith(expect.stringContaining("git branch -D \"fusion/fn-1001\""), expect.anything());
+    expect(getSelfHealingLogger().warn).not.toHaveBeenCalledWith(expect.stringContaining("stale-active-branch-rescue-needed FN-1001"));
+    expect(store.updateTask).toHaveBeenCalledWith("FN-1001", { worktree: null, branch: null, baseCommitSha: null });
+    expect(store.logEntry).toHaveBeenCalledWith(
+      "FN-1001",
+      expect.stringContaining("reason=complete-column-unique-commits-force"),
+    );
+    expect((store as any).recordRunAuditEvent).toHaveBeenCalledWith(expect.objectContaining({
+      domain: "git",
+      mutationType: "branch:stale-active-reclaim",
+      target: "fusion/fn-1001",
+    }));
+  });
+
+  it("force-deletes unique-commit branches for RENAMED complete lanes (role-resolved)", async () => {
+    /* Role resolution, not the literal id "done": a custom complete column must take the force path. */
+    getSelfHealingLogger().warn.mockClear();
+    mockedIsUsableTaskWorktree.mockResolvedValue(false);
+    (store.listTasks as any).mockResolvedValueOnce([
+      { id: "FN-1001", column: "shipped", checkedOutBy: null, userPaused: false, worktree: null, branch: null, lineageId: "lin-1" },
+    ]);
+    (store as unknown as { listWorkflowDefinitions: unknown }).listWorkflowDefinitions = vi.fn(async () => [{
+      ir: {
+        version: "v2",
+        id: "custom:renamed-complete",
+        nodes: [],
+        edges: [],
+        columns: [
+          { id: "building", name: "building", traits: [{ trait: "wip", config: { limitSetting: "maxConcurrent" } }] },
+          { id: "shipped", name: "shipped", traits: [{ trait: "complete" }] },
+        ],
+      },
+    }]);
+    mockedExecSync.mockImplementation((command: string) => {
+      if (command.includes("git branch --list 'fusion/*'")) return Buffer.from("  fusion/fn-1001\n");
+      if (command.includes("git rev-parse --verify") && command.includes("fusion/fn-1001")) return Buffer.from("abc123def456\n");
+      if (command.includes("git rev-list --count") && command.includes("fusion/fn-1001")) return Buffer.from("2\n");
+      return Buffer.from("");
+    });
+
+    const recovered = await manager.reclaimStaleActiveBranches();
+
+    expect(recovered).toBe(1);
+    expect(mockedExecSync).toHaveBeenCalledWith(expect.stringContaining("git branch -D \"fusion/fn-1001\""), expect.anything());
+    expect(getSelfHealingLogger().warn).not.toHaveBeenCalledWith(expect.stringContaining("stale-active-branch-rescue-needed"));
   });
 
   it("skips task with active heartbeat run", async () => {

@@ -1,22 +1,38 @@
 {
   "outcome": "merged",
-  "recordedAt": "2026-08-01T13:29:48Z",
+  "recordedAt": "2026-08-05T05:53:24Z",
   "integrationBranch": "main",
-  "appsolinoSha": "168d8cbf39c4d9d0a1e05f11daf301223f585908",
-  "upstreamSha": "5786c87eff118231e58bb0877f2cb2252a346a8d",
-  "mergeBase": "71576d9536267a7835f352922a55831811717896",
-  "ahead": 93,
-  "behind": 29,
-  "conflictedFiles": [],
+  "appsolinoSha": "98c7119cadf820cafb37edd1d5a929a3c25bdd0b",
+  "upstreamSha": "6f939a08a03fe350cc78e371d4bfe5a2f39ffd00",
+  "mergeBase": "5786c87eff118231e58bb0877f2cb2252a346a8d",
+  "ahead": 145,
+  "behind": 138,
+  "conflictedFiles": [
+    "packages/engine/src/executor.ts",
+    "scripts/lib/lifecycle-column-census-baseline.json"
+  ],
   "resolvedConflicts": [
+    {
+      "file": "packages/engine/src/executor.ts",
+      "resolution": "semantic-overlay",
+      "note": "Preserve Appsolino Auto4 DELIBERATE-LITERAL Correction B parks; take upstream executor evolution"
+    },
     {
       "file": "scripts/lib/lifecycle-column-census-baseline.json",
       "resolution": "regenerated-from-merged-tree",
-      "note": "Regenerated with node scripts/lifecycle-column-census.mjs --strict --update-baseline after upstream merge"
+      "note": "node scripts/lifecycle-column-census.mjs --strict --update-baseline"
+    },
+    {
+      "file": ".github/workflows/agent-browser-install.yml",
+      "resolution": "appsolino-overlay",
+      "note": "Carry install+build pack fixture overlay from PR #82"
     }
   ],
-  "touchesWorkflows": false,
+  "touchesWorkflows": true,
   "touchesMigrations": true,
   "touchesLockfile": false,
-  "mutatesAppsolinoMain": false
+  "mutatesAppsolinoMain": false,
+  "supersedes": [
+    "#82"
+  ]
 }

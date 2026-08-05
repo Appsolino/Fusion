@@ -13,12 +13,12 @@ import {
   TASK_PRIORITIES,
   getErrorMessage,
 } from "@fusion/core";
-import { resolveEffectiveAutoMerge } from "../../../core/src/task-merge";
+import { resolveEffectiveAutoMerge } from "../../../core/src/merge/task-merge";
 // FNXC:PlannerOversight 2026-07-04-00:00: the dashboard's vite alias for "@fusion/core"
 // resolves only to ../core/src/types.ts (see packages/dashboard/vite.config.ts), so this
 // resolver — like resolveEffectiveAutoMerge above — must be imported from its source module
 // directly rather than the package barrel.
-import { resolveEffectivePlannerOversightLevel } from "../../../core/src/workflow-settings-resolver";
+import { resolveEffectivePlannerOversightLevel } from "../../../core/src/workflows/workflow-settings-resolver";
 import { addressPrFeedback, fetchTaskDetail, uploadAttachment, fetchMission, fetchAgent, rebuildTaskSpec, refreshPrStatus, fetchWorkflowSettingValues, type WorkflowFieldDefinition, type RevertTaskOptions, type RevertTaskResult } from "../api";
 import { GitHubBadge } from "./GitHubBadge";
 import { GitLabBadge } from "./GitLabBadge";
@@ -51,8 +51,8 @@ import { getRunningOptionalGateBadge, getRunningWorkflowStepLabel, getUnifiedTas
 import { ACTIVE_STATUSES, isTaskAgentActive } from "../utils/taskActivity";
 import { getPrBadgeModifierClass } from "../utils/prBadgeClass";
 import { getTotalAgentActiveMs, getEndToEndDurationMs, getTimedDurationMs, getWorkflowRuntimeMs, parseTimestampToMs } from "../utils/taskTiming";
-import { getTaskStatusBadgeLabel, type TaskStatusBadgeContext, hasTaskStatusBadge } from "../utils/taskStatusBadgeLabel";
-import { isReviewBudgetExhaustedApproval } from "../utils/reviewBudgetApproval";
+import { getTaskStatusBadgeLabel, type TaskStatusBadgeContext, hasTaskStatusBadge, isTaskPlanningActive } from "../utils/taskStatusBadgeLabel";
+import { isReviewBudgetExhaustedApproval, isTaskAwaitingPlanApproval } from "../utils/reviewBudgetApproval";
 import { canStartPrFeedbackAddressing, getTaskPrimaryPrInfo } from "../utils/prFeedback";
 import type { ToastType } from "../hooks/useToast";
 import { useConfirm } from "../hooks/useConfirm";
@@ -618,6 +618,8 @@ interface TaskCardProps {
   onArchiveTask guard).
   */
   onRevertTask?: (id: string, body?: RevertTaskOptions) => Promise<RevertTaskResult>;
+  /** Resolution action for a successfully reverted task. */
+  onReviseTask?: (task: Task) => void;
   onDeleteTask?: (id: string, options?: {
     removeDependencyReferences?: boolean;
     removeLineageReferences?: boolean;
@@ -996,6 +998,7 @@ function TaskCardComponent({
   onUnarchiveTask,
   onRevertTask,
   onDeleteTask,
+  onReviseTask,
   onPauseTask,
   onRetryTask,
   onUnpauseTask,
@@ -1538,8 +1541,8 @@ function TaskCardComponent({
   know approval is required because Plan Review exhausted automatic REVISE replans without
   converging — Approve keeps the current PROMPT.md; Reject regenerates.
   */
-  const isAwaitingApproval = isIntakeColumn && task.status === "awaiting-approval";
   const isPlanReviewReplanCapApproval = isReviewBudgetExhaustedApproval(task);
+  const isAwaitingApproval = isTaskAwaitingPlanApproval(task, isIntakeColumn);
   const isAwaitingInput = task.status === "awaiting-user-input";
   const isArchived = isArchivedColumn;
   /*
@@ -3262,6 +3265,12 @@ function TaskCardComponent({
           <span>{t("tasks.revertedBadge", "Reverted")}</span>
         </span>
       )}
+      {showRevertedChip && (
+        <span className="card-reverted-actions" aria-label={t("tasks.revertedResolutionActions", "Reverted task resolution actions")}>
+          {onDeleteTask && <button type="button" className="btn" onClick={(event) => { event.stopPropagation(); void handleTaskActionDelete(); }}>{t("tasks.delete", "Delete")}</button>}
+          {onReviseTask && <button type="button" className="btn" onClick={(event) => { event.stopPropagation(); onReviseTask(task); }}>{t("tasks.revise", "Revise")}</button>}
+        </span>
+      )}
       {showNearDuplicateChip && (
         <>
           <span
@@ -3368,6 +3377,7 @@ function TaskCardComponent({
     && !visualStatus
     && Boolean(task.recentAgentActivityAt)
     && isAgentActive;
+  const isLivePlanning = isTaskPlanningActive(task, { globalPaused });
   /*
   FNXC:TaskStatusBadge 2026-08-01-07:20 (operator: queued belongs with Planning and Ready):
   Queued used to render as a clock-and-text footer tag, separating the waiting state from the
@@ -3398,7 +3408,7 @@ function TaskCardComponent({
         ? t("tasks.awaitingApproval", "Awaiting Approval")
         : isAwaitingInput
           ? t("tasks.needsInput", "Needs input")
-          : isTransientPlannerActive
+          : isLivePlanning || isTransientPlannerActive
             ? t("tasks.statusPlanning", "Planning")
             /*
             FNXC:TaskStatusBadge 2026-08-01-03:20 (operator: ONE queued badge family, no dupes):
@@ -3483,6 +3493,11 @@ function TaskCardComponent({
     );
   }
 
+  /*
+  FNXC:TaskCardMenu 2026-08-01-16:06:
+  React portal events bubble through the TaskCard owner tree even though this menu lives under document.body.
+  Stop every touch, pointer, compatibility-click, and keyboard path at the portal wrapper so selecting any menu action cannot invoke card detail opening while TaskContextMenu keeps its own dispatch and navigation behavior.
+  */
   return (
     <div
       ref={cardRef}
@@ -3515,8 +3530,20 @@ function TaskCardComponent({
           ref={contextMenuRef}
           className="task-card-context-menu-popover"
           style={{ left: contextMenuPosition.x, top: contextMenuPosition.y } as CSSProperties}
+          onPointerDown={(event) => event.stopPropagation()}
+          onPointerMove={(event) => event.stopPropagation()}
+          onPointerUp={(event) => event.stopPropagation()}
+          onPointerCancel={(event) => event.stopPropagation()}
+          onTouchStart={(event) => event.stopPropagation()}
+          onTouchMove={(event) => event.stopPropagation()}
+          onTouchEnd={(event) => event.stopPropagation()}
+          onTouchCancel={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
-          onContextMenu={(event) => event.preventDefault()}
+          onKeyDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
         >
           <TaskContextMenu
             actions={contextMenuActions}
@@ -3595,7 +3622,7 @@ function TaskCardComponent({
                       )
                     : undefined
             }
-            aria-label={isTransientPlannerActive ? t("tasks.statusPlanning", "Planning") : undefined}
+            aria-label={isLivePlanning || isTransientPlannerActive ? t("tasks.statusPlanning", "Planning") : undefined}
             data-testid={isAwaitingApproval ? `card-awaiting-approval-${task.id}` : showQueuedToPlanBadge ? `card-queued-to-plan-${task.id}` : undefined}
             data-awaiting-approval-reason={isAwaitingApproval ? (task.awaitingApprovalReason ?? "manual") : undefined}
           >

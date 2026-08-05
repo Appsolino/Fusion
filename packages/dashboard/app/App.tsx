@@ -28,7 +28,7 @@ import { ToastContainer } from "./components/ToastContainer";
 import { useBackgroundSessions } from "./hooks/useBackgroundSessions";
 import { useGitHubStarPromptShown, markGitHubStarPromptShown } from "./hooks/useGitHubStarPrompt";
 import { useSessionBannersHidden } from "./hooks/useSessionBannerPref";
-import { useTasks } from "./hooks/useTasks";
+import { mergeTaskSnapshot, useTasks } from "./hooks/useTasks";
 import { useBoardWorkflows } from "./hooks/useBoardWorkflows";
 import type { ExecutorColumnFlags } from "./hooks/useExecutorStats";
 import { useProjects } from "./hooks/useProjects";
@@ -101,7 +101,7 @@ import {
   executeCliSessionBannerAction,
 } from "./utils/appLifecycle";
 // Re-export the unit-tested lifecycle helpers so existing `from "./App"` /
-// `from "../../App"` imports keep resolving after the bodies moved to utils.
+// `from "./App"` imports keep resolving after the bodies moved to utils.
 export {
   didEnterAwaitingApproval,
   didEnterDone,
@@ -142,7 +142,6 @@ const MemoryView = lazy(() => import("./components/MemoryView").then((m) => ({ d
 const SecretsView = lazy(() => import("./components/SecretsView").then((m) => ({ default: m.SecretsView })));
 const CommandCenter = lazy(() => import("./components/command-center/CommandCenter").then((m) => ({ default: m.CommandCenter })));
 const DevServerView = lazy(() => import("./components/DevServerView").then((m) => ({ default: m.DevServerView })));
-const TodoView = lazy(() => import("./components/TodoView").then((m) => ({ default: m.TodoView })));
 const GoalsView = lazy(() => import("./components/GoalsView").then((m) => ({ default: m.GoalsView })));
 const PullRequestView = lazy(() => import("./components/PullRequestView").then((m) => ({ default: m.PullRequestView })));
 /*
@@ -186,7 +185,6 @@ function prefetchLazyViews() {
     void import("./components/SecretsView");
     void import("./components/command-center/CommandCenter");
     void import("./components/DevServerView");
-    void import("./components/TodoView");
     void import("./components/GoalsView");
     void import("./components/PullRequestView");
   });
@@ -863,7 +861,6 @@ function AppInner() {
     insightsEnabled,
     memoryEnabled,
     devServerEnabled,
-    todosEnabled,
     goalsEnabled,
     setQuickChatButtonModeImmediate,
     setMobileNavPrimaryItemsImmediate,
@@ -1000,10 +997,7 @@ function AppInner() {
     if (taskView === "goalsView" && !goalsEnabled) {
       handleChangeTaskView("board");
     }
-    if (taskView === "todos" && !todosEnabled) {
-      handleChangeTaskView("board");
-    }
-  }, [taskView, settingsLoaded, skillsEnabled, insightsEnabled, handleChangeTaskView, agentsEnabled, memoryEnabled, devServerEnabled, researchEnabled, evalsEnabled, ideationEnabled, goalsEnabled, todosEnabled, graphPluginTaskView]);
+  }, [taskView, settingsLoaded, skillsEnabled, insightsEnabled, handleChangeTaskView, agentsEnabled, memoryEnabled, devServerEnabled, researchEnabled, evalsEnabled, ideationEnabled, goalsEnabled, graphPluginTaskView]);
 
   const {
     availableModels,
@@ -1165,7 +1159,7 @@ function AppInner() {
     const previousDetailTab = mainPanelDetailInitialTab;
 
     if (previousView === "task-detail" && previousDetailTask?.id === task.id && previousDetailTab === initialTab) {
-      setMainPanelDetailTask(task);
+      setMainPanelDetailTask((current) => current?.id === task.id ? mergeTaskSnapshot(current, task) : task);
       return;
     }
 
@@ -1573,7 +1567,7 @@ function AppInner() {
 
   // Props for the extracted <MainContent> switch (see components/dashboard/MainContent.tsx).
   // Every value is passed by its App name; the switch renders the same subtrees as before.
-  const rightDock = useRightDockController({ active: rightDockActive, projectId: currentProject?.id, addToast, columnFlagsByTaskId: footerColumnFlagsByTaskId, settingsLoaded, researchReadinessVersion, goalAnchorId, tasks: isRemote && remoteData.tasks.length > 0 ? remoteData.tasks : tasks, workflowSteps, subscribePluginEvents, openDetailTask, openTaskPopup: popOutTaskDetailForCurrentView, openMobileTasksInPopup, openFileInBrowser, onMoveTask: moveTask, onDeleteTask: deleteTask, onArchiveTask: archiveTask, onRevertTask: revertTask, onMergeTask: mergeTask, onRetryTask: retryTask, onBypassReview: bypassReview, onResetTask: resetTask, onDuplicateTask: duplicateTask, onTaskUpdated: (task: Task) => ingestCreatedTasks([task]), openSettings: (section?: string) => openSettingsWithNav(section as SectionId), onOpenUsage: openUsageWithNav, onOpenActivityLog: openActivityLogWithNav, onOpenGitHubImport: openGitHubImportWithNav, onOpenGitManager: openGitManagerWithNav, onOpenSchedules: openSchedulesWithNav, onSendSelectionToTask: modalManager.openNewTaskWithDescription, onCreateTaskFromInsight: handleInsightTaskCreate, onNavigateToMission: handleOpenMission, onTaskCreated: (task: Task) => ingestCreatedTasks([task]), prAuthAvailable, autoMerge, taskDetailChatFirst, visibilityOptions: { experimentalFeatures: { insights: insightsEnabled, memoryView: memoryEnabled, devServerView: devServerEnabled, researchView: researchEnabled, evalsView: evalsEnabled, goalsView: goalsEnabled }, showSkillsTab: skillsEnabled, todosEnabled, pluginDashboardViews }, footerVisible: executorFooterVisible });
+  const rightDock = useRightDockController({ active: rightDockActive, projectId: currentProject?.id, addToast, columnFlagsByTaskId: footerColumnFlagsByTaskId, settingsLoaded, researchReadinessVersion, goalAnchorId, tasks: isRemote && remoteData.tasks.length > 0 ? remoteData.tasks : tasks, workflowSteps, subscribePluginEvents, openDetailTask, openTaskPopup: popOutTaskDetailForCurrentView, openMobileTasksInPopup, openFileInBrowser, onMoveTask: moveTask, onDeleteTask: deleteTask, onArchiveTask: archiveTask, onRevertTask: revertTask, onMergeTask: mergeTask, onRetryTask: retryTask, onBypassReview: bypassReview, onResetTask: resetTask, onDuplicateTask: duplicateTask, onTaskUpdated: (task: Task) => ingestCreatedTasks([task]), openSettings: (section?: string) => openSettingsWithNav(section as SectionId), onOpenUsage: openUsageWithNav, onOpenActivityLog: openActivityLogWithNav, onOpenGitHubImport: openGitHubImportWithNav, onOpenGitManager: openGitManagerWithNav, onOpenSchedules: openSchedulesWithNav, onSendSelectionToTask: modalManager.openNewTaskWithDescription, onCreateTaskFromInsight: handleInsightTaskCreate, onNavigateToMission: handleOpenMission, onTaskCreated: (task: Task) => ingestCreatedTasks([task]), prAuthAvailable, autoMerge, taskDetailChatFirst, visibilityOptions: { experimentalFeatures: { insights: insightsEnabled, memoryView: memoryEnabled, devServerView: devServerEnabled, researchView: researchEnabled, evalsView: evalsEnabled, goalsView: goalsEnabled }, showSkillsTab: skillsEnabled, pluginDashboardViews }, footerVisible: executorFooterVisible });
 
   /*
   FNXC:OpenTasksInRightSidebar 2026-06-28-00:00:
@@ -1636,6 +1630,7 @@ function AppInner() {
     handleRetryProjects,
     shellApi,
     taskView,
+    pluginDashboardViews,
     modalManager,
     handleChangeTaskView,
     refreshAppSettings,
@@ -1708,7 +1703,6 @@ function AppInner() {
     memoryEnabled,
     goalsEnabled,
     handleOpenMission,
-    todosEnabled,
     openPlanningWithInitialPlanWithNav,
     ingestCreatedTasks,
     nodesEnabled,
@@ -1782,7 +1776,6 @@ function AppInner() {
     ResearchView,
     SecretsView,
     SkillsView,
-    TodoView,
     _AutomationsView,
     _ImportTasksView,
     _SettingsView,
@@ -1876,7 +1869,6 @@ function AppInner() {
         onOpenWorkflowEditor={openWorkflowEditorWithNav}
         onOpenFiles={openFilesWithNav}
         filesOpen={modalManager.filesOpen}
-        todosEnabled={todosEnabled}
         view={taskView}
         onChangeView={viewMode === "project" && currentProject ? handleTaskViewChange : undefined}
         showSkillsTab={skillsEnabled}
@@ -1941,8 +1933,7 @@ function AppInner() {
             onChangeView={handleTaskViewChange}
             onNewTask={openNewTaskWithNav}
             onOpenSettings={openSettingsWithNav}
-            todosEnabled={todosEnabled}
-            mailboxUnreadCount={mailboxUnreadCount}
+                mailboxUnreadCount={mailboxUnreadCount}
             mailboxPendingApprovalCount={mailboxPendingApprovalCount}
             chatHasUnreadResponse={chatHasUnreadResponse}
             planningNeedsInput={planningNeedsInput}
@@ -2068,7 +2059,6 @@ function AppInner() {
           memoryView: memoryEnabled,
           devServer: devServerEnabled,
           devServerView: devServerEnabled,
-          todoView: todosEnabled,
           researchView: researchEnabled,
           evalsView: evalsEnabled,
           ideationView: ideationEnabled,
@@ -2175,7 +2165,8 @@ function AppInner() {
       FN remount-churn fix R7 supersedes the FN-8016 remount behavior: ALL popped-out entries render, and off-origin-view windows are hidden via FloatingWindow's hidden contract (visibility-based, aria-hidden, effects suspended) instead of being filtered out of the render array. Returning to the origin view is an instant reveal of the live window — the embedded task detail, including an open terminal WebSocket, stays mounted. The `isTaskPopupVisibleForView` predicate and per-origin-view addressability are unchanged; `visiblePoppedOutTaskEntries` still feeds the Escape/nav-shortcut consumer. While hidden, `active={false}` closes the detail's SSE/EventSource channels (R8). Each FloatingWindow key includes its origin so identical task ids never collide across views.
       */}
       {poppedOutTaskEntries.map(({ task: snapshot, originTaskView, initialTab }) => {
-        const liveTask = tasks.find((candidate) => candidate.id === snapshot.id) ?? snapshot;
+        const boardTask = tasks.find((candidate) => candidate.id === snapshot.id);
+        const liveTask = boardTask ? mergeTaskSnapshot(snapshot, boardTask) : snapshot;
         const popupKey = taskPopupIdentityKey(snapshot.id, originTaskView);
         const close = () => closePoppedOutTaskWithNav(snapshot.id, originTaskView);
         const popupVisible = taskPopupsVisibleOnCurrentView(originTaskView);
@@ -2199,10 +2190,13 @@ function AppInner() {
               initialTab={initialTab}
               projectId={currentProject?.id}
               tasks={tasks}
+              globalPaused={globalPaused}
               active={popupVisible}
               embedded
               onOpenDetail={popOutTaskDetailForCurrentView}
               onMoveTask={moveTask}
+              /* FNXC:TaskRevert 2026-08-01-20:27: Popped-out detail preserves Delete-or-Revise recovery for reverted tasks. */
+              onReviseTask={(task) => modalManager.openNewTaskWithDescription(task.description)}
               onDeleteTask={deleteTask}
               onMergeTask={mergeTask}
               onRetryTask={retryTask}
@@ -2222,6 +2216,7 @@ function AppInner() {
         projectId={currentProject?.id}
         tasks={tasks}
         columnFlagsByTaskId={footerColumnFlagsByTaskId}
+        globalPaused={globalPaused}
         projects={projects}
         currentProject={currentProject}
         addToast={addToast}

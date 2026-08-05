@@ -64,7 +64,7 @@ import { homedir } from "node:os";
 import { createServer, type Server } from "node:net";
 import { dirname, join, basename, sep } from "node:path";
 import { createRequire, syncBuiltinESMExports } from "node:module";
-import { createLogger } from "../logger.js";
+import { createLogger } from "../process/logger.js";
 import { redactConnectionString } from "./credential-redact.js";
 import type { ResolvedBackend } from "./backend-resolver.js";
 import {
@@ -1421,9 +1421,8 @@ export class EmbeddedPostgresLifecycle {
     // Check if PG is already running for this data dir. If so, reuse it.
     const existing = await isAlreadyRunning(this.options.dataDir, this.options.onLog);
     if (existing) {
-      this.options.onLog(
-        `embedded postgres: already running on port ${existing.port} (data dir ${this.options.dataDir}), connecting without starting a new instance`,
-      );
+      // FNXC:EngineDiagnostics 2026-08-03-05:54: multi-process rejoin is expected; keep "starting embedded PostgreSQL" as the boot-visible line.
+      log.debug(`embedded postgres: already running on port ${existing.port} (data dir ${this.options.dataDir}), connecting without starting a new instance`);
       this.resolvedPort = existing.port;
       this.running = false; // We didn't start it, so we won't stop it
       this.ownsProcess = false;
@@ -1439,6 +1438,8 @@ export class EmbeddedPostgresLifecycle {
         runtimeUrl: url,
         migrationUrl: url,
         migrationUrlOverridden: false,
+        directSessionUrl: url,
+        directSessionProvenance: "embedded-lifecycle",
       };
     }
     return this.startBounded();
@@ -1632,6 +1633,8 @@ export class EmbeddedPostgresLifecycle {
         runtimeUrl,
         migrationUrl: runtimeUrl,
         migrationUrlOverridden: false,
+        directSessionUrl: runtimeUrl,
+        directSessionProvenance: "embedded-lifecycle",
       };
     }
     /*
@@ -1690,6 +1693,8 @@ export class EmbeddedPostgresLifecycle {
       runtimeUrl,
       migrationUrl: runtimeUrl,
       migrationUrlOverridden: false,
+      directSessionUrl: runtimeUrl,
+      directSessionProvenance: "embedded-lifecycle",
     };
   }
 

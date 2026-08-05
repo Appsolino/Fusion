@@ -30,6 +30,7 @@ import {
   type WorkflowIrColumn,
   type TraitFlags,
   createTaskStoreForBackend,
+  buildConsumerId,
   FUSION_RESTART_EXIT_CODE,
   FUSION_NON_RETRYABLE_EXIT_CODE,
   isPostgresUniqueError,
@@ -144,6 +145,10 @@ import { handleOpencodeGoApiKeySaved, syncStartupModels } from "./startup-model-
 import { DashboardTUI, DashboardLogSink, isTTYAvailable, type SystemInfo, type GitStatus, type GitCommit, type GitCommitDetail, type GitBranch, type GitWorktree, type FileEntry, type FileReadResult, type TaskStep as TUITaskStep, type TaskLogEntry as TUITaskLogEntry, type TaskDetailData, type TaskEvent } from "./dashboard-tui/index.js";
 import { DASHBOARD_STARTUP_STATUS, runTuiStartupPrelude } from "./dashboard-startup-chain.js";
 import { phaseTime } from "../startup-phase.js";
+import {
+  DEV_SOURCE_RESTART_ARMED_MESSAGE,
+  registerDevSourceRestart,
+} from "./dev-source-restart.js";
 
 // Re-export for backward compatibility with tests
 export { promptForPort };
@@ -951,6 +956,8 @@ export async function runDashboard(port: number, opts: { paused?: boolean; dev?:
       "backend.factory",
       () => createTaskStoreForBackend({
         rootDir: cwd,
+        /* FNXC:CrossProcessDeleteObservation 2026-08-01-12:14: The dashboard store subscribes SSE, so it owns the restart-stable dashboard lifecycle consumer stream. */
+        consumerId: buildConsumerId("dashboard"),
         onMigrationProgress: (event) => migrationHoldingServer?.setMigrationProgress(event),
       }),
       logPhase,
@@ -1065,7 +1072,11 @@ export async function runDashboard(port: number, opts: { paused?: boolean; dev?:
       if (!store) throw new Error("cwd TaskStore not yet initialized");
       projectStore = store;
     } else {
-      const boot = await createTaskStoreForBackend({ rootDir: projectPath });
+      const boot = await createTaskStoreForBackend({
+        rootDir: projectPath,
+        /* FNXC:CrossProcessDeleteObservation 2026-08-01-12:14: Each dashboard project store uses the dashboard role, isolated by project id in durable consumer state. */
+        consumerId: buildConsumerId("dashboard"),
+      });
       projectStore = boot.taskStore;
       projectStoreShutdowns.set(projectPath, boot.shutdown);
       setHostTaskStore(projectPath, projectStore);
@@ -1287,6 +1298,23 @@ export async function runDashboard(port: number, opts: { paused?: boolean; dev?:
   const systemLogsForServer = {
     getRecent: (limit?: number) => logSink.getRecentEntries(limit),
     subscribe: (listener: (entry: import("./dashboard-tui/log-ring-buffer.js").LogEntry) => void) => logSink.subscribeEntries(listener),
+  };
+  const bindDevSourceRestart = (centralCore: CentralCore, beginDrain: () => void) => {
+    disposeCallbacks.push(registerDevSourceRestart({
+      enabled: process.env.FUSION_DEV_WATCH === "1"
+        && systemControlForServer.supervised
+        && Boolean(systemControlForServer.sourceWorkspaceRoot),
+      beginDrain,
+      notifyArmed: () => {
+        process.send?.({ type: DEV_SOURCE_RESTART_ARMED_MESSAGE });
+      },
+      getLiveRunningAgentCounts: () => centralCore.getLiveRunningAgentCounts(),
+      requestRestart: (reason) => requestSelfRestart?.(reason) ?? false,
+      logger: {
+        log: (message) => logSink.log(message, "dashboard"),
+        warn: (message) => logSink.warn(message, "dashboard"),
+      },
+    }));
   };
 
   /*
@@ -2449,6 +2477,7 @@ export async function runDashboard(port: number, opts: { paused?: boolean; dev?:
       }, 300);
       return true;
     };
+    bindDevSourceRestart(centralCoreForEngine, () => engineManager.beginDrain());
     registerHandler(process, "SIGINT", () => void shutdown("SIGINT"));
     registerHandler(process, "SIGTERM", () => void shutdown("SIGTERM"));
 
@@ -2784,6 +2813,12 @@ export async function runDashboard(port: number, opts: { paused?: boolean; dev?:
       }, 300);
       return true;
     };
+    if (centralCoreForMesh) {
+      bindDevSourceRestart(centralCoreForMesh, () => {
+        triggerScheduler?.stop();
+        heartbeatMonitorImpl?.stop();
+      });
+    }
     registerHandler(process, "SIGINT", () => void devShutdown("SIGINT"));
     registerHandler(process, "SIGTERM", () => void devShutdown("SIGTERM"));
 

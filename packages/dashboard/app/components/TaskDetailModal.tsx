@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Pencil, Bot, X, ChevronDown, ChevronRight, GitBranch, ArrowLeft, Zap, Loader2, AlertTriangle, Sparkles, Maximize2, Minimize2, Send, Square, Info, Paperclip, Eye, EyeOff } from "lucide-react";
 import { useViewportMode } from "../hooks/useViewportMode";
+import { mergeTaskSnapshot } from "../hooks/useTasks";
 import { FloatingWindow } from "./FloatingWindow";
 import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { useModalDismissPreference, useOverlayDismiss } from "../hooks/useOverlayDismiss";
@@ -20,10 +21,10 @@ import {
   PLANNER_OVERSIGHT_LEVELS,
   getErrorMessage,
 } from "@fusion/core";
-import { resolveEffectivePlannerOversightLevel } from "../../../core/src/workflow-settings-resolver";
-import { resolveTaskSessionAdvisorEnabled } from "../../../core/src/session-advisor";
-import { isNearDuplicateCanonicalInactive } from "../../../core/src/near-duplicate-canonical";
-import { getRevertOfId, findOpenUndoTaskForSource } from "../utils/taskRevert";
+import { resolveEffectivePlannerOversightLevel } from "../../../core/src/workflows/workflow-settings-resolver";
+import { resolveTaskSessionAdvisorEnabled } from "../../../core/src/agents/session-advisor";
+import { isNearDuplicateCanonicalInactive } from "../../../core/src/duplicates/near-duplicate-canonical";
+import { getRevertOfId, findOpenUndoTaskForSource, isTaskReverted } from "../utils/taskRevert";
 import {
   isArchivedColumnRole,
   isCompleteColumnRole,
@@ -32,8 +33,8 @@ import {
   isReviewColumnRole,
   isWipColumnRole,
 } from "../utils/columnRoles";
-import { resolveEffectiveAutoMerge } from "../../../core/src/task-merge";
-import { uploadAttachment, deleteAttachment, updateTask, repairOverlapBlocker, pauseTask, unpauseTask, fetchTaskDetail, fetchTaskVerificationRequest, fetchSettings, fetchTaskEffectiveSettings, fetchGlobalSettings, requestSpecRevision, rebuildTaskSpec, approvePlan, rejectPlan, refineTask, fetchWorkflowResults, assignTask, fetchAgents, fetchAgent, refreshPrStatus, fetchBoardWorkflows, updateTaskCustomFields, summarizeTitle, fetchWorkflowSettingValues, nudgeOverseer, stopOverseer, explainOverseer, fetchModels, fetchNodes, api } from "../api";
+import { resolveEffectiveAutoMerge } from "../../../core/src/merge/task-merge";
+import { uploadAttachment, deleteAttachment, updateTask, repairOverlapBlocker, pauseTask, unpauseTask, fetchTaskDetail, fetchTaskPrompt, fetchTaskVerificationRequest, fetchSettings, fetchTaskEffectiveSettings, fetchGlobalSettings, requestSpecRevision, rebuildTaskSpec, approvePlan, rejectPlan, refineTask, fetchWorkflowResults, assignTask, fetchAgents, fetchAgent, refreshPrStatus, fetchBoardWorkflows, updateTaskCustomFields, summarizeTitle, fetchWorkflowSettingValues, nudgeOverseer, stopOverseer, explainOverseer, fetchModels, fetchNodes, api } from "../api";
 import type { RevertTaskOptions, RevertTaskResult, ModelInfo, NodeInfo } from "../api";
 import type { BoardWorkflowsPayload, WorkflowFieldDefinition, CustomFieldRejection } from "../api";
 import { WorkflowIcon } from "./WorkflowIcon";
@@ -85,7 +86,8 @@ import { hasPendingAutomaticRecovery, isTaskManuallyRetryable } from "../utils/t
 import { findInReviewStallLogEntry, IN_REVIEW_STALL_LOG_REGEX } from "../utils/findInReviewStallLogEntry";
 import { getTaskLogEntryAction, getTaskLogEntryOutcome } from "../utils/taskLogEntryDisplay";
 import { getRelativeTimeBucket } from "../utils/relativeTimeAgo";
-import { isReviewBudgetExhaustedApproval } from "../utils/reviewBudgetApproval";
+import { isReviewBudgetExhaustedApproval, isTaskAwaitingPlanApproval } from "../utils/reviewBudgetApproval";
+import { getTaskStatusBadgeLabel, hasTaskStatusBadge, isTaskPlanningActive } from "../utils/taskStatusBadgeLabel";
 import { ACTIVE_STATUSES, resolveEffectiveExecutor, resolveEffectivePlanning, resolveEffectiveValidator, type ModelSelection } from "./effective-model-resolution";
 import { TaskContextMenu, buildTaskActionMenuModel, getTaskPrAutomationLabel } from "./TaskContextMenu";
 import type { TaskContextMenuColumnFlags, TaskContextMenuColumnMetadata } from "./TaskContextMenu";
@@ -102,6 +104,17 @@ const ACTIVITY_VIEW_MENU_MIN_WIDTH = 160;
 const ACTIVITY_VIEW_MENU_MIN_HEIGHT = 120;
 const ACTIVITY_VIEW_MENU_MAX_HEIGHT = 320;
 const ACTIVITY_VIEW_MENU_OPEN_VIEWPORT_GUARD_MS = 350;
+const PROMPT_REFRESH_INTERVAL_MS = 5_000;
+
+function isPromptRefreshLifecycleActive(task: Pick<Task, "status" | "workflowStepResults">): boolean {
+  if (task.status === "planning" || task.status === "needs-replan") return true;
+  return task.workflowStepResults?.some((result) =>
+    (result.workflowStepId === "plan-review" || result.workflowStepId === "plan-replan")
+    && result.startedAt != null
+    && result.completedAt == null,
+  ) ?? false;
+}
+
 // FNXC:TaskDetailSwipeBack 2026-07-05-12:30: FN-7587 — mobile-mode gating the presentation-only predictive-back slide/fade transition on the modal/list/nested task-detail surface uses the shared viewport classifier, so known 768px tablets do not receive phone-only presentation.
 // FNXC:PlannerOversight 2026-07-05-00:00: FN-7604 — the OVERSIGHT_MENU_MOBILE_BREAKPOINT constant (formerly used to branch the oversight controls between an inline cluster and this overflow menu) was removed; the overflow-menu dropdown is now the single universal surface at every viewport, so no breakpoint gates it.
 
@@ -368,6 +381,8 @@ export interface TaskDetailModalProps {
   onClose: () => void;
   onOpenDetail: (task: Task | TaskDetail) => void; // For clicking dependencies
   onMoveTask: (id: string, column: Column, optionsOrPosition?: { preserveProgress?: boolean } | number) => Promise<Task>;
+  /** Opens a New Task draft from a reverted task description. */
+  onReviseTask?: (task: Task) => void;
   onDeleteTask: (id: string, options?: {
     removeDependencyReferences?: boolean;
     removeLineageReferences?: boolean;
@@ -392,6 +407,8 @@ export interface TaskDetailModalProps {
   addToast: (message: string, type?: ToastType) => void;
   prAuthAvailable?: boolean;
   autoMergeEnabled?: boolean;
+  /** Prevent transient planner activity from presenting as live during an engine-wide pause. */
+  globalPaused?: boolean;
   onOpenWorkflowEditor?: () => void;
   /** Open the modal with this tab active instead of the default done-aware landing view. */
   initialTab?: TabId;
@@ -760,6 +777,7 @@ export function TaskDetailContent({
   onOpenDetail,
   onMoveTask,
   onDeleteTask,
+  onReviseTask,
   onArchiveTask,
   onRevertTask,
   onMergeTask,
@@ -771,6 +789,7 @@ export function TaskDetailContent({
   addToast,
   prAuthAvailable,
   autoMergeEnabled: autoMergeEnabledProp,
+  globalPaused = false,
   onOpenWorkflowEditor,
   /**
    * FNXC:TaskDetailActivityFirst 2026-06-30-23:59:
@@ -825,6 +844,33 @@ export function TaskDetailContent({
     !("prompt" in task),
   );
   const [verificationRequest, setVerificationRequest] = useState<TaskVerificationRequest | null>(null);
+  const detailRequestGenerationRef = useRef(0);
+  const detailRequestRef = useRef<{ key: string; promise: Promise<TaskDetail> } | null>(null);
+  /*
+  FNXC:TaskDetailPlan 2026-08-05-04:26:
+  A narrow Definition response may beat a slim task's initial full detail response. Keep it
+  separately so the older full read cannot overwrite its newer prompt on arrival.
+  */
+  const latestPromptResponseRef = useRef<{ key: string; prompt?: string } | null>(null);
+
+  /*
+  FNXC:TaskDetailPlan 2026-08-03-02:24:
+  A slim task can need its initial detail and its visible Definition refresh in the same commit.
+  Share that project-scoped request so opening Definition produces one authoritative fetch rather
+  than invalidating the initial load and issuing duplicate traffic.
+  */
+  const requestTaskDetail = useCallback((taskId: string, requestProjectId?: string) => {
+    const key = `${requestProjectId ?? ""}:${taskId}`;
+    if (detailRequestRef.current?.key === key) return detailRequestRef.current.promise;
+
+    const promise = fetchTaskDetail(taskId, requestProjectId);
+    detailRequestRef.current = { key, promise };
+    void promise.then(
+      () => { if (detailRequestRef.current?.promise === promise) detailRequestRef.current = null; },
+      () => { if (detailRequestRef.current?.promise === promise) detailRequestRef.current = null; },
+    );
+    return promise;
+  }, []);
 
   /*
   FNXC:TaskPopupViewGating 2026-07-23-10:20:
@@ -845,32 +891,42 @@ export function TaskDetailContent({
   }, [task.id, projectId, active]);
 
   useEffect(() => {
+    // FNXC:TaskDetailPlan 2026-08-03-02:06: hidden kept-alive hosts defer their initial detail request until reveal.
+    if (!active) return;
     // If the prop already has a prompt field, it's a full TaskDetail
     if ("prompt" in task) {
-      setFullDetail(task as TaskDetail);
+      setFullDetail((previous) => previous?.id === task.id ? mergeTaskSnapshot(previous, task) : task as TaskDetail);
       setDetailLoading(false);
       return;
     }
 
     let cancelled = false;
+    const requestGeneration = ++detailRequestGenerationRef.current;
     setDetailLoading(true);
     setFullDetail(null);
 
-    fetchTaskDetail(task.id, projectId)
+    requestTaskDetail(task.id, projectId)
       .then((detail) => {
-        if (!cancelled) {
-          setFullDetail(detail);
+        if (!cancelled && detailRequestGenerationRef.current === requestGeneration) {
+          const promptResponse = latestPromptResponseRef.current;
+          const promptResponseMatchesDetail = promptResponse?.key === `${projectId ?? ""}:${detail.id}`;
+          const detailWithLatestPrompt = promptResponseMatchesDetail
+            ? { ...detail, prompt: promptResponse.prompt } as TaskDetail
+            : detail;
+          setFullDetail((previous) => previous?.id === detail.id
+            ? mergeTaskSnapshot(previous, detailWithLatestPrompt, { fullSnapshot: true })
+            : detailWithLatestPrompt);
           setDetailLoading(false);
         }
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!cancelled && detailRequestGenerationRef.current === requestGeneration) {
           setDetailLoading(false);
         }
       });
 
     return () => { cancelled = true; };
-  }, [task.id, projectId]);
+  }, [task.id, projectId, active, requestTaskDetail]);
 
   // Derive a working task that always has all available fields.
   // Falls back to the optimistic Task while loading, uses fullDetail once loaded.
@@ -888,19 +944,7 @@ export function TaskDetailContent({
   }, [task.id]);
   const workingTask: TaskDetail = fullDetail
     ? ({
-      ...fullDetail,
-      ...task,
-      prompt: fullDetail.prompt,
-      log: fullDetail.log,
-      githubTracking: task.githubTracking ?? fullDetail.githubTracking,
-      gitlabTracking: task.gitlabTracking ?? fullDetail.gitlabTracking,
-      assignedAgentId: task.assignedAgentId === undefined ? fullDetail.assignedAgentId : task.assignedAgentId,
-      checkedOutBy: task.checkedOutBy === undefined ? fullDetail.checkedOutBy : task.checkedOutBy,
-      status: task.status === undefined ? fullDetail.status : task.status,
-      column: task.column === undefined ? fullDetail.column : task.column,
-      paused: task.paused === undefined ? fullDetail.paused : task.paused,
-      userPaused: task.userPaused === undefined ? fullDetail.userPaused : task.userPaused,
-      pausedReason: task.pausedReason === undefined ? fullDetail.pausedReason : task.pausedReason,
+      ...mergeTaskSnapshot(fullDetail, task),
       /*
       FNXC:TaskDetailOverlapRepair 2026-06-25-04:34:
       SSE task props are authoritative for live blocker changes, but the Clear repair flow needs a local override while stale parent props catch up. Only fall back to fetched detail when the slim parent omitted the field entirely.
@@ -910,6 +954,18 @@ export function TaskDetailContent({
         : task.overlapBlockedBy === undefined ? fullDetail.overlapBlockedBy : task.overlapBlockedBy,
     } as TaskDetail)
     : ({ ...task, prompt: "" } as TaskDetail);
+  /*
+  FNXC:TaskStatusConsistency 2026-08-05-04:30:
+  Detail hosts consume the same reconciled snapshot as board and list cards. Show live planning as
+  Planning, while an idle `needs-replan` remains Queued to revise; this prevents an open modal from
+  presenting a different lifecycle than the card that launched it.
+  */
+  const taskStatusBadgeLabel = isTaskPlanningActive(workingTask, { globalPaused })
+    ? t("tasks.statusPlanning", "Planning")
+    : getTaskStatusBadgeLabel(workingTask.status, t, undefined, {
+      idle: true,
+      overlapBlockedBy: workingTask.overlapBlockedBy ?? null,
+    });
   const originalTaskPrompt = workingTask.description ?? "";
   const hasOriginalTaskPrompt = originalTaskPrompt.trim().length > 0;
   /*
@@ -1164,6 +1220,46 @@ export function TaskDetailContent({
   const [specEditContent, setSpecEditContent] = useState(workingTask.prompt || "");
   const [specFeedback, setSpecFeedback] = useState("");
   const [showRefineModal, setShowRefineModal] = useState(false);
+
+  /*
+  FNXC:TaskDetailPlan 2026-08-05-04:05:
+  Definition is the authoritative PROMPT.md view while planning or graph Plan Review may rewrite it.
+  Its periodic read is deliberately prompt-only: replacing TaskDetail here rolled queued cards back
+  to Todo and retriggered workflow metadata. Board/SSE/mutations own card state; this effect updates
+  only the retained prompt and fences late identity responses without disturbing active edit buffers.
+  */
+  const promptRefreshLifecycleActive = isPromptRefreshLifecycleActive(task);
+  useEffect(() => {
+    if (!active || activeTab !== "definition") return;
+
+    let cancelled = false;
+    let inFlight = false;
+    const identity = `${projectId ?? ""}:${task.id}`;
+    const refreshPrompt = () => {
+      if (inFlight) return;
+      inFlight = true;
+      void fetchTaskPrompt(task.id, projectId)
+        .then((response) => {
+          if (cancelled || identity !== `${projectId ?? ""}:${task.id}` || response.id !== task.id) return;
+          // The narrow contract intentionally distinguishes an absent PROMPT.md from an empty file.
+          latestPromptResponseRef.current = { key: identity, prompt: response.prompt };
+          setFullDetail((previous) => previous ? ({ ...previous, prompt: response.prompt } as TaskDetail) : previous);
+        })
+        .catch(() => {
+          // FNXC:TaskDetailPlan 2026-08-05-04:05: retain the last good prompt; a later eligible tick may recover.
+        })
+        .finally(() => { inFlight = false; });
+    };
+
+    refreshPrompt();
+    if (!promptRefreshLifecycleActive) return () => { cancelled = true; };
+
+    const timer = window.setInterval(refreshPrompt, PROMPT_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [active, activeTab, projectId, promptRefreshLifecycleActive, task.id]);
   const [prCreateOpen, setPrCreateOpen] = useState(false);
 
   useLayoutEffect(() => {
@@ -1213,6 +1309,9 @@ export function TaskDetailContent({
   cannot encode ordered columns, so resolve move metadata independently without replacing
   the caller-owned field definitions.
   */
+  const workflowMetadataIdentityRef = useRef<string | null>(null);
+  const workflowMetadataFieldDefsRef = useRef<WorkflowFieldDefinition[] | null | undefined>(undefined);
+  const [workflowMetadataRevision, setWorkflowMetadataRevision] = useState(0);
   const [taskWorkflowBadge, setTaskWorkflowBadge] = useState<{ id: string; name: string; icon?: string } | null>(null);
   // Custom field definitions (U13/KTD-14). Resolved for this task's workflow
   // from the board-workflows payload; absent when the workflow declares none,
@@ -1228,20 +1327,39 @@ export function TaskDetailContent({
     setCustomFieldValues(task.customFields ?? {});
   }, [task.id, task.customFields]);
 
-  // Resolve selected-workflow display and move metadata once per task. A supplied fields prop
-  // avoids a duplicate field lookup, but cannot replace this ordered-column lookup.
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-04:26:
+  Task workflow selection changes emit `workflow:updated`, not a task-object update. Revalidate
+  the selected workflow payload on that event so an open unchanged-column detail cannot retain
+  prior workflow badges or actions; the revision preserves the current metadata while it settles.
+  */
+  useEffect(() => {
+    if (!active) return;
+    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    return subscribeSse(`/api/events${query}`, {
+      events: { "workflow:updated": () => setWorkflowMetadataRevision((revision) => revision + 1) },
+    });
+  }, [active, projectId]);
+
+  // Resolve selected-workflow display and move metadata from the inputs the resolver consumes.
   useEffect(() => {
     /*
-    FNXC:WorkflowBadges 2026-06-29-16:48:
-    Mounted task-detail hosts can swap from one task to another (List split-pane, right dock, floating windows). Clear the previous workflow badge and move metadata before the shared board-workflows lookup resolves so aggregate-board context never shows stale cross-workflow labels or targets.
+    FNXC:TaskDetailStateStability 2026-08-05-04:05:
+    Same-task board/SSE object replacements and prompt ticks must not clear workflow badges or
+    controls. Column is included because it derives action flags; only a true identity/workflow-field
+    switch clears prior metadata, while column revalidation keeps resolved UI mounted until it settles.
     */
-    if (workflowFieldDefsProp !== undefined) {
-      setCustomFieldDefs(workflowFieldDefsProp ?? null);
-    } else {
-      setCustomFieldDefs(null);
+    const metadataIdentity = `${projectId ?? ""}:${task.id}`;
+    const identityChanged = workflowMetadataIdentityRef.current !== metadataIdentity
+      || workflowMetadataFieldDefsRef.current !== workflowFieldDefsProp;
+    workflowMetadataIdentityRef.current = metadataIdentity;
+    workflowMetadataFieldDefsRef.current = workflowFieldDefsProp;
+    if (identityChanged) {
+      if (workflowFieldDefsProp !== undefined) setCustomFieldDefs(workflowFieldDefsProp ?? null);
+      else setCustomFieldDefs(null);
+      setTaskWorkflowBadge(null);
+      setWorkflowMoveMetadata(null);
     }
-    setTaskWorkflowBadge(null);
-    setWorkflowMoveMetadata(null);
     let cancelled = false;
     void fetchBoardWorkflows(projectId)
       .then((payload) => {
@@ -1270,16 +1388,15 @@ export function TaskDetailContent({
         });
       })
       .catch(() => {
-        if (!cancelled) {
+        // Keep settled same-task metadata visible during transient revalidation failures.
+        if (!cancelled && identityChanged) {
           if (workflowFieldDefsProp === undefined) setCustomFieldDefs(null);
           setTaskWorkflowBadge(null);
           setWorkflowMoveMetadata(null);
         }
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [task, projectId, workflowFieldDefsProp]);
+    return () => { cancelled = true; };
+  }, [task.id, task.column, projectId, workflowFieldDefsProp, workflowMetadataRevision]);
 
   /*
   FNXC:PlannerOversight 2026-07-04-17:00:
@@ -1390,8 +1507,11 @@ export function TaskDetailContent({
   const [editBranch, setEditBranch] = useState(task.branch ?? "");
   const [editBaseBranch, setEditBaseBranch] = useState(task.baseBranch ?? "");
   const [editExecutorModel, setEditExecutorModel] = useState("");
+  const [editCredentialInstanceId, setEditCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editValidatorModel, setEditValidatorModel] = useState("");
+  const [editValidatorCredentialInstanceId, setEditValidatorCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editPlanningModel, setEditPlanningModel] = useState("");
+  const [editPlanningCredentialInstanceId, setEditPlanningCredentialInstanceId] = useState<string | undefined>(undefined);
   const [editThinkingLevel, setEditThinkingLevel] = useState("");
   // FNXC:PlannerOversight 2026-07-04-00:00: Per-task override of the workflow-native plannerOversightLevel setting (FN-7508). "" means "inherit from workflow" (clear-to-default).
   const [editPlannerOversightLevel, setEditPlannerOversightLevel] = useState("");
@@ -1950,12 +2070,17 @@ export function TaskDetailContent({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [showMoveMenu, showActionsMenu, showActivityViewMenu, showOversightMenu, showInlinePriorityPicker]);
 
-  // Reset spec edit state when task changes
+  /*
+  FNXC:TaskDetailPlan 2026-08-03-02:32:
+  A visible Definition poll may update the authoritative prompt while an operator is editing it.
+  Reset edit state only for a different task; reacting to prompt revisions would discard the active
+  local draft and replace its textarea.
+  */
   useEffect(() => {
     setIsEditingSpec(false);
     setSpecEditContent(workingTask.prompt || "");
     setSpecFeedback("");
-  }, [task.id, workingTask.prompt]);
+  }, [task.id]);
 
   // Note: TaskForm handles auto-focus internally via isActive prop
 
@@ -2144,8 +2269,11 @@ export function TaskDetailContent({
     const valModel = task.validatorModelProvider && task.validatorModelId ? `${task.validatorModelProvider}/${task.validatorModelId}` : "";
     const planModel = task.planningModelProvider && task.planningModelId ? `${task.planningModelProvider}/${task.planningModelId}` : "";
     setEditExecutorModel(execModel);
+    setEditCredentialInstanceId(task.credentialInstanceId);
     setEditValidatorModel(valModel);
+    setEditValidatorCredentialInstanceId(task.validatorCredentialInstanceId);
     setEditPlanningModel(planModel);
+    setEditPlanningCredentialInstanceId(task.planningCredentialInstanceId);
     setEditThinkingLevel(task.thinkingLevel ?? "");
     setEditPlannerOversightLevel(task.plannerOversightLevel ?? "");
     setEditNodeId(task.nodeId);
@@ -2208,6 +2336,9 @@ export function TaskDetailContent({
     if (editExecutorModel !== currentExecutorModel) {
       updates.modelProvider = executorSelection?.provider ?? null;
       updates.modelId = executorSelection?.modelId ?? null;
+      updates.credentialInstanceId = null;
+    } else if ((editCredentialInstanceId ?? "") !== (task.credentialInstanceId ?? "")) {
+      updates.credentialInstanceId = editCredentialInstanceId ?? null;
     }
 
     const validatorSelection = splitModelSelection(editValidatorModel);
@@ -2215,6 +2346,9 @@ export function TaskDetailContent({
     if (editValidatorModel !== currentValidatorModel) {
       updates.validatorModelProvider = validatorSelection?.provider ?? null;
       updates.validatorModelId = validatorSelection?.modelId ?? null;
+      updates.validatorCredentialInstanceId = null;
+    } else if ((editValidatorCredentialInstanceId ?? "") !== (task.validatorCredentialInstanceId ?? "")) {
+      updates.validatorCredentialInstanceId = editValidatorCredentialInstanceId ?? null;
     }
 
     const planningSelection = splitModelSelection(editPlanningModel);
@@ -2222,6 +2356,9 @@ export function TaskDetailContent({
     if (editPlanningModel !== currentPlanningModel) {
       updates.planningModelProvider = planningSelection?.provider ?? null;
       updates.planningModelId = planningSelection?.modelId ?? null;
+      updates.planningCredentialInstanceId = null;
+    } else if ((editPlanningCredentialInstanceId ?? "") !== (task.planningCredentialInstanceId ?? "")) {
+      updates.planningCredentialInstanceId = editPlanningCredentialInstanceId ?? null;
     }
 
     const currentThinkingLevel = task.thinkingLevel ?? "";
@@ -2269,7 +2406,7 @@ export function TaskDetailContent({
     }
 
     return { updates, error: null as string | null };
-  }, [editBaseBranch, editBranch, editDependencies, editDescription, editExecutionMode, editExecutorModel, editNodeId, editPlanningModel, editPriority, editReviewLevel, editSelectedWorkflowSteps, editSourceIssueExternalId, editSourceIssueProvider, editSourceIssueRepository, editSourceIssueUrl, editThinkingLevel, editPlannerOversightLevel, editTitle, editValidatorModel, task]);
+  }, [editBaseBranch, editBranch, editDependencies, editDescription, editExecutionMode, editCredentialInstanceId, editExecutorModel, editNodeId, editPlanningCredentialInstanceId, editPlanningModel, editPriority, editReviewLevel, editSelectedWorkflowSteps, editSourceIssueExternalId, editSourceIssueProvider, editSourceIssueRepository, editSourceIssueUrl, editThinkingLevel, editPlannerOversightLevel, editTitle, editValidatorCredentialInstanceId, editValidatorModel, task]);
 
   const persistEditChanges = useCallback(async (includeDescription: boolean) => {
     const { updates, error } = buildEditUpdates(includeDescription);
@@ -2370,8 +2507,11 @@ export function TaskDetailContent({
     editBranch,
     editBaseBranch,
     editExecutorModel,
+    editCredentialInstanceId,
     editValidatorModel,
+    editValidatorCredentialInstanceId,
     editPlanningModel,
+    editPlanningCredentialInstanceId,
     editThinkingLevel,
     editPlannerOversightLevel,
     editNodeId,
@@ -3301,8 +3441,8 @@ export function TaskDetailContent({
   const isIntakeColumn = detailColumnFlags
     ? detailColumnFlags.intake === true
     : task.column === "triage";
-  const isAwaitingApproval = isIntakeColumn && task.status === "awaiting-approval";
   const isPlanReviewReplanCapApproval = isReviewBudgetExhaustedApproval(task);
+  const isAwaitingApproval = isTaskAwaitingPlanApproval(task, isIntakeColumn);
 
   const handleTogglePause = useCallback(async () => {
     try {
@@ -3540,7 +3680,7 @@ export function TaskDetailContent({
   const handleWorkflowReconciled = useCallback(async () => {
     try {
       const detail = await fetchTaskDetail(task.id, projectId);
-      setFullDetail(detail);
+      setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail, { fullSnapshot: true }) : detail);
       onTaskUpdated?.(detail);
     } catch {
       // Best-effort refresh; the SSE stream will catch the board up regardless.
@@ -3549,7 +3689,7 @@ export function TaskDetailContent({
 
   const handleBranchGroupReset = useCallback(async () => {
     const detail = await fetchTaskDetail(task.id, projectId);
-    setFullDetail(detail);
+    setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail, { fullSnapshot: true }) : detail);
     onTaskUpdated?.(detail);
   }, [task.id, projectId, onTaskUpdated]);
 
@@ -3666,17 +3806,15 @@ export function TaskDetailContent({
     try {
       await updateTask(workingTask.id, { prompt: newContent }, projectId);
       addToast(t("taskDetail.spec.updated", "Spec updated"), "success");
-      // Update local detail data
-      if (fullDetail) {
-        fullDetail.prompt = newContent;
-      }
+      // FNXC:TaskDetailPlan 2026-08-03-02:06: update immutably so the preview reflects an explicit save.
+      setFullDetail((previous) => previous ? { ...previous, prompt: newContent } : previous);
     } catch (err) {
       addToast(getErrorMessage(err), "error");
       throw err;
     } finally {
       setIsSavingSpec(false);
     }
-  }, [workingTask, fullDetail, addToast]);
+  }, [workingTask, addToast]);
 
   const handleRequestSpecRevision = useCallback(async (feedback: string) => {
     setIsRequestingRevision(true);
@@ -4442,9 +4580,20 @@ export function TaskDetailContent({
             `columnLabel` for the column a workflow does not declare and for the window before the
             board-workflows payload resolves.
             */}
-            <span className={`detail-column-badge badge-${task.column}`}>
-              {workflowColumnDisplayName ?? columnLabel(task.column)}
+            {/*
+            FNXC:TaskDetailStateStability 2026-08-05-02:55:
+            The header is the lifecycle presentation users watch during scheduler activity. Render the
+            timestamp-reconciled working snapshot, never the raw prop, so a late Todo board/detail
+            payload cannot flash over a newer queued dependency or file-overlap state.
+            */}
+            <span className={`detail-column-badge badge-${workingTask.column}`}>
+              {workflowColumnDisplayName ?? columnLabel(workingTask.column)}
             </span>
+            {hasTaskStatusBadge(workingTask.status) && (
+              <span className="card-status-badge" data-testid="task-detail-status-badge">
+                {taskStatusBadgeLabel}
+              </span>
+            )}
           </div>
           <div className="modal-header-actions">
             {!isEditing && canEdit && (
@@ -4515,7 +4664,7 @@ export function TaskDetailContent({
             )}
           </div>
         </div>
-        <div className={`detail-body${activeTab === "chat" && activitySegment === "raw-logs" && !isEditing ? " detail-body--agent-log" : ""}${activeTab === "chat" && (activitySegment === "current" || isActivityExpanded) && !isEditing ? " detail-body--chat" : ""}${activeTab === "planner-chat" && !isEditing ? " detail-body--planner-chat" : ""}`}>
+        <div className={`detail-body${activeTab === "chat" && activitySegment === "feed" && !isActivityExpanded && !isEditing ? " detail-body--feed" : ""}${activeTab === "chat" && activitySegment === "raw-logs" && !isEditing ? " detail-body--agent-log" : ""}${activeTab === "chat" && (activitySegment === "current" || isActivityExpanded) && !isEditing ? " detail-body--chat" : ""}${activeTab === "planner-chat" && !isEditing ? " detail-body--planner-chat" : ""}`}>
           <div className="detail-body-content">
           {isEditing ? (
             <div className="modal-edit-form">
@@ -4532,11 +4681,17 @@ export function TaskDetailContent({
                 baseBranch={editBaseBranch}
                 onBaseBranchChange={setEditBaseBranch}
                 executorModel={editExecutorModel}
-                onExecutorModelChange={setEditExecutorModel}
+                onExecutorModelChange={(value) => { setEditCredentialInstanceId(undefined); setEditExecutorModel(value); }}
+                credentialInstanceId={editCredentialInstanceId}
+                onCredentialInstanceIdChange={(instanceId) => setEditCredentialInstanceId(instanceId || undefined)}
                 validatorModel={editValidatorModel}
-                onValidatorModelChange={setEditValidatorModel}
+                onValidatorModelChange={(value) => { setEditValidatorCredentialInstanceId(undefined); setEditValidatorModel(value); }}
+                validatorCredentialInstanceId={editValidatorCredentialInstanceId}
+                onValidatorCredentialInstanceIdChange={(instanceId) => setEditValidatorCredentialInstanceId(instanceId || undefined)}
                 planningModel={editPlanningModel}
-                onPlanningModelChange={setEditPlanningModel}
+                onPlanningModelChange={(value) => { setEditPlanningCredentialInstanceId(undefined); setEditPlanningModel(value); }}
+                planningCredentialInstanceId={editPlanningCredentialInstanceId}
+                onPlanningCredentialInstanceIdChange={(instanceId) => setEditPlanningCredentialInstanceId(instanceId || undefined)}
                 thinkingLevel={editThinkingLevel}
                 onThinkingLevelChange={setEditThinkingLevel}
                 plannerOversightLevel={editPlannerOversightLevel}
@@ -4621,11 +4776,27 @@ export function TaskDetailContent({
                 Summarize-as-title renders inline with the title inside .detail-heading-row and is positioned (CSS) to the far bottom-right as an in-field affordance, not a separate full-width row. Markup order is preserved; only layout changed.
                 */}
                 <div className="detail-heading-row">
+                  {/*
+                  FNXC:TaskDetailTitle 2026-08-04-18:00:
+                  An overflowing task-detail title is its own sole expansion control. Keep the semantic button inside the h2 so pointer, touch, and keyboard activation share one accessible target; the separate Show more/Show less row must not return.
+                  */}
                   <h2
                     ref={titleRef}
                     className={`detail-title${descriptionExpanded ? "" : " detail-title--collapsed"}`}
                   >
-                    {displayTitleText}
+                    {titleOverflows || descriptionExpanded ? (
+                      <button
+                        type="button"
+                        className="detail-title-control"
+                        aria-expanded={descriptionExpanded}
+                        aria-label={descriptionExpanded
+                          ? t("taskDetail.title.collapse", "Collapse task title")
+                          : t("taskDetail.title.expand", "Expand task title")}
+                        onClick={() => setDescriptionExpanded((expanded) => !expanded)}
+                      >
+                        {displayTitleText}
+                      </button>
+                    ) : displayTitleText}
                   </h2>
                   {showSummarizeTitleButton && (
                     <button
@@ -4640,14 +4811,6 @@ export function TaskDetailContent({
                     </button>
                   )}
                 </div>
-                {(titleOverflows || descriptionExpanded) && (
-                  <button
-                    className="detail-description-toggle"
-                    onClick={() => setDescriptionExpanded(!descriptionExpanded)}
-                  >
-                    {descriptionExpanded ? t("taskDetail.description.showLess", "Show less") : t("taskDetail.description.showMore", "Show more")}
-                  </button>
-                )}
               </>
               {customFieldDefs && customFieldDefs.length > 0 ? (
                 <TaskFieldsSection
@@ -5542,7 +5705,7 @@ export function TaskDetailContent({
             /* FNXC:TaskDetailTabKeepAlive 2026-07-22-12:55: body renders from the kept-alive sibling below the ternary; null here prevents fall-through to Definition. */
             null
           ) : activeTab === "chat" ? (
-            <div className={`detail-section detail-section--activity${activitySegment === "current" || isActivityExpanded ? " detail-section--chat" : ""}${activitySegment === "raw-logs" ? " detail-section--agent-log" : ""}`}>
+            <div className={`detail-section detail-section--activity${activitySegment === "feed" && !isActivityExpanded ? " detail-section--feed" : ""}${activitySegment === "current" || isActivityExpanded ? " detail-section--chat" : ""}${activitySegment === "raw-logs" ? " detail-section--agent-log" : ""}`}>
               {/*
                 FNXC:TaskDetailPlannerChat 2026-06-30-22:30:
                 Activity owns the existing steering/current view, Feed, and raw agent logs inside one compact selector. The stable Activity tab id remains `chat`, legacy `logs` callers land on Feed, and Raw is the only selector option that enables raw agent-log fetching. Planner-model conversation belongs to the separate `planner-chat` tab and must not route into steering comments.
@@ -6730,7 +6893,8 @@ export function TaskDetailContent({
             </KeepAliveView>
           ) : null}
         </div>
-        {isReviewColumn && (
+      </div>
+      {isReviewColumn && (
           <PrCreateModal
             open={prCreateOpen}
             taskId={task.id}
@@ -6790,6 +6954,19 @@ export function TaskDetailContent({
                   <button className="btn btn-danger btn-sm" data-testid="detail-plan-approval-footer-reject" onClick={handleRejectPlan}>
                     {t("taskDetail.plan.rejectBtn", "Reject Plan")}
                   </button>
+                </>
+              )}
+
+              {/*
+              FNXC:TaskRevert 2026-08-01-19:51:
+              A reverted task remains accessible for provenance, but cannot present as ordinary
+              completed work. Detail therefore retains guarded Delete and routes Revise through
+              the shared New Task draft callback with the original description.
+              */}
+              {isTaskReverted(task.sourceMetadata) && (
+                <>
+                  <button className="btn btn-sm btn-danger" onClick={handleDelete} aria-label="Delete reverted task">Delete</button>
+                  {onReviseTask && <button className="btn btn-sm" onClick={() => { onReviseTask(task); requestClose?.(); }}>Revise</button>}
                 </>
               )}
 
@@ -6961,9 +7138,8 @@ export function TaskDetailContent({
               </div>
             </>
           )}
-          </div>
-        </div>
-        {showRefineModal && (
+      </div>
+      {showRefineModal && (
           <div
             className="modal-overlay open detail-refine-overlay"
             {...refineOverlayDismissProps}

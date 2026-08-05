@@ -3,7 +3,7 @@ import { makeTransitionRejection, TransitionRejectionError, buildBootstrapPrompt
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Scheduler } from "../scheduler.js";
-import { AgentSemaphore } from "../concurrency.js";
+import { AgentSemaphore } from "../concurrency/concurrency.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -53,6 +53,12 @@ function storeWith(
   workflows: { selections?: Record<string, string>; definitions?: Record<string, WorkflowIr> } = {},
 ): TaskStore {
   const byId = new Map(tasks.map((candidate) => [candidate.id, candidate]));
+  const updateTask = vi.fn(async (id: string, patch: Partial<Task>) => {
+    const current = byId.get(id);
+    if (current) Object.assign(current, patch);
+    return current as Task;
+  });
+  const logEntry = vi.fn(async () => undefined);
   return {
     listTasks: vi.fn(async () => [...byId.values()]),
     getTask: vi.fn(async (id: string) => byId.get(id) ?? null),
@@ -63,11 +69,7 @@ function storeWith(
       ...settings,
     })),
     updateSettings: vi.fn(async (patch: Record<string, unknown>) => ({ ...settings, ...patch })),
-    updateTask: vi.fn(async (id: string, patch: Partial<Task>) => {
-      const current = byId.get(id);
-      if (current) Object.assign(current, patch);
-      return current as Task;
-    }),
+    updateTask,
     moveTask: vi.fn(async (id: string, column: Task["column"]) => {
       const current = byId.get(id);
       if (current) current.column = column;
@@ -80,7 +82,22 @@ function storeWith(
       return { task: current, moved: true };
     }),
     parseFileScopeFromPrompt: vi.fn(async () => []),
-    logEntry: vi.fn(async () => undefined),
+    logEntry,
+    transitionQueuedEpisode: vi.fn(async (id: string, transition: { signature: string; blockedBy: string | null; overlapBlockedBy: string | null; action: string }) => {
+      const current = byId.get(id)!;
+      const appended = !(current.status === "queued"
+        && (current.blockedBy ?? null) === transition.blockedBy
+        && (current.overlapBlockedBy ?? null) === transition.overlapBlockedBy
+        && current.queuedLogEpisodeSignature === transition.signature);
+      await updateTask(id, {
+        status: "queued",
+        blockedBy: transition.blockedBy,
+        overlapBlockedBy: transition.overlapBlockedBy,
+        queuedLogEpisodeSignature: transition.signature,
+      });
+      if (appended) await logEntry(id, transition.action);
+      return { appended, task: current };
+    }),
     getRootDir: vi.fn(() => "/tmp/project"),
     getTasksDir: vi.fn(() => "/tmp/project/.fusion/tasks"),
     on: vi.fn(),
@@ -388,9 +405,11 @@ describe("Scheduler workflow cutover", () => {
 
     await scheduler.schedule();
 
-    expect(store.updateTask).toHaveBeenCalledWith("FN-002", {
-      status: "queued",
+    expect(store.transitionQueuedEpisode).toHaveBeenCalledWith("FN-002", {
+      signature: "dependency:FN-001",
       blockedBy: "FN-001",
+      overlapBlockedBy: null,
+      action: "queued — unmet dependencies: FN-001",
     });
     expect(store.moveTaskIf).not.toHaveBeenCalledWith("FN-002", "in-progress", expect.anything(), expect.anything());
     expect(onBlocked).toHaveBeenCalledWith(expect.objectContaining({ id: "FN-002" }), ["FN-001"]);

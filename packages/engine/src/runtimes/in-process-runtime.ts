@@ -23,54 +23,56 @@ import {
   AsyncCentralClaimStore,
   ChatStore,
   isEphemeralAgent,
+  isPlanReviewSatisfied,
   isTaskBlockedOnApproval,
   resolveWorkflowIrForTask,
   resolveTaskLifecycleColumns,
 } from "@fusion/core";
 import { Scheduler } from "../scheduler.js";
-import type { PrMonitor, PrComment } from "../pr-monitor.js";
+import type { PrMonitor, PrComment } from "../merge/pr-monitor.js";
 import type { PrInfo } from "@fusion/core";
 import { TaskExecutor, type TaskExecutorOptions } from "../executor.js";
-import type { PlanningHandoffOutcome } from "../triage.js";
-import { buildPrNodeDeps } from "../pr-nodes.js";
+import { buildPrNodeDeps } from "../merge/pr-nodes.js";
 import { isExperimentalFeatureEnabled } from "@fusion/core";
 import { createCliAgentRuntime, type BootstrappedCliAgentRuntime } from "../cli-agent/runtime.js";
-import { WorktreePool, detectGitRepository, type GitRepoDetection, type PoolInvariantViolation } from "../worktree-pool.js";
-
+import { WorktreePool, detectGitRepository, type GitRepoDetection, type PoolInvariantViolation } from "../worktree/worktree-pool.js";
+import type { PlanningHandoffOutcome } from "../triage.js";
 import { HeartbeatMonitor, HeartbeatTriggerScheduler, type WakeContext } from "../agent-heartbeat.js";
-import { AutoClaimSnapshotManager } from "../auto-claim-snapshot.js";
-import { RoutineRunner, type RoutineRunnerOptions } from "../routine-runner.js";
-import { RoutineScheduler } from "../routine-scheduler.js";
-import { createAiPromptExecutor } from "../cron-runner.js";
+import { AutoClaimSnapshotManager } from "../scheduling/auto-claim-snapshot.js";
+import { RoutineRunner, type RoutineRunnerOptions } from "../scheduling/routine-runner.js";
+import { RoutineScheduler } from "../scheduling/routine-scheduler.js";
+import { createAiPromptExecutor } from "../scheduling/cron-runner.js";
 import type {
   ProjectRuntime,
   ProjectRuntimeConfig,
   RuntimeStatus,
   RuntimeMetrics,
   ProjectRuntimeEvents,
-} from "../project-runtime.js";
+} from "../project/project-runtime.js";
 import { runtimeLog } from "../logger.js";
-import { getActiveNotificationService } from "../notifier.js";
-import { StuckTaskDetector } from "../stuck-task-detector.js";
-import { UsageLimitPauser } from "../usage-limit-detector.js";
+import { getActiveNotificationService } from "../util/notifier.js";
+import { StuckTaskDetector } from "../healing/stuck-task-detector.js";
+import { UsageLimitPauser } from "../errors/usage-limit-detector.js";
+import { CredentialInstanceRotator } from "../credential-instance-rotation.js";
+import { createFusionAuthStorage } from "../auth/auth-storage.js";
 import { SelfHealingManager, VALIDATOR_RUN_STALE_MAX_AGE_MS } from "../self-healing.js";
-import { RestartRecoveryCoordinator } from "../restart-recovery-coordinator.js";
-import { MeshLeaseManager } from "../mesh-lease-manager.js";
-import { PluginRunner } from "../plugin-runner.js";
-import { MissionAutopilot } from "../mission-autopilot.js";
-import { MissionExecutionLoop } from "../mission-execution-loop.js";
+import { RestartRecoveryCoordinator } from "../healing/restart-recovery-coordinator.js";
+import { MeshLeaseManager } from "../project/mesh-lease-manager.js";
+import { PluginRunner } from "../plugins/plugin-runner.js";
+import { MissionAutopilot } from "../missions/mission-autopilot.js";
+import { MissionExecutionLoop } from "../missions/mission-execution-loop.js";
 import { TriageProcessor } from "../triage.js";
-import { EphemeralWorkerManager } from "../ephemeral-worker-manager.js";
-import { validateProjectNodeMapping } from "../node-dispatch-validation.js";
-import { attachAgentLinkSync } from "../task-agent-sync.js";
-import { createRunAuditor, generateSyntheticRunId } from "../run-audit.js";
+import { EphemeralWorkerManager } from "../agents/ephemeral-worker-manager.js";
+import { validateProjectNodeMapping } from "../project/node-dispatch-validation.js";
+import { attachAgentLinkSync } from "../agents/task-agent-sync.js";
+import { createRunAuditor, generateSyntheticRunId } from "../util/run-audit.js";
 import { setImmediate as setImmediateCb } from "node:timers";
 import { seedPreReleasePlanReviewContinuation } from "../plan-review-continuation.js";
 import {
   persistedTopLevelAgentTaskIdsFromStore,
   projectAdmissionCoordinator,
   resolveActiveTaskCapacityLimit,
-} from "../concurrency.js";
+} from "../concurrency/concurrency.js";
 
 /*
 FNXC:WorkflowResolvedColumns 2026-07-31-14:40 (fleet — long-tail fallback arms):
@@ -294,6 +296,43 @@ export function resolveParkedContinuationDeferral(
   };
 }
 
+/*
+FNXC:PlanReviewApproval 2026-08-04-00:26:
+An operator decision must remove the one-minute human-wait deferral immediately. Clear every
+runnable planning continuation for the task, preserve CAS ownership, and wake the drain even when
+inspection fails so the normal classifier remains authoritative.
+*/
+export async function wakeApprovedPlanningContinuations(deps: {
+  taskId: string;
+  list: (taskId: string) => Promise<WorkflowWorkItem[]>;
+  transition: (
+    itemId: string,
+    state: WorkflowWorkItemState,
+    patch: { expectedState: WorkflowWorkItemState; retryAfter: null },
+  ) => Promise<unknown>;
+  kick: () => void;
+  warn: (message: string) => void;
+}): Promise<number> {
+  let released = 0;
+  try {
+    const items = await deps.list(deps.taskId);
+    for (const item of items) {
+      if (item.state !== "runnable" || item.waitReason !== "planning" || !item.retryAfter) continue;
+      try {
+        await deps.transition(item.id, item.state, { expectedState: item.state, retryAfter: null });
+        released += 1;
+      } catch (error) {
+        deps.warn(`Failed to clear approval deferral for workflow work item ${item.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  } catch (error) {
+    deps.warn(`Failed to inspect approval-deferred workflow work for ${deps.taskId}: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    deps.kick();
+  }
+  return released;
+}
+
 /** The FIFO due-poll batch size. Named because the starvation the deferral above
  *  prevents is a property of this bound, so the two belong in one place. */
 export const DUE_PLANNING_CONTINUATION_BATCH_LIMIT = 20;
@@ -476,7 +515,7 @@ export async function admitPlanningContinuation(input: {
   // turn; a pre-drain project snapshot can admit into its newly occupied slot.
   let admissionSnapshot: Promise<{ count: number; ids: string[] }> | undefined;
   const getAdmissionSnapshot = () => admissionSnapshot ??= loadClaimSnapshot();
-  await projectAdmissionCoordinator.admitOldest({
+  await projectAdmissionCoordinator.admitNext({
     projectId: input.projectId,
     maxConcurrent: resolveActiveTaskCapacityLimit({
       maxConcurrent: settings.maxConcurrent ?? 2,
@@ -488,6 +527,7 @@ export async function admitPlanningContinuation(input: {
     refresh: async () => [{
       taskId: input.task.id,
       projectId: input.projectId,
+      lane: "execute",
       createdAt: input.item.createdAt ?? input.task.createdAt,
       start: async () => {
         // The preflight above is only a fast path. This serialized check is the
@@ -712,6 +752,8 @@ export class InProcessRuntime
    */
   private cliAgentRuntime?: BootstrappedCliAgentRuntime;
   private usageLimitPauser?: UsageLimitPauser;
+  /** One runtime-owned cooldown map keeps executor and recovery paths coherent. */
+  private credentialRotator?: CredentialInstanceRotator;
   /** FNXC:PlanReviewLease 2026-07-26-20:42: cluster node id stamped onto review-gate leases; undefined until start() resolves it, or if resolution fails. */
   private localNodeId?: string;
   private selfHealingManager?: SelfHealingManager;
@@ -739,6 +781,13 @@ export class InProcessRuntime
   private workflowContinuationTimer?: ReturnType<typeof setInterval>;
   private workflowContinuationDrainActive = false;
   private workflowContinuationDrainSince = 0;
+  /*
+  FNXC:PlanReviewApproval 2026-08-04-00:26:
+  Track the event edge and the durable approval marker. The marker covers engine restarts and
+  cross-process updates that did not deliver the earlier awaiting-approval event.
+  */
+  private approvalHeldTaskIds = new Set<string>();
+  private approvalReleasedTaskIds = new Set<string>();
   private messageStore?: MessageStore;
   /** FNXC:TaskDeleteNotice 2026-07-26-16:10: identity-guarded teardown for the delete-notice mailbox seam. */
   private unregisterTaskDeleteNoticeMailbox?: () => void;
@@ -818,6 +867,7 @@ export class InProcessRuntime
         // InProcessRuntime.start(). When the factory returns a backend result,
         // the engine owns the result's shutdown() for process teardown.
         createTaskStoreForBackend,
+        buildConsumerId,
         createProjectScopedPluginMcpProvider,
         registerTaskDeleteNoticeMailbox,
       } = await import("@fusion/core");
@@ -828,6 +878,8 @@ export class InProcessRuntime
         const backendBoot = await createTaskStoreForBackend({
           rootDir: this.config.workingDirectory,
           projectId: this.config.projectId,
+          /* FNXC:CrossProcessDeleteObservation 2026-08-01-11:39: the engine owns this store, so its role-only identity is restart-stable and never derives from boot state. */
+          consumerId: buildConsumerId("engine"),
           onMigrationProgress: this.config.onMigrationProgress,
         });
         // FNXC:PostgresFinalCutover 2026-07-14-17:20: Engine runtimes must fail
@@ -843,7 +895,27 @@ export class InProcessRuntime
       FNXC:ProviderRateLimitIsolation 2026-07-19-19:10:
       Every project runtime owns one usage-limit coordinator and shares it across executor, triage, reviewer, and merger surfaces. Runtime isolation replaced the old dashboard-level construction site; constructing it here prevents a silently undefined pauser while keeping a provider outage local to the affected project/task.
       */
-      this.usageLimitPauser ??= new UsageLimitPauser(this.taskStore);
+      this.credentialRotator ??= new CredentialInstanceRotator({
+        instanceSource: createFusionAuthStorage(),
+        // FNXC:CredentialInstanceRotation 2026-08-01-11:05:
+        // Rotation evidence is emitted through the runtime-owned audit seam. Metadata
+        // is supplied by the rotator as ids/counts/outcomes only; audit failures stay
+        // non-fatal so an observability outage cannot prevent rate-limit recovery.
+        recordRunAuditEvent: async (mutationType, metadata) => {
+          await this.taskStore.recordRunAuditEvent?.({
+            taskId: typeof metadata.taskId === "string" ? metadata.taskId : undefined,
+            agentId: typeof metadata.agentId === "string" ? metadata.agentId : "runtime",
+            runId: generateSyntheticRunId("credential-instance-rotation", typeof metadata.taskId === "string" ? metadata.taskId : String(metadata.providerId ?? "unknown")),
+            domain: "database",
+            mutationType,
+            target: String(metadata.providerId ?? "unknown"),
+            metadata,
+          });
+        },
+      });
+      this.usageLimitPauser ??= new UsageLimitPauser(this.taskStore, {
+        credentialRotator: this.credentialRotator,
+      });
 
       // Initialize MessageStore early so TaskExecutor receives send_message capability.
       // FNXC:RuntimeSatelliteAsync 2026-06-24-12:45:
@@ -947,7 +1019,7 @@ export class InProcessRuntime
       // killed between `mkdir` and `git worktree add`).  Removing them here
       // ensures scanIdleWorktrees / rehydrate never sees broken entries, and
       // prevents assertValidWorktreeSession from permanently blocking retries.
-      const { reapOrphanWorktrees, scanIdleWorktrees } = await import("../worktree-pool.js");
+      const { reapOrphanWorktrees, scanIdleWorktrees } = await import("../worktree/worktree-pool.js");
       const settings = await this.taskStore.getSettings();
       try {
         const reaped = await reapOrphanWorktrees(this.config.workingDirectory, settings);
@@ -1137,7 +1209,11 @@ export class InProcessRuntime
         },
         onSchedule: (task) => {
           this.recordActivity();
-          runtimeLog.log(`Scheduled task ${task.id}`);
+          /*
+          FNXC:EngineDiagnostics 2026-08-03-05:54:
+          Redundant with scheduler `Starting ${id}` — keep the dispatch side-effect silent by default.
+          */
+          runtimeLog.debug(`Scheduled task ${task.id}`);
         },
         onBlocked: () => {},
         validateNodeDispatch: async (nodeId) => {
@@ -1213,10 +1289,10 @@ export class InProcessRuntime
       }
 
       // 5c. Initialize AgentReflectionService (requires agentStore and reflectionStore)
-      let reflectionService: import("../agent-reflection.js").AgentReflectionService | undefined;
+      let reflectionService: import("../agents/agent-reflection.js").AgentReflectionService | undefined;
       if (agentStoreForReflection && reflectionStoreForService) {
         try {
-          const { AgentReflectionService: AgentReflectionServiceClass } = await import("../agent-reflection.js");
+          const { AgentReflectionService: AgentReflectionServiceClass } = await import("../agents/agent-reflection.js");
           reflectionService = new AgentReflectionServiceClass({
             agentStore: agentStoreForReflection,
             taskStore: this.taskStore,
@@ -1229,10 +1305,10 @@ export class InProcessRuntime
         }
       }
 
-      let selfImproveService: import("../agent-self-improve.js").AgentSelfImproveService | undefined;
+      let selfImproveService: import("../agents/agent-self-improve.js").AgentSelfImproveService | undefined;
       if (agentStoreForReflection && reflectionStoreForService) {
         try {
-          const { AgentSelfImproveService: AgentSelfImproveServiceClass } = await import("../agent-self-improve.js");
+          const { AgentSelfImproveService: AgentSelfImproveServiceClass } = await import("../agents/agent-self-improve.js");
           selfImproveService = new AgentSelfImproveServiceClass({
             agentStore: agentStoreForReflection,
             reflectionStore: reflectionStoreForService,
@@ -1255,6 +1331,7 @@ export class InProcessRuntime
         getLocalNodeId: () => this.localNodeId,
         pool: this.worktreePool,
         usageLimitPauser: this.usageLimitPauser,
+        credentialRotator: this.credentialRotator,
         stuckTaskDetector: this.stuckTaskDetector,
         cliAgentRuntime: this.cliAgentRuntime?.bundle,
         pluginRunner: this.pluginRunner,
@@ -1277,7 +1354,12 @@ export class InProcessRuntime
         },
         onStart: (task, worktreePath) => {
           this.recordActivity();
-          runtimeLog.log(`Started executing task ${task.id} in ${worktreePath}`);
+          /*
+          FNXC:EngineDiagnostics 2026-08-03-05:54:
+          Executor already emits `Starting ${id}` at dispatch; worktree path is also on
+          worktree-created / node-acquired lines. Demote this echo to debug.
+          */
+          runtimeLog.debug(`Started executing task ${task.id} in ${worktreePath}`);
           // Legacy invariant (implemented in EphemeralWorkerManager):
           // if (this.taskAgentMap.has(task.id)) { ... "Skipping task-worker creation for" ... }
           void this.workerManager?.onTaskStart(task);
@@ -1385,6 +1467,7 @@ export class InProcessRuntime
           reflectionStore: reflectionStoreForService,
           reflectionService,
           selfImproveService,
+          credentialRotator: this.credentialRotator,
           snapshotManager: autoClaimSnapshotManager,
           onMissed: (agentId, reason) => {
             runtimeLog.warn(`Agent ${agentId} missed heartbeat: ${reason}`);
@@ -1529,7 +1612,12 @@ export class InProcessRuntime
           acquirePlanningWorktree: (taskId) => this.executor.ensureTaskWorktreeForPlanning(taskId),
           onSpecifyStart: (t) => {
             this.recordActivity();
-            runtimeLog.log(`Specifying ${t.id}...`);
+            /*
+            FNXC:EngineDiagnostics 2026-08-01-18:11:
+            Duplicate of triage's richer `Specifying ${id}: ${title}` planLog line. Keep this
+            short runtime echo on debug (FUSION_DEBUG=runtime) so planning start is not double-logged.
+            */
+            runtimeLog.debug(`Specifying ${t.id}...`);
           },
           onSpecifyComplete: (t, report) => {
             // Activity is recorded for EVERY outcome: a planning session ran either
@@ -1712,6 +1800,12 @@ export class InProcessRuntime
 
       // 8. Set up event forwarding from TaskStore
       this.setupEventForwarding();
+      /*
+      FNXC:CrossProcessDeleteObservation 2026-08-01-13:03:
+      Engine-owned stores do not call watch(), so runtime startup owns durable delete observation.
+      Start only after its bridge is attached so the initial poll cannot lose a cross-process delete.
+      */
+      await this.taskStore.startTaskDeletedOutboxConsumer();
 
       const startupSettings = await this.taskStore.getSettings();
       if (startupSettings.globalPause || startupSettings.enginePaused) {
@@ -1838,6 +1932,42 @@ export class InProcessRuntime
       this.emit("error", err);
       throw err;
     }
+  }
+
+  /**
+   * Close every process-local admission source without aborting work that is
+   * already running. Development source reload uses this boundary before it
+   * waits for the live-agent count to reach zero.
+   */
+  beginDrain(): void {
+    if (this.status !== "active") return;
+
+    this.setStatus("paused");
+    if (this.workflowContinuationTimer) {
+      clearInterval(this.workflowContinuationTimer);
+      this.workflowContinuationTimer = undefined;
+    }
+    const admissionStops: Array<readonly [string, () => void]> = [
+      ["self-healing manager", () => this.selfHealingManager?.stop()],
+      ["routine scheduler", () => this.routineScheduler?.stop()],
+      ["trigger scheduler", () => this.triggerScheduler?.stop()],
+      ["stuck task detector", () => this.stuckTaskDetector?.stop()],
+      ["heartbeat monitor", () => this.heartbeatMonitor?.stop()],
+      ["triage processor", () => this.triageProcessor?.stop()],
+      ["scheduler", () => this.scheduler?.stop()],
+      ["mission autopilot", () => this.missionAutopilot?.stop()],
+      ["mission execution loop", () => this.missionExecutionLoop?.stop()],
+    ];
+    for (const [label, stop] of admissionStops) {
+      try {
+        stop();
+      } catch (error) {
+        runtimeLog.warn(
+          `Failed to stop ${label} while draining ${this.config.projectId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    runtimeLog.log(`InProcessRuntime draining for ${this.config.projectId}`);
   }
 
   /**
@@ -2593,6 +2723,7 @@ export class InProcessRuntime
    */
   setUsageLimitPauser(pauser: UsageLimitPauser): void {
     this.usageLimitPauser = pauser;
+    pauser.setCredentialRotator(this.credentialRotator);
   }
 
   /**
@@ -2642,12 +2773,42 @@ export class InProcessRuntime
     // Forward task:updated events
     this.taskStore.on("task:updated", (task: Task) => {
       this.recordActivity();
+      if (task.status === "awaiting-approval") {
+        this.approvalHeldTaskIds.add(task.id);
+        this.approvalReleasedTaskIds.delete(task.id);
+      } else if (
+        !task.status
+        && !task.paused
+        && !task.userPaused
+        && (
+          this.approvalHeldTaskIds.delete(task.id)
+          || (
+            (Boolean(task.approvedPlanFingerprint) || task.workflowStepResults?.some(isPlanReviewSatisfied) === true)
+            && !this.approvalReleasedTaskIds.has(task.id)
+          )
+        )
+      ) {
+        this.approvalReleasedTaskIds.add(task.id);
+        void wakeApprovedPlanningContinuations({
+          taskId: task.id,
+          list: (taskId) => this.taskStore.listWorkflowWorkItemsForTask(taskId),
+          transition: (itemId, state, patch) => this.taskStore.transitionWorkflowWorkItem(itemId, state, patch),
+          kick: () => this.kickWorkflowContinuationProcessor(),
+          warn: (message) => runtimeLog.warn(message),
+        });
+      }
       this.emit("task:updated", task);
     });
 
-    // Forward task:deleted events
-    this.taskStore.on("task:deleted", (task: Task, meta?: { githubIssueAction?: GithubIssueAction }) => {
+    /*
+    FNXC:CrossProcessDeleteObservation 2026-08-01-12:02:
+    Preserve observed outbox provenance through the runtime bridge. Downstream project and IPC
+    bridges must distinguish cross-process deletion delivery without re-running writer effects.
+    */
+    this.taskStore.on("task:deleted", (task: Task, meta?: { githubIssueAction?: GithubIssueAction; observed?: boolean; outboxEventId?: string }) => {
       this.recordActivity();
+      this.approvalHeldTaskIds.delete(task.id);
+      this.approvalReleasedTaskIds.delete(task.id);
       this.emit("task:deleted", task, meta);
     });
 

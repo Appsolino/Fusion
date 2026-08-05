@@ -40,7 +40,7 @@ vi.mock("../pi.js", () => ({
 }));
 
 import { resolveAgentPrompt } from "@fusion/core";
-import { reviewStep, ReviewerProviderError } from "../reviewer.js";
+import { reviewStep, ReviewerProviderError } from "../execution/reviewer.js";
 import { createFnAgent, promptWithFallback } from "../pi.js";
 
 const DEFAULT_REVIEWER_PROMPT = resolveAgentPrompt("reviewer");
@@ -517,7 +517,14 @@ describe("reviewStep — spec review type", () => {
       "# Task: KB-050\n\n## Mission\nDo something great",
     );
 
+    /*
+     * FNXC:PlanReviewPromptBoundary 2026-08-04-06:35:
+     * A spec session must carry the mandatory holistic policy and batch every
+     * independently discoverable blocker, without inheriting code-diff rules.
+     */
     expect(capturedPrompt).toContain("Evaluate this PROMPT.md specification");
+    expect(capturedPrompt).toContain("## Mandatory Plan Review Procedure");
+    expect(capturedPrompt).toContain("all independently discoverable blocking findings");
     expect(capturedPrompt).toContain("spec quality criteria");
     expect(capturedPrompt).toContain("# Task: KB-050");
     expect(capturedPrompt).toContain("dangling task-document references");
@@ -550,104 +557,6 @@ describe("reviewStep — spec review type", () => {
 
     expect(capturedPrompt).not.toContain("git diff");
     expect(capturedPrompt).not.toContain("abc123");
-  });
-});
-
-/*
-FNXC:TriagePlanReviewConvergence 2026-07-16-19:40:
-Prove the spec-gate convergence block is wired through reviewStep -> buildReviewRequest. We drive
-the real (module-private) request builder by capturing the prompt string handed to the mocked
-session, exactly like the "spec review type" tests above — no test-only export is needed because
-the request text is observable at the session seam.
-*/
-describe("reviewStep — spec convergence wiring", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  function captureReviewPrompt(): { getPrompt: () => string } {
-    const state = { prompt: "" };
-    mockedCreateFnAgent.mockResolvedValue({
-      session: {
-        prompt: vi.fn().mockImplementation(async (prompt: string) => {
-          state.prompt = prompt;
-        }),
-        subscribe: vi.fn().mockImplementation((cb: any) => {
-          cb({
-            type: "message_update",
-            assistantMessageEvent: { type: "text_delta", delta: "### Verdict: APPROVE\n### Summary\nOK" },
-          });
-        }),
-        dispose: vi.fn(),
-      },
-    } as any);
-    return { getPrompt: () => state.prompt };
-  }
-
-  it("omits the convergence block for spec reviews on attempt <= 1 or undefined", async () => {
-    const cap = captureReviewPrompt();
-    await reviewStep(
-      "/tmp/worktree", "FN-CONV", 0, "Spec Review", "spec", "# Task: FN-CONV",
-      undefined,
-      { priorSpecReviewFeedback: "prior REVISE text", specReviewAttempt: 1 },
-    );
-    expect(cap.getPrompt()).not.toContain("## Convergence — Plan Review attempt");
-    expect(cap.getPrompt()).not.toContain("prior REVISE text");
-  });
-
-  it("omits the convergence block for spec reviews when convergence fields are absent", async () => {
-    const cap = captureReviewPrompt();
-    await reviewStep(
-      "/tmp/worktree", "FN-CONV", 0, "Spec Review", "spec", "# Task: FN-CONV",
-    );
-    expect(cap.getPrompt()).not.toContain("## Convergence — Plan Review attempt");
-  });
-
-  it("includes the convergence block + prior feedback + verify-your-own-miss wording at attempt 2", async () => {
-    const cap = captureReviewPrompt();
-    await reviewStep(
-      "/tmp/worktree", "FN-CONV", 0, "Spec Review", "spec", "# Task: FN-CONV",
-      undefined,
-      { priorSpecReviewFeedback: "PRIOR-REVISE-MARKER: fix the missing Surface Enumeration", specReviewAttempt: 2 },
-    );
-    const prompt = cap.getPrompt();
-    expect(prompt).toContain("## Convergence — Plan Review attempt 2");
-    expect(prompt).toContain("PRIOR-REVISE-MARKER: fix the missing Surface Enumeration");
-    expect(prompt).toContain("VERIFY each issue you raised previously was addressed");
-    expect(prompt).toContain("that is your own earlier miss");
-    // Attempt 2 must NOT yet ratchet severity.
-    expect(prompt).not.toContain("Severity ratchet (attempt 3+)");
-  });
-
-  it("adds the severity ratchet at attempt >= 3", async () => {
-    const cap = captureReviewPrompt();
-    await reviewStep(
-      "/tmp/worktree", "FN-CONV", 0, "Spec Review", "spec", "# Task: FN-CONV",
-      undefined,
-      { priorSpecReviewFeedback: "prior text", specReviewAttempt: 3 },
-    );
-    const prompt = cap.getPrompt();
-    expect(prompt).toContain("## Convergence — Plan Review attempt 3");
-    expect(prompt).toContain("Severity ratchet (attempt 3+)");
-  });
-
-  it("never includes the convergence block for code reviews even when convergence fields are passed", async () => {
-    const cap = captureReviewPrompt();
-    await reviewStep(
-      "/tmp/worktree", "FN-CONV", 1, "Code Review", "code", "# prompt", "abc123",
-      { priorSpecReviewFeedback: "prior text", specReviewAttempt: 3 } as any,
-    );
-    expect(cap.getPrompt()).not.toContain("## Convergence — Plan Review attempt");
-  });
-
-  it("never includes the convergence block for plan reviews even when convergence fields are passed", async () => {
-    const cap = captureReviewPrompt();
-    await reviewStep(
-      "/tmp/worktree", "FN-CONV", 1, "Plan Review", "plan", "# prompt",
-      undefined,
-      { priorSpecReviewFeedback: "prior text", specReviewAttempt: 3 } as any,
-    );
-    expect(cap.getPrompt()).not.toContain("## Convergence — Plan Review attempt");
   });
 });
 
@@ -1493,7 +1402,7 @@ describe("reviewStep — user comments in spec review", () => {
 
 describe("reviewStep — skill selection resolver contract (FN-1510/FN-1511)", () => {
   // FNXC:SessionSkillContext 2026-07-13: buildSessionSkillContext mockResolvedValue objects MUST include additionalSkillPaths: [] — the production code (reviewer.ts:429) reads skillContext.additionalSkillPaths.length unconditionally when skillContext is truthy; omitting the field crashes with TypeError before createFnAgent is reached.
-  vi.mock("../session-skill-context.js", () => ({
+  vi.mock("../cli-runtime/session-skill-context.js", () => ({
     buildSessionSkillContext: vi.fn(),
   }));
 
@@ -1502,7 +1411,7 @@ describe("reviewStep — skill selection resolver contract (FN-1510/FN-1511)", (
   });
 
   it("passes skillSelection to createFnAgent when agentStore and rootDir are provided", async () => {
-    const { buildSessionSkillContext } = await import("../session-skill-context.js");
+    const { buildSessionSkillContext } = await import("../cli-runtime/session-skill-context.js");
     vi.mocked(buildSessionSkillContext).mockResolvedValue({ skillSelectionContext: {
       projectRootDir: "/tmp/project",
       requestedSkillNames: ["fusion"],
@@ -1535,7 +1444,7 @@ describe("reviewStep — skill selection resolver contract (FN-1510/FN-1511)", (
   });
 
   it("uses assigned agent skills when available", async () => {
-    const { buildSessionSkillContext } = await import("../session-skill-context.js");
+    const { buildSessionSkillContext } = await import("../cli-runtime/session-skill-context.js");
     vi.mocked(buildSessionSkillContext).mockResolvedValue({ skillSelectionContext: {
       projectRootDir: "/tmp/project",
       requestedSkillNames: ["custom-skill", "another-skill"],
@@ -1568,7 +1477,7 @@ describe("reviewStep — skill selection resolver contract (FN-1510/FN-1511)", (
   });
 
   it("does not pass skillSelection when buildSessionSkillContext returns undefined context", async () => {
-    const { buildSessionSkillContext } = await import("../session-skill-context.js");
+    const { buildSessionSkillContext } = await import("../cli-runtime/session-skill-context.js");
     vi.mocked(buildSessionSkillContext).mockResolvedValue({ skillSelectionContext: undefined, resolvedSkillNames: [], skillSource: "none", additionalSkillPaths: [] });
 
     mockedCreateFnAgent.mockResolvedValue(
@@ -1614,7 +1523,7 @@ describe("reviewStep — skill selection resolver contract (FN-1510/FN-1511)", (
   });
 
   it("gracefully handles buildSessionSkillContext throwing", async () => {
-    const { buildSessionSkillContext } = await import("../session-skill-context.js");
+    const { buildSessionSkillContext } = await import("../cli-runtime/session-skill-context.js");
     vi.mocked(buildSessionSkillContext).mockRejectedValue(new Error("Agent not found"));
 
     mockedCreateFnAgent.mockResolvedValue(
@@ -1641,7 +1550,7 @@ describe("reviewStep — skill selection resolver contract (FN-1510/FN-1511)", (
   });
 
   it("records resolved skill names in skill context result", async () => {
-    const { buildSessionSkillContext } = await import("../session-skill-context.js");
+    const { buildSessionSkillContext } = await import("../cli-runtime/session-skill-context.js");
     const resolvedNames = ["skill-a", "skill-b", "skill-c"];
     vi.mocked(buildSessionSkillContext).mockResolvedValue({ skillSelectionContext: {
       projectRootDir: "/tmp/project",
@@ -1673,7 +1582,7 @@ describe("reviewStep — skill selection resolver contract (FN-1510/FN-1511)", (
   });
 
   it("uses sessionPurpose='reviewer' in skill selection context", async () => {
-    const { buildSessionSkillContext } = await import("../session-skill-context.js");
+    const { buildSessionSkillContext } = await import("../cli-runtime/session-skill-context.js");
     vi.mocked(buildSessionSkillContext).mockResolvedValue({ skillSelectionContext: {
       projectRootDir: "/tmp/project",
       requestedSkillNames: ["fusion"],

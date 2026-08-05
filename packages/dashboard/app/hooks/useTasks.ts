@@ -12,15 +12,6 @@ import { isLikelyTabSuspensionError } from "./visibilitySuspension";
 import { isIntakeColumnRole, isHoldColumnRole, type ColumnRoleFlags } from "../utils/columnRoles";
 
 const loggedTaskCacheHitProjects = new Set<string>();
-/*
-FNXC:MobileTabDiscard 2026-07-26-10:34:
-In-app task-view re-entry freshness is deliberately NOT the hydration TTL. `SWR_TASKS_MAX_AGE_MS` was
-raised to hours so a discarded mobile tab can repaint its last board instantly; this bound answers a
-different question — "is the LIVE in-memory snapshot recent enough to skip the catch-up fetch when the
-user returns to Board/List within the same page session?" — and must stay short, because task SSE is
-disabled off task-list views and missed events need server confirmation.
-*/
-const TASK_VIEW_REENTRY_FRESHNESS_MS = 60_000;
 
 /*
 FNXC:MobileTabDiscard 2026-07-26-16:40:
@@ -255,46 +246,105 @@ function carryAwaitingPlanning(current: Task, incoming: Task): boolean | undefin
   return stepCountUnchanged ? current.awaitingPlanning : undefined;
 }
 
-function mergeSameColumnTask(current: Task, incoming: Task): Task {
-  return {
-    ...incoming,
-    awaitingPlanning: carryAwaitingPlanning(current, incoming),
-    // Preserve stable execution metadata when a same-column live update arrives
-    // without the full task payload (common during status/log-only SSE updates).
-    columnMovedAt: current.columnMovedAt ?? incoming.columnMovedAt,
-    executionStartedAt: current.executionStartedAt ?? incoming.executionStartedAt,
-    executionCompletedAt: current.executionCompletedAt ?? incoming.executionCompletedAt,
-    firstExecutionAt: current.firstExecutionAt ?? incoming.firstExecutionAt,
-    cumulativeActiveMs: incoming.cumulativeActiveMs ?? current.cumulativeActiveMs,
-    worktree: incoming.worktree ?? current.worktree,
-    modifiedFiles: incoming.modifiedFiles ?? current.modifiedFiles,
-    timedExecutionMs: incoming.timedExecutionMs ?? current.timedExecutionMs,
-    workflowStepResults: incoming.workflowStepResults ?? current.workflowStepResults,
-    tokenUsage: incoming.tokenUsage ?? current.tokenUsage,
-    mergeDetails: incoming.mergeDetails ?? current.mergeDetails,
-  };
+/*
+FNXC:TaskDetailStateStability 2026-08-05-02:55:
+The scheduler can refresh the board while a task-detail host holds a newer queued dependency or
+file-overlap snapshot. Providers (SWR, SSE, fetchTaskDetail, and local mutations) do not share an
+arrival order, so lifecycle rendering must use the existing timestamp evidence: a later `columnMovedAt`
+owns a real column transition; within that column, a later `updatedAt` owns status. Equal or absent
+clock evidence retains the already-visible known lifecycle state unless a complete server snapshot is
+newer than the row and resolves an equal legacy move clock; sparse SSE patches never receive that tie-break.
+
+This helper intentionally merges only defined sparse fields and retains a fetched detail's prompt/log
+when a slim board row arrives. Every open-detail host and useTasks ingestion uses this one boundary so
+one provider cannot regress a modal, main panel, split detail, dock, or popup independently.
+*/
+export interface TaskSnapshotMergeOptions {
+  /** A complete board/detail fetch can resolve an otherwise ambiguous legacy column clock. */
+  fullSnapshot?: boolean;
+  /** A canonical task:moved SSE payload names its destination, even when its clock ties the visible row. */
+  authoritativeMove?: boolean;
 }
 
-function mergeIncomingTask(current: Task, incoming: Task): Task {
+export function mergeTaskSnapshot<T extends Task>(
+  current: T,
+  incoming: Task,
+  options: TaskSnapshotMergeOptions = {},
+): T {
+  if (current.id !== incoming.id) return current;
+
+  const merged = { ...current } as Record<string, unknown>;
   const updatedAtCompare = compareTimestamps(incoming.updatedAt, current.updatedAt);
-  if (updatedAtCompare < 0) {
-    return current;
+  /*
+  FNXC:TaskStatusConsistency 2026-08-05-04:14:
+  Missing clocks are not authority: a legacy detail row and a sparse SSE patch with neither clock
+  must retain populated metadata rather than letting their arrival order erase queue/workflow state.
+  Only a strictly newer update clock, or an explicitly complete equal-clock fetch below, may replace it.
+  */
+  const acceptsIncomingSnapshot = updatedAtCompare > 0;
+  // A fetch is explicitly marked complete at its call site. Equal clocks can only fill an absent
+  // field from a sparse event; they replace populated fields only for a complete fetch.
+  const acceptsEqualClockFields = options.fullSnapshot === true && updatedAtCompare === 0;
+  for (const [key, value] of Object.entries(incoming)) {
+    const canMergeField = acceptsIncomingSnapshot
+      || acceptsEqualClockFields
+      || (updatedAtCompare === 0 && merged[key] === undefined);
+    if (value !== undefined && canMergeField) {
+      merged[key] = value;
+    }
   }
 
-  if (current.column === incoming.column) {
-    return mergeSameColumnTask(current, incoming);
+
+  const columnMovedAtCompare = compareTimestamps(incoming.columnMovedAt, current.columnMovedAt);
+  /*
+  FNXC:BoardBadgeFreshness 2026-08-05-05:26:
+  `task:moved` is the post-commit lifecycle authority and includes its explicit destination. A board
+  fetch can observe the task immediately before the move event, leaving identical clocks when one
+  transition shares the engine's operation timestamp. Accept that equal-clock canonical move so cards,
+  list rows, and open details change promptly; older clocks remain rejected, so delayed stale events
+  cannot roll a newer badge backward.
+  */
+  const incomingMovesColumn = incoming.column !== undefined
+    && (current.column === undefined
+      || columnMovedAtCompare > 0
+      || (options.authoritativeMove === true && columnMovedAtCompare === 0)
+      // A full server snapshot is more complete than an SSE patch, so its newer task clock can
+      // resolve a legacy equal move clock without letting a sparse event move the card.
+      || (options.fullSnapshot === true && columnMovedAtCompare === 0 && updatedAtCompare > 0)
+      // Older rows have no column-move clock. A newer task timestamp is still evidence for a real move.
+      || (!current.columnMovedAt && !incoming.columnMovedAt && updatedAtCompare > 0));
+  const incomingUpdatesStatus = incoming.status !== undefined
+    && (current.status === undefined || updatedAtCompare > 0 || incomingMovesColumn);
+
+  // The lifecycle fields are evidence-owned rather than object-spread-owned.
+  merged.column = incomingMovesColumn ? incoming.column : current.column;
+  merged.columnMovedAt = columnMovedAtCompare > 0 ? incoming.columnMovedAt : current.columnMovedAt;
+  merged.status = incomingUpdatesStatus ? incoming.status : current.status;
+  merged.updatedAt = updatedAtCompare > 0 ? incoming.updatedAt : current.updatedAt;
+  merged.awaitingPlanning = acceptsIncomingSnapshot
+    ? carryAwaitingPlanning(current, incoming)
+    : current.awaitingPlanning;
+  /*
+  FNXC:TaskStatusConsistency 2026-08-05-04:05:
+  `recentAgentActivityAt` is a client-only bridge from an agent-log event to the next task snapshot.
+  Preserve it while a stale/equal payload is rejected so live Planning does not flash back to Queued,
+  but clear it when a newer authoritative row arrives without the marker. Equal-clock sparse events
+  may fill missing fields but cannot replace populated detail metadata; only complete fetches may do so.
+  */
+  merged.recentAgentActivityAt = acceptsIncomingSnapshot
+    ? incoming.recentAgentActivityAt
+    : current.recentAgentActivityAt;
+
+  if ("prompt" in current && incoming.prompt === undefined) {
+    merged.prompt = current.prompt;
+    merged.log = current.log;
   }
 
-  const columnTimestampCompare = compareTimestamps(current.columnMovedAt, incoming.columnMovedAt);
-  if (current.columnMovedAt && !incoming.columnMovedAt) {
-    return { ...incoming, column: current.column, columnMovedAt: current.columnMovedAt };
-  }
+  return merged as T;
+}
 
-  if (columnTimestampCompare >= 0) {
-    return { ...incoming, column: current.column, columnMovedAt: current.columnMovedAt };
-  }
-
-  return incoming;
+function mergeIncomingTask(current: Task, incoming: Task, options?: TaskSnapshotMergeOptions): Task {
+  return mergeTaskSnapshot(current, incoming, options);
 }
 
 export interface UseTasksOptions {
@@ -395,6 +445,8 @@ export function useTasks(options?: UseTasksOptions) {
   const searchQueryRef = useRef(searchQuery);
   const refreshTasksRef = useRef<typeof refreshTasks>(null!);
   const prevSseEnabledRef = useRef(sseEnabled);
+  // Coordinates the earlier re-entry effect with the project-change fetch effect below.
+  const projectChangeRefreshPendingRef = useRef(false);
   /*
   FNXC:MobileTabDiscard 2026-07-26-14:12:
   "Data as of" clock for everything derived from `tasks` (isTaskStuck / countStuckTasks, TaskCard's
@@ -474,6 +526,7 @@ export function useTasks(options?: UseTasksOptions) {
   if (previousProjectIdRef.current !== projectId) {
     previousProjectIdRef.current = projectId;
     projectContextVersionRef.current++;
+    projectChangeRefreshPendingRef.current = true;
   }
 
   const VISIBILITY_REFRESH_DEBOUNCE_MS = 1000;
@@ -529,13 +582,20 @@ export function useTasks(options?: UseTasksOptions) {
       the query is cleared.
       */
       const shouldCarryOverArchived = !wantArchived && !query && archivedLoadedRef.current;
-      if (shouldCarryOverArchived) {
-        const freshIds = new Set(normalizedFetchedTasks.map((task) => task.id));
+      setTasks((previous) => {
+        // A scheduler/SWR response can have been assembled before a newer SSE/local update.
+        // Reconcile matching rows inside the state updater so that race cannot roll an open detail
+        // (or its board source) back merely because this fetch callback arrived last.
+        const reconciledFetchedTasks = normalizedFetchedTasks.map((fetched) => {
+          const current = previous.find((candidate) => candidate.id === fetched.id);
+          return current ? mergeIncomingTask(current, fetched, { fullSnapshot: true }) : fetched;
+        });
+        if (!shouldCarryOverArchived) return reconciledFetchedTasks;
+
+        const freshIds = new Set(reconciledFetchedTasks.map((task) => task.id));
         const archivedCarryOver = archivedTasksRef.current.filter((task) => !freshIds.has(task.id));
-        setTasks(archivedCarryOver.length > 0 ? [...normalizedFetchedTasks, ...archivedCarryOver] : normalizedFetchedTasks);
-      } else {
-        setTasks(normalizedFetchedTasks);
-      }
+        return archivedCarryOver.length > 0 ? [...reconciledFetchedTasks, ...archivedCarryOver] : reconciledFetchedTasks;
+      });
       if (requestProjectId) {
         writeTaskCacheSnapshot(`${SWR_CACHE_KEYS.TASKS_PREFIX}${requestProjectId}`, fetchedTasks);
       }
@@ -586,35 +646,25 @@ export function useTasks(options?: UseTasksOptions) {
   }, [projectId]);
   refreshTasksRef.current = refreshTasks;
 
-  const shouldRefreshOnTaskViewReentry = useCallback(() => {
-    if (lastRefreshErrorAt !== null) return true;
-    if (searchQueryRef.current) return true;
-    if (includeArchivedRef.current) return true;
-    if (lastConfirmedProjectIdRef.current !== projectId) return true;
-    if (lastConfirmedSearchQueryRef.current !== searchQueryRef.current) return true;
-    if (lastConfirmedIncludeArchivedRef.current !== includeArchivedRef.current) return true;
-
-    const lastFetchAt = lastFetchTimeMs.current;
-    if (lastFetchAt === undefined) return true;
-
-    return Date.now() - lastFetchAt > TASK_VIEW_REENTRY_FRESHNESS_MS;
-  }, [lastRefreshErrorAt, projectId]);
-
   /*
-  FNXC:DashboardTaskCache 2026-06-29-22:35:
-  Brief Board/List returns should reuse fresh in-memory task state instead of issuing another all-task fetch, so the existing task array renders immediately without an empty/loading shell. Stale, missing, failed, project/search, or archived snapshots still perform one catch-up because task SSE is disabled off task-list views and missed events need server confirmation.
+  FNXC:DashboardLiveUpdates 2026-08-04-08:12:
+  Task SSE is disabled outside Board/List, so elapsed time cannot prove that the in-memory snapshot is
+  current: any task lifecycle event may have been missed during that lossy interval. Every genuine
+  false→true task-view return therefore reconciles once with the server, regardless of snapshot age.
 
-  FNXC:DashboardTaskCache 2026-06-29-23:12:
-  The freshness shortcut is scoped only to in-app task-view re-entry. Initial mount, tab visibility recovery, SSE reconnect resync, search refreshes, and delete fetch-version invalidation remain independent safety paths because each represents either a new browser/server gap or a changed query context.
+  The project-change effect is deliberately later in this hook. When a project switch and false→true
+  return occur in one render, it owns the single new-project request; this effect skips that coincident
+  transition rather than issuing a duplicate. Initial true mounts, false→false renders, and Board↔List
+  true→true renders are not re-entries, while a later same-project false→true transition remains eligible.
   */
   useEffect(() => {
     const previous = prevSseEnabledRef.current;
     prevSseEnabledRef.current = sseEnabled;
 
-    if (previous === false && sseEnabled === true && shouldRefreshOnTaskViewReentry()) {
+    if (previous === false && sseEnabled === true && !projectChangeRefreshPendingRef.current) {
       void refreshTasksRef.current();
     }
-  }, [shouldRefreshOnTaskViewReentry, sseEnabled]);
+  }, [sseEnabled]);
 
   /*
   FNXC:ArchivePagination 2026-07-08-00:00:
@@ -754,6 +804,7 @@ export function useTasks(options?: UseTasksOptions) {
   useEffect(() => {
     setIsStale(true);
     void refreshTasks({ clearOnError: true });
+    projectChangeRefreshPendingRef.current = false;
     // FNXC:ArchivePagination 2026-07-08-00:00: reset archived-page state on
     // project switch so a new project's Archived column starts collapsed
     // and re-fetches its own page 1 rather than reusing the previous
@@ -907,8 +958,11 @@ export function useTasks(options?: UseTasksOptions) {
           // task becomes visible instead of being silently dropped.
           return [...prev, movedTask];
         }
+        const current = prev[existingIndex]!;
+        const merged = mergeIncomingTask(current, movedTask, { authoritativeMove: true });
+        if (merged === current) return prev;
         const next = [...prev];
-        next[existingIndex] = movedTask;
+        next[existingIndex] = merged;
         return next;
       });
       advanceFreshnessClockForLiveUpdate();
