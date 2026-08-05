@@ -35,7 +35,7 @@
     "4-s1b": {
       "status": "IN_PROGRESS",
       "prs": [],
-      "notes": "policy+plan+run dry-run; live spawn deferred"
+      "notes": "live path implemented (gate OFF); activation + live proof deferred"
     },
     "5-s2": {
       "status": "IN_PROGRESS",
