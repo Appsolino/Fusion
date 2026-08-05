@@ -2334,13 +2334,13 @@ describe("TaskDetailModal", () => {
       Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
         configurable: true,
         get() {
-          return this instanceof HTMLElement && this.classList.contains("detail-title") ? titleScrollHeight : 0;
+          return this instanceof HTMLElement && this.classList.contains("detail-title-measurement") ? titleScrollHeight : 0;
         },
       });
       Object.defineProperty(HTMLElement.prototype, "clientHeight", {
         configurable: true,
         get() {
-          return this instanceof HTMLElement && this.classList.contains("detail-title") ? titleClientHeight : 0;
+          return this instanceof HTMLElement && this.classList.contains("detail-title-measurement") ? titleClientHeight : 0;
         },
       });
     });
@@ -2401,13 +2401,16 @@ describe("TaskDetailModal", () => {
       renderDetail({ title: longTitle });
 
       const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      const measuredText = document.querySelector(".detail-title-measurement");
       const collapsedObserver = titleResizeObservers.at(-1);
       expect(collapsedObserver).toBeDefined();
+      expect(measuredText?.textContent).toBe(longTitle);
 
       await userEvent.click(titleControl);
       expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
       expect(screen.getByRole("button", { name: "Collapse task title" })).toBe(titleControl);
       expect(titleControl).toHaveAttribute("aria-expanded", "true");
+      expect(document.querySelector(".detail-title-measurement")).toBe(measuredText);
       expect(document.querySelector("h2.detail-title")?.textContent).toBe(longTitle);
       expect(collapsedObserver?.disconnected).toBe(true);
 
@@ -2424,6 +2427,7 @@ describe("TaskDetailModal", () => {
       await userEvent.click(titleControl);
       const recollapsedObserver = titleResizeObservers.at(-1);
       expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
+      expect(document.querySelector(".detail-title-measurement")).toBe(measuredText);
       expect(screen.getByRole("button", { name: "Expand task title" })).toBe(titleControl);
       expect(titleControl).toHaveAttribute("aria-expanded", "false");
       expect(recollapsedObserver).not.toBe(collapsedObserver);
@@ -2481,6 +2485,36 @@ describe("TaskDetailModal", () => {
       expect(screen.queryByRole("button", { name: /task title/ })).toBeNull();
       expectNoStandaloneTitleToggle();
       Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
+    });
+
+    it("ignores title observer deliveries while a kept-alive pop-out is hidden", async () => {
+      setTitleLayout({ scrollHeight: 40, clientHeight: 40 });
+      const props = {
+        embedded: true,
+        active: true,
+        initialTab: "definition" as const,
+        onMoveTask: noopMove,
+        onDeleteTask: noopDelete,
+        onMergeTask: noopMerge,
+        onOpenDetail: noopOpenDetail,
+        addToast: noop,
+      };
+      const { rerender } = render(<TaskDetailContent {...props} task={makeTask({ id: "FN-HIDDEN", title: "Visibility fenced title" })} />);
+      const visibleObserver = titleResizeObservers.at(-1);
+      expect(screen.queryByRole("button", { name: /task title/ })).toBeNull();
+
+      rerender(<TaskDetailContent {...props} active={false} task={makeTask({ id: "FN-HIDDEN", title: "Visibility fenced title" })} />);
+      expect(visibleObserver?.disconnected).toBe(true);
+      setTitleLayout({ scrollHeight: 120, clientHeight: 40 });
+      await act(async () => {
+        visibleObserver?.callback([], {} as ResizeObserver);
+        visibleObserver?.callback([], {} as ResizeObserver);
+      });
+      expect(screen.queryByRole("button", { name: /task title/ })).toBeNull();
+
+      rerender(<TaskDetailContent {...props} active task={makeTask({ id: "FN-HIDDEN", title: "Visibility fenced title" })} />);
+      expect(await screen.findByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
+      expectNoStandaloneTitleToggle();
     });
 
     it("supports keyboard activation through the title control", async () => {
@@ -2667,8 +2701,8 @@ describe("TaskDetailModal", () => {
     it("has desktop and mobile CSS rules that preserve the two-line title clamp", () => {
       const css = readDashboardStylesSource();
       expect(css).toContain(".detail-title--collapsed");
-      expectBaseRule(css, ".detail-title--collapsed", "-webkit-line-clamp: 2");
-      expectBaseRule(css, ".detail-title--collapsed", "line-clamp: 2");
+      expectBaseRule(css, ".detail-title--collapsed .detail-title-measurement", "-webkit-line-clamp: 2");
+      expectBaseRule(css, ".detail-title--collapsed .detail-title-measurement", "line-clamp: 2");
       expectBaseRule(css, ".detail-title-control", "width: 100%");
       expectBaseRule(css, ".detail-title-control:focus-visible", "box-shadow: var(--focus-ring-strong)");
       expect(css).toContain("@media (max-width: 768px)");

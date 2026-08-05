@@ -1207,17 +1207,18 @@ export function TaskDetailContent({
   const [highlightStallCode, setHighlightStallCode] = useState<string | null>(null);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [titleOverflows, setTitleOverflows] = useState(false);
-  const titleRef = useRef<HTMLHeadingElement | null>(null);
+  const titleRef = useRef<HTMLSpanElement | null>(null);
   const displayTitleText = task.title || task.description || task.id;
 
   /*
-  FNXC:TaskDetailTitle 2026-08-05-16:42:
-  Title overflow eligibility belongs to the stable two-line collapsed layout, while expanded or
-  collapsed display is an explicit operator choice. Do not mutate the live expanded heading to
-  measure it: ResizeObserver callbacks caused by that class change can otherwise replace the
-  title-owned control and flicker the detail view. Reset both values before paint only when this
-  task identity or its displayed title/fallback changes; ordinary rerenders and resize callbacks
-  must never reverse the choice.
+  FNXC:TaskDetailTitle 2026-08-05-18:48:
+  Browser layout proved that swapping bare heading text for the semantic title button can alter the
+  exact box whose overflow decides whether that button exists. Measure an always-present text span
+  with the collapsed two-line rules instead; the button is an out-of-flow accessible overlay and
+  cannot feed back into eligibility. Expansion remains an operator-owned state across modal,
+  full-panel, split-pane, right-dock, and floating-window hosts. Reset only for a new task or its
+  title/description/id fallback, never from a resize delivery. Kept-alive hidden pop-outs are not a
+  live layout authority: disconnect and fence their callbacks until their host is visible again.
   */
   useLayoutEffect(() => {
     setDescriptionExpanded(false);
@@ -1281,6 +1282,10 @@ export function TaskDetailContent({
   const [prCreateOpen, setPrCreateOpen] = useState(false);
 
   useLayoutEffect(() => {
+    // A kept-alive floating detail can be hidden while another view owns its layout. Its stale
+    // ResizeObserver delivery must not change eligibility before the host becomes visible again.
+    if (!active) return;
+
     const titleElement = titleRef.current;
     if (!titleElement) {
       setTitleOverflows(false);
@@ -1311,7 +1316,7 @@ export function TaskDetailContent({
       resizeObserver?.disconnect();
       window.removeEventListener("resize", measureTitleOverflow);
     };
-  }, [descriptionExpanded, displayTitleText, task.id]);
+  }, [active, descriptionExpanded, displayTitleText, task.id]);
 
   /*
   FNXC:WorkflowBadges 2026-06-29-00:00:
@@ -4797,10 +4802,10 @@ export function TaskDetailContent({
                   FNXC:TaskDetailTitle 2026-08-04-18:00:
                   An overflowing task-detail title is its own sole expansion control. Keep the semantic button inside the h2 so pointer, touch, and keyboard activation share one accessible target; the separate Show more/Show less row must not return.
                   */}
-                  <h2
-                    ref={titleRef}
-                    className={`detail-title${descriptionExpanded ? "" : " detail-title--collapsed"}`}
-                  >
+                  <h2 className={`detail-title${descriptionExpanded ? "" : " detail-title--collapsed"}`}>
+                    <span ref={titleRef} className="detail-title-measurement">
+                      {displayTitleText}
+                    </span>
                     {titleOverflows || descriptionExpanded ? (
                       <button
                         type="button"
@@ -4810,10 +4815,8 @@ export function TaskDetailContent({
                           ? t("taskDetail.title.collapse", "Collapse task title")
                           : t("taskDetail.title.expand", "Expand task title")}
                         onClick={() => setDescriptionExpanded((expanded) => !expanded)}
-                      >
-                        {displayTitleText}
-                      </button>
-                    ) : displayTitleText}
+                      />
+                    ) : null}
                   </h2>
                   {showSummarizeTitleButton && (
                     <button
