@@ -12,7 +12,7 @@ query ambiguous once the trigger stopped being a mobile-only affordance.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, act, waitFor, cleanup, within } from "@testing-library/react";
 
 // FNXC:Markdown 2026-06-23-03:30: Mock the heavy `mermaid` library so the shared
 // markdown pipeline's MermaidDiagram resolves without loading the real renderer.
@@ -23,6 +23,7 @@ vi.mock("mermaid", () => ({
   },
 }));
 import userEvent from "@testing-library/user-event";
+
 import {
   makeTask,
   noop,
@@ -43,6 +44,22 @@ import { TaskDetailModal, TaskDetailContent } from "../TaskDetailModal";
 import * as dashboardApi from "../../api";
 import { FileBrowserProvider } from "../../context/FileBrowserContext";
 import type { Task } from "@fusion/core";
+
+/*
+FNXC:TaskDetailOptimisticOpening 2026-08-05-07:39:
+A running task deliberately exposes its raw runtime status in two ownership regions: the modal
+header's lifecycle badge and the Stats panel's Runtime status row. Optimistic-opening assertions
+must scope the Stats claim to its named semantic region, then assert one row there and the expected
+two owned values overall; this catches a duplicated Stats panel without treating legitimate header
+context as a production rendering defect.
+*/
+function expectSingleStatsRuntimeStatus(status: string) {
+  const statsPanel = screen.getByRole("region", { name: "Task execution statistics" });
+  expect(within(statsPanel).getByText(status)).toBeInTheDocument();
+  expect(within(statsPanel).getAllByText(status)).toHaveLength(1);
+  expect(screen.getByTestId("task-detail-status-badge")).toHaveTextContent(status);
+  expect(screen.getAllByText(status)).toHaveLength(2);
+}
 
 setupTaskDetailModalHooks();
 
@@ -2903,7 +2920,7 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Execution Details")).toBeInTheDocument();
       expect(screen.getByText("Loading token statistics…")).toBeDefined();
       expect(screen.getAllByText("Fast").length).toBeGreaterThan(0);
-      expect(screen.getByText("executing")).toBeInTheDocument();
+      expectSingleStatsRuntimeStatus("executing");
     });
 
     it("shows spec content after fetchTaskDetail resolves", async () => {
@@ -2993,7 +3010,7 @@ describe("TaskDetailModal", () => {
       expect(screen.getByText("Execution mode")).toBeInTheDocument();
       expect(screen.getByText("Runtime status")).toBeInTheDocument();
       expect(screen.getAllByText("Fast").length).toBeGreaterThan(0);
-      expect(screen.getByText("executing")).toBeInTheDocument();
+      expectSingleStatsRuntimeStatus("executing");
       expect(screen.getByText((1200).toLocaleString())).toBeInTheDocument();
       expect(screen.getByText((450).toLocaleString())).toBeInTheDocument();
       expect(screen.getByText((210).toLocaleString())).toBeInTheDocument();
