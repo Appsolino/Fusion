@@ -1410,6 +1410,55 @@ describe("useTasks", () => {
       expect(result.current.tasks[0].status).toBe("executing");
     });
 
+    it("updates the badge state immediately for an equal-clock canonical move and rejects a delayed older move", async () => {
+      const initialTask = createMockTask({
+        id: "FN-BADGE",
+        column: "todo" as Column,
+        status: "needs-replan",
+        columnMovedAt: "2026-01-02T00:00:00Z",
+        updatedAt: "2026-01-02T00:00:00Z",
+      });
+      mockFetchTasks.mockResolvedValueOnce([initialTask]);
+
+      const { result } = renderHook(() => useTasks());
+      await waitFor(() => expect(result.current.tasks[0]?.status).toBe("needs-replan"));
+
+      // This is the production ordering: hydration has the same operation clock, then SSE names
+      // the committed destination. Before FN-8800 the strict-clock merge dropped this transition.
+      act(() => {
+        MockEventSource.instances[0]._emit("task:moved", {
+          task: createMockTask({
+            id: "FN-BADGE",
+            column: "todo" as Column,
+            status: "planning",
+            columnMovedAt: initialTask.columnMovedAt,
+            updatedAt: initialTask.updatedAt,
+          }),
+          from: "todo" as Column,
+          to: "in-progress" as Column,
+        });
+      });
+
+      expect(result.current.tasks[0]).toMatchObject({ column: "in-progress", status: "planning" });
+
+      // A reconnect-delayed prior move has an older lifecycle clock and must not revert the badge.
+      act(() => {
+        MockEventSource.instances[0]._emit("task:moved", {
+          task: createMockTask({
+            id: "FN-BADGE",
+            column: "todo" as Column,
+            status: "needs-replan",
+            columnMovedAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+          }),
+          from: "in-progress" as Column,
+          to: "todo" as Column,
+        });
+      });
+
+      expect(result.current.tasks[0]).toMatchObject({ column: "in-progress", status: "planning" });
+    });
+
     it("preserves current column when incoming has no columnMovedAt (legacy data)", async () => {
       const initialTask = createMockTask({
         id: "FN-001",

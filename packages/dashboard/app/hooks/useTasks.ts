@@ -262,6 +262,8 @@ one provider cannot regress a modal, main panel, split detail, dock, or popup in
 export interface TaskSnapshotMergeOptions {
   /** A complete board/detail fetch can resolve an otherwise ambiguous legacy column clock. */
   fullSnapshot?: boolean;
+  /** A canonical task:moved SSE payload names its destination, even when its clock ties the visible row. */
+  authoritativeMove?: boolean;
 }
 
 export function mergeTaskSnapshot<T extends Task>(
@@ -294,9 +296,18 @@ export function mergeTaskSnapshot<T extends Task>(
 
 
   const columnMovedAtCompare = compareTimestamps(incoming.columnMovedAt, current.columnMovedAt);
+  /*
+  FNXC:BoardBadgeFreshness 2026-08-05-05:26:
+  `task:moved` is the post-commit lifecycle authority and includes its explicit destination. A board
+  fetch can observe the task immediately before the move event, leaving identical clocks when one
+  transition shares the engine's operation timestamp. Accept that equal-clock canonical move so cards,
+  list rows, and open details change promptly; older clocks remain rejected, so delayed stale events
+  cannot roll a newer badge backward.
+  */
   const incomingMovesColumn = incoming.column !== undefined
     && (current.column === undefined
       || columnMovedAtCompare > 0
+      || (options.authoritativeMove === true && columnMovedAtCompare === 0)
       // A full server snapshot is more complete than an SSE patch, so its newer task clock can
       // resolve a legacy equal move clock without letting a sparse event move the card.
       || (options.fullSnapshot === true && columnMovedAtCompare === 0 && updatedAtCompare > 0)
@@ -948,7 +959,7 @@ export function useTasks(options?: UseTasksOptions) {
           return [...prev, movedTask];
         }
         const current = prev[existingIndex]!;
-        const merged = mergeIncomingTask(current, movedTask);
+        const merged = mergeIncomingTask(current, movedTask, { authoritativeMove: true });
         if (merged === current) return prev;
         const next = [...prev];
         next[existingIndex] = merged;
