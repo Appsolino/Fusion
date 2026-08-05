@@ -101,6 +101,8 @@ import {
   // FN-8004 follow-up: shared with SelfHealingManager.recoverStaleMergingStatus so the manual
   // Retry gate and the automatic sweep agree on when a merge-active stamp is orphaned.
   isStaleMergeActiveStatus,
+  resumeApprovedPlanReviewHandoff,
+  type ApprovedPlanReviewHandoffResult,
   type AiUndoTaskResult,
   type PrepareRevertPrBranchResult,
   type PrepareWorkspaceRevertPrBranchesResult,
@@ -4314,6 +4316,21 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
          * so a stale plan can never bypass a later manual approval gate.
          */
         const approved = await scopedStore.updateTask(task.id, approvalPatch);
+        /*
+         * FNXC:PlanApprovalDispatch 2026-08-05-01:57:
+         * Clearing awaiting-approval is only the first half of the operator decision. Resume the
+         * graph through the public engine seam while the planning lifecycle fence is still held so
+         * Plan Review creates its own runnable continuation and later capacity evidence. The route
+         * must never mark review passed or create a capacity continuation on the operator's behalf.
+         */
+        const approvedWorkflow = await resolveWorkflowIrForTask(scopedStore, approved.id);
+        const handoff: ApprovedPlanReviewHandoffResult = await resumeApprovedPlanReviewHandoff(
+          scopedStore,
+          approved,
+          approvedWorkflow,
+        );
+        // Keep the typed handoff result local: recovery owns retry after a post-approval seed failure.
+        void handoff;
         // Activity logging is secondary to the now-durable decision. Do not turn
         // a successful approval into a 500 if the bounded log append is unavailable.
         await scopedStore.logEntry(task.id, "Plan approved by user").catch((error) => {
