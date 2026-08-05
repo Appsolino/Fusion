@@ -85,5 +85,12 @@
         "approver"
       ]
     }
-  }
+  },
+  "status": "HOST_D_AUTONOMY_ACCEPTED",
+  "updatedUtc": "2026-08-05T16:09:20Z",
+  "finalMainSha": "7c62e652e56dd3fa04755f547ba7456213ba1dd8",
+  "upstreamSha": "8120c07b6a074755f44ed22f066b40eaeb19f199",
+  "hostDRelease": "auto3-0.75.1-beta.1-7c62e652e56d",
+  "schemaCeiling": "0044",
+  "hostPAccessCount": 0
 }
