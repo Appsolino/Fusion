@@ -2284,8 +2284,10 @@ describe("TaskDetailModal", () => {
   describe("description truncation", () => {
     let titleScrollHeight = 0;
     let titleClientHeight = 0;
+    let titleResizeObservers: Array<{ callback: ResizeObserverCallback; disconnected: boolean }> = [];
     const originalScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
     const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    const originalResizeObserver = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver");
 
     const setTitleLayout = ({ scrollHeight, clientHeight }: { scrollHeight: number; clientHeight: number }) => {
       titleScrollHeight = scrollHeight;
@@ -2313,6 +2315,22 @@ describe("TaskDetailModal", () => {
 
     beforeEach(() => {
       setTitleLayout({ scrollHeight: 120, clientHeight: 40 });
+      titleResizeObservers = [];
+      Object.defineProperty(globalThis, "ResizeObserver", {
+        configurable: true,
+        value: class TitleResizeObserver {
+          private readonly observation: { callback: ResizeObserverCallback; disconnected: boolean };
+
+          constructor(callback: ResizeObserverCallback) {
+            this.observation = { callback, disconnected: false };
+            titleResizeObservers.push(this.observation);
+          }
+
+          observe() {}
+          unobserve() {}
+          disconnect() { this.observation.disconnected = true; }
+        },
+      });
       Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
         configurable: true,
         get() {
@@ -2337,6 +2355,11 @@ describe("TaskDetailModal", () => {
         Object.defineProperty(HTMLElement.prototype, "clientHeight", originalClientHeight);
       } else {
         Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+      }
+      if (originalResizeObserver) {
+        Object.defineProperty(globalThis, "ResizeObserver", originalResizeObserver);
+      } else {
+        Reflect.deleteProperty(globalThis, "ResizeObserver");
       }
     });
 
@@ -2371,6 +2394,93 @@ describe("TaskDetailModal", () => {
       expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
       expect(screen.getByRole("button", { name: "Expand task title" })).toHaveAttribute("aria-expanded", "false");
       expectNoStandaloneTitleToggle();
+    });
+
+    it("keeps the modal title control stable through repeated resize callbacks after each activation", async () => {
+      const longTitle = "Resize-safe title ".repeat(25);
+      renderDetail({ title: longTitle });
+
+      const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      const collapsedObserver = titleResizeObservers.at(-1);
+      expect(collapsedObserver).toBeDefined();
+
+      await userEvent.click(titleControl);
+      expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
+      expect(screen.getByRole("button", { name: "Collapse task title" })).toBe(titleControl);
+      expect(titleControl).toHaveAttribute("aria-expanded", "true");
+      expect(document.querySelector("h2.detail-title")?.textContent).toBe(longTitle);
+      expect(collapsedObserver?.disconnected).toBe(true);
+
+      // Delivery can race disconnect; a stale collapsed-layout observer must not reclaim the choice.
+      await act(async () => {
+        for (let index = 0; index < 3; index++) {
+          collapsedObserver?.callback([], {} as ResizeObserver);
+        }
+      });
+      expect(screen.getByRole("button", { name: "Collapse task title" })).toBe(titleControl);
+      expect(titleControl).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getAllByRole("button", { name: "Collapse task title" })).toHaveLength(1);
+
+      await userEvent.click(titleControl);
+      const recollapsedObserver = titleResizeObservers.at(-1);
+      expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
+      expect(screen.getByRole("button", { name: "Expand task title" })).toBe(titleControl);
+      expect(titleControl).toHaveAttribute("aria-expanded", "false");
+      expect(recollapsedObserver).not.toBe(collapsedObserver);
+
+      await act(async () => {
+        for (let index = 0; index < 3; index++) {
+          recollapsedObserver?.callback([], {} as ResizeObserver);
+        }
+      });
+      expect(document.querySelector("h2.detail-title")).toHaveClass("detail-title--collapsed");
+      expect(screen.getByRole("button", { name: "Expand task title" })).toBe(titleControl);
+      expect(screen.getAllByRole("button", { name: "Expand task title" })).toHaveLength(1);
+      expect(document.querySelector("h2.detail-title")?.textContent).toBe(longTitle);
+      expectNoStandaloneTitleToggle();
+    });
+
+    it("keeps the embedded narrow title choice stable and ignores a switched task's stale observer", async () => {
+      const longTitle = "Embedded mobile title ".repeat(25);
+      const props = {
+        embedded: true,
+        active: true,
+        initialTab: "definition" as const,
+        onMoveTask: noopMove,
+        onDeleteTask: noopDelete,
+        onMergeTask: noopMerge,
+        onOpenDetail: noopOpenDetail,
+        addToast: noop,
+      };
+      const originalInnerWidth = window.innerWidth;
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
+      const { rerender } = render(<TaskDetailContent {...props} task={makeTask({ id: "FN-EMBEDDED", title: longTitle })} />);
+      fireEvent(window, new Event("resize"));
+
+      const titleControl = await screen.findByRole("button", { name: "Expand task title" });
+      const oldObserver = titleResizeObservers.at(-1);
+      await userEvent.click(titleControl);
+      await act(async () => {
+        oldObserver?.callback([], {} as ResizeObserver);
+        oldObserver?.callback([], {} as ResizeObserver);
+      });
+      expect(document.querySelector("h2.detail-title")).not.toHaveClass("detail-title--collapsed");
+      expect(screen.getByRole("button", { name: "Collapse task title" })).toBe(titleControl);
+
+      setTitleLayout({ scrollHeight: 40, clientHeight: 40 });
+      rerender(<TaskDetailContent {...props} task={makeTask({ id: "FN-EMBEDDED-NEXT", title: "Narrow fitting title" })} />);
+      await act(async () => {});
+      expect(document.querySelector("h2.detail-title")?.textContent).toBe("Narrow fitting title");
+      expect(screen.queryByRole("button", { name: /task title/ })).toBeNull();
+      expect(oldObserver?.disconnected).toBe(true);
+
+      await act(async () => {
+        oldObserver?.callback([], {} as ResizeObserver);
+        oldObserver?.callback([], {} as ResizeObserver);
+      });
+      expect(screen.queryByRole("button", { name: /task title/ })).toBeNull();
+      expectNoStandaloneTitleToggle();
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
     });
 
     it("supports keyboard activation through the title control", async () => {

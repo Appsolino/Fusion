@@ -1199,17 +1199,30 @@ export function TaskDetailContent({
     }
   }, [activeTab, task.column, isDoneColumn, detailFlagsAreForThisTask]);
 
-  // Reset description and planner-chat focus state when task changes
+  // Reset planner-chat focus when the operator opens a different task.
   useEffect(() => {
-    setDescriptionExpanded(false);
     setPlannerChatExpanded(false);
-  }, [task.column, task.id]);
+  }, [task.id]);
 
   const [highlightStallCode, setHighlightStallCode] = useState<string | null>(null);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [titleOverflows, setTitleOverflows] = useState(false);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const displayTitleText = task.title || task.description || task.id;
+
+  /*
+  FNXC:TaskDetailTitle 2026-08-05-16:42:
+  Title overflow eligibility belongs to the stable two-line collapsed layout, while expanded or
+  collapsed display is an explicit operator choice. Do not mutate the live expanded heading to
+  measure it: ResizeObserver callbacks caused by that class change can otherwise replace the
+  title-owned control and flicker the detail view. Reset both values before paint only when this
+  task identity or its displayed title/fallback changes; ordinary rerenders and resize callbacks
+  must never reverse the choice.
+  */
+  useLayoutEffect(() => {
+    setDescriptionExpanded(false);
+    setTitleOverflows(false);
+  }, [displayTitleText, task.id]);
   const [attachments, setAttachments] = useState<TaskAttachment[]>(task.attachments || []);
   const [uploading, setUploading] = useState(false);
   const [dependencies, setDependencies] = useState<string[]>(task.dependencies || []);
@@ -1274,20 +1287,15 @@ export function TaskDetailContent({
       return;
     }
 
+    // Expanded headings have natural height, so only the rendered collapsed layout is a valid
+    // overflow measurement. The user choice remains mounted while this observer is disconnected.
+    if (descriptionExpanded) return;
+
+    let cancelled = false;
     const measureTitleOverflow = () => {
-      let addedCollapsedClass = false;
-      if (descriptionExpanded && !titleElement.classList.contains("detail-title--collapsed")) {
-        titleElement.classList.add("detail-title--collapsed");
-        addedCollapsedClass = true;
-      }
-
+      if (cancelled) return;
       const overflows = titleElement.scrollHeight > titleElement.clientHeight + 1;
-
-      if (addedCollapsedClass) {
-        titleElement.classList.remove("detail-title--collapsed");
-      }
-
-      setTitleOverflows(overflows);
+      setTitleOverflows((previous) => previous === overflows ? previous : overflows);
     };
 
     measureTitleOverflow();
@@ -1299,6 +1307,7 @@ export function TaskDetailContent({
     window.addEventListener("resize", measureTitleOverflow);
 
     return () => {
+      cancelled = true;
       resizeObserver?.disconnect();
       window.removeEventListener("resize", measureTitleOverflow);
     };
