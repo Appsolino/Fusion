@@ -5,6 +5,8 @@
 
 S1B creates **one** bounded repair PR from an accepted S1A assessment. It does not merge, deploy, or access Host P.
 
+Live orchestration is implemented under `infra/scripts/steward/s1b/` (worktree → Cursor `composer-2.5` repair → tests → Automation App push/PR → dual Cursor review with `merge=false`). **Activation and live proof remain separate** — do not treat this document as proof-complete.
+
 ## Activation
 
 ```text
@@ -29,8 +31,8 @@ killSwitch / activation/KILL overrides all enables
 - Branch: `repair/steward-<issue>-<fingerprint12>`
 - One PR per occurrence
 - Cursor dual reviewer + approver (separate sessions) required before exact-head merge
-- Automation App push identity only
+- Automation App push identity only (`S1B_GITHUB_APP_TOKEN`)
 
 ## Forbidden
 
-Main direct write · Host P · self-approval · secret expansion · silent provider switch · duplicate repair PRs
+Main direct write · Host P · self-approval · secret expansion · silent provider switch · duplicate repair PRs · merge/deploy inside S1B
