@@ -271,8 +271,9 @@ describe("model probe + sanitized spawn", () => {
       if (args[0] === "models") return { stdout: "composer-2.5\n", code: 0 };
       sawAsk = true;
       assert.equal(args.some((a) => String(a).length > 100_000), false);
-      assert.match(opts.stdinText || "", /diffText/);
-      assert.ok((opts.stdinText || "").includes(huge.slice(0, 32)));
+      assert.match(opts.stdinText || "", /evidence\.json|COMPLETE review instructions/);
+      assert.equal((opts.stdinText || "").includes(huge.slice(0, 32)), false);
+      assert.ok(args.includes("--workspace"));
       return {
         stdout:
           "```json\n" +
@@ -297,7 +298,7 @@ describe("model probe + sanitized spawn", () => {
       sessionId: randomUUID(),
     });
     assert.equal(sawAsk, true);
-    assert.equal(r.promptDelivery, "stdin");
+    assert.equal(r.promptDelivery, "evidence-file+stdin");
     assert.ok(r.promptBytes > 100_000);
     assert.equal(r.actualModel, "composer-2.5");
   });
@@ -322,11 +323,11 @@ describe("dual review with real child process simulation", () => {
       seen.push({ args: [...args], env: { ...opts.env } });
       if (args[0] === "models") return { stdout: "composer-2.5 (default)\n", code: 0 };
       assert.equal(args.includes("--mode") && args.includes("ask"), true);
+      assert.equal(args.includes("--workspace"), true);
       assert.equal(args.some((a) => String(a).includes("diffText")), false);
       const prompt = opts.stdinText || "";
-      assert.match(prompt, /CredentialInstanceRotator/);
-      assert.match(prompt, /diffText/);
-      assert.match(prompt, /requiredCheckResults/);
+      assert.match(prompt, /evidence\.json|COMPLETE review instructions/);
+      assert.equal(String(prompt).includes("CredentialInstanceRotator"), false);
       for (const bad of FORBIDDEN_REVIEW_ENV) {
         assert.equal(opts.env[bad], undefined);
       }
