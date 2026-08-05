@@ -66,6 +66,12 @@ describe("activation gates", () => {
     const summary = summarizeActivation({ env: { S1A_AUTO_HANDOFF: "false" } });
     assert.equal(summary.effective.s1aAutoHandoff, false);
   });
+
+  it("blank envOverride falls back to policy enabled", () => {
+    const summary = summarizeActivation({ env: { S1A_AUTO_HANDOFF: "" } });
+    assert.equal(summary.effective.s1aAutoHandoff, true);
+  });
+
 });
 
 describe("programme ledger", () => {

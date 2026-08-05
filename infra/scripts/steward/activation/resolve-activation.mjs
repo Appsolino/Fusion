@@ -40,9 +40,13 @@ export function isGateEnabled(gateKey, opts = {}) {
 
   const overrideName = gate.envOverride;
   if (overrideName && Object.prototype.hasOwnProperty.call(env, overrideName)) {
-    const v = String(env[overrideName] || "");
-    const trueValue = gate.envTrueValue || "true";
-    return v === trueValue || v.toLowerCase() === "true" || v === "1";
+    const v = String(env[overrideName] ?? "").trim();
+    // Blank/whitespace means "not set" — GitHub Actions often injects empty
+    // strings for unset vars; those must not override policy.enabled.
+    if (v !== "") {
+      const trueValue = gate.envTrueValue || "true";
+      return v === trueValue || v.toLowerCase() === "true" || v === "1";
+    }
   }
   return Boolean(gate.enabled);
 }
