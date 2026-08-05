@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AppsolinoStewardS2 2026-08-04:
+ * FNXC:AppsolinoStewardS2 2026-08-05:
  * Deterministic low-risk playbooks — always regenerate from the resolved tree.
  */
 import { S2_PLAYBOOKS } from "./policy.mjs";
@@ -53,21 +53,48 @@ export function describePlaybook(playbookId, ctx = {}) {
 
 /**
  * Map known generated conflict paths to a playbook.
+ * Never suggests playbooks for semantic-source / migration / permission / deployment.
  * @param {string[]} paths
  */
 export function suggestPlaybooksForPaths(paths) {
   /** @type {string[]} */
   const out = [];
   for (const p of paths) {
-    if (/baseline\.json$/i.test(p) || /census-baseline/i.test(p)) {
+    const path = String(p || "").replace(/\\/g, "/");
+    if (
+      /permission/i.test(path) ||
+      /auto3-hostd-deploy/i.test(path) ||
+      /host[-_]?[dp]/i.test(path) ||
+      /migration/i.test(path) ||
+      /(^|\/)packages\//.test(path) ||
+      /executor\.ts$/i.test(path)
+    ) {
+      // Explicitly no LOW suggestion — escalate to S3 / owner.
+      continue;
+    }
+    if (/baseline\.json$/i.test(path) || /census-baseline/i.test(path)) {
       out.push("generated-baselines");
-    } else if (/\.snap(\.|$)/i.test(p) || /__snapshots__/.test(p)) {
+    } else if (/\.snap(\.|$)/i.test(path) || /__snapshots__/.test(path)) {
       out.push("generated-snapshots");
-    } else if (/pnpm-lock\.yaml$|package-lock\.json$|yarn\.lock$/.test(p)) {
+    } else if (/pnpm-lock\.yaml$|package-lock\.json$|yarn\.lock$/.test(path)) {
       out.push("lockfile-regen-unchanged-intent");
-    } else if (/CURRENT-STATE\.md$|ledger\.json$/.test(p)) {
+    } else if (/CURRENT-STATE\.md$|ledger\.json$/.test(path)) {
       out.push("stale-status-document-fields");
+    } else if (/(^|\/)\.github\/workflows\//.test(path)) {
+      // Metadata-only candidates only — still requires attestation at eligibility time.
+      out.push("known-safe-workflow-metadata");
     }
   }
   return [...new Set(out)];
+}
+
+/**
+ * Hard allowlist check.
+ * @param {string} playbookId
+ */
+export function assertPlaybookAllowlisted(playbookId) {
+  if (!S2_PLAYBOOKS.includes(String(playbookId || ""))) {
+    throw new Error(`S2 playbook not allowlisted: ${playbookId}`);
+  }
+  return true;
 }

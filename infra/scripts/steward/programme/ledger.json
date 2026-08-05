@@ -7,7 +7,7 @@
   "s1aImplementationBaselineSha": "be0aeee7710aba632a267d34737fd18cdeb0f2db",
   "documentationClosureMergeSha": "1a507b22ab2af14e3c46f6a5c2dad3d2890b28a0",
   "hostP": "PROHIBITED",
-  "updatedAtUtc": "2026-08-04T12:00:00Z",
+  "updatedAtUtc": "2026-08-05T06:00:00Z",
   "activePhase": "2-cursor-dual-review",
   "phases": {
     "1-control-plane": {
@@ -19,7 +19,7 @@
         "b30a65a158bfe3d721d1ace69532dc6a543b3be0"
       ],
       "merges": [],
-      "notes": "PR #80 control plane — Cursor dual-review with full evidence, model probe, writer recompute, gates OFF; bootstrap owner merge only"
+      "notes": "PR #80 control plane \u2014 Cursor dual-review with full evidence, model probe, writer recompute, gates OFF; bootstrap owner merge only"
     },
     "2-grok-review": {
       "status": "SUPERSEDED",
@@ -40,12 +40,12 @@
     "5-s2": {
       "status": "IN_PROGRESS",
       "prs": [],
-      "notes": "policy+playbooks implemented; gate OFF"
+      "notes": "run-s2 + classify-low + reconcile implemented; unit-proven; gate OFF; no live proof"
     },
     "6-s3": {
       "status": "IN_PROGRESS",
       "prs": [],
-      "notes": "policy implemented; gate OFF"
+      "notes": "run-s3 + rollback path + writer merge wiring; unit-proven; gate OFF; no live proof"
     },
     "7-upstream-74": {
       "status": "IN_PROGRESS",
