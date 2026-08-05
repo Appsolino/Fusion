@@ -34,7 +34,7 @@ import {
   isWipColumnRole,
 } from "../utils/columnRoles";
 import { resolveEffectiveAutoMerge } from "../../../core/src/merge/task-merge";
-import { uploadAttachment, deleteAttachment, updateTask, repairOverlapBlocker, pauseTask, unpauseTask, fetchTaskDetail, fetchTaskVerificationRequest, fetchSettings, fetchTaskEffectiveSettings, fetchGlobalSettings, requestSpecRevision, rebuildTaskSpec, approvePlan, rejectPlan, refineTask, fetchWorkflowResults, assignTask, fetchAgents, fetchAgent, refreshPrStatus, fetchBoardWorkflows, updateTaskCustomFields, summarizeTitle, fetchWorkflowSettingValues, nudgeOverseer, stopOverseer, explainOverseer, fetchModels, fetchNodes, api } from "../api";
+import { uploadAttachment, deleteAttachment, updateTask, repairOverlapBlocker, pauseTask, unpauseTask, fetchTaskDetail, fetchTaskPrompt, fetchTaskVerificationRequest, fetchSettings, fetchTaskEffectiveSettings, fetchGlobalSettings, requestSpecRevision, rebuildTaskSpec, approvePlan, rejectPlan, refineTask, fetchWorkflowResults, assignTask, fetchAgents, fetchAgent, refreshPrStatus, fetchBoardWorkflows, updateTaskCustomFields, summarizeTitle, fetchWorkflowSettingValues, nudgeOverseer, stopOverseer, explainOverseer, fetchModels, fetchNodes, api } from "../api";
 import type { RevertTaskOptions, RevertTaskResult, ModelInfo, NodeInfo } from "../api";
 import type { BoardWorkflowsPayload, WorkflowFieldDefinition, CustomFieldRejection } from "../api";
 import { WorkflowIcon } from "./WorkflowIcon";
@@ -846,6 +846,12 @@ export function TaskDetailContent({
   const [verificationRequest, setVerificationRequest] = useState<TaskVerificationRequest | null>(null);
   const detailRequestGenerationRef = useRef(0);
   const detailRequestRef = useRef<{ key: string; promise: Promise<TaskDetail> } | null>(null);
+  /*
+  FNXC:TaskDetailPlan 2026-08-05-04:26:
+  A narrow Definition response may beat a slim task's initial full detail response. Keep it
+  separately so the older full read cannot overwrite its newer prompt on arrival.
+  */
+  const latestPromptResponseRef = useRef<{ key: string; prompt?: string } | null>(null);
 
   /*
   FNXC:TaskDetailPlan 2026-08-03-02:24:
@@ -902,7 +908,14 @@ export function TaskDetailContent({
     requestTaskDetail(task.id, projectId)
       .then((detail) => {
         if (!cancelled && detailRequestGenerationRef.current === requestGeneration) {
-          setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail, { fullSnapshot: true }) : detail);
+          const promptResponse = latestPromptResponseRef.current;
+          const promptResponseMatchesDetail = promptResponse?.key === `${projectId ?? ""}:${detail.id}`;
+          const detailWithLatestPrompt = promptResponseMatchesDetail
+            ? { ...detail, prompt: promptResponse.prompt } as TaskDetail
+            : detail;
+          setFullDetail((previous) => previous?.id === detail.id
+            ? mergeTaskSnapshot(previous, detailWithLatestPrompt, { fullSnapshot: true })
+            : detailWithLatestPrompt);
           setDetailLoading(false);
         }
       })
@@ -1209,12 +1222,11 @@ export function TaskDetailContent({
   const [showRefineModal, setShowRefineModal] = useState(false);
 
   /*
-  FNXC:TaskDetailPlan 2026-08-03-02:06:
+  FNXC:TaskDetailPlan 2026-08-05-04:05:
   Definition is the authoritative PROMPT.md view while planning or graph Plan Review may rewrite it.
-  Refresh on every visible show/re-show, then keep one bounded chain only for planning, replan, or a
-  running plan-review gate. The request generation prevents a late task/project response from
-  replacing current detail, and intentionally updates only the authoritative prompt so active edits
-  retain their local textarea buffer.
+  Its periodic read is deliberately prompt-only: replacing TaskDetail here rolled queued cards back
+  to Todo and retriggered workflow metadata. Board/SSE/mutations own card state; this effect updates
+  only the retained prompt and fences late identity responses without disturbing active edit buffers.
   */
   const promptRefreshLifecycleActive = isPromptRefreshLifecycleActive(task);
   useEffect(() => {
@@ -1222,37 +1234,32 @@ export function TaskDetailContent({
 
     let cancelled = false;
     let inFlight = false;
-    const requestGeneration = ++detailRequestGenerationRef.current;
+    const identity = `${projectId ?? ""}:${task.id}`;
     const refreshPrompt = () => {
       if (inFlight) return;
       inFlight = true;
-      void requestTaskDetail(task.id, projectId)
-        .then((detail) => {
-          if (cancelled || detailRequestGenerationRef.current !== requestGeneration || detail.id !== task.id) return;
-          setFullDetail((previous) => previous ? { ...previous, prompt: detail.prompt } : detail);
-          setDetailLoading(false);
+      void fetchTaskPrompt(task.id, projectId)
+        .then((response) => {
+          if (cancelled || identity !== `${projectId ?? ""}:${task.id}` || response.id !== task.id) return;
+          // The narrow contract intentionally distinguishes an absent PROMPT.md from an empty file.
+          latestPromptResponseRef.current = { key: identity, prompt: response.prompt };
+          setFullDetail((previous) => previous ? ({ ...previous, prompt: response.prompt } as TaskDetail) : previous);
         })
         .catch(() => {
-          // FNXC:TaskDetailPlan 2026-08-03-02:06: retain the last good prompt; a later eligible tick may recover.
+          // FNXC:TaskDetailPlan 2026-08-05-04:05: retain the last good prompt; a later eligible tick may recover.
         })
         .finally(() => { inFlight = false; });
     };
 
     refreshPrompt();
-    if (!promptRefreshLifecycleActive) {
-      return () => {
-        cancelled = true;
-        if (detailRequestGenerationRef.current === requestGeneration) detailRequestGenerationRef.current++;
-      };
-    }
+    if (!promptRefreshLifecycleActive) return () => { cancelled = true; };
 
     const timer = window.setInterval(refreshPrompt, PROMPT_REFRESH_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      if (detailRequestGenerationRef.current === requestGeneration) detailRequestGenerationRef.current++;
     };
-  }, [active, activeTab, projectId, promptRefreshLifecycleActive, requestTaskDetail, task.id]);
+  }, [active, activeTab, projectId, promptRefreshLifecycleActive, task.id]);
   const [prCreateOpen, setPrCreateOpen] = useState(false);
 
   useLayoutEffect(() => {
@@ -1302,6 +1309,9 @@ export function TaskDetailContent({
   cannot encode ordered columns, so resolve move metadata independently without replacing
   the caller-owned field definitions.
   */
+  const workflowMetadataIdentityRef = useRef<string | null>(null);
+  const workflowMetadataFieldDefsRef = useRef<WorkflowFieldDefinition[] | null | undefined>(undefined);
+  const [workflowMetadataRevision, setWorkflowMetadataRevision] = useState(0);
   const [taskWorkflowBadge, setTaskWorkflowBadge] = useState<{ id: string; name: string; icon?: string } | null>(null);
   // Custom field definitions (U13/KTD-14). Resolved for this task's workflow
   // from the board-workflows payload; absent when the workflow declares none,
@@ -1317,20 +1327,39 @@ export function TaskDetailContent({
     setCustomFieldValues(task.customFields ?? {});
   }, [task.id, task.customFields]);
 
-  // Resolve selected-workflow display and move metadata once per task. A supplied fields prop
-  // avoids a duplicate field lookup, but cannot replace this ordered-column lookup.
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-04:26:
+  Task workflow selection changes emit `workflow:updated`, not a task-object update. Revalidate
+  the selected workflow payload on that event so an open unchanged-column detail cannot retain
+  prior workflow badges or actions; the revision preserves the current metadata while it settles.
+  */
+  useEffect(() => {
+    if (!active) return;
+    const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    return subscribeSse(`/api/events${query}`, {
+      events: { "workflow:updated": () => setWorkflowMetadataRevision((revision) => revision + 1) },
+    });
+  }, [active, projectId]);
+
+  // Resolve selected-workflow display and move metadata from the inputs the resolver consumes.
   useEffect(() => {
     /*
-    FNXC:WorkflowBadges 2026-06-29-16:48:
-    Mounted task-detail hosts can swap from one task to another (List split-pane, right dock, floating windows). Clear the previous workflow badge and move metadata before the shared board-workflows lookup resolves so aggregate-board context never shows stale cross-workflow labels or targets.
+    FNXC:TaskDetailStateStability 2026-08-05-04:05:
+    Same-task board/SSE object replacements and prompt ticks must not clear workflow badges or
+    controls. Column is included because it derives action flags; only a true identity/workflow-field
+    switch clears prior metadata, while column revalidation keeps resolved UI mounted until it settles.
     */
-    if (workflowFieldDefsProp !== undefined) {
-      setCustomFieldDefs(workflowFieldDefsProp ?? null);
-    } else {
-      setCustomFieldDefs(null);
+    const metadataIdentity = `${projectId ?? ""}:${task.id}`;
+    const identityChanged = workflowMetadataIdentityRef.current !== metadataIdentity
+      || workflowMetadataFieldDefsRef.current !== workflowFieldDefsProp;
+    workflowMetadataIdentityRef.current = metadataIdentity;
+    workflowMetadataFieldDefsRef.current = workflowFieldDefsProp;
+    if (identityChanged) {
+      if (workflowFieldDefsProp !== undefined) setCustomFieldDefs(workflowFieldDefsProp ?? null);
+      else setCustomFieldDefs(null);
+      setTaskWorkflowBadge(null);
+      setWorkflowMoveMetadata(null);
     }
-    setTaskWorkflowBadge(null);
-    setWorkflowMoveMetadata(null);
     let cancelled = false;
     void fetchBoardWorkflows(projectId)
       .then((payload) => {
@@ -1359,16 +1388,15 @@ export function TaskDetailContent({
         });
       })
       .catch(() => {
-        if (!cancelled) {
+        // Keep settled same-task metadata visible during transient revalidation failures.
+        if (!cancelled && identityChanged) {
           if (workflowFieldDefsProp === undefined) setCustomFieldDefs(null);
           setTaskWorkflowBadge(null);
           setWorkflowMoveMetadata(null);
         }
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [task, projectId, workflowFieldDefsProp]);
+    return () => { cancelled = true; };
+  }, [task.id, task.column, projectId, workflowFieldDefsProp, workflowMetadataRevision]);
 
   /*
   FNXC:PlannerOversight 2026-07-04-17:00:

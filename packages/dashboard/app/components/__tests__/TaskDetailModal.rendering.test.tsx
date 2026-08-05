@@ -37,10 +37,12 @@ import {
   readDashboardStylesSource,
   resetTaskDetailFetchMock,
   setupTaskDetailModalHooks,
+  taskDetailSseSubscriptions,
 } from "./TaskDetailModal.test-helpers";
 import { TaskDetailModal, TaskDetailContent } from "../TaskDetailModal";
 import * as dashboardApi from "../../api";
 import { FileBrowserProvider } from "../../context/FileBrowserContext";
+import type { Task } from "@fusion/core";
 
 setupTaskDetailModalHooks();
 
@@ -88,6 +90,153 @@ describe("TaskDetailModal", () => {
 
     expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
     expect(screen.getByText("Preserved prompt")).toBeInTheDocument();
+  });
+
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-04:05:
+  Definition ticks must not publish a full task snapshot. Drive repeated planning ticks against
+  the production detail host and preserve the queued lifecycle and resolved workflow badge node.
+  */
+  it("keeps queued lifecycle and workflow badge continuous across prompt-only ticks", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValue({
+        flagEnabled: true, defaultWorkflowId: "builtin:coding",
+        workflows: [{ id: "builtin:coding", name: "Coding", columns: [], fields: [] }], taskWorkflowIds: {},
+      });
+      const promptFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+      promptFetch.mockResolvedValue({ id: "FN-POLL", prompt: "# Updated definition" });
+      const fullFetch = vi.mocked(dashboardApi.fetchTaskDetail);
+      const queued = makeTask({ id: "FN-POLL", column: "in-progress", status: "queued", prompt: "# Initial definition", workflowStepResults: [{ workflowStepId: "plan-review", status: "running", startedAt: "2026-08-05T00:00:00.000Z" }] });
+      render(<TaskDetailContent embedded active initialTab="definition" task={queued} onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+
+      await act(async () => {});
+      const badge = screen.getByTestId("task-detail-workflow-badge");
+      const initialPromptRequests = promptFetch.mock.calls.length;
+      expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
+      for (let tick = 1; tick <= 3; tick++) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(fullFetch).not.toHaveBeenCalled();
+        expect(promptFetch).toHaveBeenCalledTimes(initialPromptRequests + tick);
+        expect(document.querySelector(".detail-column-badge")).toHaveClass("badge-in-progress");
+        expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
+      }
+      expect(screen.getByText("Updated definition")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /*
+  FNXC:TaskDetailStateStability 2026-08-05-05:01:
+  Done cards use the same Definition timer as queued work. Keep both the resolved workflow badge and
+  applicable Actions control mounted through every narrow response so the fix cannot merely hide the
+  queued Todo rollback while completed-task controls still flash.
+  */
+  it("keeps done workflow badge and action controls continuous across prompt-only ticks", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValue({
+        flagEnabled: true, defaultWorkflowId: "builtin:coding",
+        workflows: [{ id: "builtin:coding", name: "Coding", columns: [], fields: [] }], taskWorkflowIds: {},
+      });
+      vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValue({ id: "FN-DONE-POLL", prompt: "# Refreshed definition" });
+      const done = makeTask({ id: "FN-DONE-POLL", column: "done", status: "done", prompt: "# Original definition", workflowStepResults: [{ workflowStepId: "plan-review", status: "running", startedAt: "2026-08-05T00:00:00.000Z" }] });
+      render(<TaskDetailContent embedded active initialTab="definition" task={done} onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+
+      await act(async () => {});
+      const badge = screen.getByTestId("task-detail-workflow-badge");
+      const actions = screen.getByRole("button", { name: "Actions" });
+      const initialPromptRequests = vi.mocked(dashboardApi.fetchTaskPrompt).mock.calls.length;
+      for (let tick = 1; tick <= 3; tick++) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(dashboardApi.fetchTaskDetail).not.toHaveBeenCalled();
+        expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledTimes(initialPromptRequests + tick);
+        expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
+        expect(screen.getByRole("button", { name: "Actions" })).toBe(actions);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("revalidates column actions without clearing same-task workflow metadata", async () => {
+    const payload = {
+      flagEnabled: true, defaultWorkflowId: "wf-columns", taskWorkflowIds: {},
+      workflows: [{ id: "wf-columns", name: "Column workflow", columns: [
+        { id: "in-progress", name: "Building", flags: { countsTowardWip: true } },
+        { id: "done", name: "Shipped", flags: { complete: true } },
+      ], fields: [] }],
+    };
+    let settleColumnMove: (value: typeof payload) => void = () => undefined;
+    vi.mocked(dashboardApi.fetchBoardWorkflows)
+      .mockResolvedValueOnce(payload)
+      .mockImplementationOnce(() => new Promise<typeof payload>((resolve) => { settleColumnMove = resolve; }));
+    const task = makeTask({ id: "FN-COLUMN-MOVE", column: "in-progress", status: "queued" });
+    const props = { embedded: true, active: true, initialTab: "definition" as const, onMoveTask: noopMove, onDeleteTask: noopDelete, onMergeTask: noopMerge, onOpenDetail: noopOpenDetail, addToast: noop };
+    const { rerender } = render(<TaskDetailContent {...props} task={task} />);
+
+    const badge = await screen.findByTestId("task-detail-workflow-badge");
+    const actions = screen.getByRole("button", { name: "Actions" });
+    const initialMoveLabel = document.querySelector<HTMLButtonElement>(".detail-move-btn")?.getAttribute("aria-label");
+    rerender(<TaskDetailContent {...props} task={{ ...task, column: "done", status: "done" }} />);
+
+    expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
+    expect(screen.getByRole("button", { name: "Actions" })).toBe(actions);
+    await act(async () => { settleColumnMove(payload); });
+    await waitFor(() => expect(document.querySelector<HTMLButtonElement>(".detail-move-btn")?.getAttribute("aria-label")).not.toBe(initialMoveLabel));
+  });
+
+  it("keeps a prompt-only response when slim initial detail resolves later", async () => {
+    let resolveDetail: (detail: TaskDetail) => void = () => undefined;
+    vi.mocked(dashboardApi.fetchTaskDetail).mockImplementationOnce(() => new Promise<TaskDetail>((resolve) => {
+      resolveDetail = resolve;
+    }));
+    vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValueOnce({ id: "FN-slim-prompt", prompt: "# Newer narrow prompt" });
+    const slimTask = makeTask({ id: "FN-slim-prompt", prompt: undefined }) as Task;
+
+    render(<TaskDetailContent embedded active initialTab="definition" task={slimTask} onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+    await waitFor(() => expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledWith("FN-slim-prompt", undefined));
+
+    await act(async () => {
+      resolveDetail(makeTask({ id: "FN-slim-prompt", prompt: "# Older full prompt" }));
+    });
+
+    expect(await screen.findByText("Newer narrow prompt")).toBeInTheDocument();
+    expect(screen.queryByText("Older full prompt")).toBeNull();
+  });
+
+  it("revalidates selected workflow metadata after its workflow SSE revision", async () => {
+    vi.mocked(dashboardApi.fetchBoardWorkflows).mockResolvedValueOnce({
+      flagEnabled: true, defaultWorkflowId: "builtin:coding",
+      workflows: [{ id: "builtin:coding", name: "Coding", columns: [], fields: [] }],
+      taskWorkflowIds: { "FN-workflow-revision": "builtin:coding" },
+    });
+    let resolveRevalidation: (payload: Awaited<ReturnType<typeof dashboardApi.fetchBoardWorkflows>>) => void = () => undefined;
+    vi.mocked(dashboardApi.fetchBoardWorkflows).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveRevalidation = resolve;
+    }));
+    render(<TaskDetailContent embedded active task={makeTask({ id: "FN-workflow-revision", column: "todo" })} onMoveTask={noopMove} onDeleteTask={noopDelete} onMergeTask={noopMerge} onOpenDetail={noopOpenDetail} addToast={noop} />);
+
+    expect(await screen.findByText("Coding")).toBeInTheDocument();
+    const badge = screen.getByTestId("task-detail-workflow-badge");
+    const workflowSubscription = taskDetailSseSubscriptions.find((subscription) => subscription.options.events?.["workflow:updated"]);
+    expect(workflowSubscription).toBeDefined();
+
+    await act(async () => {
+      workflowSubscription?.options.events?.["workflow:updated"](new MessageEvent("workflow:updated"));
+    });
+    expect(screen.getByTestId("task-detail-workflow-badge")).toBe(badge);
+    expect(screen.getByText("Coding")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveRevalidation({
+        flagEnabled: true, defaultWorkflowId: "wf-docs",
+        workflows: [{ id: "wf-docs", name: "Docs", columns: [], fields: [] }],
+        taskWorkflowIds: { "FN-workflow-revision": "wf-docs" },
+      });
+    });
+    expect(await screen.findByText("Docs")).toBeInTheDocument();
   });
 
   describe("workflow timestamp badge", () => {
@@ -265,10 +414,10 @@ describe("TaskDetailModal", () => {
       summary: "See `packages/dashboard/app/App.tsx:25:3` for context.",
       prompt: "# Prompt\n\nInspect `packages/dashboard/app/App.tsx:11`.",
     });
-    vi.mocked(dashboardApi.fetchTaskDetail).mockResolvedValue(makeTask({
-      ...initialDetail,
+    vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValue({
+      id: initialDetail.id,
       prompt: "# Prompt\n\nInspect `packages/dashboard/app/App.tsx:12`.",
-    }));
+    });
 
     render(
       <FileBrowserProvider openFile={openFile}>
@@ -286,12 +435,12 @@ describe("TaskDetailModal", () => {
     );
 
     /*
-    FNXC:DashboardTests 2026-08-04-15:05:
-    Definition refresh replaces its markdown tree. Query only after it settles so
-    this integration test clicks the live prompt link, then assert the separately
-    rendered completed-summary surface retains the same FileBrowser contract.
+    FNXC:DashboardTests 2026-08-05-04:05:
+    Definition refresh updates only its prompt tree. Query after the narrow response settles so
+    this integration test clicks the live prompt link, then assert the separately rendered
+    completed-summary surface retains the same FileBrowser contract.
     */
-    await waitFor(() => expect(dashboardApi.fetchTaskDetail).toHaveBeenCalledWith("FN-099", undefined));
+    await waitFor(() => expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledWith("FN-099", undefined));
     const promptLink = await screen.findByRole("button", { name: "packages/dashboard/app/App.tsx:12" });
     expect(screen.queryByRole("button", { name: "packages/dashboard/app/App.tsx:11" })).toBeNull();
     expect(promptLink.closest("code")?.querySelector("button.file-path-link")).toBe(promptLink);
@@ -2438,6 +2587,8 @@ describe("TaskDetailModal", () => {
   describe("optimistic opening with Task", () => {
     beforeEach(async () => {
       await resetTaskDetailFetchMock();
+      vi.mocked(dashboardApi.fetchTaskPrompt).mockReset();
+      vi.mocked(dashboardApi.fetchTaskPrompt).mockResolvedValue({ id: "FN-099", prompt: "# Task FN-099" });
     });
 
     it("restores a resolved detail Promise after an override is reset", async () => {
@@ -2467,7 +2618,7 @@ describe("TaskDetailModal", () => {
         />,
       );
 
-      await waitFor(() => expect(mockFetch).toHaveBeenCalledWith("FN-099", undefined));
+      await waitFor(() => expect(dashboardApi.fetchTaskPrompt).toHaveBeenCalledWith("FN-099", undefined));
       await waitFor(() => expect(screen.queryByText("Restored default prompt")).toBeNull());
     });
 
@@ -2562,9 +2713,9 @@ describe("TaskDetailModal", () => {
       });
     });
 
-    it("uses one Definition refresh request when prop is already a TaskDetail with prompt", async () => {
-      const { fetchTaskDetail } = await import("../../api");
-      const mockFetch = vi.mocked(fetchTaskDetail);
+    it("uses a prompt-only Definition refresh when prop is already a TaskDetail with prompt", async () => {
+      const mockPromptFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+      const mockFetch = vi.mocked(dashboardApi.fetchTaskDetail);
 
       const detail: TaskDetail = {
         id: "FN-202",
@@ -2592,15 +2743,13 @@ describe("TaskDetailModal", () => {
         />,
       );
 
-      // A full detail skips the slim initial load but Definition still refreshes
-      // its authoritative prompt exactly once when shown.
-      await waitFor(() => expect(mockFetch).toHaveBeenCalledWith("FN-202", undefined));
-      expect(mockFetch).toHaveBeenCalledTimes(1);
+      // A full detail skips the full client; Definition reads only its prompt.
+      await waitFor(() => expect(mockPromptFetch).toHaveBeenCalledWith("FN-202", undefined));
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("retains the last good prompt when Definition refresh rejects", async () => {
-      const { fetchTaskDetail } = await import("../../api");
-      const mockFetch = vi.mocked(fetchTaskDetail);
+      const mockFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
       const detail = makeTask({ id: "FN-202-rejected", prompt: "# Last good prompt" });
       mockFetch.mockRejectedValueOnce(new Error("refresh failed"));
 
@@ -2632,13 +2781,13 @@ describe("TaskDetailModal", () => {
     it("defers embedded refresh while inactive, deduplicates pending interval work, and resumes on re-show", async () => {
       vi.useFakeTimers();
       try {
-        const mockFetch = vi.mocked(dashboardApi.fetchTaskDetail);
-        let resolveFirstRequest: (detail: TaskDetail) => void = () => undefined;
-        mockFetch.mockImplementationOnce(() => new Promise<TaskDetail>((resolve) => {
+        const mockFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+        let resolveFirstRequest: (detail: { id: string; prompt?: string }) => void = () => undefined;
+        mockFetch.mockImplementationOnce(() => new Promise<{ id: string; prompt?: string }>((resolve) => {
           resolveFirstRequest = resolve;
         }));
-        mockFetch.mockResolvedValueOnce(makeTask({ id: "FN-lifecycle", prompt: "# Interval refresh" }));
-        mockFetch.mockResolvedValue(makeTask({ id: "FN-lifecycle", prompt: "# Re-shown refresh" }));
+        mockFetch.mockResolvedValueOnce({ id: "FN-lifecycle", prompt: "# Interval refresh" });
+        mockFetch.mockResolvedValue({ id: "FN-lifecycle", prompt: "# Re-shown refresh" });
         const props = {
           embedded: true,
           initialTab: "definition" as const,
@@ -2660,7 +2809,7 @@ describe("TaskDetailModal", () => {
         await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
         expect(mockFetch).toHaveBeenCalledTimes(1);
 
-        await act(async () => { resolveFirstRequest(makeTask({ id: "FN-lifecycle", prompt: "# First refresh" })); });
+        await act(async () => { resolveFirstRequest({ id: "FN-lifecycle", prompt: "# First refresh" }); });
         expect(screen.getByText("First refresh")).toBeInTheDocument();
 
         await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
@@ -2679,12 +2828,12 @@ describe("TaskDetailModal", () => {
     });
 
     it("fences a cancelled embedded refresh after a visible task switch", async () => {
-      const mockFetch = vi.mocked(dashboardApi.fetchTaskDetail);
-      let resolveStaleRequest: (detail: TaskDetail) => void = () => undefined;
-      let resolveCurrentRequest: (detail: TaskDetail) => void = () => undefined;
+      const mockFetch = vi.mocked(dashboardApi.fetchTaskPrompt);
+      let resolveStaleRequest: (detail: { id: string; prompt?: string }) => void = () => undefined;
+      let resolveCurrentRequest: (detail: { id: string; prompt?: string }) => void = () => undefined;
       mockFetch
-        .mockImplementationOnce(() => new Promise<TaskDetail>((resolve) => { resolveStaleRequest = resolve; }))
-        .mockImplementationOnce(() => new Promise<TaskDetail>((resolve) => { resolveCurrentRequest = resolve; }));
+        .mockImplementationOnce(() => new Promise<{ id: string; prompt?: string }>((resolve) => { resolveStaleRequest = resolve; }))
+        .mockImplementationOnce(() => new Promise<{ id: string; prompt?: string }>((resolve) => { resolveCurrentRequest = resolve; }));
       const sharedProps = {
         embedded: true,
         initialTab: "definition" as const,
@@ -2704,10 +2853,10 @@ describe("TaskDetailModal", () => {
       rerender(<TaskDetailContent {...sharedProps} task={currentTask} active />);
       await waitFor(() => expect(mockFetch).toHaveBeenCalledWith("FN-current-detail", undefined));
 
-      await act(async () => { resolveCurrentRequest(makeTask({ id: "FN-current-detail", prompt: "# Current response" })); });
+      await act(async () => { resolveCurrentRequest({ id: "FN-current-detail", prompt: "# Current response" }); });
       expect(await screen.findByText("Current response")).toBeInTheDocument();
 
-      await act(async () => { resolveStaleRequest(makeTask({ id: "FN-stale-detail", prompt: "# Stale response" })); });
+      await act(async () => { resolveStaleRequest({ id: "FN-stale-detail", prompt: "# Stale response" }); });
       expect(screen.queryByText("Stale response")).toBeNull();
       expect(screen.getByText("Current response")).toBeInTheDocument();
     });

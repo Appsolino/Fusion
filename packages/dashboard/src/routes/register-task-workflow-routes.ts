@@ -3947,6 +3947,23 @@ export function registerTaskWorkflowRoutes(ctx: ApiRoutesContext, deps: TaskWork
     }
   });
 
+  /*
+  FNXC:TaskDetailPlan 2026-08-05-04:05:
+  This literal route precedes /tasks/:id so Express cannot capture `prompt` as a task id.
+  Definition polling gets only identity plus PROMPT.md and cannot replace lifecycle or workflow state.
+  */
+  router.get("/tasks/:id/prompt", async (req, res) => {
+    try {
+      const { store: scopedStore } = await getProjectContext(req);
+      const task = await scopedStore.getTask(req.params.id);
+      res.json(task.prompt === undefined ? { id: task.id } : { id: task.id, prompt: task.prompt });
+    } catch (err: unknown) {
+      if (err instanceof ApiError) throw err;
+      if (isTaskLookupMiss(err)) throw notFound(`Task ${req.params.id} not found`);
+      rethrowAsApiError(err, "Internal server error");
+    }
+  });
+
   // Get single task with prompt content
   router.get("/tasks/:id", async (req, res) => {
     try {
