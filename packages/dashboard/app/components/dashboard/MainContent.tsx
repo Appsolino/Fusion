@@ -684,7 +684,7 @@ export function MainContent({
     return (
       <PageErrorBoundary>
         <Suspense fallback={null}>
-          <SecretsView addToast={addToast} />
+          <SecretsView addToast={addToast} projectId={currentProject?.id} />
         </Suspense>
       </PageErrorBoundary>
     );

@@ -4069,7 +4069,7 @@ export function SettingsModal({
         );
 
       case "secrets":
-        return <SecretsSection addToast={addToast} />;
+        return <SecretsSection addToast={addToast} projectId={projectId} />;
       case "global-mcp":
         return (
           <GlobalMcpSection
