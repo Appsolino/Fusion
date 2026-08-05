@@ -55,7 +55,7 @@ sudo -u fusion bash -lc 'cursor-agent status; which cursor-agent'
 | Name | Value |
 | --- | --- |
 | `S1A_WORKTREE_ROOT` | `/srv/appsolino-fusion/phase-1/worktrees` |
-| `S1A_AUTO_HANDOFF` | `false` (default) |
+| `S1A_AUTO_HANDOFF` | optional override; blank/unset → `activation-policy.json` (`s1aAutoHandoff`) |
 | `S1A_CURSOR_API_KEY` or `CURSOR_API_KEY` | optional if interactive login already works |
 
 7. Live dispatch:
