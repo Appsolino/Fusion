@@ -31,7 +31,7 @@ HOLD:    Host P / production — PROHIBITED
 DONE:    S0 ACCEPTED; S1A MANUAL LIVE PROOF PASS (issue #74)
 DONE:    Gate A proof: noop-already-assessed (run 30986441560)
 DONE:    One active upstream sync: PR #93 only (supersedes #84/#82)
-NOTE:    This PR enables s0HandoffS1a only; S1B/S2/S3 remain OFF
+NOTE:    This PR enables s0HandoffS1a only; S1B ON; S2 enabling (this PR); S3 remain OFF
 NOTE:    Engine stays paused. Host P untouched / prohibited.
 ```
 
