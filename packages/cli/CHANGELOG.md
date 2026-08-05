@@ -1,5 +1,19 @@
 # @runfusion/fusion
 
+## 0.75.1-beta.0
+
+### Patch Changes
+
+- b9c5df0: summary: Prevent chat checkpoints from failing on NUL-containing tool output.
+  category: fix
+  dev: Sanitizes chat JSONB persistence boundaries and observes best-effort checkpoint failures.
+- 4167841: summary: Resume Plan Review automatically after approving a task plan.
+  category: fix
+  dev: Dashboard approval now invokes the public engine handoff that seeds graph-owned review work.
+- 0658795: summary: Restore workflow review feedback selection for same-task revisions.
+  category: fix
+  dev: Canonical workflow-step review items now prevent forged client feedback from reaching snapshots or steering.
+
 ## 0.75.0
 
 ### Minor Changes

@@ -2,6 +2,20 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.75.1-beta.0
+
+### Highlights
+
+- Approving a task plan in the dashboard now resumes Plan Review automatically
+- Workflow review feedback applies to the right revision again on same-task reviews
+- Chat checkpoints no longer fail when tool output contains NUL bytes
+
+### Fixed
+
+- Approving a plan in the dashboard hands off to the engine so graph-owned Plan Review work is seeded and continues without a manual nudge.
+- Review feedback selection is restored for same-task revisions: workflow review items are resolved canonically, so client-supplied feedback can no longer reach snapshots or steering unchecked.
+- Chat checkpoints survive tool output containing NUL characters instead of failing to persist; checkpoint failures are now observed as best-effort rather than breaking the chat.
+
 ## 0.75.0
 
 ### Highlights
