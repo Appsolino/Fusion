@@ -7,7 +7,7 @@
 | Field | Value |
 | --- | --- |
 | Programme tracking | Issue [#78](https://github.com/Appsolino/Fusion/issues/78) |
-| Live `main` SHA | `7c62e652e56dd3fa04755f547ba7456213ba1dd8` (PR #93 absorb) |
+| Live `main` SHA | `d82c01cb9c868a8baa5c68eed6c30adce63df2f0` (docs #106; absorb #93 `7c62e652e56dd3fa04755f547ba7456213ba1dd8`) |
 | Integrated upstream | Runfusion `8120c07b6a074755f44ed22f066b40eaeb19f199` |
 | Active Host D release | `auto3-0.75.1-beta.1-7c62e652e56d` |
 | Previous rollback release | `auto3-0.74.0-beta.6-16f24ed3b473` |
