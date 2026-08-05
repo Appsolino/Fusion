@@ -365,10 +365,6 @@ describe("S1B live path (mocked children)", () => {
         s1bGateEnabled: true,
         skipAuthorityGuard: true,
         spawnFn: mockSpawn,
-        cursorEngine: undefined,
-        // Override engine path: use real runCursorRepairEngine via not setting cursorEngine
-        // but we need mutations — inject engine that also records env from spawn path.
-        // Instead call runCursorRepairEngine separately after setting up env:
         testFn: async () => ({ ok: true }),
         gitPushFn: () => ({ status: 0, stdout: "", stderr: "" }),
         gh: (args) => {
@@ -380,7 +376,7 @@ describe("S1B live path (mocked children)", () => {
           };
         },
         dualReviewFn: async () => ({ action: "approved-ready", merged: false }),
-        // Use injectable cursorEngine that uses cursorChildEnv like production
+        // Injectable cursorEngine that uses cursorChildEnv like production
         cursorEngine: async (input) => {
           const env = cursorChildEnv({
             apiKey: process.env.CURSOR_API_KEY,
