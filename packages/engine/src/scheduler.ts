@@ -2406,10 +2406,27 @@ export class Scheduler {
           const unmetDeps = getUnmetSchedulingDependencies(task, tasks, schedulingDependencyOptions);
           if (unmetDeps.length > 0) {
             const normalizedUnmetDeps = [...new Set(unmetDeps)].sort();
+            /*
+            FNXC:WorkflowScheduling 2026-08-05-06:22:
+            Dependency blocking and file-scope blocking are independent display truths. Keep the unfinished dependency authoritative while re-deriving overlapBlockedBy from the same active-scope registry used for dispatch, so paused/re-scoped leases disappear and resumed or replacement leases reappear without waiting for the dependency to finish.
+            */
+            let activeOverlapBlockedBy: string | null = null;
+            if (activeScopes.size > 0) {
+              try {
+                const taskScope = await getFilteredFileScope(task.id);
+                if (taskScope.length > 0 && !isCoordinationOnlyTask(task, taskScope)) {
+                  activeOverlapBlockedBy = Array.from(activeScopes.entries())
+                    .sort(([aId], [bId]) => aId.localeCompare(bId))
+                    .find(([, activeScope]) => this.pathsOverlap(taskScope, activeScope))?.[0] ?? null;
+                }
+              } catch (error) {
+                schedulerLog.warn(`Failed to refresh file-scope overlap blocker for dependency-blocked task ${task.id}`, error);
+              }
+            }
             await this.transitionQueuedEpisode(task, {
               signature: `dependency:${normalizedUnmetDeps.join(",")}`,
               blockedBy: unmetDeps[0] ?? null,
-              overlapBlockedBy: task.overlapBlockedBy ?? null,
+              overlapBlockedBy: activeOverlapBlockedBy,
               action: `queued — unmet dependencies: ${unmetDeps.join(", ")}`,
             });
             this.options.onBlocked?.(task, unmetDeps);
