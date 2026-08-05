@@ -1,16 +1,12 @@
 {
   "outcome": "conflict-resolved",
-  "recordedAt": "2026-08-05T07:42:00.000Z",
+  "recordedAt": "2026-08-05T10:30:00.000Z",
   "integrationBranch": "main",
-  "appsolinoSha": "24684a0eef5818ea7091fd8e319d3ebca1d72859",
-  "upstreamSha": "68e964383fc662d6e7c14d4b0328d722c007bbcc",
-  "mergeBase": "5786c87eff118231e58bb0877f2cb2252a346a8d",
-  "conflictedFiles": [
-    "packages/engine/src/executor.ts",
-    "scripts/lib/lifecycle-column-census-baseline.json"
-  ],
-  "resolution": "semantic-executor-auto4-correction-b + regenerated-lifecycle-baseline + agent-browser-download-artifact-v4-overlay",
+  "appsolinoSha": "50aaf895ceb67251f1d7297d07606486068d40da",
+  "upstreamSha": "8120c07b6a074755f44ed22f066b40eaeb19f199",
+  "resolution": "semantic-executor-auto4-correction-b + regenerated-lifecycle-baseline + agent-browser-install-build-overlay + tip-refresh-from-68e964",
   "touchesWorkflows": true,
   "touchesMigrations": true,
-  "touchesLockfile": true
+  "touchesLockfile": true,
+  "supersedes": ["#84", "#97"]
 }
