@@ -2190,6 +2190,7 @@ function AppInner() {
               initialTab={initialTab}
               projectId={currentProject?.id}
               tasks={tasks}
+              globalPaused={globalPaused}
               active={popupVisible}
               embedded
               onOpenDetail={popOutTaskDetailForCurrentView}
@@ -2215,6 +2216,7 @@ function AppInner() {
         projectId={currentProject?.id}
         tasks={tasks}
         columnFlagsByTaskId={footerColumnFlagsByTaskId}
+        globalPaused={globalPaused}
         projects={projects}
         currentProject={currentProject}
         addToast={addToast}

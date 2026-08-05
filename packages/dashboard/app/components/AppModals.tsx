@@ -46,6 +46,7 @@ interface AppModalsProps {
   tasks: Task[];
   /* Per-task lifecycle traits, forwarded to Task Detail's blocker fan-out. */
   columnFlagsByTaskId?: ReadonlyMap<string, BlockerFanoutColumnFlags>;
+  globalPaused?: boolean;
   projects: ProjectInfo[];
   currentProject: ProjectInfo | null;
   addToast: (message: string, type?: ToastType) => void;
@@ -108,6 +109,7 @@ export function AppModals({
   projectId,
   tasks,
   columnFlagsByTaskId,
+  globalPaused = false,
   projects,
   currentProject,
   addToast,
@@ -313,6 +315,7 @@ export function AppModals({
             projectId={projectId}
             tasks={tasks}
             columnFlagsByTaskId={columnFlagsByTaskId}
+            globalPaused={globalPaused}
             onClose={closeDetailWithNav}
             onOpenDetail={openDetailTaskWithNav}
             mobileHeaderMode={modalManager.detailTaskOrigin === "list-mobile" ? "back" : "close"}

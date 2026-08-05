@@ -892,6 +892,7 @@ export function MainContent({
               task={liveDetailTask}
               projectId={currentProject?.id}
               tasks={tasks}
+              globalPaused={globalPaused}
               embedded
               initialTab={mainPanelDetailInitialTab}
               /*

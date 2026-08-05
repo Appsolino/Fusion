@@ -87,6 +87,7 @@ import { findInReviewStallLogEntry, IN_REVIEW_STALL_LOG_REGEX } from "../utils/f
 import { getTaskLogEntryAction, getTaskLogEntryOutcome } from "../utils/taskLogEntryDisplay";
 import { getRelativeTimeBucket } from "../utils/relativeTimeAgo";
 import { isReviewBudgetExhaustedApproval, isTaskAwaitingPlanApproval } from "../utils/reviewBudgetApproval";
+import { getTaskStatusBadgeLabel, hasTaskStatusBadge, isTaskPlanningActive } from "../utils/taskStatusBadgeLabel";
 import { ACTIVE_STATUSES, resolveEffectiveExecutor, resolveEffectivePlanning, resolveEffectiveValidator, type ModelSelection } from "./effective-model-resolution";
 import { TaskContextMenu, buildTaskActionMenuModel, getTaskPrAutomationLabel } from "./TaskContextMenu";
 import type { TaskContextMenuColumnFlags, TaskContextMenuColumnMetadata } from "./TaskContextMenu";
@@ -406,6 +407,8 @@ export interface TaskDetailModalProps {
   addToast: (message: string, type?: ToastType) => void;
   prAuthAvailable?: boolean;
   autoMergeEnabled?: boolean;
+  /** Prevent transient planner activity from presenting as live during an engine-wide pause. */
+  globalPaused?: boolean;
   onOpenWorkflowEditor?: () => void;
   /** Open the modal with this tab active instead of the default done-aware landing view. */
   initialTab?: TabId;
@@ -786,6 +789,7 @@ export function TaskDetailContent({
   addToast,
   prAuthAvailable,
   autoMergeEnabled: autoMergeEnabledProp,
+  globalPaused = false,
   onOpenWorkflowEditor,
   /**
    * FNXC:TaskDetailActivityFirst 2026-06-30-23:59:
@@ -898,7 +902,7 @@ export function TaskDetailContent({
     requestTaskDetail(task.id, projectId)
       .then((detail) => {
         if (!cancelled && detailRequestGenerationRef.current === requestGeneration) {
-          setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail) : detail);
+          setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail, { fullSnapshot: true }) : detail);
           setDetailLoading(false);
         }
       })
@@ -937,6 +941,18 @@ export function TaskDetailContent({
         : task.overlapBlockedBy === undefined ? fullDetail.overlapBlockedBy : task.overlapBlockedBy,
     } as TaskDetail)
     : ({ ...task, prompt: "" } as TaskDetail);
+  /*
+  FNXC:TaskStatusConsistency 2026-08-05-04:30:
+  Detail hosts consume the same reconciled snapshot as board and list cards. Show live planning as
+  Planning, while an idle `needs-replan` remains Queued to revise; this prevents an open modal from
+  presenting a different lifecycle than the card that launched it.
+  */
+  const taskStatusBadgeLabel = isTaskPlanningActive(workingTask, { globalPaused })
+    ? t("tasks.statusPlanning", "Planning")
+    : getTaskStatusBadgeLabel(workingTask.status, t, undefined, {
+      idle: true,
+      overlapBlockedBy: workingTask.overlapBlockedBy ?? null,
+    });
   const originalTaskPrompt = workingTask.description ?? "";
   const hasOriginalTaskPrompt = originalTaskPrompt.trim().length > 0;
   /*
@@ -3636,7 +3652,7 @@ export function TaskDetailContent({
   const handleWorkflowReconciled = useCallback(async () => {
     try {
       const detail = await fetchTaskDetail(task.id, projectId);
-      setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail) : detail);
+      setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail, { fullSnapshot: true }) : detail);
       onTaskUpdated?.(detail);
     } catch {
       // Best-effort refresh; the SSE stream will catch the board up regardless.
@@ -3645,7 +3661,7 @@ export function TaskDetailContent({
 
   const handleBranchGroupReset = useCallback(async () => {
     const detail = await fetchTaskDetail(task.id, projectId);
-    setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail) : detail);
+    setFullDetail((previous) => previous?.id === detail.id ? mergeTaskSnapshot(previous, detail, { fullSnapshot: true }) : detail);
     onTaskUpdated?.(detail);
   }, [task.id, projectId, onTaskUpdated]);
 
@@ -4545,6 +4561,11 @@ export function TaskDetailContent({
             <span className={`detail-column-badge badge-${workingTask.column}`}>
               {workflowColumnDisplayName ?? columnLabel(workingTask.column)}
             </span>
+            {hasTaskStatusBadge(workingTask.status) && (
+              <span className="card-status-badge" data-testid="task-detail-status-badge">
+                {taskStatusBadgeLabel}
+              </span>
+            )}
           </div>
           <div className="modal-header-actions">
             {!isEditing && canEdit && (

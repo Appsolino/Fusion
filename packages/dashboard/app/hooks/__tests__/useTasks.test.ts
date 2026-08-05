@@ -2621,9 +2621,9 @@ describe("useTasks", () => {
         MockEventSource.instances[0]._emit("task:updated", staleUpdate);
       });
 
-      // Should have in-progress column (from move) but updated title
+      // The equal-clock SSE patch cannot replace populated metadata without complete-fetch authority.
       expect(result.current.tasks[0].column).toBe("in-progress");
-      expect(result.current.tasks[0].title).toBe("Updated Title");
+      expect(result.current.tasks[0].title).toBe("Original Title");
     });
   });
 
@@ -3831,6 +3831,31 @@ describe("useTasks", () => {
         });
       });
       expect(result.current.tasks[0]?.recentAgentActivityAt).toBeUndefined();
+    });
+
+    it("retains the parked replan row plus explicit live-planner evidence until the status event lands", async () => {
+      const initialTask = createMockTask({
+        column: "triage",
+        status: "needs-replan",
+        updatedAt: "2026-08-05T10:00:00.000Z",
+      });
+      mockFetchTasks.mockResolvedValueOnce([initialTask]);
+      const { result } = renderHook(() => useTasks());
+
+      await waitFor(() => expect(result.current.tasks).toHaveLength(1));
+      act(() => {
+        MockEventSource.instances[0]._emit("agent:log", {
+          taskId: initialTask.id,
+          timestamp: "2026-08-05T10:00:01.000Z",
+          type: "tool",
+          agent: "triage",
+        });
+      });
+
+      expect(result.current.tasks[0]).toMatchObject({
+        status: "needs-replan",
+        recentAgentActivityAt: "2026-08-05T10:00:01.000Z",
+      });
     });
 
     /*

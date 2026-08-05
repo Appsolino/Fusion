@@ -252,22 +252,42 @@ The scheduler can refresh the board while a task-detail host holds a newer queue
 file-overlap snapshot. Providers (SWR, SSE, fetchTaskDetail, and local mutations) do not share an
 arrival order, so lifecycle rendering must use the existing timestamp evidence: a later `columnMovedAt`
 owns a real column transition; within that column, a later `updatedAt` owns status. Equal or absent
-clock evidence retains the already-visible known lifecycle state, preventing Todo/Queued flashes.
+clock evidence retains the already-visible known lifecycle state unless a complete server snapshot is
+newer than the row and resolves an equal legacy move clock; sparse SSE patches never receive that tie-break.
 
 This helper intentionally merges only defined sparse fields and retains a fetched detail's prompt/log
 when a slim board row arrives. Every open-detail host and useTasks ingestion uses this one boundary so
 one provider cannot regress a modal, main panel, split detail, dock, or popup independently.
 */
-export function mergeTaskSnapshot<T extends Task>(current: T, incoming: Task): T {
+export interface TaskSnapshotMergeOptions {
+  /** A complete board/detail fetch can resolve an otherwise ambiguous legacy column clock. */
+  fullSnapshot?: boolean;
+}
+
+export function mergeTaskSnapshot<T extends Task>(
+  current: T,
+  incoming: Task,
+  options: TaskSnapshotMergeOptions = {},
+): T {
   if (current.id !== incoming.id) return current;
 
   const merged = { ...current } as Record<string, unknown>;
   const updatedAtCompare = compareTimestamps(incoming.updatedAt, current.updatedAt);
-  const acceptsIncomingSnapshot = updatedAtCompare > 0 || !current.updatedAt;
+  /*
+  FNXC:TaskStatusConsistency 2026-08-05-04:14:
+  Missing clocks are not authority: a legacy detail row and a sparse SSE patch with neither clock
+  must retain populated metadata rather than letting their arrival order erase queue/workflow state.
+  Only a strictly newer update clock, or an explicitly complete equal-clock fetch below, may replace it.
+  */
+  const acceptsIncomingSnapshot = updatedAtCompare > 0;
+  // A fetch is explicitly marked complete at its call site. Equal clocks can only fill an absent
+  // field from a sparse event; they replace populated fields only for a complete fetch.
+  const acceptsEqualClockFields = options.fullSnapshot === true && updatedAtCompare === 0;
   for (const [key, value] of Object.entries(incoming)) {
-    // Older/equal scheduler payloads may enrich only fields that are still absent; they never
-    // rewrite a known snapshot simply because they arrived later.
-    if (value !== undefined && (acceptsIncomingSnapshot || merged[key] === undefined)) {
+    const canMergeField = acceptsIncomingSnapshot
+      || acceptsEqualClockFields
+      || (updatedAtCompare === 0 && merged[key] === undefined);
+    if (value !== undefined && canMergeField) {
       merged[key] = value;
     }
   }
@@ -277,6 +297,9 @@ export function mergeTaskSnapshot<T extends Task>(current: T, incoming: Task): T
   const incomingMovesColumn = incoming.column !== undefined
     && (current.column === undefined
       || columnMovedAtCompare > 0
+      // A full server snapshot is more complete than an SSE patch, so its newer task clock can
+      // resolve a legacy equal move clock without letting a sparse event move the card.
+      || (options.fullSnapshot === true && columnMovedAtCompare === 0 && updatedAtCompare > 0)
       // Older rows have no column-move clock. A newer task timestamp is still evidence for a real move.
       || (!current.columnMovedAt && !incoming.columnMovedAt && updatedAtCompare > 0));
   const incomingUpdatesStatus = incoming.status !== undefined
@@ -290,6 +313,16 @@ export function mergeTaskSnapshot<T extends Task>(current: T, incoming: Task): T
   merged.awaitingPlanning = acceptsIncomingSnapshot
     ? carryAwaitingPlanning(current, incoming)
     : current.awaitingPlanning;
+  /*
+  FNXC:TaskStatusConsistency 2026-08-05-04:05:
+  `recentAgentActivityAt` is a client-only bridge from an agent-log event to the next task snapshot.
+  Preserve it while a stale/equal payload is rejected so live Planning does not flash back to Queued,
+  but clear it when a newer authoritative row arrives without the marker. Equal-clock sparse events
+  may fill missing fields but cannot replace populated detail metadata; only complete fetches may do so.
+  */
+  merged.recentAgentActivityAt = acceptsIncomingSnapshot
+    ? incoming.recentAgentActivityAt
+    : current.recentAgentActivityAt;
 
   if ("prompt" in current && incoming.prompt === undefined) {
     merged.prompt = current.prompt;
@@ -299,8 +332,8 @@ export function mergeTaskSnapshot<T extends Task>(current: T, incoming: Task): T
   return merged as T;
 }
 
-function mergeIncomingTask(current: Task, incoming: Task): Task {
-  return mergeTaskSnapshot(current, incoming);
+function mergeIncomingTask(current: Task, incoming: Task, options?: TaskSnapshotMergeOptions): Task {
+  return mergeTaskSnapshot(current, incoming, options);
 }
 
 export interface UseTasksOptions {
@@ -544,7 +577,7 @@ export function useTasks(options?: UseTasksOptions) {
         // (or its board source) back merely because this fetch callback arrived last.
         const reconciledFetchedTasks = normalizedFetchedTasks.map((fetched) => {
           const current = previous.find((candidate) => candidate.id === fetched.id);
-          return current ? mergeIncomingTask(current, fetched) : fetched;
+          return current ? mergeIncomingTask(current, fetched, { fullSnapshot: true }) : fetched;
         });
         if (!shouldCarryOverArchived) return reconciledFetchedTasks;
 
