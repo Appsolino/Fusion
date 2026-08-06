@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { readAppFile } from "../../test/cssFixture";
+import { QuestionForm } from "../PlanningModeModal";
+
+afterEach(cleanup);
 
 describe("PlanningModeModal sequential layout", () => {
   it("uses one persistent responsive plan-and-question workspace", () => {
@@ -42,6 +48,35 @@ describe("PlanningModeModal sequential layout", () => {
     expect(component).toContain("openCommentEditor");
     expect(component).toContain("openCommentQuote");
     expect(component).toContain("pendingOpenCommentQuoteRef");
+  });
+
+  it("renders four normalized choices plus one Other without duplicate rows", () => {
+    const onSubmit = vi.fn();
+    render(<QuestionForm
+      question={{
+        id: "direction",
+        type: "single_select",
+        question: "Which direction should we take?",
+        options: [
+          { id: "speed", label: "Ship quickly", description: "Deliver a focused version.", pros: ["Fast"], cons: ["Narrow"] },
+          { id: "reliable", label: "Prioritize reliability", description: "Build safeguards first.", pros: ["Safe"], cons: ["Slow"] },
+          { id: "scope", label: "Reduce scope", description: "Deliver the essentials only.", pros: ["Small"], cons: ["Later"] },
+          { id: "learn", label: "Investigate first", description: "Research before deciding.", pros: ["Informed"], cons: ["Delayed"] },
+          { id: "speed", label: "Duplicate ID", description: "Must not render.", pros: [""], cons: [""] },
+          { id: "other", label: "Duplicate Other", isOther: true },
+        ],
+      }}
+      onSubmit={onSubmit}
+    />);
+
+    for (const label of ["Ship quickly", "Prioritize reliability", "Reduce scope", "Investigate first", "Other (write your own)"]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(screen.queryByText("Duplicate ID")).toBeNull();
+    expect(screen.getAllByRole("radio")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("radio", { name: /reduce scope/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^next$/i }));
+    expect(onSubmit).toHaveBeenCalledWith({ direction: "scope" });
   });
 
   it("keeps plan actions in a non-scrolling sibling footer with equal mobile columns", () => {
