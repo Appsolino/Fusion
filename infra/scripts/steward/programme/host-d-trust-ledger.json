@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "programme": "host-d-trust-hardening",
+  "trackingIssue": 109,
+  "repository": "Appsolino/Fusion",
+  "status": "IN_PROGRESS",
+  "hostP": "PROHIBITED",
+  "hostPAccessCount": 0,
+  "ownerInterventions": 0,
+  "startUtc": "2026-08-06T06:24:10Z",
+  "trustWindow": {
+    "startedUtc": "2026-08-06T06:24:10Z",
+    "minimumDays": 7,
+    "preferredDays": 14,
+    "resets": [],
+    "subsystemCounters": {
+      "applicationHealth": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
+      "criticalJourneys": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
+      "databaseIntegrity": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
+      "deploymentRollback": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
+      "automation": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
+      "securityBoundaries": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
+      "performanceStability": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null }
+    }
+  },
+  "baseline": {
+    "mainSha": "eb88a526c7aeba804cd0972ef1a43f4a606d23d6",
+    "activeRelease": "auto3-0.75.1-beta.1-7c62e652e56d",
+    "upstreamSha": "8120c07b6a074755f44ed22f066b40eaeb19f199",
+    "schemaCeiling": "0044",
+    "health": "ok",
+    "version": "0.75.1-beta.1",
+    "enginePaused": true
+  },
+  "cycles": [],
+  "defects": [],
+  "repairPrs": [],
+  "auto3Runs": [],
+  "rollbackRuns": [],
+  "healthHistory": [
+    {
+      "recordedUtc": "2026-08-06T06:24:10Z",
+      "status": "ok",
+      "version": "0.75.1-beta.1",
+      "enginePaused": true,
+      "releaseId": "auto3-0.75.1-beta.1-7c62e652e56d"
+    }
+  ],
+  "productDecisionBlockers": [
+    {
+      "id": "PDB-JOURNEY-SCOPE",
+      "summary": "Which in-engine user journeys are in Host D trust scope while enginePaused=true?",
+      "status": "OPEN"
+    },
+    {
+      "id": "PDB-V1A",
+      "summary": "Are V1A scenarios A–E still the critical journey set, or superseded?",
+      "status": "OPEN"
+    },
+    {
+      "id": "PDB-UNPAUSE",
+      "summary": "May any trust journey unpause staging, or only proof/disposable profiles?",
+      "status": "OPEN"
+    }
+  ],
+  "terminal": null,
+  "updatedUtc": "2026-08-06T06:24:10Z"
+}
