@@ -72,15 +72,9 @@ jobs:
           permission-actions: write
           permission-contents: read
 
-      - name: Configure gh
+      - name: Unit-test trust-cycle controller
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          echo "$GH_TOKEN" | gh auth login --with-token
-          gh auth setup-git
-
-      - name: Unit-test trust-cycle controller
         run: |
           set -euo pipefail
           node --test infra/scripts/steward/programme/__tests__/host-d-trust-cycle.test.mjs
@@ -102,7 +96,7 @@ jobs:
           echo "action=$ACTION" >> "$GITHUB_OUTPUT"
 
       - name: Local Host D health snapshot (self-hosted)
-        if: always()
+        if: success()
         run: |
           set -euo pipefail
           curl -fsS http://127.0.0.1:4140/api/health | tee "$RUNNER_TEMP/health.json"
@@ -110,11 +104,13 @@ jobs:
           python3 - <<'PY'
           import json, os
           from datetime import datetime, timezone
+          from pathlib import Path
           health=json.load(open(os.environ["RUNNER_TEMP"]+"/health.json"))
-          report=json.load(open(os.environ["RUNNER_TEMP"]+"/trust-cycle-report.json"))
+          rp=Path(os.environ["RUNNER_TEMP"])/"trust-cycle-report.json"
+          report=json.loads(rp.read_text()) if rp.exists() else {}
           report["liveHealth"]= {"status": health.get("status"), "version": health.get("version")}
           report["recordedUtc"]= datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-          open(os.environ["RUNNER_TEMP"]+"/trust-cycle-report.json","w").write(json.dumps(report, indent=2)+"\n")
+          rp.write_text(json.dumps(report, indent=2)+"\n")
           print(json.dumps(report["liveHealth"]))
           PY
 
