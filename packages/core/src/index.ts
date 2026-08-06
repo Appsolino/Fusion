@@ -1145,6 +1145,7 @@ export {
   getLatestFailedPreMergeReviewStep,
   isTaskReadyForMerge,
   allowsAutoMergeProcessing,
+  hasUserAutoMergeHold,
   isSharedBranchGroupMemberIntegration,
   isLiveSharedBranchGroupMemberIntegration,
   resolveEffectiveAutoMerge,

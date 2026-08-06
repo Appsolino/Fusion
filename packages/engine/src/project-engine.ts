@@ -24,6 +24,7 @@ import {
   resolveColumnFlags,
   type TraitFlags,
   allowsAutoMergeProcessing,
+  hasUserAutoMergeHold,
   compareTasksByPriorityThenAgeAndId,
   emitOverseerConfirmation,
   emitOverseerEscalation,
@@ -2935,23 +2936,27 @@ export class ProjectEngine {
    * pushed wins. listTasks returns createdAt ASC — without this sort an
    * older low-priority task would start before a later urgent one.
    */
-  private async allowInReviewMergeProcessing(task: Pick<Task, "branchContext" | "autoMerge">, settings: Pick<Settings, "autoMerge">, store: Partial<Pick<TaskStore, "getBranchGroup">> = this.runtime.getTaskStore()): Promise<boolean> {
-    if (allowsAutoMergeProcessing(task, settings)) {
-      return true;
-    }
+  private async allowInReviewMergeProcessing(task: Pick<Task, "branchContext" | "autoMerge" | "autoMergeProvenance">, settings: Pick<Settings, "autoMerge">, store: Partial<Pick<TaskStore, "getBranchGroup">> = this.runtime.getTaskStore()): Promise<boolean> {
+    // FNXC:SharedBranchMemberHold 2026-08-05-23:35: resolve group liveness before
+    // general admission. Only a live intermediate group may bypass false policy;
+    // a user-authored Off always remains a manual hold.
+    if (hasUserAutoMergeHold(task)) return false;
 
     const groupId = task.branchContext?.groupId?.trim();
     const branchGroup = groupId ? await store.getBranchGroup?.(groupId) : null;
-    if (!branchGroup || branchGroup.status !== "open" || !branchGroup.branchName.trim()) {
-      return false;
+    const projectDefaultBranch = await resolveIntegrationBranch(this.config.workingDirectory, settings as Settings);
+    if (isLiveSharedBranchGroupMemberIntegration(task, branchGroup, projectDefaultBranch)) {
+      return true;
     }
 
-    const projectDefaultBranch = await resolveIntegrationBranch(this.config.workingDirectory, settings as Settings);
     /*
-    FNXC:AutoMergeHold 2026-07-09-16:53:
-    FN-7750 / Runfusion#1980: shared-branch member integration may bypass the global `autoMerge:false` hold only while its group row is still open. Stale, finalized, abandoned, or missing groups must flow through the standalone manual-hold gate so no task provenance can solo auto-merge to main.
+    FNXC:AutoMergeHold 2026-08-05-23:35:
+    A shared member with a missing, closed, or default-branch group is no longer
+    an intermediate integration. Its false task value must use the standalone
+    manual-release path even when project auto-merge is enabled.
     */
-    return isLiveSharedBranchGroupMemberIntegration(task, branchGroup, projectDefaultBranch);
+    if (task.autoMerge === false && groupId) return false;
+    return allowsAutoMergeProcessing(task, settings);
   }
 
   private async emitLegacyAutoMergeStampAdvisory(store: TaskStore): Promise<void> {

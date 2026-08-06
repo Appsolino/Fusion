@@ -3680,7 +3680,7 @@ describe("allowInReviewMergeProcessing per-task autoMerge override", () => {
     await expect(gate({ autoMerge: false }, { autoMerge: false })).resolves.toBe(false);
   });
 
-  it("keeps everything flowing when the global setting is on — explicit autoMerge:false is parked manual-required downstream", async () => {
+  it("keeps standalone values flowing when the global setting is on", async () => {
     await expect(gate({}, { autoMerge: true })).resolves.toBe(true);
     await expect(gate({ autoMerge: false }, { autoMerge: true })).resolves.toBe(true);
   });
@@ -3691,6 +3691,17 @@ describe("allowInReviewMergeProcessing per-task autoMerge override", () => {
       { autoMerge: false, integrationBranch: "main" },
       { status: "open", branchName: "mission/M-3324" },
     )).resolves.toBe(true);
+  });
+
+  it("holds only an operator-authored false override before live member integration", async () => {
+    const shared = { branchContext: { assignmentMode: "shared", groupId: "grp-1" } as Task["branchContext"] };
+    const settings = { autoMerge: false, integrationBranch: "main" };
+    const group = { status: "open" as const, branchName: "mission/M-3324" };
+
+    await expect(gate({ ...shared, autoMerge: false, autoMergeProvenance: "user" }, settings, group)).resolves.toBe(false);
+    await expect(gate({ ...shared, autoMerge: false, autoMergeProvenance: "mission" }, settings, group)).resolves.toBe(true);
+    await expect(gate({ ...shared, autoMerge: false, autoMergeProvenance: "legacy-stamp" }, settings, group)).resolves.toBe(true);
+    await expect(gate({ ...shared, autoMerge: false }, settings, group)).resolves.toBe(true);
   });
 
   it("keeps live shared-branch-group member integration on the default branch behind the manual gate", async () => {
@@ -3705,12 +3716,50 @@ describe("allowInReviewMergeProcessing per-task autoMerge override", () => {
     ["missing", null],
     ["finalized", { status: "finalized" as const }],
     ["abandoned", { status: "abandoned" as const }],
-  ])("blocks shared-branch-group member integration for %s groups when global autoMerge is off", async (_label, branchGroup) => {
+    ["default-branch", { status: "open" as const, branchName: "main" }],
+  ])("blocks false shared members for %s groups even when global autoMerge is on", async (_label, branchGroup) => {
     await expect(gate(
-      { branchContext: { assignmentMode: "shared", groupId: "grp-1" } as Task["branchContext"] },
-      { autoMerge: false },
+      { branchContext: { assignmentMode: "shared", groupId: "grp-1" } as Task["branchContext"], autoMerge: false, autoMergeProvenance: "mission" },
+      { autoMerge: true, integrationBranch: "main" },
       branchGroup,
     )).resolves.toBe(false);
+  });
+
+  it("keeps stale false members in the interpreter manual hold until the explicit release path merges once into the group", async () => {
+    const task = {
+      id: "FN-8811",
+      column: "in-review",
+      branch: "fusion/fn-8811",
+      autoMerge: false,
+      autoMergeProvenance: "mission",
+      branchContext: { assignmentMode: "shared", groupId: "BG-8811", source: "mission" },
+    } as Task;
+    const settings = { autoMerge: true, globalPause: false, enginePaused: false, integrationBranch: "main" } as Settings;
+    const store = {
+      getTask: vi.fn(async () => task),
+      getSettings: vi.fn(async () => settings),
+      getBranchGroup: vi.fn(async () => ({ status: "open", branchName: "main" })),
+      getTaskWorkflowSelection: () => undefined,
+      getTaskWorkflowSelectionAsync: async () => undefined,
+    } as unknown as TaskStore;
+    const onMerge = vi.fn(async () => ({ task, branch: task.branch ?? "", merged: true, mergeTargetBranch: "mission/M-8811" }));
+    const self: any = {
+      config: { workingDirectory: "/tmp/proj_test" },
+      runtime: { getTaskStore: () => store },
+      onMerge,
+    };
+    self.allowInReviewMergeProcessing = (candidate: Task, candidateSettings: Settings, candidateStore: TaskStore) =>
+      (ProjectEngine.prototype as any).allowInReviewMergeProcessing.call(self, candidate, candidateSettings, candidateStore);
+
+    const held = await (ProjectEngine.prototype as any).requestInterpreterMerge.call(self, task.id);
+
+    expect(held).toMatchObject({ merged: false, noOp: true });
+    expect(onMerge).not.toHaveBeenCalled();
+
+    // The operator's explicit release uses onMerge, not the auto-merge requester.
+    await self.onMerge(task.id, { manual: true });
+    expect(onMerge).toHaveBeenCalledTimes(1);
+    expect(onMerge).toHaveBeenCalledWith(task.id, { manual: true });
   });
 
   it.each([
