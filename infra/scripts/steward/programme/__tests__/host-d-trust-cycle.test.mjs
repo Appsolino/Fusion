@@ -11,6 +11,7 @@ import {
   findInProgressTrustRuns,
   isTrustProgrammeRun,
   executeTrustDecision,
+  resolveTrustCounters,
 } from "../host-d-trust-cycle.mjs";
 
 describe("host-d-trust-cycle discovery", () => {
@@ -141,3 +142,23 @@ describe("executeTrustDecision dry-run default", () => {
     assert.equal(out.wouldDispatch, true);
   });
 });
+
+
+describe("resolveTrustCounters", () => {
+  it("takes max Pass counts when top-level and trustWindow disagree", () => {
+    const c = resolveTrustCounters({
+      counters: { proofRollbacksPass: 1, backupRestorePass: 2, requiredProofRollbacks: 2 },
+      trustWindow: { counters: { proofRollbacksPass: 2, backupRestorePass: 1, requiredProofRollbacks: 2 } },
+    });
+    assert.equal(c.proofRollbacksPass, 2);
+    assert.equal(c.backupRestorePass, 2);
+  });
+
+  it("falls back to trustWindow.counters when top-level missing", () => {
+    const c = resolveTrustCounters({
+      trustWindow: { counters: { proofRollbacksPass: 2, requiredProofRollbacks: 2 } },
+    });
+    assert.equal(c.proofRollbacksPass, 2);
+  });
+});
+

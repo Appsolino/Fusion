@@ -29,6 +29,31 @@ export function loadTrustLedger(path = TRUST_LEDGER_PATH) {
  * @param {object} ledger
  * @param {string} [path]
  */
+
+/**
+ * Resolve trust counters. Prefer top-level `counters` (controller contract),
+ * fall back to `trustWindow.counters`, and when both exist take the max of
+ * *Pass counts so a partial ledger sync cannot under-count completed proofs.
+ * @param {object} ledger
+ */
+export function resolveTrustCounters(ledger) {
+  const a = (ledger && ledger.counters) || {};
+  const b = (ledger && ledger.trustWindow && ledger.trustWindow.counters) || {};
+  /** @type {Record<string, unknown>} */
+  const out = { ...b, ...a };
+  for (const key of Object.keys({ ...a, ...b })) {
+    if (!/Pass$/i.test(key)) continue;
+    const va = Number(a[key]);
+    const vb = Number(b[key]);
+    const aOk = Number.isFinite(va);
+    const bOk = Number.isFinite(vb);
+    if (aOk && bOk) out[key] = Math.max(va, vb);
+    else if (aOk) out[key] = va;
+    else if (bOk) out[key] = vb;
+  }
+  return out;
+}
+
 export function saveTrustLedger(ledger, path = TRUST_LEDGER_PATH) {
   ledger.updatedUtc = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   writeFileSync(path, `${JSON.stringify(ledger, null, 2)}\n`);
@@ -183,7 +208,7 @@ export function decideNextTrustAction(input) {
     };
   }
 
-  const counters = ledger.counters || {};
+  const counters = resolveTrustCounters(ledger);
   const stagingPass = Number(counters.stagingDeploysPass || 0);
   const rollbackPass = Number(counters.proofRollbacksPass || 0);
   const backupPass = Number(counters.backupRestorePass || 0);
@@ -302,7 +327,7 @@ function main() {
     })),
     decision,
     result,
-    counters: ledger.counters || null,
+    counters: resolveTrustCounters(ledger),
   };
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   if (result.critical) process.exit(3);
