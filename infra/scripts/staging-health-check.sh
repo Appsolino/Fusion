@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # FNXC:Phase2A 2026-07-30-07:45: Localhost staging health + monitoring textfile exporter.
+# FNXC:HostDTrust 2026-08-06: Derive EXPECTED_* from active release when unset (#111).
 # FNXC:Phase2A 2026-07-30-07:45: Exit non-zero when composite health is false; write PROM/JSON atomically first.
 # FNXC:Phase2A 2026-07-30-07:45: migration_ok requires fusion_schema_migrations max(version)==EXPECTED_HIGHEST_MIGRATION.
 # FNXC:Phase2A 2026-07-30-07:45: acceptance_ok requires every expected ACC-ENV result PASS and non-stale JSON.
@@ -13,8 +14,10 @@ PROM_DIR=/var/lib/node_exporter/textfile_collector
 PROM_FILE="$PROM_DIR/appsolino_fusion_staging.prom"
 STATUS_JSON=/srv/appsolino-fusion/staging/state/health-status.json
 ACCEPTANCE_JSON=/srv/appsolino-fusion/staging/state/acceptance-result.json
-EXPECTED_VERSION="${EXPECTED_VERSION:-0.74.0-beta.5}"
-EXPECTED_HIGHEST_MIGRATION="${EXPECTED_HIGHEST_MIGRATION:-0036}"
+# Defaults are intentionally empty; filled from active RELEASE_IDENTITY / migrations
+# after fusion.env so env pins still win for negative tests (#111 / programme #109).
+EXPECTED_VERSION="${EXPECTED_VERSION:-}"
+EXPECTED_HIGHEST_MIGRATION="${EXPECTED_HIGHEST_MIGRATION:-}"
 ACCEPTANCE_MAX_AGE_SECONDS="${ACCEPTANCE_MAX_AGE_SECONDS:-604800}"
 NOTES_FILE=$(mktemp)
 mkdir -p "$PROM_DIR" /srv/appsolino-fusion/staging/state
@@ -22,6 +25,22 @@ mkdir -p "$PROM_DIR" /srv/appsolino-fusion/staging/state
 if [[ -f "$ENV_FILE" ]]; then set -a; source "$ENV_FILE"; set +a; fi
 PORT="${PORT:-4140}"
 HOST="${HOST:-127.0.0.1}"
+
+# Derive expected identity from the active Host D release when not pinned.
+if [[ -z "$EXPECTED_VERSION" && -f "$CURRENT/RELEASE_IDENTITY" ]]; then
+  EXPECTED_VERSION="$(grep -E '^VERSION=' "$CURRENT/RELEASE_IDENTITY" | head -1 | cut -d= -f2- || true)"
+fi
+if [[ -z "$EXPECTED_HIGHEST_MIGRATION" && -d "$CURRENT/migrations" ]]; then
+  EXPECTED_HIGHEST_MIGRATION="$(
+    find "$CURRENT/migrations" -maxdepth 1 -type f -name '[0-9][0-9][0-9][0-9]_*.sql' -printf '%f\n' 2>/dev/null       | sed -n 's/^\([0-9][0-9][0-9][0-9]\)_.*/\1/p'       | sort -u       | tail -1
+  )"
+fi
+if [[ -z "$EXPECTED_VERSION" ]]; then
+  EXPECTED_VERSION="unknown"
+fi
+if [[ -z "$EXPECTED_HIGHEST_MIGRATION" ]]; then
+  EXPECTED_HIGHEST_MIGRATION="none"
+fi
 
 ok=1
 service_active=0
