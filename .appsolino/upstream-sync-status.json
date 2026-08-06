@@ -1,12 +1,15 @@
 {
-  "outcome": "conflict-resolved",
-  "recordedAt": "2026-08-05T10:30:00.000Z",
+  "outcome": "merged",
+  "recordedAt": "2026-08-06T09:23:48.859Z",
   "integrationBranch": "main",
-  "appsolinoSha": "50aaf895ceb67251f1d7297d07606486068d40da",
-  "upstreamSha": "8120c07b6a074755f44ed22f066b40eaeb19f199",
-  "resolution": "semantic-executor-auto4-correction-b + regenerated-lifecycle-baseline + agent-browser-install-build-overlay + tip-refresh-from-68e964",
-  "touchesWorkflows": true,
-  "touchesMigrations": true,
-  "touchesLockfile": true,
-  "supersedes": ["#84", "#97"]
+  "appsolinoSha": "1a2ad4685e532715706dbafc7b2215dccdc8ad36",
+  "upstreamSha": "64413f4e8d278c94ac7a4cc64a2f83d7e83edd46",
+  "mergeBase": "8120c07b6a074755f44ed22f066b40eaeb19f199",
+  "ahead": 214,
+  "behind": 10,
+  "conflictedFiles": [],
+  "touchesWorkflows": false,
+  "touchesMigrations": false,
+  "touchesLockfile": false,
+  "changedFileCount": 152
 }
