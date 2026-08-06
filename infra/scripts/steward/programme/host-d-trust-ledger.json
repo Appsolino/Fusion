@@ -17,7 +17,8 @@
       "applicationHealth": {
         "startedUtc": "2026-08-06T06:24:10Z",
         "lastResetUtc": null,
-        "lastResetReason": null
+        "lastResetReason": null,
+        "lastEvidenceUtc": "2026-08-06T07:42:44Z"
       },
       "criticalJourneys": {
         "startedUtc": "2026-08-06T06:24:10Z",
@@ -27,12 +28,14 @@
       "databaseIntegrity": {
         "startedUtc": "2026-08-06T06:24:10Z",
         "lastResetUtc": null,
-        "lastResetReason": null
+        "lastResetReason": null,
+        "lastEvidenceUtc": "2026-08-06T07:42:44Z"
       },
       "deploymentRollback": {
         "startedUtc": "2026-08-06T06:24:10Z",
         "lastResetUtc": null,
-        "lastResetReason": null
+        "lastResetReason": null,
+        "lastEvidenceUtc": "2026-08-06T07:42:44Z"
       },
       "automation": {
         "startedUtc": "2026-08-06T06:24:10Z",
@@ -49,6 +52,15 @@
         "lastResetUtc": null,
         "lastResetReason": null
       }
+    },
+    "counters": {
+      "stagingDeploysPass": 1,
+      "proofRollbacksPass": 1,
+      "backupRestorePass": 1,
+      "restartsPass": 1,
+      "requiredStagingDeploys": 3,
+      "requiredProofRollbacks": 2,
+      "requiredBackupRestores": 2
     }
   },
   "baseline": {
@@ -64,8 +76,8 @@
     {
       "id": "cycle-1",
       "startedUtc": "2026-08-06T06:24:10Z",
-      "updatedUtc": "2026-08-06T07:22:08Z",
-      "status": "IN_PROGRESS",
+      "updatedUtc": "2026-08-06T07:42:44Z",
+      "status": "COMPLETE",
       "results": {
         "B-health-api": "PASS",
         "B-enginePaused": "PASS",
@@ -76,7 +88,7 @@
         "ACC-ENV-03-08": "PASS",
         "I-monitor-baseline": "FIXED",
         "E-staging-deploy": "PASS",
-        "E-proof-rollback": "IN_PROGRESS",
+        "E-proof-rollback": "PASS",
         "G-active-sync-prs": 0,
         "hostPAccess": 0,
         "I-auto3-evidence-complete": "PASS"
@@ -103,9 +115,18 @@
         {
           "id": 31080371857,
           "profile": "proof",
-          "status": "in_progress",
+          "terminal": "ROLLED_BACK",
+          "classification": "PASS",
           "sourceSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
-          "force_smoke_fail": true
+          "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+          "force_smoke_fail": true,
+          "previousReleaseRestored": true,
+          "hostPAccessed": false,
+          "healthAfter": "ok",
+          "enginePausedAfter": true,
+          "workflowConclusion": "success",
+          "recordedUtc": "2026-08-06T07:31:11Z",
+          "recoveredUtc": "2026-08-06T07:42:44Z"
         }
       ],
       "activeReleaseAfter": "auto3-0.75.1-beta.1-aa107c9ace98"
@@ -168,12 +189,38 @@
     {
       "id": 31080371857,
       "profile": "proof",
-      "status": "in_progress",
+      "terminal": "ROLLED_BACK",
+      "classification": "PASS",
       "sourceSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
-      "force_smoke_fail": true
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "force_smoke_fail": true,
+      "previousReleaseRestored": true,
+      "hostPAccessed": false,
+      "healthAfter": "ok",
+      "enginePausedAfter": true,
+      "workflowConclusion": "success",
+      "recordedUtc": "2026-08-06T07:31:11Z",
+      "recoveredUtc": "2026-08-06T07:42:44Z"
     }
   ],
-  "rollbackRuns": [],
+  "rollbackRuns": [
+    {
+      "id": 31080371857,
+      "profile": "proof",
+      "terminal": "ROLLED_BACK",
+      "classification": "PASS",
+      "sourceSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "force_smoke_fail": true,
+      "previousReleaseRestored": true,
+      "hostPAccessed": false,
+      "healthAfter": "ok",
+      "enginePausedAfter": true,
+      "workflowConclusion": "success",
+      "recordedUtc": "2026-08-06T07:31:11Z",
+      "recoveredUtc": "2026-08-06T07:42:44Z"
+    }
+  ],
   "healthHistory": [
     {
       "recordedUtc": "2026-08-06T06:24:10Z",
@@ -197,6 +244,15 @@
       "enginePaused": true,
       "monitorOk": true,
       "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98"
+    },
+    {
+      "recordedUtc": "2026-08-06T07:42:44Z",
+      "status": "ok",
+      "version": "0.75.1-beta.1",
+      "enginePaused": true,
+      "monitorOk": true,
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "note": "recovered-after-cursor-wait-skip"
     }
   ],
   "productDecisionBlockers": [
@@ -217,5 +273,30 @@
     }
   ],
   "terminal": null,
-  "updatedUtc": "2026-08-06T07:22:08Z"
+  "updatedUtc": "2026-08-06T07:45:33Z",
+  "recovery": {
+    "recoveredUtc": "2026-08-06T07:42:44Z",
+    "reason": "Cursor foreground wait skipped while AUTO-3 still running",
+    "stagingRunId": 31078888130,
+    "proofRunId": 31080371857,
+    "noDuplicateRedispatch": true
+  },
+  "nextEligible": {
+    "action": "second-backup-restore",
+    "then": [
+      "process-kill-recovery",
+      "second-proof-rollback",
+      "durable-controller-activate"
+    ],
+    "note": "Do not redispatch Cycle 1 staging/proof; discover existing runs first"
+  },
+  "counters": {
+    "stagingDeploysPass": 1,
+    "proofRollbacksPass": 1,
+    "backupRestorePass": 1,
+    "restartsPass": 1,
+    "requiredStagingDeploys": 3,
+    "requiredProofRollbacks": 2,
+    "requiredBackupRestores": 2
+  }
 }
