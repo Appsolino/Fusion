@@ -55,7 +55,7 @@ Automation/ops journeys proceed independently of these blockers.
 
 | ID | Test | Status | Evidence |
 | --- | --- | --- | --- |
-| E-01 | Standard/idempotent staging deploy | PASS | AUTO-3 staging |
+| E-01 | Standard/idempotent staging deploy | PASS | AUTO-3 staging 31078888130 + 31090853566; stagingDeploysPass 2/3 |
 | E-02 | Proof-profile deploy | PASS | AUTO-3 31083830588 (ROLLED_BACK path) |
 | E-03 | force_smoke_fail → ROLLED_BACK | PASS | 31080371857 + 31083830588; proofRollbacksPass 2/2 |
 | E-04 | Previous release restored + health | PASS | previousReleaseRestored=true; staging healthy |
