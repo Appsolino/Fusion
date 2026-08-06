@@ -14,29 +14,215 @@
     "preferredDays": 14,
     "resets": [],
     "subsystemCounters": {
-      "applicationHealth": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
-      "criticalJourneys": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
-      "databaseIntegrity": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
-      "deploymentRollback": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
-      "automation": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
-      "securityBoundaries": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null },
-      "performanceStability": { "startedUtc": "2026-08-06T06:24:10Z", "lastResetUtc": null, "lastResetReason": null }
+      "applicationHealth": {
+        "startedUtc": "2026-08-06T06:24:10Z",
+        "lastResetUtc": null,
+        "lastResetReason": null,
+        "lastEvidenceUtc": "2026-08-06T07:42:44Z"
+      },
+      "criticalJourneys": {
+        "startedUtc": "2026-08-06T06:24:10Z",
+        "lastResetUtc": null,
+        "lastResetReason": null
+      },
+      "databaseIntegrity": {
+        "startedUtc": "2026-08-06T06:24:10Z",
+        "lastResetUtc": null,
+        "lastResetReason": null,
+        "lastEvidenceUtc": "2026-08-06T07:42:44Z"
+      },
+      "deploymentRollback": {
+        "startedUtc": "2026-08-06T06:24:10Z",
+        "lastResetUtc": null,
+        "lastResetReason": null,
+        "lastEvidenceUtc": "2026-08-06T07:42:44Z"
+      },
+      "automation": {
+        "startedUtc": "2026-08-06T06:24:10Z",
+        "lastResetUtc": null,
+        "lastResetReason": null
+      },
+      "securityBoundaries": {
+        "startedUtc": "2026-08-06T06:24:10Z",
+        "lastResetUtc": null,
+        "lastResetReason": null
+      },
+      "performanceStability": {
+        "startedUtc": "2026-08-06T06:24:10Z",
+        "lastResetUtc": null,
+        "lastResetReason": null
+      }
+    },
+    "counters": {
+      "stagingDeploysPass": 1,
+      "proofRollbacksPass": 1,
+      "backupRestorePass": 1,
+      "restartsPass": 1,
+      "requiredStagingDeploys": 3,
+      "requiredProofRollbacks": 2,
+      "requiredBackupRestores": 2
     }
   },
   "baseline": {
-    "mainSha": "eb88a526c7aeba804cd0972ef1a43f4a606d23d6",
-    "activeRelease": "auto3-0.75.1-beta.1-7c62e652e56d",
+    "mainSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+    "activeRelease": "auto3-0.75.1-beta.1-aa107c9ace98",
     "upstreamSha": "8120c07b6a074755f44ed22f066b40eaeb19f199",
     "schemaCeiling": "0044",
     "health": "ok",
     "version": "0.75.1-beta.1",
     "enginePaused": true
   },
-  "cycles": [],
-  "defects": [],
-  "repairPrs": [],
-  "auto3Runs": [],
-  "rollbackRuns": [],
+  "cycles": [
+    {
+      "id": "cycle-1",
+      "startedUtc": "2026-08-06T06:24:10Z",
+      "updatedUtc": "2026-08-06T07:42:44Z",
+      "status": "COMPLETE",
+      "results": {
+        "B-health-api": "PASS",
+        "B-enginePaused": "PASS",
+        "A-release-identity": "PASS",
+        "F-controlled-restart": "PASS",
+        "D-backup": "PASS",
+        "D-disposable-restore": "PASS",
+        "ACC-ENV-03-08": "PASS",
+        "I-monitor-baseline": "FIXED",
+        "E-staging-deploy": "PASS",
+        "E-proof-rollback": "PASS",
+        "G-active-sync-prs": 0,
+        "hostPAccess": 0,
+        "I-auto3-evidence-complete": "PASS"
+      },
+      "evidenceDir": "/srv/appsolino-fusion/tmp/host-d-trust-cycle1-20260806T062548Z",
+      "auto3Runs": [
+        {
+          "id": 31078888130,
+          "profile": "staging",
+          "terminal": "DEPLOYED",
+          "sourceSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+          "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+          "health": "ok",
+          "enginePaused": true,
+          "hostPAccessed": false
+        },
+        {
+          "id": 31079037988,
+          "profile": "proof",
+          "terminal": "BLOCKED",
+          "reason": "IMMUTABLE_CONFLICT",
+          "issue": 114
+        },
+        {
+          "id": 31080371857,
+          "profile": "proof",
+          "terminal": "ROLLED_BACK",
+          "classification": "PASS",
+          "sourceSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+          "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+          "force_smoke_fail": true,
+          "previousReleaseRestored": true,
+          "hostPAccessed": false,
+          "healthAfter": "ok",
+          "enginePausedAfter": true,
+          "workflowConclusion": "success",
+          "recordedUtc": "2026-08-06T07:31:11Z",
+          "recoveredUtc": "2026-08-06T07:42:44Z"
+        }
+      ],
+      "activeReleaseAfter": "auto3-0.75.1-beta.1-aa107c9ace98"
+    }
+  ],
+  "defects": [
+    {
+      "issue": 111,
+      "fingerprint": "host-d/monitor-baseline-drift",
+      "severity": "MEDIUM",
+      "status": "CLOSED",
+      "repairPr": 112,
+      "exactHead": "ab32fca88f034ae6c157a52821aae78ba2331fd1",
+      "mergeSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+      "closedUtc": "2026-08-06T06:56:00Z",
+      "subsystemReset": "observability/monitoring"
+    },
+    {
+      "issue": 114,
+      "fingerprint": "auto3/immutable-conflict-same-sha-rebuild",
+      "severity": "MEDIUM",
+      "status": "CLOSED_ACCEPTED_GUARD",
+      "evidenceRun": 31079037988,
+      "resolution": "Use current main tip for proof drills; do not rebuild obsolete same-SHA release dirs. Successful proof 31080371857 supersedes.",
+      "closedUtc": "2026-08-06T07:46:19Z"
+    }
+  ],
+  "repairPrs": [
+    {
+      "number": 110,
+      "title": "docs(host-d): trust-hardening programme #109",
+      "exactHead": "4152dab86238f92ae525a8615944c2c31899b245",
+      "mergeSha": "c3a8d988ef26b03ab688380060f09da176dce41a",
+      "risk": "LOW"
+    },
+    {
+      "number": 112,
+      "title": "fix(host-d): monitor baseline derives from active release (#111)",
+      "exactHead": "ab32fca88f034ae6c157a52821aae78ba2331fd1",
+      "mergeSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+      "risk": "LOW"
+    }
+  ],
+  "auto3Runs": [
+    {
+      "id": 31078888130,
+      "profile": "staging",
+      "terminal": "DEPLOYED",
+      "sourceSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "health": "ok",
+      "enginePaused": true,
+      "hostPAccessed": false
+    },
+    {
+      "id": 31079037988,
+      "profile": "proof",
+      "terminal": "BLOCKED",
+      "reason": "IMMUTABLE_CONFLICT",
+      "issue": 114
+    },
+    {
+      "id": 31080371857,
+      "profile": "proof",
+      "terminal": "ROLLED_BACK",
+      "classification": "PASS",
+      "sourceSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "force_smoke_fail": true,
+      "previousReleaseRestored": true,
+      "hostPAccessed": false,
+      "healthAfter": "ok",
+      "enginePausedAfter": true,
+      "workflowConclusion": "success",
+      "recordedUtc": "2026-08-06T07:31:11Z",
+      "recoveredUtc": "2026-08-06T07:42:44Z"
+    }
+  ],
+  "rollbackRuns": [
+    {
+      "id": 31080371857,
+      "profile": "proof",
+      "terminal": "ROLLED_BACK",
+      "classification": "PASS",
+      "sourceSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "force_smoke_fail": true,
+      "previousReleaseRestored": true,
+      "hostPAccessed": false,
+      "healthAfter": "ok",
+      "enginePausedAfter": true,
+      "workflowConclusion": "success",
+      "recordedUtc": "2026-08-06T07:31:11Z",
+      "recoveredUtc": "2026-08-06T07:42:44Z"
+    }
+  ],
   "healthHistory": [
     {
       "recordedUtc": "2026-08-06T06:24:10Z",
@@ -44,6 +230,39 @@
       "version": "0.75.1-beta.1",
       "enginePaused": true,
       "releaseId": "auto3-0.75.1-beta.1-7c62e652e56d"
+    },
+    {
+      "recordedUtc": "2026-08-06T07:08:56Z",
+      "status": "ok",
+      "version": "0.75.1-beta.1",
+      "enginePaused": true,
+      "monitorOk": true,
+      "releaseId": "auto3-0.75.1-beta.1-7c62e652e56d"
+    },
+    {
+      "recordedUtc": "2026-08-06T07:22:08Z",
+      "status": "ok",
+      "version": "0.75.1-beta.1",
+      "enginePaused": true,
+      "monitorOk": true,
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98"
+    },
+    {
+      "recordedUtc": "2026-08-06T07:42:44Z",
+      "status": "ok",
+      "version": "0.75.1-beta.1",
+      "enginePaused": true,
+      "monitorOk": true,
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "note": "recovered-after-cursor-wait-skip"
+    },
+    {
+      "recordedUtc": "2026-08-06T07:46:19Z",
+      "status": "ok",
+      "version": "0.75.1-beta.1",
+      "enginePaused": true,
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "note": "second-backup-restore-pass"
     }
   ],
   "productDecisionBlockers": [
@@ -54,7 +273,7 @@
     },
     {
       "id": "PDB-V1A",
-      "summary": "Are V1A scenarios A–E still the critical journey set, or superseded?",
+      "summary": "Are V1A scenarios A\u2013E still the critical journey set, or superseded?",
       "status": "OPEN"
     },
     {
@@ -64,5 +283,26 @@
     }
   ],
   "terminal": null,
-  "updatedUtc": "2026-08-06T06:24:10Z"
+  "updatedUtc": "2026-08-06T07:46:19Z",
+  "recovery": {
+    "recoveredUtc": "2026-08-06T07:42:44Z",
+    "reason": "Cursor foreground wait skipped while AUTO-3 still running",
+    "stagingRunId": 31078888130,
+    "proofRunId": 31080371857,
+    "noDuplicateRedispatch": true
+  },
+  "nextEligible": {
+    "action": "dispatch-proof-rollback",
+    "reason": "need proofRollbacksPass 2/2",
+    "after": "second-staging-or-soak"
+  },
+  "counters": {
+    "stagingDeploysPass": 1,
+    "proofRollbacksPass": 1,
+    "backupRestorePass": 2,
+    "restartsPass": 1,
+    "requiredStagingDeploys": 3,
+    "requiredProofRollbacks": 2,
+    "requiredBackupRestores": 2
+  }
 }

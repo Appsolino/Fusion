@@ -1,0 +1,164 @@
+# FNXC:HostDTrust 2026-08-06:
+# Durable Host D trust-hardening cycle controller for programme #109.
+# Continues when interactive Cursor sessions close. Discovers existing AUTO-3
+# runs before any dispatch. Host P credentials must not be present.
+# Does not reopen programme #78 or issue #105.
+
+name: Host D Trust Cycle
+
+on:
+  schedule:
+    # Hourly — bounded reconcile; never long-polls in Cursor.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "If true, may dispatch the next eligible AUTO-3 (still skips when in-flight)"
+        required: false
+        type: boolean
+        default: false
+      mode:
+        description: "reconcile-only | decide | execute-next"
+        required: false
+        type: choice
+        options:
+          - reconcile-only
+          - decide
+          - execute-next
+        default: decide
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: host-d-trust-cycle
+  cancel-in-progress: false
+
+jobs:
+  cycle:
+    name: Reconcile trust ledger + next eligible step
+    runs-on: [self-hosted, appsolino-fusion]
+    steps:
+      - name: Refuse Host P / production secrets in this job
+        env:
+          HOST_P_DEPLOY_SSH_KEY: ${{ secrets.HOST_P_DEPLOY_SSH_KEY }}
+          HOST_P_KNOWN_HOSTS: ${{ secrets.HOST_P_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${HOST_P_DEPLOY_SSH_KEY:-}" || -n "${HOST_P_KNOWN_HOSTS:-}" ]]; then
+            echo "::error::Host P secrets must not be available to Host D trust cycle"
+            exit 1
+          fi
+          echo "host-p-secrets-absent"
+
+      - name: Checkout Appsolino main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create GitHub App token (issues + actions dispatch)
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: Fusion
+          permission-issues: write
+          permission-actions: write
+          permission-contents: read
+
+      - name: Configure gh
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | gh auth login --with-token
+          gh auth setup-git
+
+      - name: Unit-test trust-cycle controller
+        run: |
+          set -euo pipefail
+          node --test infra/scripts/steward/programme/__tests__/host-d-trust-cycle.test.mjs
+
+      - name: Decide next action (discover runs first)
+        id: decide
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EXECUTE: ${{ github.event_name == 'workflow_dispatch' && inputs.execute || false }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'decide' }}
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [[ "$EXECUTE" == "true" && "$MODE" == "execute-next" ]]; then
+            ARGS+=(--execute)
+          fi
+          node infra/scripts/steward/programme/host-d-trust-cycle.mjs "${ARGS[@]}" | tee "$RUNNER_TEMP/trust-cycle-report.json"
+          ACTION=$(python3 -c 'import json;print(json.load(open("'"$RUNNER_TEMP"'/trust-cycle-report.json"))["decision"]["action"])')
+          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+
+      - name: Local Host D health snapshot (self-hosted)
+        if: always()
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:4140/api/health | tee "$RUNNER_TEMP/health.json"
+          curl -fsS http://127.0.0.1:4140/api/settings | python3 -c 'import sys,json;d=json.load(sys.stdin); assert d.get("enginePaused") is True; print("enginePaused=true")'
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          health=json.load(open(os.environ["RUNNER_TEMP"]+"/health.json"))
+          report=json.load(open(os.environ["RUNNER_TEMP"]+"/trust-cycle-report.json"))
+          report["liveHealth"]= {"status": health.get("status"), "version": health.get("version")}
+          report["recordedUtc"]= datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          open(os.environ["RUNNER_TEMP"]+"/trust-cycle-report.json","w").write(json.dumps(report, indent=2)+"\n")
+          print(json.dumps(report["liveHealth"]))
+          PY
+
+      - name: Optional local backup/restore when decided
+        if: steps.decide.outputs.action == 'local-backup-restore'
+        run: |
+          set -euo pipefail
+          # Only when controller selected this action; still fail-closed as root tooling.
+          sudo /usr/local/sbin/staging-backup.sh | tee "$RUNNER_TEMP/backup.log"
+          sudo /usr/local/sbin/staging-restore-test.sh | tee "$RUNNER_TEMP/restore.log"
+          curl -fsS http://127.0.0.1:4140/api/health | python3 -c 'import sys,json;d=json.load(sys.stdin); assert d.get("status")=="ok"'
+
+      - name: Checkpoint comment on tracking issue #109
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          BODY=$(python3 - <<'PY'
+          import json, os
+          r=json.load(open(os.environ["RUNNER_TEMP"]+"/trust-cycle-report.json"))
+          d=r.get("decision") or {}
+          lines=[
+            "## Host D trust-cycle controller checkpoint",
+            "",
+            f"- controller_run: `{os.environ.get('GITHUB_RUN_ID','')}`",
+            f"- recordedUtc: `{r.get('recordedUtc')}`",
+            f"- action: `{d.get('action')}`",
+            f"- reason: `{d.get('reason')}`",
+            f"- hostPAccessCount: `{r.get('hostPAccessCount')}`",
+            f"- liveHealth: `{json.dumps(r.get('liveHealth'))}`",
+            f"- inProgressTrustRuns: `{json.dumps(r.get('inProgressTrustRuns'))}`",
+            "",
+            "Durable controller — no Cursor foreground wait required.",
+          ]
+          print("\n".join(lines))
+          PY
+          )
+          gh issue comment 109 --repo Appsolino/Fusion --body "$BODY"
+
+      - name: Upload cycle report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-d-trust-cycle-${{ github.run_id }}
+          path: ${{ runner.temp }}/trust-cycle-report.json
+          if-no-files-found: warn
+          retention-days: 30
