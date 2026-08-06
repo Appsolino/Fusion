@@ -2,6 +2,37 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.75.1
+
+### Highlights
+
+- Secrets now bind to the selected project, work in chat approvals, and land in new worktrees
+- Approving a task plan resumes Plan Review automatically
+- Pick individual structured review findings to send back for same-task revision
+- No failure alerts while Fusion is still auto-recovering the task
+- Dashboard cards refresh reliably after unpause, tab resume, and SSE reconnect
+
+### New
+
+- Select individual structured workflow review findings and send just those back for a same-task revision, with location and severity preserved.
+- Custom workflow review nodes are now classified as plan or code review, so their results accept feedback directly from the Review tab.
+
+### Fixed
+
+- Dashboard secret management is bound to the selected project; requests without an explicit project are rejected rather than resolved from fallback context.
+- Chat-agent secret approvals work again, and failed decisions now show an actionable reason.
+- Secrets env files are restored in fresh task worktrees.
+- Approving a task plan hands off to the engine so Plan Review resumes on its own instead of stalling.
+- Workflow review feedback selection works again for same-task revisions.
+- Task failure alerts stay quiet while Fusion still owns and is retrying the recovery.
+- Task detail refreshes immediately after unpausing instead of showing stale state.
+- Dashboard cards revalidate on focus, tab visibility, browser back/forward resume, and SSE reconnect.
+- Long task-detail titles stay stable when expanded or collapsed, and no longer flicker during window resize.
+- Stale file-overlap blockers are hidden when a task is simply queued behind an unfinished dependency.
+- An operator's review hold is honored before a mission task joins its shared branch.
+- Stopping a task now cancels its pending workspace merge contention retries.
+- Chat checkpoints no longer fail on tool output containing NUL bytes.
+
 ## 0.75.1-beta.2
 
 ### Highlights
