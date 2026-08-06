@@ -497,7 +497,22 @@ export class ProjectEngine {
   Cleared on the first non-busy outcome (success path resets it).
   */
   private workspaceBusyReenqueues = new Map<string, number>();
+  private readonly workspaceBusyReenqueueTimers = new Set<ReturnType<typeof setTimeout>>();
   private static readonly WORKSPACE_BUSY_MAX_REENQUEUES = 10;
+
+  /*
+  FNXC:WorkspaceMergeDispatch 2026-08-05-23:56:
+  Workspace lease-contention retries are engine-owned lifecycle work, not detached callbacks.
+  Track only these busy re-enqueue timers so stop() can cancel them and tests can measure the
+  capped workspace ladder without confusing it with merge-body or maintenance timers.
+  */
+  private scheduleWorkspaceBusyReenqueue(taskId: string, delayMs: number): void {
+    const timer = setTimeout(() => {
+      this.workspaceBusyReenqueueTimers.delete(timer);
+      if (!this.shuttingDown) this.internalEnqueueMerge(taskId);
+    }, delayMs);
+    this.workspaceBusyReenqueueTimers.add(timer);
+  }
 
   /**
    * Pending manual merge resolvers — keyed by taskId.
@@ -1328,6 +1343,10 @@ export class ProjectEngine {
       clearInterval(this.mergeActiveReconcileTimer);
       this.mergeActiveReconcileTimer = null;
     }
+    for (const timer of this.workspaceBusyReenqueueTimers) {
+      clearTimeout(timer);
+    }
+    this.workspaceBusyReenqueueTimers.clear();
     for (const [taskId, deferred] of this.capacityDeferredMerges) {
       clearTimeout(deferred.timer);
       for (const resolver of deferred.resolvers) {
@@ -4323,9 +4342,7 @@ export class ProjectEngine {
               runtimeLog.log(
                 `Workspace land busy re-enqueue ${busyCount + 1}/${ProjectEngine.WORKSPACE_BUSY_MAX_REENQUEUES} for ${taskId} in ${delayMs / 1000}s (no mergeRetry consumed — pure lease contention)`,
               );
-              setTimeout(() => {
-                if (!this.shuttingDown) this.internalEnqueueMerge(taskId);
-              }, delayMs);
+              this.scheduleWorkspaceBusyReenqueue(taskId, delayMs);
             } else {
               // Pathological sustained contention — surface but do NOT burn mergeRetries; park as
               // failed so the cooldown sweep stops re-attempting and an operator can intervene.
