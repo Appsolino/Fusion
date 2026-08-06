@@ -18,7 +18,7 @@
         "startedUtc": "2026-08-06T06:24:10Z",
         "lastResetUtc": null,
         "lastResetReason": null,
-        "lastEvidenceUtc": "2026-08-06T07:42:44Z"
+        "lastEvidenceUtc": "2026-08-06T08:29:30Z"
       },
       "criticalJourneys": {
         "startedUtc": "2026-08-06T06:24:10Z",
@@ -35,7 +35,7 @@
         "startedUtc": "2026-08-06T06:24:10Z",
         "lastResetUtc": null,
         "lastResetReason": null,
-        "lastEvidenceUtc": "2026-08-06T07:42:44Z"
+        "lastEvidenceUtc": "2026-08-06T08:29:30Z"
       },
       "automation": {
         "startedUtc": "2026-08-06T06:24:10Z",
@@ -55,7 +55,7 @@
     },
     "counters": {
       "stagingDeploysPass": 1,
-      "proofRollbacksPass": 1,
+      "proofRollbacksPass": 2,
       "backupRestorePass": 1,
       "restartsPass": 1,
       "requiredStagingDeploys": 3,
@@ -64,7 +64,7 @@
     }
   },
   "baseline": {
-    "mainSha": "aa107c9ace98dbec92e1feb52640382895923a7c",
+    "mainSha": "351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e",
     "activeRelease": "auto3-0.75.1-beta.1-aa107c9ace98",
     "upstreamSha": "8120c07b6a074755f44ed22f066b40eaeb19f199",
     "schemaCeiling": "0044",
@@ -127,6 +127,40 @@
           "workflowConclusion": "success",
           "recordedUtc": "2026-08-06T07:31:11Z",
           "recoveredUtc": "2026-08-06T07:42:44Z"
+        }
+      ],
+      "activeReleaseAfter": "auto3-0.75.1-beta.1-aa107c9ace98"
+    },
+    {
+      "id": "cycle-2",
+      "startedUtc": "2026-08-06T08:10:39Z",
+      "updatedUtc": "2026-08-06T08:29:30Z",
+      "status": "IN_PROGRESS",
+      "results": {
+        "E-proof-rollback-2": "PASS"
+      },
+      "auto3Runs": [
+        {
+          "id": 31083830588,
+          "profile": "proof",
+          "terminal": "ROLLED_BACK",
+          "classification": "PASS",
+          "sourceSha": "351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e",
+          "releaseId": "auto3-0.75.1-beta.1-351bc8d2ad79",
+          "force_smoke_fail": true,
+          "previousReleaseRestored": true,
+          "restoredReleaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+          "hostPAccessed": false,
+          "healthAfter": "ok",
+          "enginePausedAfter": true,
+          "workflowConclusion": "success",
+          "recordedUtc": "2026-08-06T08:21:46Z",
+          "reconciledUtc": "2026-08-06T08:29:30Z",
+          "reasons": [
+            "deliberate post-activation smoke failure",
+            "previous release restored"
+          ],
+          "evidenceCompleteness": true
         }
       ],
       "activeReleaseAfter": "auto3-0.75.1-beta.1-aa107c9ace98"
@@ -203,6 +237,28 @@
       "workflowConclusion": "success",
       "recordedUtc": "2026-08-06T07:31:11Z",
       "recoveredUtc": "2026-08-06T07:42:44Z"
+    },
+    {
+      "id": 31083830588,
+      "profile": "proof",
+      "terminal": "ROLLED_BACK",
+      "classification": "PASS",
+      "sourceSha": "351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e",
+      "releaseId": "auto3-0.75.1-beta.1-351bc8d2ad79",
+      "force_smoke_fail": true,
+      "previousReleaseRestored": true,
+      "restoredReleaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "hostPAccessed": false,
+      "healthAfter": "ok",
+      "enginePausedAfter": true,
+      "workflowConclusion": "success",
+      "recordedUtc": "2026-08-06T08:21:46Z",
+      "reconciledUtc": "2026-08-06T08:29:30Z",
+      "reasons": [
+        "deliberate post-activation smoke failure",
+        "previous release restored"
+      ],
+      "evidenceCompleteness": true
     }
   ],
   "rollbackRuns": [
@@ -221,6 +277,28 @@
       "workflowConclusion": "success",
       "recordedUtc": "2026-08-06T07:31:11Z",
       "recoveredUtc": "2026-08-06T07:42:44Z"
+    },
+    {
+      "id": 31083830588,
+      "profile": "proof",
+      "terminal": "ROLLED_BACK",
+      "classification": "PASS",
+      "sourceSha": "351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e",
+      "releaseId": "auto3-0.75.1-beta.1-351bc8d2ad79",
+      "force_smoke_fail": true,
+      "previousReleaseRestored": true,
+      "restoredReleaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "hostPAccessed": false,
+      "healthAfter": "ok",
+      "enginePausedAfter": true,
+      "workflowConclusion": "success",
+      "recordedUtc": "2026-08-06T08:21:46Z",
+      "reconciledUtc": "2026-08-06T08:29:30Z",
+      "reasons": [
+        "deliberate post-activation smoke failure",
+        "previous release restored"
+      ],
+      "evidenceCompleteness": true
     }
   ],
   "healthHistory": [
@@ -263,6 +341,14 @@
       "enginePaused": true,
       "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
       "note": "second-backup-restore-pass"
+    },
+    {
+      "recordedUtc": "2026-08-06T08:29:30Z",
+      "status": "ok",
+      "version": "0.75.1-beta.1",
+      "enginePaused": true,
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "note": "post proof rollback 31083830588"
     }
   ],
   "productDecisionBlockers": [
@@ -283,7 +369,7 @@
     }
   ],
   "terminal": null,
-  "updatedUtc": "2026-08-06T07:46:19Z",
+  "updatedUtc": "2026-08-06T08:29:30Z",
   "recovery": {
     "recoveredUtc": "2026-08-06T07:42:44Z",
     "reason": "Cursor foreground wait skipped while AUTO-3 still running",

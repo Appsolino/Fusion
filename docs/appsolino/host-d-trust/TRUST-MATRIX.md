@@ -3,7 +3,7 @@
 **Programme:** [#109](https://github.com/Appsolino/Fusion/issues/109)  
 **Legend:** `PASS` · `FAIL` · `BLOCKED` · `PENDING` · `N/A`
 
-Statuses below reflect programme start + Cycle 1 kickoff. Update after each cycle.
+Statuses reflect Cycle 1 complete + Cycle 2 proof rollback 2/2 reconciled (2026-08-06).
 
 ## Product-decision blockers
 
@@ -56,8 +56,8 @@ Automation/ops journeys proceed independently of these blockers.
 | ID | Test | Status | Evidence |
 | --- | --- | --- | --- |
 | E-01 | Standard/idempotent staging deploy | PASS | AUTO-3 staging |
-| E-02 | Proof-profile deploy | PENDING | profile=proof |
-| E-03 | force_smoke_fail → ROLLED_BACK | QUEUED | AUTO-3 |
+| E-02 | Proof-profile deploy | PASS | AUTO-3 31083830588 (ROLLED_BACK path) |
+| E-03 | force_smoke_fail → ROLLED_BACK | PASS | 31080371857 + 31083830588; proofRollbacksPass 2/2 |
 | E-04 | Previous release restored + health | PASS | previousReleaseRestored=true; staging healthy |
 | E-05 | Structured evidence complete | PASS | auto3-evidence.json |
 | E-06 | Host P access false | PASS | receipt |
@@ -68,7 +68,7 @@ Automation/ops journeys proceed independently of these blockers.
 | --- | --- | --- | --- |
 | F-01 | Controlled app process restart | PASS | Cycle 1 |
 | F-02 | Health negative probes | PENDING | staging-health-negative |
-| F-03 | Deliberate post-activation smoke fail | PENDING | = E-03 |
+| F-03 | Deliberate post-activation smoke fail | PASS | = E-03 (2/2) |
 | F-04 | Kill-9 / reboot / disk pressure | PENDING | harness TBD; abort limits required |
 
 ## G — Automation reliability
