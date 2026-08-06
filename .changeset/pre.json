@@ -46,6 +46,15 @@
     "fn-8793-workflow-review-items",
     "fn-8794-review-kind",
     "fn-8795-structured-review-findings",
-    "fn-8799-recovery-notifications"
+    "fn-8799-recovery-notifications",
+    "fn-8801-immediate-unpause-state",
+    "fn-8805-stable-task-title",
+    "fn-8806-task-title-flicker",
+    "fn-8807-dashboard-resume-revalidation",
+    "fn-8808-secrets-project-binding",
+    "fn-8809-secrets-chat-approval",
+    "fn-8810-secrets-env-runtime-wiring",
+    "fn-8811-shared-member-review-hold",
+    "workspace-busy-timer-cleanup"
   ]
 }

@@ -2,6 +2,30 @@
 
 User-facing release notes aggregated across all packages. This file is auto-synced from each `packages/*/CHANGELOG.md` by `scripts/release.mjs` — do not edit by hand.
 
+## 0.75.1-beta.2
+
+### Highlights
+
+- Dashboard secrets now bind to the selected project instead of a fallback context
+- Chat-agent secret approvals work again and failed decisions show an actionable reason
+- Fresh task worktrees get their secrets-env files restored
+- Task detail unpause refreshes state immediately, and cards revalidate after tab or browser resume
+- An operator's review hold is honored before a mission task joins its shared branch
+
+### Security
+
+- Dashboard secret management is bound to the selected project: secrets routes reject requests that arrive without an explicit project before any fallback context resolution.
+
+### Fixed
+
+- Chat-agent secret approvals no longer fail silently; prompt-gated secret reads keep the registered engine session principal, and a failed decision now surfaces an actionable reason.
+- Fresh task worktrees again receive their secrets-env files, because the runtime shares the project secrets store with executor and heartbeat worktree acquisition.
+- Unpausing from task detail refreshes dashboard state right away through the shared lifecycle reconciliation path.
+- Dashboard cards revalidate reliably after browser and tab resume; focus, visibility, page-show, and SSE reconnect now share one fenced revalidation path.
+- Long task-detail titles stay stable when expanded or collapsed, and no longer flicker during window resize.
+- An operator's explicit review hold is respected before a mission task joins its shared branch; mission policy auto-merge values stay distinct from per-task operator overrides.
+- Stopping a workspace merge now cancels its pending contention retries instead of letting a busy re-enqueue timer fire later.
+
 ## 0.75.1-beta.1
 
 ### Highlights
