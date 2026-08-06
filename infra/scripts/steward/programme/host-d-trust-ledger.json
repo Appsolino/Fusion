@@ -54,7 +54,7 @@
       }
     },
     "counters": {
-      "stagingDeploysPass": 2,
+      "stagingDeploysPass": 3,
       "proofRollbacksPass": 2,
       "backupRestorePass": 2,
       "restartsPass": 1,
@@ -64,8 +64,8 @@
     }
   },
   "baseline": {
-    "mainSha": "351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e",
-    "activeRelease": "auto3-0.75.1-beta.1-351bc8d2ad79",
+    "mainSha": "d059357a498dc572f8fe035578ed73879d8b3f55",
+    "activeRelease": "auto3-0.75.1-beta.1-d059357a498d",
     "upstreamSha": "8120c07b6a074755f44ed22f066b40eaeb19f199",
     "schemaCeiling": "0044",
     "health": "ok",
@@ -134,11 +134,12 @@
     {
       "id": "cycle-2",
       "startedUtc": "2026-08-06T08:10:39Z",
-      "updatedUtc": "2026-08-06T10:24:52Z",
-      "status": "IN_PROGRESS",
+      "updatedUtc": "2026-08-06T11:51:17Z",
+      "status": "SOAK",
       "results": {
         "E-proof-rollback-2": "PASS",
-        "E-staging-deploy-2": "PASS"
+        "E-staging-deploy-2": "PASS",
+        "E-staging-deploy-3": "PASS"
       },
       "auto3Runs": [
         {
@@ -176,9 +177,23 @@
           "workflowConclusion": "success",
           "recordedUtc": "2026-08-06T10:02:26Z",
           "reconciledUtc": "2026-08-06T10:24:52Z"
+        },
+        {
+          "id": 31096140522,
+          "profile": "staging",
+          "terminal": "DEPLOYED",
+          "classification": "PASS",
+          "sourceSha": "d059357a498dc572f8fe035578ed73879d8b3f55",
+          "releaseId": "auto3-0.75.1-beta.1-d059357a498d",
+          "health": "ok",
+          "enginePaused": true,
+          "hostPAccessed": false,
+          "workflowConclusion": "success",
+          "recordedUtc": "2026-08-06T11:21:51Z",
+          "reconciledUtc": "2026-08-06T11:51:17Z"
         }
       ],
-      "activeReleaseAfter": "auto3-0.75.1-beta.1-351bc8d2ad79"
+      "activeReleaseAfter": "auto3-0.75.1-beta.1-d059357a498d"
     }
   ],
   "defects": [
@@ -296,6 +311,20 @@
       "workflowConclusion": "success",
       "recordedUtc": "2026-08-06T10:02:26Z",
       "reconciledUtc": "2026-08-06T10:24:52Z"
+    },
+    {
+      "id": 31096140522,
+      "profile": "staging",
+      "terminal": "DEPLOYED",
+      "classification": "PASS",
+      "sourceSha": "d059357a498dc572f8fe035578ed73879d8b3f55",
+      "releaseId": "auto3-0.75.1-beta.1-d059357a498d",
+      "health": "ok",
+      "enginePaused": true,
+      "hostPAccessed": false,
+      "workflowConclusion": "success",
+      "recordedUtc": "2026-08-06T11:21:51Z",
+      "reconciledUtc": "2026-08-06T11:51:17Z"
     }
   ],
   "rollbackRuns": [
@@ -406,7 +435,7 @@
     }
   ],
   "terminal": null,
-  "updatedUtc": "2026-08-06T10:24:52Z",
+  "updatedUtc": "2026-08-06T11:51:17Z",
   "recovery": {
     "recoveredUtc": "2026-08-06T07:42:44Z",
     "reason": "Cursor foreground wait skipped while AUTO-3 still running",
@@ -420,7 +449,7 @@
     "after": "second-staging-or-soak"
   },
   "counters": {
-    "stagingDeploysPass": 2,
+    "stagingDeploysPass": 3,
     "proofRollbacksPass": 2,
     "backupRestorePass": 2,
     "restartsPass": 1,
@@ -429,7 +458,9 @@
     "requiredBackupRestores": 2
   },
   "dispatchedKeys": [
-    "dispatch-staging-deploy|staging|351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e"
+    "dispatch-staging-deploy|staging|351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e",
+    "dispatch-staging-deploy|staging|d059357a498dc572f8fe035578ed73879d8b3f55"
   ],
-  "pendingDispatch": null
+  "pendingDispatch": null,
+  "nextPhase": "soak-observe-and-remaining-matrix"
 }
