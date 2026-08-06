@@ -148,8 +148,10 @@
       "issue": 114,
       "fingerprint": "auto3/immutable-conflict-same-sha-rebuild",
       "severity": "MEDIUM",
-      "status": "OPEN",
-      "evidenceRun": 31079037988
+      "status": "CLOSED_ACCEPTED_GUARD",
+      "evidenceRun": 31079037988,
+      "resolution": "Use current main tip for proof drills; do not rebuild obsolete same-SHA release dirs. Successful proof 31080371857 supersedes.",
+      "closedUtc": "2026-08-06T07:46:19Z"
     }
   ],
   "repairPrs": [
@@ -253,6 +255,14 @@
       "monitorOk": true,
       "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
       "note": "recovered-after-cursor-wait-skip"
+    },
+    {
+      "recordedUtc": "2026-08-06T07:46:19Z",
+      "status": "ok",
+      "version": "0.75.1-beta.1",
+      "enginePaused": true,
+      "releaseId": "auto3-0.75.1-beta.1-aa107c9ace98",
+      "note": "second-backup-restore-pass"
     }
   ],
   "productDecisionBlockers": [
@@ -273,7 +283,7 @@
     }
   ],
   "terminal": null,
-  "updatedUtc": "2026-08-06T07:45:33Z",
+  "updatedUtc": "2026-08-06T07:46:19Z",
   "recovery": {
     "recoveredUtc": "2026-08-06T07:42:44Z",
     "reason": "Cursor foreground wait skipped while AUTO-3 still running",
@@ -282,18 +292,14 @@
     "noDuplicateRedispatch": true
   },
   "nextEligible": {
-    "action": "second-backup-restore",
-    "then": [
-      "process-kill-recovery",
-      "second-proof-rollback",
-      "durable-controller-activate"
-    ],
-    "note": "Do not redispatch Cycle 1 staging/proof; discover existing runs first"
+    "action": "dispatch-proof-rollback",
+    "reason": "need proofRollbacksPass 2/2",
+    "after": "second-staging-or-soak"
   },
   "counters": {
     "stagingDeploysPass": 1,
     "proofRollbacksPass": 1,
-    "backupRestorePass": 1,
+    "backupRestorePass": 2,
     "restartsPass": 1,
     "requiredStagingDeploys": 3,
     "requiredProofRollbacks": 2,
