@@ -8,17 +8,18 @@ name: Host D Trust Cycle
 
 on:
   schedule:
-    # Hourly — bounded reconcile; never long-polls in Cursor.
+    # Hourly — discover → reconcile/decide → at most one eligible dispatch.
+    # Equivalent to execute-next + execute=true, with discover-before-dispatch guards.
     - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       execute:
-        description: "If true, may dispatch the next eligible AUTO-3 (still skips when in-flight)"
+        description: "If true with mode=execute-next, may dispatch one eligible AUTO-3 (skipped when in-flight). Ignored for reconcile-only. Schedule always executes."
         required: false
         type: boolean
         default: false
       mode:
-        description: "reconcile-only | decide | execute-next"
+        description: "reconcile-only (never dispatch) | decide (dry) | execute-next (dispatch if eligible). Schedule forces execute-next."
         required: false
         type: choice
         options:
@@ -83,17 +84,38 @@ jobs:
         id: decide
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          EXECUTE: ${{ github.event_name == 'workflow_dispatch' && inputs.execute || false }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'decide' }}
+          EVENT_NAME: ${{ github.event_name }}
+          EXECUTE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.execute || false }}
+          MODE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'decide' }}
+          HOST_D_TRUST_RUNTIME_LEDGER: /srv/appsolino-fusion/staging/state/host-d-trust-runtime.json
         run: |
           set -euo pipefail
+          # Schedule ≡ execute-next + execute=true. reconcile-only never dispatches.
+          MODE="$MODE_INPUT"
+          EXECUTE="$EXECUTE_INPUT"
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            MODE=execute-next
+            EXECUTE=true
+          fi
+          if [[ "$MODE" == "reconcile-only" ]]; then
+            EXECUTE=false
+          fi
           ARGS=()
           if [[ "$EXECUTE" == "true" && "$MODE" == "execute-next" ]]; then
             ARGS+=(--execute)
           fi
+          echo "controller_mode=$MODE execute=$EXECUTE event=$EVENT_NAME"
           node infra/scripts/steward/programme/host-d-trust-cycle.mjs "${ARGS[@]}" | tee "$RUNNER_TEMP/trust-cycle-report.json"
           ACTION=$(python3 -c 'import json;print(json.load(open("'"$RUNNER_TEMP"'/trust-cycle-report.json"))["decision"]["action"])')
+          DISPATCHED=$(python3 -c 'import json;print(json.load(open("'"$RUNNER_TEMP"'/trust-cycle-report.json")).get("result",{}).get("dispatched") is True)')
+          CHILDREN=$(python3 -c 'import json;print(json.load(open("'"$RUNNER_TEMP"'/trust-cycle-report.json")).get("result",{}).get("childCount") or 0)')
           echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+          echo "dispatched=$DISPATCHED" >> "$GITHUB_OUTPUT"
+          echo "child_count=$CHILDREN" >> "$GITHUB_OUTPUT"
+          if [[ "$CHILDREN" != "0" && "$CHILDREN" != "1" ]]; then
+            echo "::error::controller dispatched $CHILDREN children; max allowed is 1"
+            exit 1
+          fi
 
       - name: Local Host D health snapshot (self-hosted)
         if: success()
@@ -132,18 +154,23 @@ jobs:
           import json, os
           r=json.load(open(os.environ["RUNNER_TEMP"]+"/trust-cycle-report.json"))
           d=r.get("decision") or {}
+          res=r.get("result") or {}
           lines=[
             "## Host D trust-cycle controller checkpoint",
             "",
             f"- controller_run: `{os.environ.get('GITHUB_RUN_ID','')}`",
+            f"- event: `{os.environ.get('EVENT_NAME', os.environ.get('GITHUB_EVENT_NAME',''))}`",
             f"- recordedUtc: `{r.get('recordedUtc')}`",
             f"- action: `{d.get('action')}`",
             f"- reason: `{d.get('reason')}`",
+            f"- dispatched: `{res.get('dispatched')}`",
+            f"- childCount: `{res.get('childCount')}`",
             f"- hostPAccessCount: `{r.get('hostPAccessCount')}`",
             f"- liveHealth: `{json.dumps(r.get('liveHealth'))}`",
             f"- inProgressTrustRuns: `{json.dumps(r.get('inProgressTrustRuns'))}`",
+            f"- counters: `{json.dumps(r.get('counters'))}`",
             "",
-            "Durable controller — no Cursor foreground wait required.",
+            "Durable controller — schedule may execute at most one eligible child; no Cursor wait.",
           ]
           print("\n".join(lines))
           PY

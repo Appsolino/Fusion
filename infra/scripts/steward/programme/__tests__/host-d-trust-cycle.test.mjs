@@ -12,7 +12,16 @@ import {
   isTrustProgrammeRun,
   executeTrustDecision,
   resolveTrustCounters,
+  resolveControllerExecutionMode,
+  hasCriticalFreeze,
+  buildDispatchKey,
+  refineSkippedDecision,
+  recordStagingDeployPass,
+  applyClassifiedRunToLedger,
+  mergeLedgerOverlay,
 } from "../host-d-trust-cycle.mjs";
+
+const TIP = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 describe("host-d-trust-cycle discovery", () => {
   it("recognizes trust handoff titles only", () => {
@@ -29,6 +38,35 @@ describe("host-d-trust-cycle discovery", () => {
     const inflight = findInProgressTrustRuns(runs);
     assert.equal(inflight.length, 1);
     assert.equal(inflight[0].databaseId, 1);
+  });
+});
+
+describe("resolveControllerExecutionMode", () => {
+  it("schedule forces execute-next with execute=true (cron dispatches when eligible)", () => {
+    const m = resolveControllerExecutionMode({ eventName: "schedule" });
+    assert.equal(m.mode, "execute-next");
+    assert.equal(m.execute, true);
+    assert.equal(m.shouldExecute, true);
+  });
+
+  it("manual reconcile-only never executes", () => {
+    const m = resolveControllerExecutionMode({
+      eventName: "workflow_dispatch",
+      executeInput: true,
+      modeInput: "reconcile-only",
+    });
+    assert.equal(m.mode, "reconcile-only");
+    assert.equal(m.execute, false);
+    assert.equal(m.shouldExecute, false);
+  });
+
+  it("manual decide stays dry", () => {
+    const m = resolveControllerExecutionMode({
+      eventName: "workflow_dispatch",
+      executeInput: false,
+      modeInput: "decide",
+    });
+    assert.equal(m.shouldExecute, false);
   });
 });
 
@@ -70,6 +108,20 @@ describe("classifyTrustAuto3Result", () => {
     assert.equal(c.pass, false);
     assert.equal(c.severity, "CRITICAL");
   });
+
+  it("incomplete evidence is needs-evidence (not another deployment)", () => {
+    const c = classifyTrustAuto3Result({
+      profile: "staging",
+      evidence: {
+        terminal: "DEPLOYED",
+        health: "ok",
+        enginePaused: true,
+        completeness: { complete: false, needsEvidence: true },
+      },
+    });
+    assert.equal(c.needsEvidence, true);
+    assert.equal(c.pass, false);
+  });
 });
 
 describe("decideNextTrustAction", () => {
@@ -86,17 +138,18 @@ describe("decideNextTrustAction", () => {
     },
   };
 
-  it("waits when a trust AUTO-3 is in progress (no duplicate dispatch)", () => {
+  it("waits when a trust AUTO-3 is in progress (cron does not dispatch)", () => {
     const d = decideNextTrustAction({
       ledger: baseLedger,
       runs: [{ databaseId: 9, status: "in_progress", displayTitle: "AUTO-3 trust-foo proof" }],
+      mainSha: TIP,
     });
     assert.equal(d.action, "wait-existing");
     assert.deepEqual(d.runIds, [9]);
   });
 
   it("prefers second backup/restore before more AUTO-3", () => {
-    const d = decideNextTrustAction({ ledger: baseLedger, runs: [] });
+    const d = decideNextTrustAction({ ledger: baseLedger, runs: [], mainSha: TIP });
     assert.equal(d.action, "local-backup-restore");
   });
 
@@ -107,6 +160,7 @@ describe("decideNextTrustAction", () => {
         counters: { ...baseLedger.counters, backupRestorePass: 2 },
       },
       runs: [],
+      mainSha: TIP,
     });
     assert.equal(d.action, "dispatch-proof-rollback");
     assert.equal(d.force_smoke_fail, true);
@@ -127,22 +181,128 @@ describe("decideNextTrustAction", () => {
         trustWindow: { startedUtc: "2026-08-06T06:24:10Z" },
       },
       runs: [],
+      mainSha: TIP,
     });
     assert.equal(d.action, "soak-observe");
   });
-});
 
-describe("executeTrustDecision dry-run default", () => {
-  it("does not dispatch when dryRun default", () => {
-    const out = executeTrustDecision(
-      { action: "dispatch-staging-deploy", profile: "staging", force_smoke_fail: false },
-      { dryRun: true, mainSha: "a".repeat(40) },
+  it("CRITICAL freeze blocks dispatch", () => {
+    const d = decideNextTrustAction({
+      ledger: {
+        ...baseLedger,
+        counters: { ...baseLedger.counters, backupRestorePass: 2 },
+        freezeDestructive: true,
+      },
+      runs: [],
+      mainSha: TIP,
+    });
+    assert.equal(d.action, "stop-critical");
+  });
+
+  it("Host P boundary blocks dispatch", () => {
+    assert.equal(hasCriticalFreeze({ hostP: "PROHIBITED", hostPAccessCount: 1 }), true);
+    const d = decideNextTrustAction({
+      ledger: {
+        ...baseLedger,
+        hostPAccessCount: 1,
+        counters: { ...baseLedger.counters, backupRestorePass: 2 },
+      },
+      runs: [],
+      mainSha: TIP,
+    });
+    assert.equal(d.action, "stop-critical");
+  });
+
+  it("incomplete evidence causes reconcile-needs-evidence, not another deployment", () => {
+    const d = decideNextTrustAction({
+      ledger: {
+        ...baseLedger,
+        counters: { ...baseLedger.counters, backupRestorePass: 2, proofRollbacksPass: 2 },
+        needsEvidence: { runId: 1, reason: "needs-evidence" },
+      },
+      runs: [],
+      mainSha: TIP,
+    });
+    assert.equal(d.action, "reconcile-needs-evidence");
+  });
+
+  it("does not duplicate a completed or already-dispatched test for same head", () => {
+    const key = buildDispatchKey(
+      { action: "dispatch-staging-deploy", profile: "staging" },
+      TIP,
     );
-    assert.equal(out.dispatched, false);
-    assert.equal(out.wouldDispatch, true);
+    const d = decideNextTrustAction({
+      ledger: {
+        ...baseLedger,
+        counters: {
+          stagingDeploysPass: 1,
+          proofRollbacksPass: 2,
+          backupRestorePass: 2,
+          requiredStagingDeploys: 3,
+          requiredProofRollbacks: 2,
+          requiredBackupRestores: 2,
+        },
+        dispatchedKeys: [key],
+      },
+      runs: [],
+      mainSha: TIP,
+    });
+    assert.equal(d.action, "skip-duplicate");
+    const refined = refineSkippedDecision(d, {
+      counters: {
+        stagingDeploysPass: 1,
+        proofRollbacksPass: 2,
+        backupRestorePass: 2,
+        requiredStagingDeploys: 3,
+        requiredProofRollbacks: 2,
+        requiredBackupRestores: 2,
+      },
+    }, TIP);
+    assert.equal(refined.action, "wait-tip-or-reconcile");
   });
 });
 
+describe("executeTrustDecision", () => {
+  it("does not dispatch when dryRun default", () => {
+    const out = executeTrustDecision(
+      { action: "dispatch-staging-deploy", profile: "staging", force_smoke_fail: false },
+      { dryRun: true, mainSha: TIP },
+    );
+    assert.equal(out.dispatched, false);
+    assert.equal(out.wouldDispatch, true);
+    assert.equal(out.childCount, 0);
+  });
+
+  it("dispatches at most one child and checkpoints before dispatch", () => {
+    /** @type {object[]} */
+    const calls = [];
+    /** @type {object[]} */
+    const checkpoints = [];
+    const out = executeTrustDecision(
+      {
+        action: "dispatch-staging-deploy",
+        profile: "staging",
+        force_smoke_fail: false,
+        dispatchKey: buildDispatchKey({ action: "dispatch-staging-deploy", profile: "staging" }, TIP),
+      },
+      {
+        dryRun: false,
+        mainSha: TIP,
+        beforeDispatch: (cp) => checkpoints.push(cp),
+        gh: (cmd, args) => {
+          calls.push({ cmd, args });
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.equal(out.dispatched, true);
+    assert.equal(out.childCount, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(checkpoints.length, 1);
+    assert.equal(checkpoints[0].status, "checkpointed");
+    assert.ok(checkpoints[0].handoffId);
+  });
+});
 
 describe("resolveTrustCounters", () => {
   it("takes max Pass counts when top-level and trustWindow disagree", () => {
@@ -162,3 +322,57 @@ describe("resolveTrustCounters", () => {
   });
 });
 
+describe("recordStagingDeployPass / applyClassifiedRunToLedger", () => {
+  it("increments stagingDeploysPass once per run id", () => {
+    let ledger = {
+      counters: {
+        stagingDeploysPass: 1,
+        proofRollbacksPass: 2,
+        backupRestorePass: 2,
+        requiredStagingDeploys: 3,
+      },
+      auto3Runs: [],
+    };
+    ledger = recordStagingDeployPass(ledger, {
+      id: 31090853566,
+      sourceSha: "351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e",
+      releaseId: "auto3-0.75.1-beta.1-351bc8d2ad79",
+      terminal: "DEPLOYED",
+    });
+    assert.equal(resolveTrustCounters(ledger).stagingDeploysPass, 2);
+    ledger = recordStagingDeployPass(ledger, {
+      id: 31090853566,
+      sourceSha: "351bc8d2ad7985dfb82f2b64727d44f7ec4a3a2e",
+      releaseId: "auto3-0.75.1-beta.1-351bc8d2ad79",
+      terminal: "DEPLOYED",
+    });
+    assert.equal(resolveTrustCounters(ledger).stagingDeploysPass, 2);
+  });
+
+  it("CRITICAL classification freezes further destructive testing", () => {
+    const ledger = applyClassifiedRunToLedger(
+      { counters: { stagingDeploysPass: 1 }, auto3Runs: [], hostPAccessCount: 0 },
+      {
+        id: 1,
+        profile: "staging",
+        classification: { pass: false, severity: "CRITICAL", reason: "host-p-accessed" },
+        evidence: { terminal: "DEPLOYED", hostPAccessed: true },
+      },
+    );
+    assert.equal(ledger.freezeDestructive, true);
+    assert.ok(hasCriticalFreeze(ledger));
+  });
+
+  it("needs-evidence overlay blocks redeploy via merge", () => {
+    const base = { counters: { stagingDeploysPass: 1 }, auto3Runs: [] };
+    const classified = applyClassifiedRunToLedger(base, {
+      id: 2,
+      profile: "staging",
+      classification: { pass: false, severity: "MEDIUM", reason: "needs-evidence", needsEvidence: true },
+      evidence: { terminal: "DEPLOYED", completeness: { needsEvidence: true } },
+    });
+    const merged = mergeLedgerOverlay(base, classified);
+    const d = decideNextTrustAction({ ledger: merged, runs: [], mainSha: TIP });
+    assert.equal(d.action, "reconcile-needs-evidence");
+  });
+});
