@@ -2,6 +2,11 @@
 # FNXC:Phase2A 2026-07-30-07:40: Local staging pg_dump as postgres (RLS-safe) with metadata; fail-closed off-host upload.
 # FNXC:Phase2A 2026-07-30-07:40: dump_path and source_main_sha are distinct variables — never reuse the dump path name for git output.
 set -euo pipefail
+# FNXC:HostDTrust 2026-08-06: Must run as root so postgres dump in /tmp is installable (#109 cycle1).
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  echo "staging-backup.sh must run as root (sudo)" >&2
+  exit 1
+fi
 SECRETS=/etc/appsolino-fusion/staging/secrets.env
 BACKUPS=/srv/appsolino-fusion/staging/backups
 META_DIR="$BACKUPS/meta"
