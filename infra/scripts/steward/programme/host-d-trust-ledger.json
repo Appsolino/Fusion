@@ -56,7 +56,7 @@
     "counters": {
       "stagingDeploysPass": 1,
       "proofRollbacksPass": 2,
-      "backupRestorePass": 1,
+      "backupRestorePass": 2,
       "restartsPass": 1,
       "requiredStagingDeploys": 3,
       "requiredProofRollbacks": 2,
@@ -186,6 +186,14 @@
       "evidenceRun": 31079037988,
       "resolution": "Use current main tip for proof drills; do not rebuild obsolete same-SHA release dirs. Successful proof 31080371857 supersedes.",
       "closedUtc": "2026-08-06T07:46:19Z"
+    },
+    {
+      "fingerprint": "host-d/trust-counter-path-drift",
+      "severity": "MEDIUM",
+      "status": "FIXED",
+      "summary": "Controller read ledger.counters while programme updates used trustWindow.counters; paths drifted (proof 1 vs 2).",
+      "repairNote": "resolveTrustCounters() + synced both locations after proof 31083830588",
+      "fixedUtc": "2026-08-06T09:25:29Z"
     }
   ],
   "repairPrs": [
@@ -369,7 +377,7 @@
     }
   ],
   "terminal": null,
-  "updatedUtc": "2026-08-06T08:29:30Z",
+  "updatedUtc": "2026-08-06T09:25:29Z",
   "recovery": {
     "recoveredUtc": "2026-08-06T07:42:44Z",
     "reason": "Cursor foreground wait skipped while AUTO-3 still running",
@@ -384,7 +392,7 @@
   },
   "counters": {
     "stagingDeploysPass": 1,
-    "proofRollbacksPass": 1,
+    "proofRollbacksPass": 2,
     "backupRestorePass": 2,
     "restartsPass": 1,
     "requiredStagingDeploys": 3,
