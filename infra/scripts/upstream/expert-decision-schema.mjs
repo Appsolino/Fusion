@@ -74,9 +74,20 @@ export function validateExpertDecision(raw) {
   if (!EXPERT_DECISIONS.includes(/** @type {*} */ (decision))) {
     errors.push(`decision must be one of ${EXPERT_DECISIONS.join("|")}`);
   }
-  const problemType = String(raw.problemType || raw.problem_type || "").toUpperCase();
+  const problemTypeRaw = String(raw.problemType || raw.problem_type || "").toUpperCase();
+  /*
+  FNXC:UpstreamAiProtocol 2026-08-07-11:20:
+  Unknown problemType enums from the model must not park as silent ENGINEERING_UNRESOLVED.
+  Coerce to OTHER_ENGINEERING so schema-valid decisions can proceed; invented types were
+  observed on #135 attempt 3 after two valid REQUEST_CHANGES rounds.
+  */
+  let problemType = problemTypeRaw;
   if (!EXPERT_PROBLEM_TYPES.includes(/** @type {*} */ (problemType))) {
-    errors.push(`problemType must be one of ${EXPERT_PROBLEM_TYPES.join("|")}`);
+    if (!problemTypeRaw) {
+      errors.push(`problemType must be one of ${EXPERT_PROBLEM_TYPES.join("|")}`);
+    } else {
+      problemType = "OTHER_ENGINEERING";
+    }
   }
   for (const field of ["rootCause", "upstreamIntent", "appsolinoIntent", "resolution"]) {
     const v = raw[field] ?? raw[field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)];
