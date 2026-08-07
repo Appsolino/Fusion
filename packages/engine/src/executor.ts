@@ -10837,7 +10837,11 @@ export class TaskExecutor {
     const failedNode = result.visitedNodeIds[result.visitedNodeIds.length - 1];
     if (failedNode !== undefined && failedNode !== "execute") return false;
 
-    if (live.steps.some((step) => step.status === "done")) return false;
+    /*
+    FNXC:GraphRestartRecovery 2026-08-07-23:36:
+    Completed earlier steps are resumable progress when a later step is still active. Only a fully terminal step list fences this bounded retry path.
+    */
+    if (live.steps.length > 0 && !hasNonTerminalWorkflowSteps(live)) return false;
 
     const failureState = live as Task & { lastError?: unknown; failureReason?: unknown };
     if (failureState.lastError != null || failureState.failureReason != null) return false;
@@ -12839,9 +12843,38 @@ export class TaskExecutor {
             error: null,
           }, this.getRunContextFor(task.id));
           const scheduleRetry = () => {
-            this.execute(live).catch((err) =>
-              executorLog.error(`Failed transient graph resume retry for ${task.id}:`, err),
-            );
+            void (async () => {
+              try {
+                const resumeTask = await this.store.getTask(task.id);
+                const resumeFailureState = resumeTask as Task & { lastError?: unknown; failureReason?: unknown };
+                if (
+                  resumeTask.deletedAt
+                  || resumeTask.paused
+                  || resumeTask.userPaused
+                  || this.userCanceledTaskIds.has(task.id)
+                  || resumeTask.status != null
+                  || resumeTask.error != null
+                  || resumeFailureState.lastError != null
+                  || resumeFailureState.failureReason != null
+                  || resumeTask.column !== failureLanes.wip
+                  || (await resolveTerminalColumnsFor(this.store, resumeTask.id)).includes(resumeTask.column)
+                  || this.executing.has(task.id)
+                  || this.activeSessions.has(task.id)
+                  || this.activeStepExecutors.has(task.id)
+                  || this.activeWorkflowStepSessions.has(task.id)
+                  || this.activeCliTaskSessions.has(task.id)
+                  || this.activeWorkflowGraphAbortControllers.has(task.id)
+                  || this.resumingUnpaused.has(task.id)
+                  || TaskExecutor.processWideGraphRouting.has(task.id)
+                ) {
+                  executorLog.debug(`${task.id}: skipping transient graph resume retry — task is no longer in a safe WIP resume state`);
+                  return;
+                }
+                await this.execute(resumeTask);
+              } catch (err) {
+                executorLog.error(`Failed transient graph resume retry for ${task.id}:`, err);
+              }
+            })();
           };
           if (TRANSIENT_GRAPH_RESUME_RETRY_BACKOFF_MS > 0) {
             const handle = setTimeout(scheduleRetry, TRANSIENT_GRAPH_RESUME_RETRY_BACKOFF_MS);
