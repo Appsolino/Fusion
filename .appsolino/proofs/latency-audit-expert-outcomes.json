@@ -1,0 +1,215 @@
+[
+  {
+    "finalizable": "false",
+    "next": "BLOCKED_UNRESOLVED",
+    "failureClass": null,
+    "reason": "malformed verifier output (json-parse-failed:SyntaxError: Unexpected non-whitespace character after JSON at position 574 (line 6 column 6)) \u2014 fail closed",
+    "expertModel": "composer-2.5",
+    "verifierModel": "claude-opus-5-thinking-high",
+    "verifierAttempts": null,
+    "repairAttempts": null,
+    "pr": 131,
+    "created": "2026-08-07T07:38:47Z",
+    "latencyClass": [
+      "AI_PROTOCOL_RETRY"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "BLOCKED_UNRESOLVED",
+    "failureClass": null,
+    "reason": "malformed verifier output (no-json-object) \u2014 fail closed",
+    "expertModel": "composer-2.5",
+    "verifierModel": "claude-opus-5-thinking-high",
+    "verifierAttempts": null,
+    "repairAttempts": null,
+    "pr": 131,
+    "created": "2026-08-07T08:31:48Z",
+    "latencyClass": [
+      "AI_PROTOCOL_RETRY"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "BLOCKED_UNRESOLVED",
+    "failureClass": "n/a",
+    "reason": "deterministic regression/tests still failing \u2014 AI RESOLVED claim is insufficient",
+    "expertModel": "composer-2.5",
+    "verifierModel": "claude-opus-5-thinking-high",
+    "verifierAttempts": "1",
+    "repairAttempts": "3",
+    "pr": 133,
+    "created": "2026-08-07T09:22:15Z",
+    "latencyClass": [
+      "DETERMINISTIC_TESTS",
+      "UNNECESSARY_EXPERT_INVOCATION"
+    ]
+  },
+  {
+    "finalizable": null,
+    "next": null,
+    "failureClass": null,
+    "reason": null,
+    "expertModel": null,
+    "verifierModel": null,
+    "verifierAttempts": null,
+    "repairAttempts": null,
+    "pr": 133,
+    "created": "2026-08-07T09:30:27Z",
+    "latencyClass": [
+      "UNKNOWN_LATENCY"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "REFRESH_REQUIRED",
+    "failureClass": "n/a",
+    "reason": "candidate upstream eaadd153b1f3 != live upstream fc2040ca8476 \u2014 refresh before merge",
+    "expertModel": "composer-2.5",
+    "verifierModel": "claude-opus-5-thinking-high",
+    "verifierAttempts": "1",
+    "repairAttempts": "1",
+    "pr": 133,
+    "created": "2026-08-07T09:42:22Z",
+    "latencyClass": [
+      "STALE_UPSTREAM"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "AI_PROVIDER_ERROR",
+    "failureClass": "AI_PROVIDER_ERROR",
+    "reason": "expert invocation failed: expert resolver timed out after 600000ms",
+    "expertModel": "n/a",
+    "verifierModel": "n/a",
+    "verifierAttempts": "1",
+    "repairAttempts": "1",
+    "pr": 135,
+    "created": "2026-08-07T09:57:00Z",
+    "latencyClass": [
+      "AI_TIMEOUT"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "AI_PROVIDER_ERROR",
+    "failureClass": "AI_PROVIDER_ERROR",
+    "reason": "verifier invocation failed: cursor-agent exit 143:",
+    "expertModel": "composer-2.5",
+    "verifierModel": "n/a",
+    "verifierAttempts": "1",
+    "repairAttempts": "2",
+    "pr": 135,
+    "created": "2026-08-07T10:14:01Z",
+    "latencyClass": [
+      "AI_PROVIDER_EXIT"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "AI_PROVIDER_ERROR",
+    "failureClass": "AI_PROVIDER_ERROR",
+    "reason": "expert invocation failed: expert resolver timed out after 600000ms",
+    "expertModel": "n/a",
+    "verifierModel": "n/a",
+    "verifierAttempts": "1",
+    "repairAttempts": "1",
+    "pr": 135,
+    "created": "2026-08-07T10:30:00Z",
+    "latencyClass": [
+      "AI_TIMEOUT"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "AI_PROTOCOL_ERROR",
+    "failureClass": "AI_PROTOCOL_ERROR",
+    "reason": "expert schema validation failed: problemType must be one of GIT_MERGE_CONFLICT|SEMANTIC_CONFLICT|BUILD_FAILURE|TEST_FAILURE|MIGRATION_INCOMPATIBILITY|DEPENDENCY_CONFLICT|PROVIDER_RUNTIME_CONFLICT|AUTH_SECRETS_CONFLICT|ARCHITECTURE_CONFLICT|PATCH_VS_UPSTREAM|OBSOLETE_LOCAL_PATCH|UPSTREAM_SUPERSEDES_LOCAL|REGRESSION_FROM_ABSORPTION|OTHER_ENGINEERING",
+    "expertModel": "composer-2.5",
+    "verifierModel": "n/a",
+    "verifierAttempts": "3",
+    "repairAttempts": "3",
+    "pr": 135,
+    "created": "2026-08-07T11:16:47Z",
+    "latencyClass": [
+      "AI_PROTOCOL_RETRY",
+      "AI_SCHEMA_REPAIR"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "BLOCKED_UNRESOLVED",
+    "failureClass": "ENGINEERING_UNRESOLVED",
+    "reason": "expert invocation failed: expert resolver exit 143:",
+    "expertModel": "n/a",
+    "verifierModel": "n/a",
+    "verifierAttempts": "2",
+    "repairAttempts": "2",
+    "pr": 135,
+    "created": "2026-08-07T11:40:39Z",
+    "latencyClass": [
+      "AI_PROVIDER_EXIT"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "BLOCKED_UNRESOLVED",
+    "failureClass": "ENGINEERING_UNRESOLVED",
+    "reason": "expert invocation failed: expert resolver exit 143:",
+    "expertModel": "n/a",
+    "verifierModel": "n/a",
+    "verifierAttempts": "3",
+    "repairAttempts": "3",
+    "pr": 135,
+    "created": "2026-08-07T12:12:04Z",
+    "latencyClass": [
+      "AI_PROVIDER_EXIT"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "REFRESH_REQUIRED",
+    "failureClass": "n/a",
+    "reason": "candidate Appsolino base 65acd3fb88b9 != live Appsolino main b51957d72709 \u2014 refresh before merge",
+    "expertModel": "composer-2.5",
+    "verifierModel": "claude-opus-5-thinking-high",
+    "verifierAttempts": "1",
+    "repairAttempts": "1",
+    "pr": 135,
+    "created": "2026-08-07T12:23:09Z",
+    "latencyClass": [
+      "STALE_APPSOLINO_BASE"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "BLOCKED_UNRESOLVED",
+    "failureClass": "n/a",
+    "reason": "verifier REQUEST_CHANGES \u2014 return to expert repair loop",
+    "expertModel": "composer-2.5",
+    "verifierModel": "claude-opus-5-thinking-high",
+    "verifierAttempts": "1",
+    "repairAttempts": "3",
+    "pr": 135,
+    "created": "2026-08-07T12:58:28Z",
+    "latencyClass": [
+      "VERIFIER_REQUEST_CHANGES",
+      "REPAIR_NON_CONVERGENCE"
+    ]
+  },
+  {
+    "finalizable": "false",
+    "next": "REFRESH_REQUIRED",
+    "failureClass": "n/a",
+    "reason": "candidate Appsolino base b51957d72709 != live Appsolino main 7d9219cf04aa \u2014 refresh before merge",
+    "expertModel": "composer-2.5",
+    "verifierModel": "claude-opus-5-thinking-high",
+    "verifierAttempts": "1",
+    "repairAttempts": "2",
+    "pr": 135,
+    "created": "2026-08-07T13:19:18Z",
+    "latencyClass": [
+      "STALE_APPSOLINO_BASE"
+    ]
+  }
+]
