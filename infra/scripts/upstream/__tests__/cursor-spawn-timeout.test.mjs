@@ -19,11 +19,11 @@ function fakeSpawnFactory({ hang = false, exitCode = 0, stdout = "ok" } = {}) {
     child.kill = (signal) => {
       kills.push({ signal });
       if (signal === "SIGKILL" || !hang) {
-        setImmediate(() => child.emit("close", signal === "SIGKILL" ? null : exitCode, signal === "SIGKILL" ? "SIGKILL" : null));
+        setTimeout(() => child.emit("close", signal === "SIGKILL" ? null : exitCode, signal === "SIGKILL" ? "SIGKILL" : null), 0);
       }
       // SIGTERM on hang: ignore (reproduces cursor-agent behavior)
     };
-    setImmediate(() => {
+    setTimeout(() => {
       if (!hang && exitCode === 0) {
         child.stdout.emit("data", stdout);
         child.emit("close", 0, null);
@@ -31,7 +31,7 @@ function fakeSpawnFactory({ hang = false, exitCode = 0, stdout = "ok" } = {}) {
         child.stderr.emit("data", "boom");
         child.emit("close", exitCode, null);
       }
-    });
+    }, 0);
     return child;
   };
   return { spawnFn, kills };
