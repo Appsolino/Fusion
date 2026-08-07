@@ -325,3 +325,46 @@ False-negative parent workflow results; operators cannot trust AUTO-2 success/fa
 | Live proof PR #52 | PROVEN | Handoff `auto2-30691423651-1-5f1b923bd815-5ccedbe0` → child `30691437372` DEPLOYED; older failed ignored |
 | Finalize YAML heredoc (#53) | FIXED | Restored `workflow_dispatch` registration |
 | Finalize summary exit (#54 follow-up) | FIXED | Parent no longer fails after successful DEPLOYED due to summary SyntaxError |
+
+---
+
+## FIX-FALSE-SUCCESS-PUSH — pushAfterMerge failure still marked done
+
+Status: **IN FIX** (PR #124)
+Severity: Critical
+Component: Engine / merger
+First observed: 2026-08-07 (expert Part B review)
+GitHub PR: https://github.com/Appsolino/Fusion/pull/124
+Patch registry: `FIX-FALSE-SUCCESS-PUSH`
+
+### Failure fingerprint
+
+- `pushAfterMerge: true`, local merge succeeds, remote push fails.
+- Task moves to `done` with only `pushedToRemote: false` / task-log evidence.
+
+### Impact
+
+False SUCCESS / DONE when a configured mandatory push final failed.
+
+### Permanent correction
+
+Refuse `done` on push failure/abort; park `failed` with `PUSH_FAILED: …`. Local land not rolled back.
+
+---
+
+## FIX-VERIFICATION-PASSED-EVIDENCE — verificationPassed from config presence
+
+Status: **IN FIX** (PR #124)
+Severity: High
+Component: Engine / merger post-merge audit
+First observed: 2026-08-07 (expert Part B review)
+GitHub PR: https://github.com/Appsolino/Fusion/pull/124
+Patch registry: `FIX-VERIFICATION-PASSED-EVIDENCE`
+
+### Failure fingerprint
+
+- Rebase merge path set `verificationPassed = Boolean(testCommand || buildCommand)` instead of returning an execution result from the verifier runner.
+
+### Permanent correction
+
+`applyBranchCommitsPreservingHistory` returns `verificationPassed` only after successful `runDeterministicVerification`.
