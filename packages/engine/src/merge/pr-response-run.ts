@@ -89,6 +89,8 @@ export type PrThreadVerdict =
 export interface PrAgentRunResult {
   /** Per-thread verdicts (fix or disagree + the reply body to post). */
   verdicts: PrThreadVerdict[];
+  /** Raw agent text when callers need markers beyond per-thread verdicts (CI repair). */
+  text?: string;
 }
 
 /** Outcome of a fast-forward push attempt. */

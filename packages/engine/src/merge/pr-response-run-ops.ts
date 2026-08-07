@@ -149,7 +149,7 @@ export function makePrResponseAgentRunner(
     } finally {
       session.dispose();
     }
-    return { verdicts: parseAgentVerdicts(captured, threads.map((t) => t.id)) };
+    return { verdicts: parseAgentVerdicts(captured, threads.map((t) => t.id)), text: captured };
   };
 }
 

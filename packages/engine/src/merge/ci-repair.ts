@@ -26,6 +26,10 @@ export interface CiRepairDecisionInput {
   failureClass?: CiFailureClass;
   headOid?: string | null;
   lastRepairedHeadOid?: string | null;
+  /** Current failure fingerprint (check names + normalized log). */
+  failureFingerprint?: string | null;
+  /** Fingerprint already repaired on lastRepairedHeadOid without a new head. */
+  lastFailureFingerprint?: string | null;
 }
 
 export interface CiRepairDecision {
@@ -72,6 +76,26 @@ export function decideCiRepairAction(input: CiRepairDecisionInput): CiRepairDeci
     return {
       action: "exhausted",
       reason: "same head already repaired without new commits — refuse blind retry",
+      attempts,
+      maxAttempts: max,
+    };
+  }
+  /*
+  FNXC:FullAutonomy 2026-08-07-21:21:
+  Even across a head change that did not actually alter the failure, refuse
+  re-repair when the fingerprint is unchanged and we already spent an attempt
+  on that fingerprint. Prevents log-spam loops that keep "fixing" the same error.
+  */
+  if (
+    input.failureFingerprint &&
+    input.lastFailureFingerprint &&
+    String(input.failureFingerprint) === String(input.lastFailureFingerprint) &&
+    attempts > 0 &&
+    klass !== "transient"
+  ) {
+    return {
+      action: "exhausted",
+      reason: "identical CI failure fingerprint already repaired — refuse repeated repair",
       attempts,
       maxAttempts: max,
     };
