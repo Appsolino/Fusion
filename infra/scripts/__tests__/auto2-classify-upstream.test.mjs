@@ -165,10 +165,11 @@ describe("AUTO-2 classify", () => {
     assert.equal(r.touchesProviderRuntime, true);
   });
 
-  it("large change set → sensitive", () => {
+  it("large automation absorb file count alone is observability, not sensitive", () => {
     const files = Array.from({ length: LARGE_FILE_COUNT }, (_, i) => `docs/note-${i}.md`);
     const r = classifyUpstream({ changedFiles: files, commitCount: 1, isAutomationPr: true });
-    assert.equal(r.riskClass, "sensitive");
+    assert.notEqual(r.riskClass, "sensitive");
+    assert.match(r.reasons.join(" "), /observability/);
   });
 
   it("failed checks → blocked", () => {

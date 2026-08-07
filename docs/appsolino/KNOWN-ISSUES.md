@@ -373,7 +373,7 @@ Patch registry: `FIX-VERIFICATION-PASSED-EVIDENCE`
 
 ## ISS-UP-LATENCY-001 — Blind long waits in autonomous upstream maintenance
 
-Status: **IN FIX** (live cycle on #144; package-enrichment follow-up `fix/sensitive-review-package-enrichment`)
+Status: **MOSTLY FIXED** (architecture + #144 absorb complete; residual: Cursor Approval Agent overlap, RELEASE_STALE plane)
 Severity: High (operational reliability)
 Component: Upstream AUTO-2 expert / sensitive path / self-hosted runner
 First observed: 2026-08-07 (runs `31169133069`, `31171067130`, candidate #135)
@@ -395,8 +395,63 @@ Evidence: `docs/appsolino/upstream/MAINTENANCE-LATENCY-AUDIT.md`
 - Latency evidence artifact + heartbeat; `pnpm appsolino:maintenance-latency-report`.
 - Targeted REQUEST_CHANGES + NON_CONVERGING_LOOP; cancel superseded expert runs.
 - Orchestrator-built `sensitive-review-package.mjs` declares migrations + patch registry delta before the read-only verifier runs.
+- AI verifier APPROVE / `auto2:ai-verified` merge without Anas966 (#150/#151).
 
 ### Do not
 
 Weaken deterministic validation or fail-closed trust to “go faster.”
 Send Composer repair solely to invent review-package metadata the orchestrator already knows.
+
+---
+
+## ISS-UP-GOV-001 — External Cursor Approval Agent overlaps upstream controller
+
+Status: **DISABLED_BY_OWNER** (verification pending on next `automation/upstream-*` PR)
+Severity: Medium (duplicate reviews / Anas966 re-requests; not merge authority)
+Component: Cursor Automation `83ebd12a-8fb8-11f1-a7d1-d6b4613131ce` + AUTO-2
+First observed: 2026-08-07 on PR #144
+Evidence: PR reviews “Sent by Cursor Approval Agent…”; `docs/appsolino/upstream/CURSOR-APPROVAL-AGENT-EXCLUDE.md`
+
+### Failure fingerprint
+
+- Every `pull_request synchronize` on `automation/upstream-*` gets a `cursor[bot]` COMMENTED review (“not approving”) and re-requests `Anas966`.
+- Visually confusable with `appsolino-fusion-automation[bot]` Sensitive review APPROVE (intended).
+- Steward Dual Approve (`steward-cursor-dual-approve.yml`) is unrelated — `workflow_dispatch` only.
+
+### Permanent correction
+
+- Owner disabled Cursor Automation `83ebd12a-…` (2026-08-07).
+- On next machine-managed PR: verify no `cursor[bot]` review / Anas966 request → close this issue.
+- Repo-side defensive reviewer cleanup remains until that verification.
+- Maintenance controller remains sole authority for validation / AI review / repair / finalize.
+
+### Do not
+
+Treat `cursor[bot]` comments as AUTO-2 verifier APPROVE.
+Restore Anas966 as the normal upstream merge gate.
+Block #153 waiting on live verification — repo-side path is already safe.
+
+---
+
+## ISS-UP-REL-001 — Source current while GitHub Latest Release stale
+
+Status: **OPEN** (tracking plane; publish policy deferred)
+Severity: Low–Medium (operator confusion, not runtime rollback)
+Component: Release workflow / tag plane vs AUTO-1 absorb
+First observed: 2026-08-07 (source `0.75.1`, Latest Release `v0.73.0`)
+Evidence: `infra/scripts/upstream/release-freshness.mjs`
+
+### Failure fingerprint
+
+- Appsolino `package.json` / source at upstream version while GitHub Releases page shows older `v*`.
+- No `v*` tag pushed on absorb → release workflow never fires.
+
+### Permanent correction
+
+- Track `RELEASE_STALE` / `RELEASE_PENDING` / `RELEASE_CURRENT` separately from source FRESH.
+- Publish Appsolino release when upstream **VERSION** changes + release-level validation — not on every absorb commit.
+
+### Do not
+
+Infer product rollback from the Latest Release badge alone.
+Auto-publish ten GitHub releases for ten upstream commits at the same version.

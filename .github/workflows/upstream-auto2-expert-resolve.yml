@@ -9,6 +9,11 @@
 
 name: Upstream AUTO-2 Expert Resolve
 
+# FNXC:AutomationGovernance 2026-08-07-20:15:
+# Self-identify PR + mode + candidate SHA. workflow_dispatch head_sha is the workflow
+# ref (usually main), NOT the candidate — lease anti-thrash must parse this run-name.
+run-name: AUTO2 Expert PR#${{ inputs.pr_number }} mode=${{ inputs.mode || 'repair' }} candidate=${{ inputs.validated_head }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -129,6 +134,7 @@ jobs:
           so the verifier does not REQUEST_CHANGES on null/[] metadata the orchestrator already knows.
           */
           import { buildSensitiveReviewPackage, toVerifierEvidenceFields } from './infra/scripts/upstream/sensitive-review-package.mjs';
+          import { stampSyncStatusAfterExpertRepair } from './infra/scripts/upstream/provenance-evidence.mjs';
           import { spawnSync } from 'node:child_process';
           import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -474,6 +480,16 @@ jobs:
           }
           if (result.finalizable) {
             const branch = prj.headRefName;
+            /*
+            FNXC:AutomationGovernance 2026-08-07-20:24:
+            Restamp durable provenance from baseline validated_head → repaired worktree
+            BEFORE commit/push. Product edits become MIXED; proof-only stays NONE.
+            */
+            const stamp = stampSyncStatusAfterExpertRepair({
+              worktreePath: wt,
+              baselineSha: head,
+            });
+            process.stdout.write(`[expert-repair] provenance stamp kind=${stamp.kind} product=${stamp.appsolinoProductPaths.length} maintenance=${stamp.maintenanceMetadataPaths.length}\n`);
             const status = spawnSync('git', ['-C', wt, 'status', '--porcelain'], { encoding: 'utf8' });
             if (status.status === 0 && status.stdout.trim()) {
               spawnSync('git', ['-C', wt, 'add', '-A'], { encoding: 'utf8' });

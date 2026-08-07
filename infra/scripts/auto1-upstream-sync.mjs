@@ -25,6 +25,11 @@ import {
   formatFreshnessReport,
 } from "./upstream/freshness.mjs";
 import {
+  observeReleaseFreshness,
+  RELEASE_FRESHNESS_PATH,
+} from "./upstream/observe-release-freshness.mjs";
+import { buildProvenanceEvidenceBlock } from "./upstream/provenance-evidence.mjs";
+import {
   selectRollingCandidate,
   planSupersedeObsolete,
   parseUpstreamShaFromBranch,
@@ -325,6 +330,13 @@ Merge-base: ${delta.mergeBase}
     }
 
     if (upstreamFixedResolution?.resolved === true) {
+      /*
+      FNXC:AutomationGovernance 2026-08-07-20:04:
+      Persist resolvedConflictedFiles inside the resolution record. Live conflictedFiles
+      clears so GitHub becomes MERGEABLE, but provenance must still classify
+      CONFLICT_RESOLUTION — never silently promote to EXACT_UPSTREAM.
+      */
+      const resolvedConflictedFiles = [...conflictedFiles];
       conflict = false;
       conflictedFiles = [];
       mkdirSync(join(repoDir, dirname(STATUS_PATH)), { recursive: true });
@@ -348,7 +360,20 @@ Merge-base: ${delta.mergeBase}
           action: upstreamFixedResolution.decision?.action || "TAKE_UPSTREAM",
           retiredPatchIds: upstreamFixedResolution.decision?.retiredPatchIds || [],
           reason: upstreamFixedResolution.decision?.reason || null,
+          resolvedConflictedFiles,
         },
+        /*
+        FNXC:AutomationGovernance 2026-08-07-20:15:
+        TAKE_UPSTREAM retirement is conflict reconciliation, not local product adaptation.
+        */
+        ...buildProvenanceEvidenceBlock({
+          conflictReconciliationComplete: true,
+          patchReconciliationComplete: true,
+          localDeltaClassificationComplete: true,
+          localDeltaKind: "NONE",
+          appsolinoProductPaths: [],
+          adaptedPaths: [],
+        }),
       };
       writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
       git(repoDir, ["add", STATUS_PATH, ".appsolino/patches"], { allowFailure: true });
@@ -381,11 +406,20 @@ Merge-base: ${delta.mergeBase}
           ? {
               resolved: false,
               action: upstreamFixedResolution.decision?.action || null,
-              reason: upstreamFixedResolution.decision?.reason || upstreamFixedResolution.reason || null,
+              reason: upstreamFixedResolution.decision?.reason || null,
               stderr: upstreamFixedResolution.stderr || null,
               spawnStatus: upstreamFixedResolution.spawnStatus ?? upstreamFixedResolution.status ?? null,
             }
           : null,
+        ...buildProvenanceEvidenceBlock({
+          // Reconciliation step finished: durable conflict state recorded (still unresolved).
+          conflictReconciliationComplete: true,
+          patchReconciliationComplete: true,
+          localDeltaClassificationComplete: true,
+          localDeltaKind: "NONE",
+          appsolinoProductPaths: [],
+          adaptedPaths: [],
+        }),
       };
       writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
       git(repoDir, ["add", STATUS_PATH]);
@@ -417,6 +451,18 @@ Merge-base: ${delta.mergeBase}
       touchesMigrations: delta.touchesMigrations,
       touchesLockfile: delta.touchesLockfile,
       changedFileCount: delta.changedFiles.length,
+      /*
+      FNXC:AutomationGovernance 2026-08-07-20:15:
+      Clean absorb: complete provenance schema with no local product delta.
+      */
+      ...buildProvenanceEvidenceBlock({
+        conflictReconciliationComplete: true,
+        patchReconciliationComplete: true,
+        localDeltaClassificationComplete: true,
+        localDeltaKind: "NONE",
+        appsolinoProductPaths: [],
+        adaptedPaths: [],
+      }),
     };
     writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
     git(repoDir, ["add", STATUS_PATH]);
@@ -587,11 +633,42 @@ Merge-base: ${delta.mergeBase}
   });
   try {
     writeFreshnessStatus(join(repoDir, FRESHNESS_STATUS_PATH), freshness);
+    /*
+    FNXC:AutomationGovernance 2026-08-07-20:04:
+    Observe RELEASE_STALE as a separate plane (detection only — never publishes).
+    */
+    let releaseFreshness = null;
+    try {
+      const observeGh =
+        input.gh ??
+        ((args) => {
+          const env = {
+            ...process.env,
+            GH_TOKEN: process.env.AUTO1_GITHUB_APP_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "",
+          };
+          const result = spawnSync("gh", args, { encoding: "utf8", env });
+          return {
+            status: result.status ?? 1,
+            stdout: (result.stdout ?? "").trim(),
+            stderr: (result.stderr ?? "").trim(),
+          };
+        });
+      releaseFreshness = observeReleaseFreshness({
+        repoDir,
+        runGh: observeGh,
+        appsolinoRepo: input.ghRepo || process.env.GITHUB_REPOSITORY || "Appsolino/Fusion",
+      });
+    } catch {
+      releaseFreshness = null;
+    }
     // Keep status on the sync branch when we already have local commits.
     if (syncBranch && (push || createPr)) {
       git(repoDir, ["add", FRESHNESS_STATUS_PATH], { allowFailure: true });
+      if (releaseFreshness) {
+        git(repoDir, ["add", RELEASE_FRESHNESS_PATH], { allowFailure: true });
+      }
       const staged = git(repoDir, ["diff", "--cached", "--name-only"], { allowFailure: true }).stdout;
-      if (staged.includes(FRESHNESS_STATUS_PATH)) {
+      if (staged.includes(FRESHNESS_STATUS_PATH) || staged.includes(RELEASE_FRESHNESS_PATH)) {
         git(repoDir, [
           "commit",
           "-m",

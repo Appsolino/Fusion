@@ -1,40 +1,54 @@
 # Appsolino Fusion — current state
 
-<!-- latency-cycle-2026-08-07 -->
+<!-- latency-cycle-2026-08-07 / governance-2026-08-07 -->
 ## Live maintenance cycle (2026-08-07)
 
-Latency architecture (#141), verifier budget 8m (#143), patch-reconcile runner (#146), AUTO-1 expert-skip (#147) are on main. Rolling candidate **#144** (`1f9b0e64…`); #135 CLOSED/superseded. SENSITIVE_REVIEW is verifier-first. Live blocker: verifier REQUEST_CHANGES on undeclared `migrationInfo`/`patchRegistryChanges` sent Composer repair into full cycle-budget exhaustion (`31205033983`) — package enrichment PR in flight. Do not reopen owner review on `automation/upstream-*`; Cursor Approval Agent still re-requests Anas966 (clear + policy follow-up).
-
+**#144 MERGED** (absorb `1f9b0e64…`). Source freshness **FRESH / 0 behind** Runfusion main.
+Follow-ups #149–#151 on main (review package enrichment, AI-verified merge, SHA-bound APPROVE).
+Governance cleanup in flight: exclude external Cursor Approval Agent from `automation/upstream-*`,
+provenance+impact risk, candidate lease, release-freshness (`RELEASE_STALE`), automation map.
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-07T19:05:00Z
+**Last updated UTC:** 2026-08-07T19:57:00Z
 
 | Field | Value |
 | --- | --- |
 | Active programme | Issue [#109](https://github.com/Appsolino/Fusion/issues/109) — Host D trust-hardening |
 | Prior programmes | [#78](https://github.com/Appsolino/Fusion/issues/78) CLOSED · [#105](https://github.com/Appsolino/Fusion/issues/105) CLOSED |
-| Appsolino main tip | `d8471f4250aa71c030c609e265909e68a7764f42` (look up live tip with `git fetch && git rev-parse origin/main`) |
-| Integrated upstream (main freshness file) | still pre-absorb — **not FRESH** |
+| Appsolino main tip | `7782fa76605f3c0836be2349911fcdd9277e74f1` (look up live tip with `git fetch && git rev-parse origin/main`) |
+| Source version | `0.75.1` (package.json) |
+| Integrated upstream | `1f9b0e644abb27e19803637803d74e37d7c45ce2` — **FRESH / 0 behind** |
 | Live Runfusion HEAD | `1f9b0e644abb27e19803637803d74e37d7c45ce2` |
-| Active upstream candidate | [#144](https://github.com/Appsolino/Fusion/pull/144) `automation/upstream-1f9b0e644abb` |
+| Active upstream candidate | none (post-#144) |
+| Latest published GitHub Release | `v0.73.0` (2026-07-25) — **RELEASE_STALE** vs source `0.75.1` |
 | Active Host D release | `auto3-0.75.1-beta.1-7c62e652e56d` |
-| Schema ceiling | **0044** (candidate adds 0045/0046 — Host D staging only after absorb) |
-| Staging health | `ok` / `0.75.1-beta.1` @ `127.0.0.1:4140` (`enginePaused=true`) |
+| Schema ceiling | check live after absorb (0045/0046 may be on Host D after AUTO-3) |
+| Staging health | verify live; Host D may remain `enginePaused=true` |
 | Host P state | **accessed=NO — prohibited** |
 | Operating mode | **HOST-D TRUST HARDENING** · continuous automation continues |
 
-## Maintenance plane (this cycle)
+## Freshness planes
+
+| Plane | State |
+| --- | --- |
+| Source freshness | **FRESH** (integrated == Runfusion HEAD) |
+| Release freshness | **RELEASE_STALE** (source `0.75.1` ≠ Latest Release `v0.73.0`; no auto-tag on absorb) |
+| Deploy freshness | Host D separate; Host P prohibited |
+
+## Maintenance plane
 
 | Item | State |
 | --- | --- |
-| Latency architecture | Landed [#141](https://github.com/Appsolino/Fusion/pull/141) — `SENSITIVE_REVIEW` vs `REPAIR_REQUIRED`, cycle budget, stale watchdog |
-| Live sensitive-review proof | Verifier-first on #144 (~4m); no Composer on clean PASS path |
-| Review-package enrichment | Landed [#149](https://github.com/Appsolino/Fusion/pull/149)
-| AI-verified merge path | **IN FIX** — finalize must merge on verifier APPROVE without Anas966 |
-| `FIX-LANE-WIRING-TOUCH-FIXTURE` | **RETIRED** / `UPSTREAM_FIXED` on #144 |
-| Freshness | **not FRESH** — awaiting enriched sensitive-review → APPROVE → finalize |
-| Part B / Host D unpause | **not authorised** — remain paused |
+| Latency architecture | Landed [#141](https://github.com/Appsolino/Fusion/pull/141) |
+| AI-verified merge (no Anas966) | Landed [#150](https://github.com/Appsolino/Fusion/pull/150) / SHA bind [#151](https://github.com/Appsolino/Fusion/pull/151) |
+| Absorb #144 | **MERGED** |
+| `FIX-LANE-WIRING-TOUCH-FIXTURE` | **RETIRED** / `UPSTREAM_FIXED` |
+| Cursor Approval Agent on upstream | **DISABLED by owner** — verification pending on next `automation/upstream-*` PR; defensive reviewer cleanup kept ([ops note](upstream/CURSOR-APPROVAL-AGENT-EXCLUDE.md)) |
+| Automation map | [AUTOMATION-MAP.json](upstream/AUTOMATION-MAP.json) + YAML drift test |
+| Provenance | Durable sync-status evidence; fail-closed away from false EXACT_UPSTREAM |
+| Release observation | AUTO-1 + finalize observe `RELEASE_STALE` (no auto-publish) |
+| Part B / Host D unpause | **not authorised** |
 
 ## Steward enablement
 
@@ -49,7 +63,9 @@ Latency architecture (#141), verifier budget 8m (#143), patch-reconcile runner (
 ## Owner priority
 
 ```text
-NOW:     Land sensitive-review package enrichment → AUTO-1 refresh → verifier APPROVE → FRESH
+NOW:     Merge #153 after green checks → return to dependability mission
+NEXT:    On next automation/upstream-* PR verify no cursor[bot]; then close ISS-UP-GOV-001
 HOLD:    Host P / production — PROHIBITED; do not unpause Host D solely for maintenance proof
-NOTE:    AI resolver = known problem; AI verifier = uncertainty/risk (do not send Composer for package metadata)
+NOTE:    Official upstream easy to absorb; Appsolino product deltas get scrutiny; maintenance metadata is observability
+NOTE:    Do not auto-publish a GitHub Release on every upstream commit — version-change policy
 ```
