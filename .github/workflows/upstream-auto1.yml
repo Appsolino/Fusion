@@ -86,6 +86,23 @@ jobs:
           # Fail closed before merge/push if App credentials cannot talk to origin.
           git ls-remote --exit-code origin HEAD >/dev/null
 
+      # FNXC:UpstreamPatchReconcile 2026-08-07-07:20:
+      # UPSTREAM_FIXED conflict resolution runs INSIDE AUTO-1 sync and needs node+pnpm
+      # for clean-upstream regression (pnpm check:lane-wiring). Setup must precede sync.
+      - name: Setup Node + pnpm (required for in-sync Finding Comparison)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable corepack pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+          node -v
+          pnpm -v
+
       - name: Run AUTO-1 sync
         id: sync
         shell: bash
@@ -129,13 +146,7 @@ jobs:
           fi
           exit "$code"
 
-      - name: Setup Node for patch reconciliation
-        if: steps.sync.outputs.outcome == 'merged' && steps.sync.outputs.upstream_sha != ''
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Finding Comparison — reconcile patches on clean upstream
+      - name: Finding Comparison — reconcile remaining patches on clean upstream
         if: steps.sync.outputs.outcome == 'merged' && steps.sync.outputs.upstream_sha != ''
         id: patch-reconcile
         shell: bash
@@ -148,6 +159,7 @@ jobs:
           set -euo pipefail
           # FNXC:UpstreamPatchReconcile 2026-08-07-05:55:
           # Automation-only retirement proof against exact clean upstream tip. Do not hand-edit registry.
+          # Covering-patch retirement may already have happened during conflict resolution inside sync.
           node infra/scripts/upstream/run-patch-reconcile-live.mjs \
             --repo-dir "$GITHUB_WORKSPACE" \
             --upstream-sha "$UPSTREAM_SHA" \

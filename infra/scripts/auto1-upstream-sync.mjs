@@ -248,6 +248,9 @@ Merge-base: ${delta.mergeBase}
           status: resolve.status,
         };
       }
+      if (resolve.stderr) {
+        process.stderr.write(`[auto1] upstream-fixed resolver stderr:\n${resolve.stderr}\n`);
+      }
       if (!upstreamFixedResolution.reason && resolve.status !== 0) {
         upstreamFixedResolution = {
           ...upstreamFixedResolution,
@@ -320,6 +323,8 @@ Merge-base: ${delta.mergeBase}
               resolved: false,
               action: upstreamFixedResolution.decision?.action || null,
               reason: upstreamFixedResolution.decision?.reason || upstreamFixedResolution.reason || null,
+              stderr: upstreamFixedResolution.stderr || null,
+              spawnStatus: upstreamFixedResolution.spawnStatus ?? upstreamFixedResolution.status ?? null,
             }
           : null,
       };
