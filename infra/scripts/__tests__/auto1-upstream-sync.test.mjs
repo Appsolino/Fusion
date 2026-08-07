@@ -385,7 +385,7 @@ describe("clearAutonomousOwnerReviewRequests", () => {
       headRefName: "automation/upstream-fc2040ca8476",
     });
     assert.equal(r.cleared, true);
-    assert.ok(calls.some((c) => c.includes("--remove-reviewer") && c.includes("Anas966")));
+    assert.ok(calls.some((c) => c[0] === "api" && c.includes("DELETE") && c.some((x) => String(x).includes("Anas966"))));
   });
 
   it("skips non-automation branches", () => {

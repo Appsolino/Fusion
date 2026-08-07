@@ -79,15 +79,14 @@ export function clearAutonomousOwnerReviewRequests(gh, opts) {
   if (!match) {
     return { cleared: false, reason: "no-owner-review-request" };
   }
-  // gh pr edit --remove-reviewer
+  // Prefer REST delete — GraphQL `pr edit --remove-reviewer` can fail on Projects Classic deprecation noise.
   const removed = gh([
-    "pr",
-    "edit",
-    pr,
-    "--repo",
-    repo,
-    "--remove-reviewer",
-    login,
+    "api",
+    "-X",
+    "DELETE",
+    `repos/${repo}/pulls/${pr}/requested_reviewers`,
+    "-f",
+    `reviewers[]=${login}`,
   ]);
   if (removed.status !== 0) {
     return { cleared: false, reason: `remove-reviewer-failed:${removed.stderr || removed.stdout}` };
