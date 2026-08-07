@@ -42,6 +42,11 @@ export const VERIFIER_MODEL_SECONDARY = process.env.UPSTREAM_VERIFIER_MODEL_SECO
 /** Bounded verifier attempts per candidate revision (normal → repair → fresh [→ secondary]). */
 export const DEFAULT_MAX_VERIFIER_ATTEMPTS = 3;
 
+/*
+FNXC:UpstreamLatency 2026-08-07-18:30:
+migrationInfo is an orchestrator-built object (declaredMigrations, hostDStagingDeploy,
+sync agreement) — not a free-text string. null only when enrichment was omitted.
+*/
 /**
  * @param {{
  *   originalProblem: string,
@@ -49,7 +54,9 @@ export const DEFAULT_MAX_VERIFIER_ATTEMPTS = 3;
  *   diffText: string,
  *   patchRegistryChanges?: object[],
  *   deterministicTestResults?: object,
- *   migrationInfo?: string|null,
+ *   migrationInfo?: object|string|null,
+ *   resolverPatchActions?: object[]|null,
+ *   sensitiveReviewEvidenceOmission?: string|null,
  *   riskClass?: string,
  *   candidateSha?: string|null,
  *   upstreamSha?: string|null,
@@ -107,6 +114,9 @@ export function buildVerifierPrompt(evidence, opts = {}) {
     "You do not know whether the resolver claimed success — judge the diff and tests.",
     "Host P is prohibited. Do not approve secret expansion or production activation.",
     "",
+    evidence.sensitiveReviewEvidenceOmission
+      ? `EVIDENCE OMITTED: ${evidence.sensitiveReviewEvidenceOmission} — do not treat empty patchRegistryChanges or null migrationInfo as proof of absence.`
+      : null,
     "Review package:",
     JSON.stringify(
       {
@@ -115,7 +125,9 @@ export function buildVerifierPrompt(evidence, opts = {}) {
         riskClass: evidence.riskClass || "SENSITIVE",
         patchRegistryChanges: evidence.patchRegistryChanges || [],
         deterministicTestResults: evidence.deterministicTestResults || null,
-        migrationInfo: evidence.migrationInfo || null,
+        migrationInfo: evidence.migrationInfo ?? null,
+        resolverPatchActions: evidence.resolverPatchActions || null,
+        sensitiveReviewEvidenceOmission: evidence.sensitiveReviewEvidenceOmission || null,
         ...shaBlock,
         diffText: String(evidence.diffText || "").slice(0, 120_000),
       },
@@ -124,7 +136,9 @@ export function buildVerifierPrompt(evidence, opts = {}) {
     ),
     "",
     schemaHint,
-  ].join("\n");
+  ]
+    .filter((line) => line != null && line !== "")
+    .join("\n");
 }
 
 /**

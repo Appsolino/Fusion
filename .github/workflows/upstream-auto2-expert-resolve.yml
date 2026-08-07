@@ -123,6 +123,12 @@ jobs:
           import { createCycleBudget } from './infra/scripts/upstream/cycle-budget.mjs';
           import { createLatencyTracker } from './infra/scripts/upstream/latency-tracker.mjs';
           import { clearAutonomousOwnerReviewRequests } from './infra/scripts/auto1-upstream-sync.mjs';
+          /*
+          FNXC:UpstreamLatency 2026-08-07-18:30:
+          Enrich SENSITIVE_REVIEW evidence with declared migrations + patch registry delta
+          so the verifier does not REQUEST_CHANGES on null/[] metadata the orchestrator already knows.
+          */
+          import { buildSensitiveReviewPackage, toVerifierEvidenceFields } from './infra/scripts/upstream/sensitive-review-package.mjs';
           import { spawnSync } from 'node:child_process';
           import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -247,6 +253,34 @@ jobs:
           if (mode === 'sensitive-review') {
             tracker.classify('SENSITIVE_REVIEW');
             const integrity = runExpertIntegrityChecks(wt);
+            const reviewPkg = buildSensitiveReviewPackage({
+              worktreePath: wt,
+              candidateSha: head,
+              upstreamSha: cand,
+              baseAppsolinoSha: candidateBase,
+              integrity: { passed: integrity.passed === true, failures: integrity.failures || [] },
+            });
+            // Persist package evidence outside the verifier prompt only (orchestrator proofs dir).
+            writeFileSync(
+              `${wt}/.appsolino/proofs/sensitive-review-package.json`,
+              `${JSON.stringify(reviewPkg, null, 2)}\n`,
+            );
+            if (!reviewPkg.agreement?.ok) {
+              const body = [
+                '## Sensitive review package agreement failure',
+                '',
+                'Orchestrator could not reconcile the review package with `.appsolino/upstream-sync-status.json`.',
+                'Fail closed — do not send an empty/null migration or registry package to the verifier.',
+                '',
+                '```json',
+                JSON.stringify(reviewPkg.agreement, null, 2),
+                '```',
+              ].join('\n');
+              spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', body], { encoding: 'utf8' });
+              writeLatency({ packageAgreementOk: false, agreementErrors: reviewPkg.agreement?.errors || [] });
+              process.exit(2);
+            }
+            const pkgFields = toVerifierEvidenceFields(reviewPkg);
             tracker.beginPhase({ name: 'sensitive-review', attempt: 1, model: 'claude-opus-5-thinking-high', classification: 'AI_VERIFIER_REASONING' });
             const verifier = await runUpstreamAiVerifier({
               worktreePath: wt,
@@ -259,9 +293,16 @@ jobs:
                   'Mode: SENSITIVE_REVIEW (read-only).',
                   'Deterministic AUTO-2 validation: PASS.',
                   `Integrity: ${integrity.passed ? 'PASS' : 'FAIL ' + (integrity.failures || []).join(';')}`,
+                  `Package agreement: PASS (${reviewPkg.migrationInfo.declaredMigrations.length} migrations declared; ${reviewPkg.patchRegistryChanges.length} registry rows).`,
                   'Inspect the checked-out candidate worktree; do not require an embedded full-tree diff.',
+                  'Treat migrationInfo and patchRegistryChanges below as orchestrator-declared scope — not as verified absence when empty.',
                 ].join('\n'),
-                deterministicTestResults: { passed: integrity.passed === true, failures: integrity.failures || [] },
+                ...pkgFields,
+                deterministicTestResults: {
+                  passed: integrity.passed === true,
+                  failures: integrity.failures || [],
+                  ...(pkgFields.deterministicTestResults || {}),
+                },
                 riskClass: 'SENSITIVE',
                 candidateSha: head,
                 upstreamSha: cand,
@@ -270,7 +311,13 @@ jobs:
             });
             tracker.endPhase({ result: verifier.verdict?.verdict || verifier.failureClass || verifier.action });
             writeFileSync(`${wt}/.appsolino/proofs/sensitive-review.json`, `${JSON.stringify(verifier, null, 2)}\n`);
-            writeLatency({ verifierOutcome: verifier.verdict?.verdict || verifier.action, integrityPassed: integrity.passed });
+            writeLatency({
+              verifierOutcome: verifier.verdict?.verdict || verifier.action,
+              integrityPassed: integrity.passed,
+              packageAgreementOk: true,
+              declaredMigrationCount: reviewPkg.migrationInfo.declaredMigrations.length,
+              patchRegistryChangeCount: reviewPkg.patchRegistryChanges.length,
+            });
             const summary = [
               `## Sensitive review result`,
               ``,

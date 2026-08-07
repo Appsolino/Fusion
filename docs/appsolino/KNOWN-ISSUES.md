@@ -373,7 +373,7 @@ Patch registry: `FIX-VERIFICATION-PASSED-EVIDENCE`
 
 ## ISS-UP-LATENCY-001 — Blind long waits in autonomous upstream maintenance
 
-Status: **IN FIX** (branch `feat/maintenance-latency-audit`)
+Status: **IN FIX** (live cycle on #144; package-enrichment follow-up `fix/sensitive-review-package-enrichment`)
 Severity: High (operational reliability)
 Component: Upstream AUTO-2 expert / sensitive path / self-hosted runner
 First observed: 2026-08-07 (runs `31169133069`, `31171067130`, candidate #135)
@@ -386,6 +386,7 @@ Evidence: `docs/appsolino/upstream/MAINTENANCE-LATENCY-AUDIT.md`
 - Per-child 15m timeouts multiply across repair×verifier attempts.
 - Freshness checked only at loop boundaries → STALE_WORK after long AI calls.
 - Runner queue conflated with AI time.
+- SENSITIVE_REVIEW package sent `migrationInfo:null` / `patchRegistryChanges:[]` while the candidate declared migrations and registry churn → verifier REQUEST_CHANGES → Composer repair burned the full 20m cycle budget (runs `31205033983`, exit 143) without a code defect.
 
 ### Permanent correction (in progress)
 
@@ -393,7 +394,9 @@ Evidence: `docs/appsolino/upstream/MAINTENANCE-LATENCY-AUDIT.md`
 - Total cycle wall-clock budget (`LATENCY_BUDGET_EXHAUSTED`); phase budgets; mid-flight stale watchdog.
 - Latency evidence artifact + heartbeat; `pnpm appsolino:maintenance-latency-report`.
 - Targeted REQUEST_CHANGES + NON_CONVERGING_LOOP; cancel superseded expert runs.
+- Orchestrator-built `sensitive-review-package.mjs` declares migrations + patch registry delta before the read-only verifier runs.
 
 ### Do not
 
 Weaken deterministic validation or fail-closed trust to “go faster.”
+Send Composer repair solely to invent review-package metadata the orchestrator already knows.
