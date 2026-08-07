@@ -116,3 +116,10 @@ packages/desktop/deploy/
 # vi.mock interception for imports nested inside the bundle; see the script
 # comment (scripts/build-engine-core-gate-bundle.mjs) for the full repro.
 packages/core/.gate-bundle/
+
+# FNXC:UpstreamFreshness 2026-08-07-04:50: runtime freshness/prompt artifacts (registry+proofs are committed)
+.appsolino/upstream-expert-prompt.txt
+.appsolino/upstream-freshness.json
+.appsolino/upstream-freshness-report.md
+.appsolino/upstream-freshness-snapshot.json
+.appsolino/recover-stale-result.json

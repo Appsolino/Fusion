@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "FIX-ISS-GIT-007",
+  "status": "ACTIVE",
+  "defect": {
+    "description": "Auto-merge / integration assumes branch name main while default may differ",
+    "reproduction": "Disposable repo default master; integration resolution fails or wrong tip",
+    "affectedSubsystem": "git/integration"
+  },
+  "introducedAgainst": {
+    "upstreamSha": null
+  },
+  "regressionTests": [
+    "infra/scripts/__tests__/auto1-upstream-sync.test.mjs"
+  ],
+  "upstreamComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "comparedAgainstSha": null,
+    "relatedIssue": null,
+    "relatedPr": null,
+    "relatedCommit": null,
+    "evidence": "Appsolino AUTO-1 resolveIntegrationBranch (origin/HEAD)",
+    "comparedAt": null
+  },
+  "localAction": {
+    "patchRequired": true,
+    "applyPaths": [
+      "infra/scripts/auto1-upstream-sync.mjs",
+      "packages/engine/src/merge/pr-nodes.ts",
+      "packages/engine/src/merge/integration-branch.ts",
+      "packages/engine/src/merge/group-merge-coordinator.ts"
+    ]
+  },
+  "retirementCondition": {
+    "regressionTestPassesOnCleanUpstream": true,
+    "notes": "Retire if upstream Fusion permanently resolves default-branch without hardcoding main"
+  },
+  "revisions": [
+    {
+      "revision": 1,
+      "againstUpstreamSha": null,
+      "summary": "ISS-GIT-007 origin/HEAD resolution",
+      "files": [
+        "infra/scripts/auto1-upstream-sync.mjs"
+      ],
+      "createdAt": "2026-07-31T12:40:00Z"
+    }
+  ],
+  "updatedUtc": "2026-08-07T04:11:18Z"
+}

@@ -165,6 +165,12 @@ jobs:
             auto-merged|auto-merged-deployed|already-merged-idempotent)
               exit 0
               ;;
+            expert-resolving|ai-verifying|refresh-required|blocked-policy|blocked-unresolved|approval-required)
+              # FNXC:UpstreamFreshness 2026-08-07-04:30:
+              # Durable non-merge outcomes. Workflow succeeds so expert/refresh can continue;
+              # overall freshness remains unhealthy until integratedUpstreamSha matches upstreamHead.
+              exit 0
+              ;;
             auto-merged-deploy-rolled-back|auto-merged-deploy-critical|auto-merged-deploy-failed|blocked)
               exit 2
               ;;
@@ -173,6 +179,29 @@ jobs:
               exit 0
               ;;
           esac
+
+      - name: Dispatch upstream expert resolver or AUTO-1 refresh
+        if: steps.fin.outputs.action == 'expert-resolving' || steps.fin.outputs.action == 'refresh-required'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/auto2-gh-config
+          ACTION: ${{ steps.fin.outputs.action }}
+          PR: ${{ steps.meta.outputs.pr }}
+          HEAD: ${{ steps.meta.outputs.validated_head }}
+        run: |
+          set -euo pipefail
+          # FNXC:UpstreamSensitiveExpert 2026-08-07-04:30:
+          # SENSITIVE continues to rolling AUTO-1 refresh or expert resolve — not owner parking.
+          if [[ "$ACTION" == "refresh-required" ]]; then
+            gh workflow run upstream-auto1.yml --repo "$GITHUB_REPOSITORY"
+            echo "Dispatched AUTO-1 refresh for live upstream HEAD"
+          else
+            gh workflow run upstream-auto2-expert-resolve.yml --repo "$GITHUB_REPOSITORY" \
+              -f pr_number="$PR" \
+              -f validated_head="$HEAD" || {
+              echo "::warning::expert-resolve workflow missing or dispatch failed — state remains expert-resolving/blocked-unresolved"
+            }
+          fi
 
       - name: Guard — Host D only via AUTO-3 workflow
         run: |

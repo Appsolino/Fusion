@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "FIX-ISS-CLI-005-CURSOR-ROUTING",
+  "status": "ACTIVE",
+  "defect": {
+    "description": "cursor-cli models missing from pi ModelRegistry hard-fail planning",
+    "reproduction": "Select cursor-cli/composer-2.5 → not found in pi model registry",
+    "affectedSubsystem": "engine/agents"
+  },
+  "introducedAgainst": {
+    "upstreamSha": null
+  },
+  "regressionTests": [
+    "packages/engine/src/__tests__/agent-session-helpers-cursor-routing.test.ts"
+  ],
+  "upstreamComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "comparedAgainstSha": null,
+    "relatedIssue": null,
+    "relatedPr": null,
+    "relatedCommit": null,
+    "evidence": null,
+    "comparedAt": null
+  },
+  "localAction": {
+    "patchRequired": true,
+    "applyPaths": [
+      "packages/engine/src/agents/agent-session-helpers.ts"
+    ]
+  },
+  "retirementCondition": {
+    "regressionTestPassesOnCleanUpstream": true,
+    "notes": null
+  },
+  "revisions": [
+    {
+      "revision": 1,
+      "againstUpstreamSha": null,
+      "summary": "cursor runtimeHint routing",
+      "files": [],
+      "createdAt": null
+    }
+  ],
+  "updatedUtc": "2026-08-07T04:11:18Z"
+}
