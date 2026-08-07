@@ -4,6 +4,9 @@ import type { TaskDetail, WorkflowIrNode } from "@fusion/core";
 import type { WorkflowNodeHandler, WorkflowNodeResult } from "./workflow-graph-executor.js";
 import { createPrNodeHandlers, createAutoMergeGateHandler, type PrNodeDeps } from "../merge/pr-nodes.js";
 import {
+  EXTERNAL_EVENT_OUTCOME_METADATA_KEY,
+} from "../execution/hold-release.js";
+import {
   primitiveNodeContext,
   type WorkflowPrimitiveContext,
   type WorkflowRuntimePrimitives,
@@ -746,8 +749,37 @@ export function createDefaultNodeHandlers(
     dispatch, so entry must park the card in place exactly like
     `manual-merge-hold` — the outcome-labelled release edges are traversed by the
     resuming run, never by the run that entered the hold.
+
+    FNXC:FullAutonomy 2026-08-07-21:08:
+    When `releaseHeldTaskByEvent` persisted `workflowExternalEventOutcome` from a
+    `github:pr-*` tag, the resumed hold run consumes it and returns
+    `outcome:<event>` so edges like `outcome:approved` / `outcome:checks-failed`
+    can traverse. Clearing the pending field is best-effort and idempotent.
     */
-    hold: async () => ({ outcome: "failure", value: "manual-required" }),
+    hold: async (_node, ctx) => {
+      const store = deps?.prNodes?.getStore?.();
+      const freshTask = typeof store?.getTask === "function"
+        ? await store.getTask(ctx.task.id)
+        : ctx.task;
+      const pendingRaw = freshTask?.sourceMetadata?.[EXTERNAL_EVENT_OUTCOME_METADATA_KEY];
+      const pending = typeof pendingRaw === "string" && pendingRaw.trim() ? pendingRaw.trim() : null;
+      if (pending) {
+        if (typeof store?.updateTask !== "function") {
+          return { outcome: "failure", value: "manual-required" };
+        }
+        try {
+          await store.updateTask(ctx.task.id, {
+            sourceMetadataPatch: { [EXTERNAL_EVENT_OUTCOME_METADATA_KEY]: null },
+          });
+        } catch {
+          // Fail closed: a stale outcome could otherwise replay when a future
+          // hold resumes after process restart.
+          return { outcome: "failure", value: "manual-required" };
+        }
+        return { outcome: "success", value: pending };
+      }
+      return { outcome: "failure", value: "manual-required" };
+    },
     "retry-backoff": async () => ({ outcome: "success" }),
     "recovery-router": async (_node, ctx) => ({
       outcome: "success",

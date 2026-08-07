@@ -1,22 +1,21 @@
 # Appsolino Fusion — current state
 
-<!-- latency-cycle-2026-08-07 / governance-2026-08-07 -->
+<!-- latency-cycle-2026-08-07 / governance-2026-08-07 / full-autonomy-2026-08-07 -->
 ## Live maintenance cycle (2026-08-07)
 
 **#144 MERGED** (absorb `1f9b0e64…`). Source freshness **FRESH / 0 behind** Runfusion main.
 Follow-ups #149–#151 on main (review package enrichment, AI-verified merge, SHA-bound APPROVE).
-Governance cleanup in flight: exclude external Cursor Approval Agent from `automation/upstream-*`,
-provenance+impact risk, candidate lease, release-freshness (`RELEASE_STALE`), automation map.
+Governance **#153 MERGED** (provenance, candidate lease, release-freshness, automation map, Cursor Approval Agent docs).
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-07T19:57:00Z
+**Last updated UTC:** 2026-08-07T21:10:00Z
 
 | Field | Value |
 | --- | --- |
-| Active programme | Issue [#109](https://github.com/Appsolino/Fusion/issues/109) — Host D trust-hardening |
+| Active programme | Issue [#109](https://github.com/Appsolino/Fusion/issues/109) — Host D trust-hardening + **full autonomy** (`feat/full-autonomy`) |
 | Prior programmes | [#78](https://github.com/Appsolino/Fusion/issues/78) CLOSED · [#105](https://github.com/Appsolino/Fusion/issues/105) CLOSED |
-| Appsolino main tip | `7782fa76605f3c0836be2349911fcdd9277e74f1` (look up live tip with `git fetch && git rev-parse origin/main`) |
+| Appsolino main tip | `44311f009fe8fec280f7c82effe6f7e34643bb77` (#153 merged) |
 | Source version | `0.75.1` (package.json) |
 | Integrated upstream | `1f9b0e644abb27e19803637803d74e37d7c45ce2` — **FRESH / 0 behind** |
 | Live Runfusion HEAD | `1f9b0e644abb27e19803637803d74e37d7c45ce2` |
@@ -24,9 +23,10 @@ provenance+impact risk, candidate lease, release-freshness (`RELEASE_STALE`), au
 | Latest published GitHub Release | `v0.73.0` (2026-07-25) — **RELEASE_STALE** vs source `0.75.1` |
 | Active Host D release | `auto3-0.75.1-beta.1-7c62e652e56d` |
 | Schema ceiling | check live after absorb (0045/0046 may be on Host D after AUTO-3) |
+| Full autonomy | Phase 1 audit + CI checks-failed routing in progress — see `docs/appsolino/FULL-AUTONOMY-AUDIT.md` |
 | Staging health | verify live; Host D may remain `enginePaused=true` |
 | Host P state | **accessed=NO — prohibited** |
-| Operating mode | **HOST-D TRUST HARDENING** · continuous automation continues |
+| Operating mode | **HOST-D TRUST HARDENING** · continuous automation continues; **do not unpause Host D for autonomy soak without owner OK** |
 
 ## Freshness planes
 
@@ -63,9 +63,9 @@ provenance+impact risk, candidate lease, release-freshness (`RELEASE_STALE`), au
 ## Owner priority
 
 ```text
-NOW:     Merge #153 after green checks → return to dependability mission
-NEXT:    On next automation/upstream-* PR verify no cursor[bot]; then close ISS-UP-GOV-001
-HOLD:    Host P / production — PROHIBITED; do not unpause Host D solely for maintenance proof
+NOW:     Complete and validate full-autonomy CI-repair routing (`feat/full-autonomy`); Host D remains paused
+NEXT:    Verify next upstream PR has no cursor[bot]; close ISS-UP-GOV-001; soak CI repair only after owner authorises engine unpause
+HOLD:    Host P / production — PROHIBITED; do not unpause Host D solely for maintenance or autonomy soak proof
 NOTE:    Official upstream easy to absorb; Appsolino product deltas get scrutiny; maintenance metadata is observability
 NOTE:    Do not auto-publish a GitHub Release on every upstream commit — version-change policy
 ```

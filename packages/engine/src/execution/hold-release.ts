@@ -65,6 +65,14 @@ import { schedulerLog } from "../logger.js";
 import { getPromptPath } from "./spec-staleness.js";
 import { activeSessionRegistry, executingTaskLock } from "../agents/active-session-registry.js";
 import { evaluateStrandedHoldContinuation } from "../plan-review-continuation.js";
+import {
+  PENDING_HOLD_OUTCOME_FIELD,
+  parseGithubPrHoldEventTag,
+  pendingHoldOutcomeMetadataPatch,
+} from "../merge/hold-event-outcome.js";
+
+/** Durable task-metadata key consumed by the resumed external-event hold node. */
+export const EXTERNAL_EVENT_OUTCOME_METADATA_KEY = PENDING_HOLD_OUTCOME_FIELD;
 
 // FNXC:StrandedHoldContinuation 2026-07-26-14:15:
 // A genuine stranded-plan fault is warned once per held location; ordinary
@@ -1000,6 +1008,18 @@ export async function releaseHeldTaskByEvent(
   if (!column || !holdConfig || holdConfig.release !== "external-event") {
     return { released: false, rejection: "not-external-event-hold" };
   }
+  const pendingOutcome = parseGithubPrHoldEventTag(eventTag);
+  if (pendingOutcome) {
+    try {
+      await store.updateTask(taskId, {
+        sourceMetadataPatch: pendingHoldOutcomeMetadataPatch(pendingOutcome),
+      });
+    } catch {
+      // Do not move a PR-event card without its routable continuation outcome:
+      // otherwise the hold handler can only park it again and the event is lost.
+      return { released: false, rejection: "event-outcome-persist-failed" };
+    }
+  }
   try {
     void store.recordRunAuditEvent?.({
       taskId,
@@ -1023,5 +1043,43 @@ export async function releaseHeldTaskByEvent(
     target,
     ir,
   );
-  return released ? { released: true, toColumn: target } : { released: false, rejection: "capacity-exhausted-or-no-slot" };
+  if (!released) {
+    return { released: false, rejection: "capacity-exhausted-or-no-slot" };
+  }
+
+  /*
+  FNXC:FullAutonomy 2026-08-07-21:10:
+  After moving out of the external-event hold, seed a runnable continuation at the
+  pinned hold node (or the first hold node in the prior column) so the next
+  executor claim resumes THERE with the pending outcome — not from `start`.
+  Idempotent replace of any prior held/active task continuation.
+  */
+  const resumeNodeId =
+    task.workflowIrPinNodeId ||
+    (ir.version === "v2"
+      ? ir.nodes.find((n) => n.kind === "hold" && n.column === task.column)?.id
+      : undefined);
+  if (resumeNodeId && typeof store.replaceActiveTaskWorkflowContinuation === "function") {
+    try {
+      await store.replaceActiveTaskWorkflowContinuation({
+        runId: `hold-release:event:${taskId}:${resumeNodeId}`,
+        taskId,
+        nodeId: resumeNodeId,
+        kind: "task",
+        state: "runnable",
+        stableWorkflowRunId: `${taskId}:workflow`,
+        waitReason: null,
+        sourceColumn: task.column,
+        targetColumn: target,
+      });
+    } catch (err) {
+      schedulerLog.warn(
+        `Hold event release for ${taskId} moved to ${target} but continuation seed failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  return { released: true, toColumn: target };
 }

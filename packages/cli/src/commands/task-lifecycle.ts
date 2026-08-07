@@ -73,6 +73,7 @@ import type {
   PrReconcileGithubOps,
   PrReconcileFetchResult,
 } from "@fusion/engine";
+import { buildCiFailureEvidence } from "@fusion/engine";
 
 /**
  * Minimal interface for GitHub operations needed by the PR merge workflow.
@@ -108,6 +109,21 @@ interface GitHubOperations {
     viewerCanResolve: boolean;
     comments: Array<{ author: string; body: string; viewerDidAuthor: boolean }>;
   }>>;
+  /** Failed check-runs + annotations/log excerpts for CI repair (FullAutonomy). */
+  getFailedCheckRuns?(
+    owner: string,
+    repo: string,
+    headSha: string,
+  ): Promise<
+    Array<{
+      name: string;
+      conclusion: string | null;
+      details_url?: string | null;
+      output?: { title?: string | null; summary?: string | null; text?: string | null };
+      annotations?: Array<{ path?: string; title?: string; message?: string; startLine?: number }>;
+      logExcerpt?: string | null;
+    }>
+  >;
   updatePr(params: { owner?: string; repo?: string; number: number; title?: string; body?: string }): Promise<PrInfo>;
   closePr(params: { number: number }): Promise<PrInfo>;
   /** ETag-conditional change probe (U2/U4); 304 ⇒ unchanged, rate-limit-free. */
@@ -469,6 +485,7 @@ export function createPrNodeGithubOps(
     | "resolveReviewThread"
     | "getViewerLogin"
     | "getPrReviewThreadsDetailed"
+    | "getFailedCheckRuns"
   >,
   options: {
     /**
@@ -571,6 +588,30 @@ export function createPrNodeGithubOps(
       resolveThread: (threadId) => github.resolveReviewThread(threadId),
       getCwd,
       getTaskId: (entity) => entity.sourceId,
+      fetchCiFailureEvidence: async (entity) => {
+        const headOid = entity.headOid;
+        if (!headOid || !github.getFailedCheckRuns) {
+          return buildCiFailureEvidence({ headOid, checkRuns: [] });
+        }
+        const { owner, name } = splitRepoSlug(entity.repo);
+        if (!owner || !name) {
+          return buildCiFailureEvidence({ headOid, checkRuns: [] });
+        }
+        const runs = await github.getFailedCheckRuns(owner, name, headOid);
+        return buildCiFailureEvidence({ headOid, checkRuns: runs });
+      },
+    },
+    fetchCiFailureEvidence: async (entity) => {
+      const headOid = entity.headOid;
+      if (!headOid || !github.getFailedCheckRuns) {
+        return buildCiFailureEvidence({ headOid, checkRuns: [] });
+      }
+      const { owner, name } = splitRepoSlug(entity.repo);
+      if (!owner || !name) {
+        return buildCiFailureEvidence({ headOid, checkRuns: [] });
+      }
+      const runs = await github.getFailedCheckRuns(owner, name, headOid);
+      return buildCiFailureEvidence({ headOid, checkRuns: runs });
     },
   };
 }

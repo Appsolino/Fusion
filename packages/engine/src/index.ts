@@ -272,6 +272,24 @@ export {
   buildRespondCallback,
 } from "./merge/pr-nodes.js";
 export {
+  buildCiFailureEvidence,
+  fingerprintCiFailure,
+  buildCiRepairAgentPrompt,
+  parseCiRepairAgentVerdict,
+  type CiFailureEvidence,
+  type RawCiCheckRun,
+} from "./merge/ci-failure-evidence.js";
+export {
+  decideCiRepairAction,
+  classifyCiFailureEvidence,
+  autoMergeGateCiFailedValue,
+  DEFAULT_CI_REPAIR_MAX_ATTEMPTS,
+  type CiFailureClass,
+  type CiRepairDecision,
+  type CiRepairAction,
+} from "./merge/ci-repair.js";
+export { runCiRepairRun } from "./merge/ci-repair-run.js";
+export {
   runPrResponseRun,
   scanForSecrets,
   buildPrEntityMarker,

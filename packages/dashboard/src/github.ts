@@ -2563,6 +2563,107 @@ export class GitHubClient {
     throw new Error("GitHub CLI (gh) is not available or not authenticated, and no GITHUB_TOKEN provided.");
   }
 
+  /*
+  FNXC:FullAutonomy 2026-08-07-21:21:
+  Failed check-run payloads (+ annotations / optional job log excerpt) for the
+  PR CI-repair agent. Engine stays dashboard-free; CLI injects this as
+  fetchCiFailureEvidence → buildCiFailureEvidence.
+  */
+  async getFailedCheckRuns(
+    owner: string,
+    repo: string,
+    headSha: string,
+  ): Promise<
+    Array<{
+      name: string;
+      conclusion: string | null;
+      details_url?: string | null;
+      output?: { title?: string | null; summary?: string | null; text?: string | null };
+      annotations?: Array<{ path?: string; title?: string; message?: string; startLine?: number }>;
+      logExcerpt?: string | null;
+    }>
+  > {
+    const headers = this.buildHeaders();
+    const checksUrl = `${this.baseUrl}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100`;
+    const checksRes = await fetch(checksUrl, { headers });
+    if (!checksRes.ok) {
+      throw new Error(`GitHub check-runs error: ${checksRes.status} ${checksRes.statusText}`);
+    }
+    const checksJson = (await checksRes.json()) as {
+      check_runs?: Array<{
+        id?: number;
+        name?: string;
+        conclusion?: string | null;
+        details_url?: string | null;
+        output?: { title?: string | null; summary?: string | null; text?: string | null };
+      }>;
+    };
+    const failed = (checksJson.check_runs ?? []).filter((c) => {
+      const conclusion = String(c.conclusion || "").toLowerCase();
+      return conclusion === "failure" || conclusion === "timed_out" || conclusion === "action_required";
+    });
+    const out: Array<{
+      name: string;
+      conclusion: string | null;
+      details_url?: string | null;
+      output?: { title?: string | null; summary?: string | null; text?: string | null };
+      annotations?: Array<{ path?: string; title?: string; message?: string; startLine?: number }>;
+      logExcerpt?: string | null;
+    }> = [];
+    for (const run of failed.slice(0, 12)) {
+      let annotations: Array<{ path?: string; title?: string; message?: string; startLine?: number }> = [];
+      if (typeof run.id === "number") {
+        try {
+          const annUrl = `${this.baseUrl}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/check-runs/${run.id}/annotations`;
+          const annRes = await fetch(annUrl, { headers });
+          if (annRes.ok) {
+            const annJson = (await annRes.json()) as Array<{
+              path?: string;
+              title?: string;
+              message?: string;
+              start_line?: number;
+            }>;
+            annotations = (annJson || []).slice(0, 40).map((a) => ({
+              path: a.path,
+              title: a.title,
+              message: a.message,
+              startLine: a.start_line,
+            }));
+          }
+        } catch {
+          annotations = [];
+        }
+      }
+      let logExcerpt: string | null = null;
+      const details = run.details_url || "";
+      const runMatch = /\/actions\/runs\/(\d+)/.exec(details);
+      if (runMatch && this.hasGhAuth()) {
+        try {
+          const log = await runGhAsync([
+            "run",
+            "view",
+            runMatch[1]!,
+            "--repo",
+            `${owner}/${repo}`,
+            "--log-failed",
+          ]);
+          logExcerpt = String(log || "").slice(0, 4000);
+        } catch {
+          logExcerpt = null;
+        }
+      }
+      out.push({
+        name: run.name || "check",
+        conclusion: run.conclusion ?? null,
+        details_url: run.details_url,
+        output: run.output,
+        annotations,
+        logExcerpt,
+      });
+    }
+    return out;
+  }
+
   private async getPrStatusWithGh(owner: string, repo: string, number: number): Promise<PrInfo> {
     const pr = await runGhJsonAsync<GhPrViewJson>([
       "pr", "view", String(number),

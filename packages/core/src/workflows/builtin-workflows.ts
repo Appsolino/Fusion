@@ -807,6 +807,8 @@ export const BUILTIN_WORKFLOWS: WorkflowDefinition[] = [
       "await-review-hold": { x: 570, y: 320 },
       gate: { x: 570, y: 160 },
       "manual-merge-hold": { x: 740, y: 80 },
+      "ci-repair": { x: 570, y: 420 },
+      "ci-repair-exhausted": { x: 740, y: 420 },
       "await-rebase": { x: 740, y: 320 },
       "pr-merge": { x: 740, y: 160 },
       end: { x: 910, y: 160 },

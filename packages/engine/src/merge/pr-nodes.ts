@@ -35,6 +35,7 @@ import {
   type PrPushResult,
 } from "./pr-response-run.js";
 import { makePrResponseAgentRunner, makePrResponseGitOps } from "./pr-response-run-ops.js";
+import { autoMergeGateCiFailedValue, decideCiRepairAction } from "./ci-repair.js";
 
 /**
  * The narrow slice of the store the PR node handlers need. Declared structurally
@@ -48,6 +49,12 @@ export interface PrNodeStore extends PrResponseRunStore {
   getActivePrEntityBySource(sourceType: PrEntity["sourceType"], sourceId: string): Promise<PrEntity | null>;
   updatePrEntity(id: string, patch: PrEntityUpdate): Promise<PrEntity>;
   updatePrInfo?(id: string, prInfo: PrInfo | null): Promise<unknown>;
+  /** Optional: load and clear a durable external-event continuation outcome. */
+  getTask?(taskId: string): Promise<TaskDetail | null>;
+  updateTask?(
+    taskId: string,
+    patch: { sourceMetadataPatch: Record<string, unknown> },
+  ): Promise<unknown>;
 }
 
 /**
@@ -119,7 +126,7 @@ export interface PrRespondCallInput {
  *   - "disagreed-only" : nothing actionable / all threads disagreed; leave open
  */
 export interface PrRespondCallResult {
-  value: "fixed" | "disagreed-only";
+  value: "fixed" | "disagreed-only" | "exhausted";
   contextPatch?: Record<string, unknown>;
 }
 
@@ -144,8 +151,15 @@ export interface PrNodeDeps {
   /**
    * Run the review-response body (U5). Defaults to a no-op returning
    * `disagreed-only` when omitted, so U3 ships a routable-but-inert pr-respond.
+   * CI-repair mode may also return `exhausted`.
    */
   respond?: (input: PrRespondCallInput) => Promise<PrRespondCallResult>;
+  /**
+   * FNXC:FullAutonomy 2026-08-07-21:21:
+   * Fetch failed-check evidence (names, annotations, log excerpts) for CI repair.
+   * Injected from CLI/dashboard GitHub client — engine stays import-free.
+   */
+  fetchCiFailureEvidence?: (entity: PrEntity) => Promise<import("./ci-failure-evidence.js").CiFailureEvidence>;
   /** Optional audit sink, called with a stable reason on every routable failure. */
   audit?: (reason: string, detail: string) => void;
 }
@@ -175,6 +189,11 @@ export interface PrNodeGithubOps {
    * engine supplies per run.
    */
   respondOps?: PrRespondGithubOps;
+  /**
+   * FNXC:FullAutonomy 2026-08-07-21:21:
+   * Optional CI failure evidence fetcher; forwarded into PrNodeDeps.
+   */
+  fetchCiFailureEvidence?: PrNodeDeps["fetchCiFailureEvidence"];
   audit?: PrNodeDeps["audit"];
 }
 
@@ -203,6 +222,11 @@ export interface PrRespondGithubOps {
   scanSecrets?: PrResponseRunDeps["scanSecrets"];
   /** Optional iteration-cap override (R8). */
   maxResponseRounds?: number;
+  /**
+   * FNXC:FullAutonomy 2026-08-07-21:21:
+   * Optional failed-check evidence loader used when node.config.mode is ci-repair.
+   */
+  fetchCiFailureEvidence?: PrNodeDeps["fetchCiFailureEvidence"];
 }
 
 /**
@@ -222,12 +246,73 @@ export function buildRespondCallback(
    */
   pluginRunner?: import("../plugins/plugin-runner.js").PluginRunner,
 ): NonNullable<PrNodeDeps["respond"]> {
-  return async ({ entity }) => {
+  return async ({ entity, node, context, task }) => {
     const store = getStore();
     // The engine owns a concrete TaskStore behind the structural PrNodeStore; the
     // agent runner + git ops need its settings + worktree. Resolve at run time.
     const fullStore = store as unknown as import("@fusion/core").TaskStore;
     const settings = await fullStore.getSettings();
+
+    const taskId = ops.getTaskId(entity);
+    const hasGetTask = typeof (fullStore as Partial<typeof fullStore>).getTask === "function";
+    const respondTask: { worktree?: string } | null = hasGetTask
+      ? await fullStore.getTask(taskId)
+      : null;
+    const cwd = respondTask?.worktree || ops.getCwd(entity);
+    const gitOps = makePrResponseGitOps(() => cwd);
+    const runAgent = makePrResponseAgentRunner(
+      settings,
+      taskId,
+      cwd,
+      hasGetTask ? fullStore : undefined,
+      pluginRunner,
+    );
+
+    /*
+    FNXC:FullAutonomy 2026-08-07-21:21:
+    CI-repair mode uses failed-check evidence + a dedicated repair agent run
+    instead of the review-thread loop. Budget/fingerprint gates live in runCiRepairRun.
+    */
+    if (node.config?.mode === "ci-repair") {
+      const fetchEvidence =
+        ops.fetchCiFailureEvidence ??
+        (async () =>
+          (await import("./ci-failure-evidence.js")).buildCiFailureEvidence({
+            headOid: entity.headOid,
+            checkRuns: [],
+          }));
+      const evidence = await fetchEvidence(entity);
+      const repair = await (await import("./ci-repair-run.js")).runCiRepairRun({
+        entity,
+        evidence,
+        attemptCount: entity.responseRounds,
+        maxAttempts:
+          typeof node.config.maxReworkCycles === "number" ? node.config.maxReworkCycles : undefined,
+        lastRepairedHeadOid:
+          typeof context.lastRepairedHeadOid === "string" ? context.lastRepairedHeadOid : null,
+        lastFailureFingerprint:
+          typeof context.lastFailureFingerprint === "string" ? context.lastFailureFingerprint : null,
+        runAgent: async ({ prompt, systemPrompt, signal }) => {
+          const result = await runAgent({
+            prompt,
+            systemPrompt,
+            signal,
+            threads: [{ id: "ci-repair" }],
+          });
+          return { text: result.text ?? "", changedFiles: undefined };
+        },
+        push: async () => gitOps.fetchAndFastForwardPush(entity),
+        scanSecrets: ops.scanSecrets
+          ? async () => {
+              const content = await gitOps.getChangedContent(entity);
+              const findings = ops.scanSecrets!(content);
+              return { ok: findings.length === 0, findings: findings.map((f) => f.kind) };
+            }
+          : undefined,
+        audit: audit ? (reason, detail) => audit(reason, detail) : undefined,
+      });
+      return { value: repair.value, contextPatch: repair.contextPatch };
+    }
 
     // U18 (R15): auto-resolution of review comments is a first-class, configurable,
     // default-ON capability. When disabled, the loop is inert — it dispatches no
@@ -245,39 +330,10 @@ export function buildRespondCallback(
       return { value: "disagreed-only" };
     }
 
-    const taskId = ops.getTaskId(entity);
-    /*
-     * FNXC:PrMergeAutoMerge 2026-07-17-19:18 (gh-4):
-     * Resolve the review-response run cwd from the task's recorded worktree first.
-     * The CLI-injected ops.getCwd defaults to process.cwd() (no CLI composition
-     * site wires getTaskWorktree), which in a centrally-installed multi-project
-     * server is the install dir — git ops and the response agent would run outside
-     * the project repo. The engine owns the store, so it recovers the worktree
-     * here; ops.getCwd stays the fallback ONLY for structural stores without
-     * getTask (PrNodeStore does not declare it — tests/specialized wiring). A
-     * real getTask rejection (store failure, deleted task) propagates instead:
-     * the pr-respond node maps it to a routable `respond-error`, which beats
-     * running a mutating agent + git push in a cwd that may not even be the
-     * project repo. Structural stores are also withheld from the agent runner,
-     * whose store parameter is optional but assumed to have getTask.
-     */
-    const hasGetTask = typeof (fullStore as Partial<typeof fullStore>).getTask === "function";
-    const respondTask: { worktree?: string } | null = hasGetTask
-      ? await fullStore.getTask(taskId)
-      : null;
-    const cwd = respondTask?.worktree || ops.getCwd(entity);
-    const gitOps = makePrResponseGitOps(() => cwd);
-    const runAgent = makePrResponseAgentRunner(
-      settings,
-      taskId,
-      cwd,
-      hasGetTask ? fullStore : undefined,
-      pluginRunner,
-    );
-
+    void task;
     const result = await runPrResponseRun({
       entity,
-      store,
+      store: fullStore as unknown as PrResponseRunStore,
       getReviewThreads: ops.getReviewThreads,
       getViewerLogin: ops.getViewerLogin,
       checkPrStillOpen: ops.checkPrStillOpen,
@@ -319,13 +375,25 @@ export function buildPrNodeDeps(
   // callback here (the engine binds the store + audit). An explicit `respond`
   // takes precedence (tests/specialized wiring); absent both → inert default.
   const respond = ops.respond
-    ?? (ops.respondOps ? buildRespondCallback(getStore, ops.respondOps, ops.audit, pluginRunner) : undefined);
+    ?? (ops.respondOps
+      ? buildRespondCallback(
+          getStore,
+          {
+            ...ops.respondOps,
+            fetchCiFailureEvidence:
+              ops.respondOps.fetchCiFailureEvidence ?? ops.fetchCiFailureEvidence,
+          },
+          ops.audit,
+          pluginRunner,
+        )
+      : undefined);
   return {
     getStore,
     resolvePrSource: ops.resolvePrSource,
     createPr: ops.createPr,
     mergePr: ops.mergePr,
     respond,
+    fetchCiFailureEvidence: ops.fetchCiFailureEvidence ?? ops.respondOps?.fetchCiFailureEvidence,
     audit: ops.audit,
   };
 }
@@ -489,6 +557,54 @@ export function createPrNodeHandlers(deps: PrNodeDeps): Record<
       return { outcome: "success", value: "not-actionable" };
     }
 
+    /*
+    FNXC:FullAutonomy 2026-08-07-21:08 / 2026-08-07-21:21:
+    CI-repair mode consults failed-check evidence + decideCiRepairAction before
+    dispatching an agent. Exhausted / out-of-scope / wait actions never launch
+    duplicate repair work. Attempt count is tracked via responseRounds.
+    */
+    if (node.config?.mode === "ci-repair") {
+      let failureClass: import("./ci-repair.js").CiFailureClass = "unknown";
+      let failureFingerprint: string | null = null;
+      try {
+        const evidence = deps.fetchCiFailureEvidence
+          ? await deps.fetchCiFailureEvidence(entity)
+          : null;
+        if (evidence) {
+          failureClass = evidence.failureClass;
+          failureFingerprint = evidence.fingerprint;
+        }
+      } catch (err) {
+        audit(
+          "ci-repair-evidence-error",
+          `ci-repair '${node.id}' evidence fetch failed: ${classifyError(err)}`,
+        );
+      }
+      const decision = decideCiRepairAction({
+        checksRollup: entity.checksRollup,
+        attemptCount: entity.responseRounds,
+        maxAttempts:
+          typeof node.config.maxReworkCycles === "number" ? node.config.maxReworkCycles : undefined,
+        headOid: entity.headOid,
+        lastRepairedHeadOid:
+          typeof ctx.context.lastRepairedHeadOid === "string" ? ctx.context.lastRepairedHeadOid : null,
+        failureClass,
+        failureFingerprint,
+        lastFailureFingerprint:
+          typeof ctx.context.lastFailureFingerprint === "string"
+            ? ctx.context.lastFailureFingerprint
+            : null,
+      });
+      if (decision.action === "exhausted" || decision.action === "ignore") {
+        audit("ci-repair-exhausted", `ci-repair '${node.id}' ${decision.reason}`);
+        return { outcome: "success", value: "exhausted" };
+      }
+      if (decision.action === "wait" || decision.action === "ready" || decision.action === "retry-wait") {
+        audit("ci-repair-wait", `ci-repair '${node.id}' ${decision.reason}`);
+        return { outcome: "success", value: "disagreed-only" };
+      }
+    }
+
     // Bump the rework-cycle counter (R8 cap backing; persisted). Forward the
     // POST-update entity so runPrResponseRun's cap check (`responseRounds > cap`)
     // sees this round's count — passing the stale pre-increment entity fires the
@@ -509,7 +625,16 @@ export function createPrNodeHandlers(deps: PrNodeDeps): Record<
       return { outcome: "failure", value: "respond-error" };
     }
 
-    return { outcome: "success", value: result.value, contextPatch: result.contextPatch };
+    return {
+      outcome: "success",
+      value: result.value,
+      contextPatch: {
+        ...(result.contextPatch ?? {}),
+        ...(node.config?.mode === "ci-repair" && updatedEntity.headOid
+          ? { lastRepairedHeadOid: updatedEntity.headOid }
+          : {}),
+      },
+    };
   };
 
   return {
@@ -527,9 +652,13 @@ export function createPrNodeHandlers(deps: PrNodeDeps): Record<
  *   - `outcome:auto-on`  → toward `pr-merge`, when {@link isPrEntityAutoMergeReady}
  *     (opted in + approved + all checks concluded success + mergeable clean +
  *     verified).
- *   - `outcome:auto-off` → park for a manual-release merge, for EVERY non-ready
- *     case: not opted in, pending/failed checks, UNKNOWN/conflicting mergeability,
- *     unverified entity, or no live entity at all. The gate never blocks the run.
+ *   - `outcome:ci-failed` → toward bounded CI repair when checksRollup is failure
+ *     (FNXC:FullAutonomy 2026-08-07-21:04). Distinct from auto-off so workflows
+ *     can repair instead of parking forever.
+ *   - `outcome:auto-off` → park for a manual-release merge, for EVERY other
+ *     non-ready case: not opted in, pending checks, UNKNOWN/conflicting
+ *     mergeability, unverified entity, or no live entity at all. The gate never
+ *     blocks the run.
  *
  * Reuses the gate-routing contract (`{ outcome: "success", value }` consumed by
  * `outcome:` edges in shouldTraverseEdge) rather than forking a parallel routing
@@ -558,7 +687,13 @@ export function createAutoMergeGateHandler(deps: Pick<PrNodeDeps, "getStore" | "
 
     // Re-fetch authoritative state: the entity row IS the live copy here (store
     // read), so pending checks / UNKNOWN mergeable / unverified / not-opted-in all
-    // fall to auto-off via the shared predicate.
+    // fall to auto-off via the shared predicate — except explicit CI failure,
+    // which routes to ci-failed for the repair loop.
+    const ciFailed = autoMergeGateCiFailedValue(entity);
+    if (ciFailed) {
+      audit("auto-merge-gate-ci-failed", `auto-merge gate '${node.id}' routing ci-failed for task ${ctx.task.id}`);
+      return { outcome: "success", value: ciFailed };
+    }
     if (isPrEntityAutoMergeReady(entity)) {
       return { outcome: "success", value: "auto-on" };
     }

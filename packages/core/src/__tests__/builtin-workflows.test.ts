@@ -343,6 +343,15 @@ describe("built-in workflows", () => {
     // The auto-merge gate (U6) routes after approval.
     expect(ir.nodes.some((n) => n.kind === "gate" && (n.config as { gate?: string })?.gate === "auto-merge")).toBe(true);
 
+    // FullAutonomy: CI failure routes to a bounded ci-repair node.
+    expect(ir.nodes.some((n) => n.id === "ci-repair" && n.kind === "pr-respond")).toBe(true);
+    expect(ir.edges.some((e) => e.from === "gate" && e.to === "ci-repair" && e.condition === "outcome:ci-failed")).toBe(
+      true,
+    );
+    expect(
+      ir.edges.some((e) => e.from === "await-review" && e.to === "ci-repair" && e.condition === "outcome:checks-failed"),
+    ).toBe(true);
+
     // await-review is the bounded-rework region head; pr-respond loops back to it.
     const awaitReview = ir.nodes.find((n) => n.id === "await-review");
     expect((awaitReview?.config as { reworkRegion?: boolean })?.reworkRegion).toBe(true);
@@ -597,7 +606,7 @@ describe("built-in workflows", () => {
         [
           { id: "triage", traits: ["intake"] },
           { id: "in-progress", traits: ["wip", "timing"] },
-          { id: "await-review", traits: ["merge-blocker", "stall-detection"] },
+          { id: "await-review", traits: ["merge-blocker", "stall-detection", "hold"] },
           { id: "done", traits: ["complete"] },
           { id: "archived", traits: ["archived"] },
         ],
