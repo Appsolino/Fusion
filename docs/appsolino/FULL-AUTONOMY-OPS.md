@@ -61,5 +61,5 @@ Self-healing audits for orphaned worktrees and phantom leases; do not walk the w
 ## Known remaining gaps before lights-out YES
 
 1. CI log fetch → repair-agent prompt enrichment.
-2. End-to-end soak under unpaused Host D (owner authorisation required).
-3. Broader Phase 19 restart-point matrix beyond the CI-repair dependability seed.
+2. End-to-end soak under unpaused Host D (owner authorisation required) — **gate for lights-out YES**.
+3. Extend restart matrix only if soak exposes a missing recovery path (no architecture expansion until soak PASS).

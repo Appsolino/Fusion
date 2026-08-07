@@ -2,7 +2,7 @@
 
 <!-- FNXC:FullAutonomy 2026-08-07-21:18 -->
 
-**Branch:** `feat/full-autonomy` · PR [#155](https://github.com/Appsolino/Fusion/pull/155)  
+**Branch:** landed via PR [#155](https://github.com/Appsolino/Fusion/pull/155) (**MERGED** `662a3d5e…`)  
 **Scope:** Fusion board task loop (not Appsolino AUTO-1/2/3 maintenance plane)  
 **Live status:** [`CURRENT-STATE.md`](CURRENT-STATE.md) only — Host D `enginePaused` soak **not authorised**.
 
@@ -48,7 +48,7 @@ Merger / PrReconciler        direct merge OR PR entity lifecycle
 | Validation / review / repair findings | Verify + review + pr-respond (bounded) | — |
 | PR create/update | `pr-create` + idempotent entity | — |
 | Wait for CI | PrReconciler + checks rollup | — |
-| Repair CI failures | **PARTIAL** — #155 wires `checks-failed` / gate `ci-failed` + bounded `decideCiRepairAction`; agent log enrichment still open | Log excerpts → repair prompt |
+| Repair CI failures | **YES on branch** — routing + `decideCiRepairAction` + CI-log evidence → repair agent (`ci-failure-evidence` / `ci-repair-run`) | Prove on Host D soak |
 | Conflict / merge / mission continue | Merger strong direct; PR holds; feature sync | PR-head rebase weaker |
 | Restart recovery | Self-healing + PR entity R15 + pending hold outcome in `sourceMetadata` | Soak needs unpaused engine |
 
@@ -66,13 +66,18 @@ Merger / PrReconciler        direct merge OR PR entity lifecycle
 | --- | --- |
 | One authoritative scheduler → graph orchestrator | YES |
 | Durable claims + leases | YES (`graphRouting` not durable) |
-| CI repair autonomous | **PARTIAL** (#155 routing + decisions; log enrichment open) |
+| CI repair autonomous | **YES on branch** (routing + decisions + log enrichment); soak pending |
 | Merge conflict recovery | PARTIAL (direct strong; PR path holds) |
 | Soak test | **BLOCKED** — Host D `enginePaused` without owner OK |
 | Duplicate-event safety | Mostly YES (PR R15, claims, pending-outcome clear) |
+| Restart/recovery tests | Seed matrix on branch (`full-autonomy-restart-dependability.test.ts`) |
 
-## Next authorised work
+## Path to lights-out YES (no further architecture expansion)
 
-1. Enrich `ci-repair` agent prompt with failed-check log excerpts (still bounded by `decideCiRepairAction`).
-2. Persist `lastRepairedHeadOid` (or equivalent) on PR entity — not only graph context.
-3. Request Host D unpause for soak — **do not self-authorise**.
+1. Get [#155](https://github.com/Appsolino/Fusion/pull/155) green and merged — **DONE**.
+2. CI-log → repair-agent enrichment — **DONE** (remain inside `decideCiRepairAction`).
+3. Expand restart/recovery tests — **seed done**; extend only if soak finds a hole.
+4. Host D soak (~10 tasks) after **owner** unpause — include ≥1 CI repair and ≥1 restart — **BLOCKED** on `enginePaused`.
+5. Require zero duplicates/leaks/deadlocks/manual steering + PASS restart / CI repair / continuation.
+
+**Prohibit** further architecture expansion until the soak passes.
