@@ -100,6 +100,7 @@ const fixtureTask = {
   createdAt: "2026-08-05T00:00:00.000Z",
   updatedAt: "2026-08-05T00:00:00.000Z",
 } as unknown as Task;
+const fixtureColumnFlagsByTaskId = new Map([[fixtureTask.id, { hold: true }]]);
 
 /*
 FNXC:TaskDetailTitle 2026-08-05-18:48:
@@ -159,19 +160,13 @@ function TaskDetailTitleMainPanelHarness() {
 
 function TaskDetailTitleListHarness() {
   localStorage.setItem("kb:fixture:kb-dashboard-list-selected-task", fixtureTask.id);
-  return <div data-testid="title-host-list"><ListView {...{ tasks: [fixtureTask], projectId: "fixture", onMoveTask: asyncTask, onDeleteTask: asyncTask, onMergeTask: asyncMerge, addToast: noop, onOpenDetail: noop, onNewTask: noop, onQuickCreate: noop, availableModels: [], autoMerge: true, columnFlagsByTaskId: new Map() } as unknown as React.ComponentProps<typeof ListView>} /></div>;
+  return <div data-testid="title-host-list"><ListView {...{ tasks: [fixtureTask], projectId: "fixture", onMoveTask: asyncTask, onDeleteTask: asyncTask, onMergeTask: asyncMerge, addToast: noop, onOpenDetail: noop, onNewTask: noop, onQuickCreate: noop, availableModels: [], autoMerge: true, columnFlagsByTaskId: fixtureColumnFlagsByTaskId } as unknown as React.ComponentProps<typeof ListView>} /></div>;
 }
 
 function TaskDetailTitleDockHarness() {
   localStorage.setItem("fusion:right-dock-open", "true");
   localStorage.setItem("fusion:right-dock-view", "tasks");
-  /*
-  FNXC:UpstreamLaneWiring 2026-08-07-04:30:
-  Upstream touch-resize fixture called useRightDockController without columnFlagsByTaskId,
-  which raised the lane-wiring ratchet (baseline 0 → 1). Pass an empty map so the fixture
-  stays inert while satisfying the resolved-lane argument contract (#2956/#2963 class).
-  */
-  const dock = useRightDockController({ active: true, projectId: "fixture", tasks: [fixtureTask], addToast: noop, settingsLoaded: true, researchReadinessVersion: 0, workflowSteps: [], subscribePluginEvents: () => noop, openDetailTask: noop, openTaskPopup: noop, openMobileTasksInPopup: false, openFileInBrowser: noop, onMoveTask: asyncTask, onDeleteTask: asyncTask, onMergeTask: asyncMerge, openSettings: noop, onSendSelectionToTask: noop, onCreateTaskFromInsight: noop, onNavigateToMission: noop, onTaskCreated: noop, prAuthAvailable: false, autoMerge: true, taskDetailChatFirst: false, visibilityOptions: {}, footerVisible: false, columnFlagsByTaskId: new Map() });
+  const dock = useRightDockController({ active: true, projectId: "fixture", tasks: [fixtureTask], addToast: noop, settingsLoaded: true, researchReadinessVersion: 0, workflowSteps: [], subscribePluginEvents: () => noop, openDetailTask: noop, openTaskPopup: noop, openMobileTasksInPopup: false, openFileInBrowser: noop, onMoveTask: asyncTask, onDeleteTask: asyncTask, onMergeTask: asyncMerge, openSettings: noop, onSendSelectionToTask: noop, onCreateTaskFromInsight: noop, onNavigateToMission: noop, onTaskCreated: noop, prAuthAvailable: false, autoMerge: true, taskDetailChatFirst: false, visibilityOptions: {}, footerVisible: false, columnFlagsByTaskId: fixtureColumnFlagsByTaskId });
   React.useEffect(() => { dock.openTaskInDock(fixtureTask); }, []);
   return <div data-testid="title-host-dock" className="fn-8806-constrained-title-host">{dock.dock}</div>;
 }
