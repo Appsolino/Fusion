@@ -10,6 +10,8 @@
  * (FIX-LANE-WIRING-TOUCH-FIXTURE vs FN-8806) without handwritten absorb.
  */
 import { spawnSync } from "node:child_process";
+import { resolve as pathResolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { loadPatchRegistry } from "./patch-registry.mjs";
 
 /**
@@ -157,6 +159,29 @@ export function applyTakeUpstreamConflictResolution(input) {
  */
 export async function tryResolveMergeConflictViaPatchRegistry(input) {
   const registry = loadPatchRegistry(input.repoDir);
+  const conflicted = (input.conflictedFiles || []).map((f) => f.replace(/\\/g, "/"));
+  const covering = registry.active.filter((p) =>
+    (p.localAction?.applyPaths || []).some((ap) => {
+      const n = String(ap).replace(/\\/g, "/");
+      return conflicted.some((file) => file === n || file.endsWith(`/${n}`) || n.endsWith(`/${file}`) || file.includes(n) || n.includes(file));
+    }),
+  );
+  if (!covering.length) {
+    return {
+      resolved: false,
+      decision: {
+        ok: false,
+        action: "LEAVE_CONFLICT",
+        reason: "no ACTIVE product patch covers conflicted paths",
+        takeUpstreamFiles: [],
+        retiredPatchIds: [],
+        uncoveredFiles: conflicted,
+      },
+      reconcile: null,
+      apply: null,
+    };
+  }
+
   const runReconcile =
     input.runReconcileFn ||
     (async (args) => {
@@ -171,11 +196,12 @@ export async function tryResolveMergeConflictViaPatchRegistry(input) {
     persist: true,
     cleanupWorktree: true,
     installDeps: true,
+    onlyPatchIds: covering.map((p) => p.id),
   });
 
   const decision = decideUpstreamFixedConflictResolution({
     conflictedFiles: input.conflictedFiles,
-    patches: registry.active,
+    patches: covering,
     reconcileResults: reconcile.results || [],
   });
 
@@ -212,6 +238,15 @@ function parseArgs(argv) {
   return out;
 }
 
+/*
+FNXC:UpstreamPatchReconcile 2026-08-07-06:45:
+Prefer flag presence over import.meta/argv equality — relative vs absolute argv[1]
+previously caused a silent no-op CLI (empty stdout) so AUTO-1 left conflicts unresolved.
+*/
+function isExecutedAsCli() {
+  return process.argv.includes("--repo-dir") || process.argv.includes("--upstream-sha") || process.argv.includes("--conflicted-files");
+}
+
 async function mainCli() {
   const args = parseArgs(process.argv.slice(2));
   const repoDir = String(args["repo-dir"] || process.cwd());
@@ -234,9 +269,7 @@ async function mainCli() {
   process.exit(result.resolved ? 0 : 3);
 }
 
-import { fileURLToPath } from "node:url";
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
+if (isExecutedAsCli()) {
   mainCli().catch((err) => {
     process.stderr.write(`${err?.stack || err}\n`);
     process.exit(1);

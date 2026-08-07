@@ -243,8 +243,21 @@ Merge-base: ${delta.mergeBase}
         upstreamFixedResolution = {
           resolved: false,
           parseError: true,
-          stderr: resolve.stderr,
+          reason: "resolver stdout was not JSON",
+          stderr: (resolve.stderr || "").slice(0, 4000),
           status: resolve.status,
+        };
+      }
+      if (!upstreamFixedResolution.reason && resolve.status !== 0) {
+        upstreamFixedResolution = {
+          ...upstreamFixedResolution,
+          resolved: upstreamFixedResolution.resolved === true,
+          spawnStatus: resolve.status,
+          stderr: (resolve.stderr || "").slice(0, 4000),
+          reason:
+            upstreamFixedResolution.decision?.reason ||
+            upstreamFixedResolution.reason ||
+            `resolver exited ${resolve.status}`,
         };
       }
     }
