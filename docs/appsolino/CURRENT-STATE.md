@@ -44,7 +44,7 @@ provenance+impact risk, candidate lease, release-freshness (`RELEASE_STALE`), au
 | AI-verified merge (no Anas966) | Landed [#150](https://github.com/Appsolino/Fusion/pull/150) / SHA bind [#151](https://github.com/Appsolino/Fusion/pull/151) |
 | Absorb #144 | **MERGED** |
 | `FIX-LANE-WIRING-TOUCH-FIXTURE` | **RETIRED** / `UPSTREAM_FIXED` |
-| Cursor Approval Agent on upstream | **OVERLAP** — owner scopes `83ebd12a`; repo remains safe ([ops note](upstream/CURSOR-APPROVAL-AGENT-EXCLUDE.md)) |
+| Cursor Approval Agent on upstream | **DISABLED by owner** — verification pending on next `automation/upstream-*` PR; defensive reviewer cleanup kept ([ops note](upstream/CURSOR-APPROVAL-AGENT-EXCLUDE.md)) |
 | Automation map | [AUTOMATION-MAP.json](upstream/AUTOMATION-MAP.json) + YAML drift test |
 | Provenance | Durable sync-status evidence; fail-closed away from false EXACT_UPSTREAM |
 | Release observation | AUTO-1 + finalize observe `RELEASE_STALE` (no auto-publish) |
@@ -63,9 +63,9 @@ provenance+impact risk, candidate lease, release-freshness (`RELEASE_STALE`), au
 ## Owner priority
 
 ```text
-NOW:     Scope Cursor Approval Agent 83ebd12a away from automation/upstream-*
-NEXT:    Land automation-governance PR (map, provenance risk, lease, RELEASE_STALE)
+NOW:     Merge #153 after green checks → return to dependability mission
+NEXT:    On next automation/upstream-* PR verify no cursor[bot]; then close ISS-UP-GOV-001
 HOLD:    Host P / production — PROHIBITED; do not unpause Host D solely for maintenance proof
-NOTE:    Official upstream easy to absorb; Appsolino deltas get scrutiny; integration gets tests
+NOTE:    Official upstream easy to absorb; Appsolino product deltas get scrutiny; maintenance metadata is observability
 NOTE:    Do not auto-publish a GitHub Release on every upstream commit — version-change policy
 ```

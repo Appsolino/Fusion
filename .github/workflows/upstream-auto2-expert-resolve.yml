@@ -9,6 +9,11 @@
 
 name: Upstream AUTO-2 Expert Resolve
 
+# FNXC:AutomationGovernance 2026-08-07-20:15:
+# Self-identify PR + mode + candidate SHA. workflow_dispatch head_sha is the workflow
+# ref (usually main), NOT the candidate — lease anti-thrash must parse this run-name.
+run-name: AUTO2 Expert PR#${{ inputs.pr_number }} mode=${{ inputs.mode || 'repair' }} candidate=${{ inputs.validated_head }}
+
 on:
   workflow_dispatch:
     inputs:

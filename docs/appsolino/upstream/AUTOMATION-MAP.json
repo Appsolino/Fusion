@@ -14,11 +14,11 @@
       "name": "Cursor Approval Agent: Pull Request Router and Approver",
       "automationId": "83ebd12a-8fb8-11f1-a7d1-d6b4613131ce",
       "actor": "cursor[bot]",
-      "status": "OVERLAP_MUST_EXCLUDE",
+      "status": "DISABLED_BY_OWNER",
       "requiredScope": {
         "ignoreBranches": ["automation/upstream-*", "auto2-proof/*"]
       },
-      "notes": "Must not request Anas966 or review automation/upstream-* candidates. Maintenance controller is sole authority there."
+      "notes": "Disabled by owner 2026-08-07. Verification pending on next automation/upstream-* PR. Defensive Anas966 cleanup remains until verified."
     }
   ],
   "actors": {

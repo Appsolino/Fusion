@@ -406,7 +406,7 @@ Send Composer repair solely to invent review-package metadata the orchestrator a
 
 ## ISS-UP-GOV-001 — External Cursor Approval Agent overlaps upstream controller
 
-Status: **OPEN** (operator must scope automation; in-repo map + exclude doc landed)
+Status: **DISABLED_BY_OWNER** (verification pending on next `automation/upstream-*` PR)
 Severity: Medium (duplicate reviews / Anas966 re-requests; not merge authority)
 Component: Cursor Automation `83ebd12a-8fb8-11f1-a7d1-d6b4613131ce` + AUTO-2
 First observed: 2026-08-07 on PR #144
@@ -420,14 +420,16 @@ Evidence: PR reviews “Sent by Cursor Approval Agent…”; `docs/appsolino/ups
 
 ### Permanent correction
 
-- Exclude `automation/upstream-*` and `auto2-proof/*` from Cursor Automation `83ebd12a-…`.
+- Owner disabled Cursor Automation `83ebd12a-…` (2026-08-07).
+- On next machine-managed PR: verify no `cursor[bot]` review / Anas966 request → close this issue.
+- Repo-side defensive reviewer cleanup remains until that verification.
 - Maintenance controller remains sole authority for validation / AI review / repair / finalize.
-- Machine-readable `docs/appsolino/upstream/AUTOMATION-MAP.json`; provenance+impact risk; candidate lease.
 
 ### Do not
 
-Disable Cursor everywhere. Do not treat `cursor[bot]` comments as AUTO-2 verifier APPROVE.
-Do not restore Anas966 as the normal upstream merge gate.
+Treat `cursor[bot]` comments as AUTO-2 verifier APPROVE.
+Restore Anas966 as the normal upstream merge gate.
+Block #153 waiting on live verification — repo-side path is already safe.
 
 ---
 

@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AutomationGovernance 2026-08-07-20:04:
- * Single candidate-generation lease: one automation/upstream-* head SHA may own at most
- * one expensive AI operation (sensitive-review XOR repair).
+ * FNXC:AutomationGovernance 2026-08-07-20:15:
+ * Single candidate-generation lease + expert-run identity via workflow run-name.
+ * Do NOT correlate activity using workflow_dispatch head_sha (that is main/ref SHA).
  *
- * Same mode + active corresponding workflow → ALREADY_RUNNING (no redispatch thrash).
- * Same mode + label held but no active run → RETRY_AFTER_TERMINAL (may redispatch).
- * sensitive-review → repair handoff remains allowed after REQUEST_CHANGES.
+ * run-name format:
+ *   AUTO2 Expert PR#<n> mode=<mode> candidate=<validated_head>
  */
 export const LEASE_LABEL_SENSITIVE = "auto2:sensitive-review";
 export const LEASE_LABEL_REPAIR = "auto2:expert-resolving";
@@ -17,6 +16,48 @@ export const EXPENSIVE_AI_LABELS = Object.freeze([
   LEASE_LABEL_REPAIR,
   LEASE_LABEL_VERIFYING,
 ]);
+
+export const EXPERT_RUN_NAME_RE =
+  /AUTO2 Expert PR#(\d+)\s+mode=([^\s]+)\s+candidate=([0-9a-f]{7,40})/i;
+
+/**
+ * @param {string|null|undefined} displayTitle
+ * @returns {{ pr: string, mode: string, candidate: string }|null}
+ */
+export function parseExpertRunIdentity(displayTitle) {
+  const m = String(displayTitle || "").match(EXPERT_RUN_NAME_RE);
+  if (!m) return null;
+  return { pr: m[1], mode: m[2].toLowerCase(), candidate: m[3].toLowerCase() };
+}
+
+/**
+ * @param {string} a
+ * @param {string} b
+ */
+export function candidateShaMatches(a, b) {
+  const x = String(a || "").toLowerCase();
+  const y = String(b || "").toLowerCase();
+  if (!x || !y) return false;
+  return x === y || x.startsWith(y) || y.startsWith(x);
+}
+
+/**
+ * Match an expert workflow run by run-name identity — never by workflow head_sha.
+ * Fixture shape (real run 31210745085): event=workflow_dispatch, head_branch=main,
+ * head_sha=main tip, display_title must carry candidate via run-name.
+ *
+ * @param {{ display_title?: string, name?: string, head_sha?: string, status?: string }} run
+ * @param {{ prNumber: string|number, mode: string, validatedHead: string }} q
+ */
+export function matchExpertRunByIdentity(run, q) {
+  const title = String(run.display_title || run.name || "");
+  const id = parseExpertRunIdentity(title);
+  if (!id) return false;
+  const mode = String(q.mode || "").toLowerCase();
+  if (id.pr !== String(q.prNumber)) return false;
+  if (id.mode !== mode) return false;
+  return candidateShaMatches(id.candidate, q.validatedHead);
+}
 
 /**
  * @param {{ labels?: Array<{name?: string}|string>, headRefOid?: string, expectedHead?: string }} pr
@@ -72,9 +113,9 @@ export function canAcquireCandidateLease(input) {
 
   if (lease.activeLabels.length === 1 && lease.activeLabels[0] === want) {
     /*
-    FNXC:AutomationGovernance 2026-08-07-20:04:
-    Anti-thrash: duplicate finalize while same-mode expert/sensitive run is in_progress
-    must NOT redispatch (cancel-in-progress would restart and burn latency budget).
+    FNXC:AutomationGovernance 2026-08-07-20:15:
+    Anti-thrash: duplicate finalize while same-mode expert run is queued/in_progress
+    must NOT redispatch.
     */
     if (input.activeSameModeRun === true) {
       return {
@@ -119,57 +160,41 @@ export function canAcquireCandidateLease(input) {
 }
 
 /**
- * Query whether expert-resolve already has an in-progress/queued run for this PR+mode+head.
  * @param {(args: string[]) => {status:number,stdout:string,stderr:string}} runGh
  * @param {{ repo: string, prNumber: string|number, mode: string, validatedHead: string }} q
  */
 export function hasActiveExpertSameModeRun(runGh, q) {
-  const mode = String(q.mode || "sensitive-review");
+  const mode = String(q.mode || "sensitive-review").toLowerCase();
   const head = String(q.validatedHead || "").toLowerCase();
   const pr = String(q.prNumber);
-  // List recent runs; match display title / inputs via API is limited — use workflow runs + jobs filter.
-  const list = runGh([
-    "api",
-    `repos/${q.repo}/actions/workflows/upstream-auto2-expert-resolve.yml/runs?per_page=15&status=in_progress`,
-    "--jq",
-    "[.workflow_runs[] | {id, status, name, head_sha, display_title}]",
-  ]);
-  if (list.status !== 0) {
-    // Fail soft: unknown activity → treat as not active so terminal retry remains possible.
-    return { active: false, reason: "could not list expert runs", runs: [] };
-  }
+
+  /** @type {object[]} */
   let runs = [];
-  try {
-    runs = JSON.parse(list.stdout || "[]");
-  } catch {
-    runs = [];
-  }
-  const queued = runGh([
-    "api",
-    `repos/${q.repo}/actions/workflows/upstream-auto2-expert-resolve.yml/runs?per_page=10&status=queued`,
-    "--jq",
-    "[.workflow_runs[] | {id, status, name, head_sha, display_title}]",
-  ]);
-  if (queued.status === 0) {
+  for (const status of ["in_progress", "queued"]) {
+    const list = runGh([
+      "api",
+      `repos/${q.repo}/actions/workflows/upstream-auto2-expert-resolve.yml/runs?per_page=20&status=${status}`,
+      "--jq",
+      "[.workflow_runs[] | {id, status, name, head_sha, head_branch, display_title, event}]",
+    ]);
+    if (list.status !== 0) continue;
     try {
-      runs = [...runs, ...JSON.parse(queued.stdout || "[]")];
+      runs = [...runs, ...JSON.parse(list.stdout || "[]")];
     } catch {
       /* ignore */
     }
   }
-  const matched = runs.filter((r) => {
-    const sha = String(r.head_sha || "").toLowerCase();
-    const title = String(r.display_title || r.name || "");
-    const headOk = !head || sha === head || sha.startsWith(head.slice(0, 12));
-    const prOk = title.includes(`#${pr}`) || title.includes(`pr ${pr}`) || title.includes(`PR ${pr}`);
-    // Mode often appears in run name / job; also accept any in-progress for same head on this workflow.
-    const modeOk = title.toLowerCase().includes(mode) || true;
-    return headOk && (prOk || headOk) && modeOk;
-  });
-  // Prefer head match alone when PR is embedded poorly in titles.
-  const byHead = runs.filter((r) => String(r.head_sha || "").toLowerCase() === head);
-  const active = (head ? byHead : matched).length > 0;
-  return { active, reason: active ? "in_progress/queued expert run for head" : "none", runs: head ? byHead : matched };
+
+  const matched = runs.filter((r) =>
+    matchExpertRunByIdentity(r, { prNumber: pr, mode, validatedHead: head }),
+  );
+  return {
+    active: matched.length > 0,
+    reason: matched.length
+      ? "in_progress/queued expert run matched run-name PR+mode+candidate"
+      : "no matching expert run-name",
+    runs: matched,
+  };
 }
 
 /**

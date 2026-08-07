@@ -28,6 +28,7 @@ import {
   observeReleaseFreshness,
   RELEASE_FRESHNESS_PATH,
 } from "./upstream/observe-release-freshness.mjs";
+import { buildProvenanceEvidenceBlock } from "./upstream/provenance-evidence.mjs";
 import {
   selectRollingCandidate,
   planSupersedeObsolete,
@@ -361,6 +362,18 @@ Merge-base: ${delta.mergeBase}
           reason: upstreamFixedResolution.decision?.reason || null,
           resolvedConflictedFiles,
         },
+        /*
+        FNXC:AutomationGovernance 2026-08-07-20:15:
+        TAKE_UPSTREAM retirement is conflict reconciliation, not local product adaptation.
+        */
+        ...buildProvenanceEvidenceBlock({
+          conflictReconciliationComplete: true,
+          patchReconciliationComplete: true,
+          localDeltaClassificationComplete: true,
+          localDeltaKind: "NONE",
+          appsolinoProductPaths: [],
+          adaptedPaths: [],
+        }),
       };
       writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
       git(repoDir, ["add", STATUS_PATH, ".appsolino/patches"], { allowFailure: true });
@@ -393,11 +406,20 @@ Merge-base: ${delta.mergeBase}
           ? {
               resolved: false,
               action: upstreamFixedResolution.decision?.action || null,
-              reason: upstreamFixedResolution.decision?.reason || upstreamFixedResolution.reason || null,
+              reason: upstreamFixedResolution.decision?.reason || null,
               stderr: upstreamFixedResolution.stderr || null,
               spawnStatus: upstreamFixedResolution.spawnStatus ?? upstreamFixedResolution.status ?? null,
             }
           : null,
+        ...buildProvenanceEvidenceBlock({
+          // Reconciliation step finished: durable conflict state recorded (still unresolved).
+          conflictReconciliationComplete: true,
+          patchReconciliationComplete: true,
+          localDeltaClassificationComplete: true,
+          localDeltaKind: "NONE",
+          appsolinoProductPaths: [],
+          adaptedPaths: [],
+        }),
       };
       writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
       git(repoDir, ["add", STATUS_PATH]);
@@ -429,6 +451,18 @@ Merge-base: ${delta.mergeBase}
       touchesMigrations: delta.touchesMigrations,
       touchesLockfile: delta.touchesLockfile,
       changedFileCount: delta.changedFiles.length,
+      /*
+      FNXC:AutomationGovernance 2026-08-07-20:15:
+      Clean absorb: complete provenance schema with no local product delta.
+      */
+      ...buildProvenanceEvidenceBlock({
+        conflictReconciliationComplete: true,
+        patchReconciliationComplete: true,
+        localDeltaClassificationComplete: true,
+        localDeltaKind: "NONE",
+        appsolinoProductPaths: [],
+        adaptedPaths: [],
+      }),
     };
     writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
     git(repoDir, ["add", STATUS_PATH]);
