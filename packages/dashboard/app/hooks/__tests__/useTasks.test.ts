@@ -3395,6 +3395,71 @@ describe("useTasks", () => {
 
       removeEventListenerSpy.mockRestore();
     });
+
+    describe.each([
+      ["focus-only desktop return", () => window.dispatchEvent(new Event("focus"))],
+      ["persisted bfcache pageshow", () => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }))],
+      ["non-persisted browser restore pageshow", () => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: false }))],
+    ])("authoritative resume via %s", (_label, resume) => {
+      it("converges a card that changed while its SSE event was missed", async () => {
+        const cached = createMockTask({ id: "FN-RESUME", column: "todo" as Column, updatedAt: "2026-01-01T00:00:00Z" });
+        const authoritative = createMockTask({ id: "FN-RESUME", column: "in-progress" as Column, updatedAt: "2026-01-01T00:01:00Z" });
+        mockFetchTasks.mockResolvedValueOnce([cached]).mockResolvedValueOnce([authoritative]);
+
+        const { result } = renderHook(() => useTasks({ projectId: "resume-project", sseEnabled: false }));
+        await waitFor(() => expect(result.current.tasks[0]?.column).toBe("todo"));
+
+        await act(async () => {
+          resume();
+          await Promise.resolve();
+        });
+
+        await waitFor(() => expect(result.current.tasks[0]?.column).toBe("in-progress"));
+        expect(mockFetchTasks).toHaveBeenLastCalledWith(undefined, undefined, "resume-project", undefined, false);
+      });
+    });
+
+    describe.each([
+      ["task:created", (initial: Task[]) => createMockTask({ id: "FN-LIVE-CREATE", column: "in-progress" as Column, updatedAt: "2026-01-01T00:02:00Z" }), ["FN-BASE", "FN-LIVE-CREATE"]],
+      ["task:deleted", (initial: Task[]) => initial[1]!, ["FN-BASE"]],
+    ])("resume response after live %s", (eventName, eventTask, expectedTaskIds) => {
+      it("keeps the live membership in cache across a remount", async () => {
+        const base = createMockTask({ id: "FN-BASE", updatedAt: "2026-01-01T00:00:00Z" });
+        const removable = createMockTask({ id: "FN-LIVE-DELETE", column: "todo" as Column, updatedAt: "2026-01-01T00:01:00Z" });
+        const initial = eventName === "task:created" ? [base] : [base, removable];
+        let cachedSnapshot: Task[] | null = null;
+        mockReadCache.mockImplementation(() => cachedSnapshot);
+        mockWriteCache.mockImplementation((_key, tasks) => {
+          cachedSnapshot = tasks as Task[];
+          return true;
+        });
+        let resolveResume: (tasks: Task[]) => void = () => {};
+        const pendingResume = new Promise<Task[]>((resolve) => { resolveResume = resolve; });
+        mockFetchTasks.mockResolvedValueOnce(initial).mockImplementationOnce(() => pendingResume).mockResolvedValue([]);
+
+        const { result, unmount } = renderHook(() => useTasks({ projectId: "resume-project" }));
+        await waitFor(() => expect(result.current.tasks.map((task) => task.id)).toEqual(initial.map((task) => task.id)));
+
+        act(() => {
+          window.dispatchEvent(new Event("focus"));
+        });
+        await waitFor(() => expect(mockFetchTasks).toHaveBeenCalledTimes(2));
+
+        act(() => {
+          MockEventSource.instances[0]!._emit(eventName, eventTask(initial));
+        });
+        await act(async () => {
+          resolveResume(initial);
+          await flushPromises();
+        });
+
+        expect(result.current.tasks.map((task) => task.id)).toEqual(expectedTaskIds);
+        unmount();
+
+        const { result: remounted } = renderHook(() => useTasks({ projectId: "resume-project", sseEnabled: false }));
+        expect(remounted.current.tasks.map((task) => task.id)).toEqual(expectedTaskIds);
+      });
+    });
   });
 
   describe("project switching", () => {
