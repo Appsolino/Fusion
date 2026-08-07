@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "taskId": "REL-L3-BROWNFIELD-FIXTURE",
+  "level": 3,
+  "repo": "appsolino-reliability-fixture",
+  "startingSha": "79d5da29ac8fd431b16e29aabc8d56c7a9a1bf87",
+  "requestedBehavior": "Implement clamp consistent with pure-function modules",
+  "plan": "Enable tests; try noop; redesign; independent review",
+  "worktree": "/srv/appsolino-fusion/tmp/reliability/appsolino-reliability-fixture",
+  "agentModel": "deterministic-fixture-agent",
+  "toolCalls": [
+    {
+      "tool": "writeFile",
+      "path": "src/feature.js",
+      "attempt": 1
+    },
+    {
+      "tool": "writeFile",
+      "path": "src/feature.js",
+      "attempt": 2
+    }
+  ],
+  "testsBefore": {
+    "passed": false
+  },
+  "testsAfter": {
+    "passed": true,
+    "durationMs": 179
+  },
+  "reviewFindings": [],
+  "independentReview": {
+    "provider": "deterministic-independent-reviewer",
+    "model": "fixture-reviewer-v1",
+    "verdict": "APPROVE"
+  },
+  "recoveryAttempts": [
+    {
+      "step": "noop-clamp-failed",
+      "passed": false
+    },
+    {
+      "step": "redesign-proper-clamp"
+    }
+  ],
+  "gitResult": {
+    "ok": true,
+    "commitSha": "2b28caf4d3929dfb3a2f43ce5a14d747f2131c24",
+    "branch": "challenge/rel-l3"
+  },
+  "prResult": {
+    "created": false,
+    "reason": "local fixture"
+  },
+  "finalStatus": "SUCCESS",
+  "mandatoryFinalFailed": false,
+  "reason": "L3 architecture-style feature with redesign recovery",
+  "wallClockDurationMs": 559,
+  "recoveredAfterFailure": true,
+  "recordedUtc": "2026-08-07T04:24:57Z"
+}

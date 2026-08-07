@@ -25,6 +25,8 @@ import {
 const HEAD_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HEAD_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const MAIN_SHA = "cccccccccccccccccccccccccccccccccccccccc";
+/** Full upstream SHA matching automation/upstream-71576d953626 branch embedding. */
+const UPSTREAM_FOR_SENSITIVE = "71576d9536260000000000000000000000000000";
 
 function sensitivePrView(overrides = {}) {
   return {
@@ -48,12 +50,13 @@ function sensitiveFilesStdout() {
 }
 
 /**
- * @param {{merges?: string[][], auto3?: string[][], reviewsJson?: string, pr?: object}} [opts]
+ * @param {{merges?: string[][], auto3?: string[][], reviewsJson?: string, pr?: object, upstreamSha?: string}} [opts]
  */
 function makeSensitiveGh(opts = {}) {
   const merges = opts.merges || [];
   const auto3 = opts.auto3 || [];
   const pr = sensitivePrView(opts.pr || {});
+  const upstreamSha = opts.upstreamSha || UPSTREAM_FOR_SENSITIVE;
   return (args) => {
     if (args[0] === "pr" && args[1] === "merge") {
       merges.push(args);
@@ -68,7 +71,11 @@ function makeSensitiveGh(opts = {}) {
     if (args[0] === "api" && String(args[1] || "").includes("/reviews")) {
       return { status: 0, stdout: opts.reviewsJson ?? "[]", stderr: "" };
     }
+    if (args[0] === "api" && String(args[1] || "").includes("Runfusion/Fusion/commits/main")) {
+      return { status: 0, stdout: upstreamSha, stderr: "" };
+    }
     if (args[0] === "api" && String(args[1] || "").includes("/commits/main")) {
+      // Appsolino main tip after merge
       return { status: 0, stdout: MAIN_SHA, stderr: "" };
     }
     if (args[0] === "workflow" && args[1] === "run") {
@@ -89,6 +96,9 @@ function makeSensitiveGh(opts = {}) {
       return { status: 0, stdout: "", stderr: "" };
     }
     if (args[0] === "api" && String(args[1] || "").includes("/comments")) {
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "api" && String(args[1] || "").includes("/labels")) {
       return { status: 0, stdout: "", stderr: "" };
     }
     if (args[0] === "api" && (args.includes("POST") || args.includes("PATCH"))) {
@@ -331,8 +341,9 @@ describe("AUTO-2 finalize policy", () => {
     assert.equal(r.classification?.riskClass, "blocked");
   });
 
-  it("workflow PR is approval-required, never auto-merged", () => {
+  it("workflow PR is expert-resolving, never auto-merged", () => {
     const merges = [];
+    const UP = "73bff5f88cf20000000000000000000000000000";
     const gh = (args) => {
       if (args[0] === "pr" && args[1] === "merge") {
         merges.push(args);
@@ -346,7 +357,7 @@ describe("AUTO-2 finalize policy", () => {
             state: "OPEN",
             headRefName: "automation/upstream-73bff5f88cf2",
             baseRefName: "main",
-            headRefOid: "head34",
+            headRefOid: "head34head34head34head34head34head34head34",
             mergeable: "MERGEABLE",
             commits: Array.from({ length: 50 }, (_, i) => ({ oid: String(i) })),
             labels: [],
@@ -363,17 +374,21 @@ describe("AUTO-2 finalize policy", () => {
           stderr: "",
         };
       }
+      if (args[0] === "api" && String(args[1] || "").includes("Runfusion/Fusion/commits/main")) {
+        return { status: 0, stdout: UP, stderr: "" };
+      }
       return { status: 0, stdout: "", stderr: "" };
     };
     const r = runAuto2Finalize({
       repo: "Appsolino/Fusion",
       prNumber: 34,
-      validatedHeadSha: "head34",
+      validatedHeadSha: "head34head34head34head34head34head34head34",
       validationConclusion: "success",
       allowMissingApp: true,
+      liveUpstreamHead: UP,
       gh,
     });
-    assert.equal(r.action, "approval-required");
+    assert.equal(r.action, "expert-resolving");
     assert.equal(r.classification?.riskClass, "sensitive");
     assert.equal(merges.length, 0);
     assert.equal(r.deployedHostD, false);
@@ -489,7 +504,7 @@ describe("AUTO-2 sensitive exact-head approval", () => {
     assert.equal(v.ok, true);
   });
 
-  it("sensitive without approval → approval-required", () => {
+  it("sensitive without approval → expert-resolving (not owner-stop)", () => {
     const merges = [];
     const gh = makeSensitiveGh({ merges, reviewsJson: "[]" });
     const r = runAuto2Finalize({
@@ -501,9 +516,28 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       dispatchAuto3: false,
       reviewsForTest: [],
       checksConclusionForTest: "success",
+      liveUpstreamHead: UPSTREAM_FOR_SENSITIVE,
       gh,
     });
-    assert.equal(r.action, "approval-required");
+    assert.equal(r.action, "expert-resolving");
+    assert.equal(merges.length, 0);
+  });
+
+  it("stale candidate upstream vs live tip → refresh-required", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      validationConclusion: "success",
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [],
+      checksConclusionForTest: "success",
+      liveUpstreamHead: "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+      gh: makeSensitiveGh({ merges }),
+    });
+    assert.equal(r.action, "refresh-required");
     assert.equal(merges.length, 0);
   });
 
@@ -621,6 +655,7 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       auto3TimeoutMs: 50,
       reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_A }],
       checksConclusionForTest: "success",
+      liveUpstreamHead: UPSTREAM_FOR_SENSITIVE,
       gh: makeSensitiveGh({ merges, auto3 }),
     });
     assert.ok(["auto-merged", "auto-merged-deployed", "auto-merged-deploy-failed"].includes(r.action));

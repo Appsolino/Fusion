@@ -9,11 +9,26 @@
  *
  * ISS-GIT-007: resolve the repository default/integration branch via origin/HEAD
  * (with explicit override) instead of assuming `main`.
+ *
+ * FNXC:UpstreamRollingCandidate 2026-08-07-04:15:
+ * After opening/updating the rolling candidate for live upstream HEAD, supersede
+ * obsolete automation/upstream-* PRs. Creating a PR is not FRESH — write freshness status.
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  evaluateFreshness,
+  writeFreshnessStatus,
+  FRESHNESS_STATUS_PATH,
+  formatFreshnessReport,
+} from "./upstream/freshness.mjs";
+import {
+  selectRollingCandidate,
+  planSupersedeObsolete,
+  parseUpstreamShaFromBranch,
+} from "./upstream/rolling-candidate.mjs";
 
 export const UPSTREAM_URL_DEFAULT = "https://github.com/Runfusion/Fusion.git";
 export const UPSTREAM_REF_DEFAULT = "main";
@@ -136,6 +151,20 @@ export function runAuto1Sync(input) {
   const delta = detectDelta(repoDir, { appsolinoRef, upstreamRef: upstreamRemoteRef });
 
   if (delta.behind === 0) {
+    const freshness = evaluateFreshness({
+      upstreamHead: delta.upstreamSha,
+      integratedUpstreamSha: delta.upstreamSha,
+      candidateUpstreamSha: null,
+      candidateAppsolinoSha: delta.appsolinoSha,
+      commitsBehindIntegrated: 0,
+      commitsBehindCandidate: 0,
+      auto1Outcome: "no-change",
+    });
+    try {
+      writeFreshnessStatus(join(repoDir, FRESHNESS_STATUS_PATH), freshness);
+    } catch {
+      /* non-fatal */
+    }
     return {
       outcome: "no-change",
       integrationBranch,
@@ -144,6 +173,10 @@ export function runAuto1Sync(input) {
       conflict: false,
       conflictedFiles: [],
       prUrl: null,
+      prNumber: null,
+      superseded: [],
+      freshness,
+      freshnessReport: formatFreshnessReport(freshness),
       mutatedMain: false,
       deployedHostD: false,
     };
@@ -227,6 +260,13 @@ Merge-base: ${delta.mergeBase}
   }
 
   let prUrl = null;
+  /** @type {number|null} */
+  let prNumber = null;
+  /** @type {Array<{prNumber:number,type:string}>} */
+  let superseded = [];
+  /** @type {ReturnType<typeof evaluateFreshness>|null} */
+  let freshness = null;
+
   if (createPr) {
     if (!input.allowMissingApp && !process.env.AUTO1_GITHUB_APP_TOKEN && !process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
       throw new Error(
@@ -275,6 +315,7 @@ Merge-base: ${delta.mergeBase}
       const edited = gh(["pr", "edit", number, "--repo", repo, "--title", title, "--body", body]);
       if (edited.status !== 0) throw new Error(`gh pr edit failed: ${edited.stderr || edited.stdout}`);
       prUrl = openPrs[0].url;
+      prNumber = Number(openPrs[0].number);
     } else {
       const created = gh([
         "pr", "create",
@@ -286,7 +327,101 @@ Merge-base: ${delta.mergeBase}
       ]);
       if (created.status !== 0) throw new Error(`gh pr create failed: ${created.stderr || created.stdout}`);
       prUrl = created.stdout;
+      const m = String(prUrl).match(/\/pull\/(\d+)/);
+      prNumber = m ? Number(m[1]) : null;
     }
+
+    /*
+    FNXC:UpstreamRollingCandidate 2026-08-07-04:15:
+    Close obsolete automation/upstream-* PRs whose embedded SHA != live upstream HEAD.
+    Never merge them as current.
+    */
+    if (input.supersedeObsolete !== false) {
+      const listed = gh([
+        "pr", "list",
+        "--repo", repo,
+        "--state", "open",
+        "--limit", "50",
+        "--json", "number,headRefName,url",
+      ]);
+      if (listed.status === 0) {
+        const allOpen = JSON.parse(listed.stdout || "[]");
+        const automation = (Array.isArray(allOpen) ? allOpen : []).filter((p) =>
+          /^automation\/upstream-/i.test(String(p.headRefName || "")),
+        );
+        const selection = selectRollingCandidate({
+          upstreamHead: delta.upstreamSha,
+          openAutomationPrs: automation.map((p) => ({
+            number: Number(p.number),
+            headRefName: String(p.headRefName),
+            candidateUpstreamSha: parseUpstreamShaFromBranch(p.headRefName),
+          })),
+        });
+        const plan = planSupersedeObsolete(selection, {
+          newPrNumber: prNumber,
+          newUpstreamSha: delta.upstreamSha,
+          dryRun: input.dryRunSupersede === true,
+        });
+        for (const action of plan.actions) {
+          if (action.prNumber === prNumber) continue;
+          if (input.dryRunSupersede === true) {
+            superseded.push({ prNumber: action.prNumber, type: "supersede-close-dry-run" });
+            continue;
+          }
+          const commented = gh([
+            "pr", "comment", String(action.prNumber),
+            "--repo", repo,
+            "--body", action.comment,
+          ]);
+          if (commented.status !== 0) {
+            throw new Error(`gh pr comment failed for #${action.prNumber}: ${commented.stderr || commented.stdout}`);
+          }
+          const closed = gh([
+            "pr", "close", String(action.prNumber),
+            "--repo", repo,
+            "--comment", "Superseded by rolling upstream candidate for live Runfusion HEAD.",
+          ]);
+          if (closed.status !== 0) {
+            throw new Error(`gh pr close failed for #${action.prNumber}: ${closed.stderr || closed.stdout}`);
+          }
+          superseded.push({ prNumber: action.prNumber, type: "supersede-close" });
+        }
+      }
+    }
+  }
+
+  // Integrated SHA is the merge-base with upstream until a successful absorption lands.
+  freshness = evaluateFreshness({
+    upstreamHead: delta.upstreamSha,
+    integratedUpstreamSha: delta.mergeBase,
+    candidateUpstreamSha: delta.upstreamSha,
+    candidateAppsolinoSha: delta.appsolinoSha,
+    commitsBehindIntegrated: delta.behind,
+    commitsBehindCandidate: 0,
+    activeCandidatePr: prNumber,
+    auto1Outcome: conflict ? "conflict" : delta.behind === 0 ? "no-change" : "merged",
+  });
+  try {
+    writeFreshnessStatus(join(repoDir, FRESHNESS_STATUS_PATH), freshness);
+    // Keep status on the sync branch when we already have local commits.
+    if (syncBranch && (push || createPr)) {
+      git(repoDir, ["add", FRESHNESS_STATUS_PATH], { allowFailure: true });
+      const staged = git(repoDir, ["diff", "--cached", "--name-only"], { allowFailure: true }).stdout;
+      if (staged.includes(FRESHNESS_STATUS_PATH)) {
+        git(repoDir, [
+          "commit",
+          "-m",
+          `chore(auto1): record upstream freshness ${freshness.state} for ${delta.upstreamSha.slice(0, 12)}`,
+        ], { allowFailure: true });
+        if (push) {
+          git(repoDir, ["push", "--force-with-lease", originRemote, `HEAD:refs/heads/${syncBranch}`], {
+            allowFailure: true,
+          });
+        }
+      }
+    }
+  } catch {
+    // Freshness write must not mask merge outcome; surface via return payload.
   }
 
   return {
@@ -297,6 +432,10 @@ Merge-base: ${delta.mergeBase}
     conflict,
     conflictedFiles,
     prUrl,
+    prNumber,
+    superseded,
+    freshness,
+    freshnessReport: freshness ? formatFreshnessReport(freshness) : null,
     mutatedMain: false,
     deployedHostD: false,
   };

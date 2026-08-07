@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "id": "FIX-ISS-WF-002-DETERMINISTIC-PARK",
+  "status": "ACTIVE",
+  "defect": {
+    "description": "Deterministic execute failures redispatch to todo instead of parking failed",
+    "reproduction": "Deterministic step-execute failure clears status and storms todo",
+    "affectedSubsystem": "engine/executor"
+  },
+  "introducedAgainst": {
+    "upstreamSha": null
+  },
+  "regressionTests": [
+    "packages/engine/src/__tests__/transient-error-detector.test.ts",
+    "packages/engine/src/__tests__/executor-graph-requeue-gate.test.ts"
+  ],
+  "upstreamComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "comparedAgainstSha": null,
+    "relatedIssue": null,
+    "relatedPr": null,
+    "relatedCommit": null,
+    "evidence": null,
+    "comparedAt": null
+  },
+  "localAction": {
+    "patchRequired": true,
+    "applyPaths": [
+      "packages/engine/src/errors/transient-error-detector.ts",
+      "packages/engine/src/executor.ts"
+    ]
+  },
+  "retirementCondition": {
+    "regressionTestPassesOnCleanUpstream": true,
+    "notes": null
+  },
+  "revisions": [
+    {
+      "revision": 1,
+      "againstUpstreamSha": null,
+      "summary": "Correction B deterministic park",
+      "files": [],
+      "createdAt": null
+    }
+  ],
+  "updatedUtc": "2026-08-07T04:11:18Z"
+}

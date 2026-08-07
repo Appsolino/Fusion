@@ -13,8 +13,10 @@ name: Upstream AUTO-1 Sync
 
 on:
   schedule:
-    # Daily ~06:30 UTC — after the read-only monitor window.
-    - cron: "30 6 * * *"
+    # FNXC:UpstreamFreshness 2026-08-07-04:35:
+    # Hourly observation — daily polling allowed Appsolino to go stale while SENSITIVE PRs parked.
+    # Source freshness stays independent of Host D/Host P deployment.
+    - cron: "12 * * * *"
   workflow_dispatch:
 
 permissions:

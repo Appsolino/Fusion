@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "taskId": "REL-L1-BROWNFIELD-FIXTURE",
+  "level": 1,
+  "repo": "appsolino-reliability-fixture",
+  "startingSha": "79d5da29ac8fd431b16e29aabc8d56c7a9a1bf87",
+  "requestedBehavior": "Fix add() off-by-one so unit tests pass",
+  "plan": "Inspect failing math.test; correct add; re-run tests; commit on isolated branch",
+  "worktree": "/srv/appsolino-fusion/tmp/reliability/appsolino-reliability-fixture",
+  "agentModel": "deterministic-fixture-agent",
+  "toolCalls": [
+    {
+      "tool": "writeFile",
+      "path": "src/math.js",
+      "intent": "fix off-by-one add"
+    }
+  ],
+  "testsBefore": {
+    "passed": false,
+    "exitCode": 1
+  },
+  "testsAfter": {
+    "passed": true,
+    "exitCode": 0,
+    "durationMs": 204
+  },
+  "reviewFindings": [],
+  "independentReview": {
+    "provider": "deterministic-independent-reviewer",
+    "model": "fixture-reviewer-v1",
+    "verdict": "APPROVE"
+  },
+  "recoveryAttempts": [],
+  "gitResult": {
+    "ok": true,
+    "commitSha": "c098f0774fc1edd958c315f00e7d95d1a99308f1",
+    "branch": "challenge/rel-l1"
+  },
+  "prResult": {
+    "created": false,
+    "reason": "local fixture — no remote push (Host P/D deploy not required)"
+  },
+  "finalStatus": "SUCCESS",
+  "mandatoryFinalFailed": false,
+  "reason": "L1 fixed with independent APPROVE",
+  "wallClockDurationMs": 240,
+  "recoveredAfterFailure": true,
+  "recordedUtc": "2026-08-07T04:24:56Z"
+}

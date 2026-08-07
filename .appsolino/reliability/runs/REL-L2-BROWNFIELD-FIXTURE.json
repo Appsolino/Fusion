@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "taskId": "REL-L2-BROWNFIELD-FIXTURE",
+  "level": 2,
+  "repo": "appsolino-reliability-fixture",
+  "startingSha": "79d5da29ac8fd431b16e29aabc8d56c7a9a1bf87",
+  "requestedBehavior": "Cross-file formatSum correctness with new regression test",
+  "plan": "Add regression; ensure math+format cooperate; commit",
+  "worktree": "/srv/appsolino-fusion/tmp/reliability/appsolino-reliability-fixture",
+  "agentModel": "deterministic-fixture-agent",
+  "toolCalls": [
+    {
+      "tool": "writeFile",
+      "path": "test/format-regression.test.js"
+    }
+  ],
+  "testsBefore": {
+    "passed": true
+  },
+  "testsAfter": {
+    "passed": true,
+    "durationMs": 175
+  },
+  "reviewFindings": [],
+  "independentReview": {
+    "provider": "deterministic-independent-reviewer",
+    "model": "fixture-reviewer-v1",
+    "verdict": "APPROVE"
+  },
+  "recoveryAttempts": [],
+  "gitResult": {
+    "ok": true,
+    "commitSha": "2a5e1232b6a00e462c59c24798e02b814648589b",
+    "branch": "challenge/rel-l2"
+  },
+  "prResult": {
+    "created": false,
+    "reason": "local fixture"
+  },
+  "finalStatus": "SUCCESS",
+  "mandatoryFinalFailed": false,
+  "reason": "L2 cross-file regression path",
+  "wallClockDurationMs": 382,
+  "recoveredAfterFailure": false,
+  "recordedUtc": "2026-08-07T04:24:57Z"
+}

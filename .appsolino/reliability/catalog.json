@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "challenges": [
+    {
+      "id": "REL-L1-SMALL-BUG",
+      "level": 1,
+      "title": "Small deterministic bug fix",
+      "goal": "Fix a single known failing assertion with a minimal code change",
+      "successCriteria": [
+        "targeted test green",
+        "no false SUCCESS if push/PR fails"
+      ],
+      "recoverableFailures": [
+        "lint",
+        "typecheck"
+      ]
+    },
+    {
+      "id": "REL-L2-CROSS-FILE",
+      "level": 2,
+      "title": "Cross-file bug with regression test",
+      "goal": "Fix behavior spanning two modules and add regression",
+      "successCriteria": [
+        "new regression fails before fix",
+        "passes after",
+        "PR created"
+      ],
+      "recoverableFailures": [
+        "test fail from incomplete fix"
+      ]
+    },
+    {
+      "id": "REL-L3-ARCHITECTURE",
+      "level": 3,
+      "title": "Feature requiring architecture understanding",
+      "goal": "Implement a small feature consistent with existing patterns",
+      "successCriteria": [
+        "independent review APPROVE or REQUEST_CHANGES loop bounded",
+        "tests green"
+      ],
+      "recoverableFailures": [
+        "review REQUEST_CHANGES"
+      ]
+    },
+    {
+      "id": "REL-L4-FAILING-PLUS-FEATURE",
+      "level": 4,
+      "title": "Existing failing tests plus feature",
+      "goal": "Stabilize failing suite then add feature",
+      "successCriteria": [
+        "pre-existing failures addressed",
+        "feature tests green"
+      ],
+      "recoverableFailures": [
+        "bootstrap",
+        "flaky quarantine policy"
+      ]
+    },
+    {
+      "id": "REL-L5-MERGE-CONFLICT",
+      "level": 5,
+      "title": "Merge/rebase conflict during execution",
+      "goal": "Recover from mid-task branch divergence",
+      "successCriteria": [
+        "conflict resolved or BLOCKED_UNRESOLVED with evidence",
+        "never false SUCCESS"
+      ],
+      "recoverableFailures": [
+        "merge conflict"
+      ]
+    },
+    {
+      "id": "REL-L6-EXTERNAL-REVIEW",
+      "level": 6,
+      "title": "External review requests changes",
+      "goal": "Address independent reviewer findings",
+      "successCriteria": [
+        "repair loop",
+        "final deterministic verification"
+      ],
+      "recoverableFailures": [
+        "REQUEST_CHANGES"
+      ]
+    },
+    {
+      "id": "REL-L7-BOOTSTRAP",
+      "level": 7,
+      "title": "Dependency/bootstrap ambiguity",
+      "goal": "Detect and resolve project bootstrap without owner babysitting",
+      "successCriteria": [
+        "environment derived or precise actionable failure"
+      ],
+      "recoverableFailures": [
+        "missing package manager",
+        "python vs python3"
+      ]
+    },
+    {
+      "id": "REL-L8-REDESIGN",
+      "level": 8,
+      "title": "First approach fails; redesign",
+      "goal": "Abandon failing approach and complete via redesign",
+      "successCriteria": [
+        "recovery attempts recorded",
+        "truthful terminal"
+      ],
+      "recoverableFailures": [
+        "design dead-end"
+      ]
+    },
+    {
+      "id": "REL-L9-INTERRUPT-RESUME",
+      "level": 9,
+      "title": "Interrupted long-running task resumed",
+      "goal": "Resume after process interrupt without losing work",
+      "successCriteria": [
+        "resume preserves progress",
+        "no duplicate destructive actions"
+      ],
+      "recoverableFailures": [
+        "process kill"
+      ]
+    },
+    {
+      "id": "REL-L10-BROWNFIELD-MULTI",
+      "level": 10,
+      "title": "Complex brownfield multi-subsystem task",
+      "goal": "Complete or truthfully block a multi-subsystem change on a real repo",
+      "successCriteria": [
+        "audit trail complete",
+        "independent review",
+        "no false SUCCESS"
+      ],
+      "recoverableFailures": [
+        "partial implementation"
+      ]
+    }
+  ]
+}

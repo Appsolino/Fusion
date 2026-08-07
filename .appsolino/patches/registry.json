@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "patchIds": [
+    "FIX-ISS-CLI-005-CURSOR-ROUTING",
+    "FIX-ISS-GIT-007",
+    "FIX-ISS-REL-001-VERSION-IDENTITY",
+    "FIX-ISS-UI-001",
+    "FIX-ISS-WF-002-DETERMINISTIC-PARK"
+  ],
+  "updatedUtc": "2026-08-07T04:16:47Z"
+}

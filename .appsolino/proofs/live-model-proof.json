@@ -1,0 +1,31 @@
+{
+  "role": "live-model-proof",
+  "startedUtc": "2026-08-07T04:13:26.009Z",
+  "endedUtc": "2026-08-07T04:14:24.324Z",
+  "latencyMs": 58315,
+  "expert": {
+    "ok": true,
+    "action": "EXPERT_DECISION",
+    "reason": "validated structured expert decision",
+    "configuredProvider": "cursor-cli",
+    "configuredModel": "composer-2.5",
+    "actualProvider": "cursor-cli",
+    "actualModel": "composer-2.5",
+    "schemaVersion": 1,
+    "decisionOk": true
+  },
+  "verifier": {
+    "ok": true,
+    "action": "VERIFIER_VERDICT",
+    "reason": "validated structured verifier verdict",
+    "configuredProvider": "cursor-cli",
+    "configuredModel": "composer-2.5",
+    "actualProvider": "cursor-cli",
+    "actualModel": "composer-2.5",
+    "schemaVersion": 1,
+    "verdictOk": true,
+    "verdict": "REQUEST_CHANGES"
+  },
+  "outcome": "PASS",
+  "secretsLogged": false
+}

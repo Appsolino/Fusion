@@ -17,6 +17,12 @@
  * verified exact-head APPROVED review from Anas966 (see auto2-sensitive-approval.mjs
  * and upstream-auto2-approve-sensitive.yml). A raw --owner-approved flag alone is
  * not authorization. Candidate code never receives App/Host D secrets.
+ *
+ * FNXC:UpstreamSensitiveExpert 2026-08-07-04:15:
+ * SENSITIVE/MEDIUM no longer default to owner-stop. Without verified owner approval,
+ * continue to expert-resolving (real AI) rather than parking as approval-required.
+ * Finalizer re-fetches upstream HEAD and refuses merge-as-current when the candidate
+ * upstream SHA is stale (REFRESH_REQUIRED).
  */
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -43,6 +49,15 @@ import {
   mapAuto3RunToTerminal,
   parseAuto3TerminalMarker,
 } from "./auto3-handoff.mjs";
+import {
+  resolveSensitiveContinuation,
+  candidateUpstreamFromHead,
+  LABEL_EXPERT_RESOLVING,
+  LABEL_REFRESH_REQUIRED,
+  LABEL_BLOCKED_POLICY,
+} from "./upstream/sensitive-expert-path.mjs";
+import { assertFinalizerFreshness } from "./upstream/rolling-candidate.mjs";
+import { evaluateFreshness, formatFreshnessReport } from "./upstream/freshness.mjs";
 
 /**
  * @param {string[]} args
@@ -180,14 +195,11 @@ export function runAuto2Finalize(input) {
   }
 
   if (classification.riskClass === "medium") {
-    return {
-      action: "approval-required",
-      reason: "medium — no automatic merge during initial AUTO-2 rollout",
-      classification,
-      pr,
-      mutatedMain: false,
-      deployedHostD: false,
-    };
+    return finalizeSensitive(input, pr, runGh, classification, {
+      currentHead,
+      stale,
+      checksFailed,
+    });
   }
 
   if (classification.riskClass === "sensitive") {
@@ -218,8 +230,11 @@ export function runAuto2Finalize(input) {
 
 /**
  * FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55:
- * Sensitive path: without verified exact-head owner review → approval-required.
- * With verified Anas966 APPROVED on exact head → merge + AUTO-3. Boolean flag alone → blocked.
+ * Sensitive path: verified exact-head owner review → merge + AUTO-3.
+ *
+ * FNXC:UpstreamSensitiveExpert 2026-08-07-04:15:
+ * Without owner approval, route to expert-resolving (not owner parking), after
+ * confirming the candidate still matches live upstream HEAD.
  *
  * @param {*} input
  * @param {*} pr
@@ -257,6 +272,12 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
     }, "head ref not automation/upstream-*");
   }
 
+  // Re-fetch live upstream HEAD before any merge-as-current decision.
+  const liveUpstreamHead = resolveLiveUpstreamHead(input, runGh);
+  const candidateUpstreamSha =
+    input.candidateUpstreamSha ||
+    candidateUpstreamFromHead(pr.headRefName || "", liveUpstreamHead);
+
   let reviews;
   if (Array.isArray(input.reviewsForTest)) {
     reviews = input.reviewsForTest;
@@ -271,16 +292,10 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
           autoMergeEligible: false,
         }, `unable to load reviews: ${fetched.error}`);
       }
-      return {
-        action: "approval-required",
-        reason: "sensitive — one owner approval required; no automatic merge",
-        classification,
-        pr,
-        mutatedMain: false,
-        deployedHostD: false,
-      };
+      reviews = [];
+    } else {
+      reviews = fetched.reviews;
     }
-    reviews = fetched.reviews;
   }
 
   let checksConclusion = input.checksConclusionForTest;
@@ -315,36 +330,187 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
     };
   }
 
-  if (!verdict.ok) {
-    /*
-    FNXC:AppsolinoAuto2SensitiveApproval 2026-08-01-04:55:
-    Passive finalize (no require-sensitive-approval): stay approval-required — never merge.
-    Approve-sensitive workflow or boolean --owner-approved without verified review: blocked.
-    */
-    if (requirePath || input.ownerApproved === true) {
-      return finalizeBlocked(input, pr, runGh, {
-        ...classification,
-        riskClass: "blocked",
-        reasons: verdict.reasons,
-        autoMergeEligible: false,
-      }, verdict.reasons.join("; "));
-    }
+  const continuation = resolveSensitiveContinuation({
+    riskClass: classification.riskClass,
+    ownerPolicy: input.ownerPolicy || {},
+    expertCompleted: input.expertCompleted === true,
+    expertDecision: input.expertDecision || null,
+    verifierVerdict: input.verifierVerdict || null,
+    deterministicPassed: input.validationConclusion !== "failure",
+    liveUpstreamHead,
+    candidateUpstreamSha,
+    skipUpstreamFreshnessCheck: input.skipUpstreamFreshnessCheck === true,
+    legacyOwnerApprovalOk: verdict.ok === true,
+  });
+
+  if (continuation.action === "refresh-required") {
+    ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_REFRESH_REQUIRED], input.dryRun === true);
     return {
-      action: "approval-required",
-      reason: "sensitive — one owner approval required; no automatic merge",
+      action: "refresh-required",
+      reason: continuation.reason,
+      classification,
+      pr,
+      liveUpstreamHead,
+      candidateUpstreamSha,
+      freshness: evaluateFreshness({
+        upstreamHead: liveUpstreamHead,
+        integratedUpstreamSha: input.integratedUpstreamSha || null,
+        candidateUpstreamSha,
+        commitsBehindIntegrated: null,
+        auto2Action: "refresh-required",
+      }),
+      mutatedMain: false,
+      deployedHostD: false,
+    };
+  }
+
+  if (continuation.action === "blocked-policy") {
+    ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_BLOCKED_POLICY], input.dryRun === true);
+    return {
+      action: "blocked-policy",
+      reason: continuation.reason,
       classification,
       pr,
       mutatedMain: false,
       deployedHostD: false,
-      approval: verdict,
     };
   }
 
-  // Verified exact-head owner approval → exact-head merge + AUTO-3
-  return performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, currentHead, {
-    reasonPrefix: "sensitive-approved",
-    auto3Profile: input.auto3Profile,
+  if (continuation.action === "blocked-unresolved") {
+    return {
+      action: "blocked-unresolved",
+      reason: continuation.reason,
+      classification,
+      pr,
+      mutatedMain: false,
+      deployedHostD: false,
+    };
+  }
+
+  if (continuation.action === "merge-eligible" && verdict.ok) {
+    // Finalizer race: refuse if upstream moved between classification and merge.
+    const race = assertFinalizerFreshness({
+      candidateUpstreamSha,
+      liveUpstreamHead,
+    });
+    if (!race.ok) {
+      ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_REFRESH_REQUIRED], input.dryRun === true);
+      return {
+        action: "refresh-required",
+        reason: race.reason,
+        classification,
+        pr,
+        liveUpstreamHead,
+        candidateUpstreamSha,
+        mutatedMain: false,
+        deployedHostD: false,
+      };
+    }
+    return performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, currentHead, {
+      reasonPrefix: "sensitive-approved",
+      auto3Profile: input.auto3Profile,
+    });
+  }
+
+  if (continuation.action === "merge-eligible" && input.expertCompleted === true) {
+    const race = assertFinalizerFreshness({
+      candidateUpstreamSha,
+      liveUpstreamHead,
+    });
+    if (!race.ok) {
+      return {
+        action: "refresh-required",
+        reason: race.reason,
+        classification,
+        pr,
+        mutatedMain: false,
+        deployedHostD: false,
+      };
+    }
+    return performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, currentHead, {
+      reasonPrefix: "sensitive-expert-verified",
+      auto3Profile: input.auto3Profile,
+    });
+  }
+
+  /*
+  FNXC:UpstreamSensitiveExpert 2026-08-07-04:15:
+  Default sensitive/medium continuation: expert-resolving. Owner approval workflow remains
+  available as an optional fast-path; it is no longer the only way forward.
+  */
+  if (requirePath || input.ownerApproved === true) {
+    // Explicit approve-sensitive workflow without verified review stays fail-closed blocked.
+    return finalizeBlocked(input, pr, runGh, {
+      ...classification,
+      riskClass: "blocked",
+      reasons: verdict.ok ? ["unexpected"] : verdict.reasons,
+      autoMergeEligible: false,
+    }, verdict.reasons.join("; ") || "sensitive approval path failed");
+  }
+
+  ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_EXPERT_RESOLVING], input.dryRun === true);
+  const freshness = evaluateFreshness({
+    upstreamHead: liveUpstreamHead,
+    integratedUpstreamSha: input.integratedUpstreamSha || null,
+    candidateUpstreamSha,
+    commitsBehindIntegrated: input.commitsBehindIntegrated ?? null,
+    activeCandidatePr: Number(pr.number),
+    auto2Action: "expert-resolving",
+    expertActive: true,
   });
+  return {
+    action: "expert-resolving",
+    reason: continuation.reason,
+    classification,
+    pr,
+    liveUpstreamHead,
+    candidateUpstreamSha,
+    freshness,
+    freshnessReport: formatFreshnessReport(freshness),
+    mutatedMain: false,
+    deployedHostD: false,
+    approval: verdict,
+  };
+}
+
+/**
+ * @param {*} input
+ * @param {*} runGh
+ */
+function resolveLiveUpstreamHead(input, runGh) {
+  if (input.liveUpstreamHead && /^[0-9a-f]{7,40}$/i.test(String(input.liveUpstreamHead))) {
+    return String(input.liveUpstreamHead).trim().toLowerCase();
+  }
+  const res = runGh([
+    "api",
+    "repos/Runfusion/Fusion/commits/main",
+    "--jq",
+    ".sha",
+  ]);
+  if (res.status !== 0) return null;
+  const sha = String(res.stdout || "").trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+/**
+ * @param {*} runGh
+ * @param {string} repo
+ * @param {string|number} prNumber
+ * @param {string[]} labels
+ * @param {boolean} dryRun
+ */
+function ensureExtraLabels(runGh, repo, prNumber, labels, dryRun) {
+  if (dryRun || !labels.length) return;
+  for (const label of labels) {
+    runGh([
+      "api",
+      "-X", "POST",
+      `repos/${repo}/issues/${prNumber}/labels`,
+      "-f", `labels[]=${label}`,
+    ]);
+    // Fallback: gh label create may not exist; ignore failures for missing label defs.
+    runGh(["pr", "edit", String(prNumber), "--repo", repo, "--add-label", label]);
+  }
 }
 
 /**

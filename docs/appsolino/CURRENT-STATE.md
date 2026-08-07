@@ -2,7 +2,7 @@
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-06T06:24:10Z
+**Last updated UTC:** 2026-08-07T04:16:00Z
 
 | Field | Value |
 | --- | --- |
@@ -29,7 +29,8 @@
 ## Owner priority
 
 ```text
-NOW:     Host D trust-hardening (#109) — test / fault-inject / repair / soak
+NOW:     Upstream autonomous freshness (feat/upstream-autonomous-freshness) + Host D trust soak (#109)
 HOLD:    Host P / production — PROHIBITED
 CLOSED:  Programme #78 · Issue #105
+NOTE:    Source freshness is independent of Host D trust deploy/rollback quotas
 ```

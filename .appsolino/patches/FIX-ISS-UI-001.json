@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "FIX-ISS-UI-001",
+  "status": "ACTIVE",
+  "defect": {
+    "description": "Settings non-identity fields hijacked by browser credential autofill",
+    "reproduction": "Open Settings; browser autofills path/API-key fields with credentials",
+    "affectedSubsystem": "dashboard/settings"
+  },
+  "introducedAgainst": {
+    "upstreamSha": null
+  },
+  "regressionTests": [
+    "packages/dashboard/app/__tests__/settings-autofill-invariant.test.ts"
+  ],
+  "upstreamComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "comparedAgainstSha": null,
+    "relatedIssue": "https://github.com/Appsolino/Fusion/issues/23",
+    "relatedPr": "https://github.com/Appsolino/Fusion/pull/28",
+    "relatedCommit": null,
+    "evidence": "Appsolino Host D operator UX; not known fixed upstream",
+    "comparedAt": null
+  },
+  "localAction": {
+    "patchRequired": true,
+    "applyPaths": [
+      "packages/dashboard/app/components/SettingsModal.tsx",
+      "packages/dashboard/app/components/SettingsView.tsx"
+    ]
+  },
+  "retirementCondition": {
+    "regressionTestPassesOnCleanUpstream": true,
+    "notes": "Retire only when Settings autofill invariant passes on clean upstream"
+  },
+  "revisions": [
+    {
+      "revision": 1,
+      "againstUpstreamSha": null,
+      "summary": "initial Appsolino autofill hardening candidate",
+      "files": [],
+      "createdAt": "2026-07-31T00:00:00Z"
+    }
+  ],
+  "updatedUtc": "2026-08-07T04:16:47Z"
+}

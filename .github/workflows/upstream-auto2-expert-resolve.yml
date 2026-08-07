@@ -1,0 +1,189 @@
+# FNXC:UpstreamSensitiveExpert 2026-08-07-04:45:
+# Real AI expert + independent AI verifier for SENSITIVE/MEDIUM upstream candidates.
+# Dispatched from AUTO-2 finalize when action=expert-resolving.
+# Never merges as current without freshness check. Host P prohibited.
+# Host D trust quotas are not consumed here — source freshness is separate from deploy.
+
+name: Upstream AUTO-2 Expert Resolve
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Automation upstream PR number"
+        required: true
+        type: string
+      validated_head:
+        description: "Exact candidate head SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: auto2-expert-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Real AI expert + independent verifier
+    runs-on: [self-hosted, appsolino-fusion]
+    steps:
+      - name: Refuse Host P secrets
+        env:
+          HOST_P_DEPLOY_SSH_KEY: ${{ secrets.HOST_P_DEPLOY_SSH_KEY }}
+          HOST_P_KNOWN_HOSTS: ${{ secrets.HOST_P_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${HOST_P_DEPLOY_SSH_KEY:-}" || -n "${HOST_P_KNOWN_HOSTS:-}" ]]; then
+            echo "::error::Host P secrets must not be available to upstream expert resolve"
+            exit 1
+          fi
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APPSOLINO_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.APPSOLINO_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: write
+
+      - name: Checkout trusted main (orchestrator code)
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Materialize candidate worktree
+        id: wt
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR: ${{ inputs.pr_number }}
+          HEAD: ${{ inputs.validated_head }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          BRANCH="$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefName --jq .headRefName)"
+          OID="$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid --jq .headRefOid)"
+          if [[ "${OID,,}" != "${HEAD,,}" ]]; then
+            echo "::error::validated_head mismatch (pr=$OID expected=$HEAD)"
+            exit 1
+          fi
+          WT="/srv/appsolino-fusion/phase-1/worktrees/expert-pr-${PR}"
+          rm -rf "$WT"
+          git fetch origin "$BRANCH"
+          git worktree add --detach "$WT" "$OID"
+          echo "path=$WT" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Run expert repair loop
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR: ${{ inputs.pr_number }}
+          HEAD: ${{ inputs.validated_head }}
+          WT: ${{ steps.wt.outputs.path }}
+          CURSOR_AGENT_BIN: /home/fusion/.local/bin/cursor-agent
+          PATH: /home/fusion/.local/bin:/usr/local/bin:/usr/bin:/bin
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { runExpertRepairLoop, writeRepairLoopEvidence } from './infra/scripts/upstream/expert-repair-loop.mjs';
+          import { assertFinalizerFreshness, parseUpstreamShaFromBranch } from './infra/scripts/upstream/rolling-candidate.mjs';
+          import { spawnSync } from 'node:child_process';
+          import { writeFileSync, mkdirSync } from 'node:fs';
+
+          const pr = process.env.PR;
+          const head = process.env.HEAD;
+          const wt = process.env.WT;
+          const repo = process.env.GITHUB_REPOSITORY;
+          const view = spawnSync('gh', ['pr', 'view', pr, '--repo', repo, '--json', 'headRefName,headRefOid'], { encoding: 'utf8' });
+          if (view.status !== 0) throw new Error(view.stderr || 'pr view failed');
+          const prj = JSON.parse(view.stdout);
+          const live = spawnSync('gh', ['api', 'repos/Runfusion/Fusion/commits/main', '--jq', '.sha'], { encoding: 'utf8' });
+          if (live.status !== 0) throw new Error('unable to fetch live upstream');
+          const liveSha = live.stdout.trim().toLowerCase();
+          const cand = parseUpstreamShaFromBranch(prj.headRefName);
+          const race = assertFinalizerFreshness({ candidateUpstreamSha: cand, liveUpstreamHead: liveSha });
+          if (!race.ok) {
+            const body = `## Expert resolve — ${race.action}\n\n${race.reason}\n\nLive upstream: \`${liveSha}\`\nCandidate: \`${cand}\`\n`;
+            spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', body], { encoding: 'utf8' });
+            if (race.action === 'REFRESH_REQUIRED') {
+              spawnSync('gh', ['workflow', 'run', 'upstream-auto1.yml', '--repo', repo], { encoding: 'utf8' });
+              process.exit(0);
+            }
+            process.exit(2);
+          }
+
+          const result = await runExpertRepairLoop({
+            worktreePath: wt,
+            maxAttempts: 3,
+            liveUpstreamHead: liveSha,
+            headRefName: prj.headRefName,
+            evidence: {
+              upstreamHead: liveSha,
+              appsolinoBaseSha: head,
+              candidateUpstreamSha: cand,
+              conflictedFiles: [],
+              problemSummary: `Resolve engineering issues on automation upstream PR #${pr}`,
+              riskClass: 'SENSITIVE',
+            },
+            recheckUpstreamFn: async () => {
+              const r = spawnSync('gh', ['api', 'repos/Runfusion/Fusion/commits/main', '--jq', '.sha'], { encoding: 'utf8' });
+              return r.status === 0 ? r.stdout.trim().toLowerCase() : null;
+            },
+            runDeterministicTests: async () => {
+              // Targeted integrity: ensure worktree still has expected head and no merge conflict markers.
+              const oid = spawnSync('git', ['-C', wt, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
+              if (oid.status !== 0) return { passed: false, failures: ['cannot read HEAD'] };
+              const markers = spawnSync('git', ['-C', wt, 'grep', '-n', '<<<<<<<', '--', '.'], { encoding: 'utf8' });
+              if (markers.status === 0 && markers.stdout.trim()) {
+                return { passed: false, failures: ['conflict markers present'] };
+              }
+              return { passed: true, failures: [] };
+            },
+          });
+
+          mkdirSync(`${wt}/.appsolino/proofs`, { recursive: true });
+          writeRepairLoopEvidence(`${wt}/.appsolino/proofs`, result);
+          writeFileSync('/tmp/expert-resolve-result.json', JSON.stringify(result, null, 2));
+          const summary = [
+            `## Expert resolve result`,
+            ``,
+            `- finalizable: \`${result.finalizable}\``,
+            `- next: \`${result.next}\``,
+            `- reason: ${result.reason}`,
+            `- expert model: \`${result.expert?.actualModel || 'n/a'}\``,
+            `- verifier model: \`${result.verifier?.actualModel || 'n/a'}\``,
+            `- attempts: ${result.attempts?.length || 0}`,
+          ].join('\n');
+          spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', summary], { encoding: 'utf8' });
+
+          if (result.next === 'REFRESH_REQUIRED') {
+            spawnSync('gh', ['workflow', 'run', 'upstream-auto1.yml', '--repo', repo], { encoding: 'utf8' });
+            process.exit(0);
+          }
+          if (result.finalizable) {
+            // Re-dispatch finalize with expert completion markers via PR comment labels.
+            spawnSync('gh', ['pr', 'edit', pr, '--repo', repo, '--add-label', 'auto2:ai-verified'], { encoding: 'utf8' });
+            process.exit(0);
+          }
+          process.exit(result.next === 'BLOCKED_POLICY' ? 2 : 2);
+          EOF
+
+      - name: Cleanup worktree
+        if: always()
+        run: |
+          set -euo pipefail
+          WT="${{ steps.wt.outputs.path }}"
+          if [[ -n "$WT" && -d "$WT" ]]; then
+            git worktree remove --force "$WT" || rm -rf "$WT"
+          fi

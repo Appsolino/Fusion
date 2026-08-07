@@ -13,6 +13,11 @@
 export const AUTO2_ACTION_EXPECTED_CHILD = Object.freeze({
   ignored: false,
   "approval-required": false,
+  "expert-resolving": false,
+  "ai-verifying": false,
+  "refresh-required": false,
+  "blocked-policy": false,
+  "blocked-unresolved": false,
   "already-merged-idempotent": false,
   "auto-merge-dry-run": false,
   blocked: false,
@@ -51,6 +56,16 @@ export function parentSemanticTerminalFromAction(action, workflowConclusion) {
       return "IGNORED";
     case "approval-required":
       return "APPROVAL_REQUIRED";
+    case "expert-resolving":
+      return "EXPERT_RESOLVING";
+    case "ai-verifying":
+      return "AI_VERIFYING";
+    case "refresh-required":
+      return "REFRESH_REQUIRED";
+    case "blocked-policy":
+      return "BLOCKED_POLICY";
+    case "blocked-unresolved":
+      return "BLOCKED_UNRESOLVED";
     case "already-merged-idempotent":
       return "IDEMPOTENT_NOOP";
     case "auto-merge-dry-run":
