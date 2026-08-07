@@ -257,6 +257,9 @@ FNXC:PlanningMode 2026-07-23-14:00:
 Planning Mode is a collaborative, user-terminated discovery session, not task triage. Its dedicated prompt must not inherit workflow or assigned-triage execution instructions, because those instructions can turn exploratory responses into executor specifications and child-task directives.
 
 A selected direction is a durable plan-backbone decision: every affected running-plan field must be rebuilt around accumulated selections, then exactly one repository-grounded question must narrow that direction another consequential level. The model may update the running plan but must never infer completion; only the visible Proceed with plan action can make a session terminal.
+
+FNXC:PlanningMode 2026-08-07-03:10:
+Planning questions normally need 3–5 materially distinct substantive alternatives; two is not sufficient, and a genuinely useful larger set must survive unchanged. Keep exactly one synthetic Other/write-your-own control separate from model alternatives so it remains the canonical free-text path.
 */
 /** Self-contained system prompt for the separate collaborative Planning Mode. */
 export const PLANNING_SYSTEM_PROMPT = `## Collaborative Planning Mode
@@ -265,13 +268,13 @@ Help the operator iteratively turn an idea into a clear, useful plan. First inve
 
 Build an evolving operator-facing plan, not an executor-ready task specification. Focus on intended outcomes, concrete deliverables, alternatives considered, and observable acceptance criteria. Do not produce task-specification bookkeeping or execution-process instructions such as task-size policy, commit guidance, no-code-change caveats, or task-creation directives. Author the operator-facing plan in Markdown: write the description as concise GitHub-flavored Markdown, while the structured change, acceptance, dependency, and deliverable fields become its Markdown sections and lists.
 
-Use a deliberate iterative narrowing loop: analyze → concrete options → operator selection → plan rebuild → one deeper question. When the opener is vague, subjective, preference-based, or symptom-only, inspect the relevant implementation surface before proposing exactly four materially distinct actionable directions grounded in those findings, plus exactly one Other option. Do not ask a generic clarification question or silently select a direction. Keep the provisional plan honest about unselected alternatives.
+Use a deliberate iterative narrowing loop: analyze → concrete options → operator selection → plan rebuild → one deeper question. When the opener is vague, subjective, preference-based, or symptom-only, inspect the relevant implementation surface before proposing normally 3–5 materially distinct actionable directions grounded in those findings, plus exactly one Other option. Two alternatives are not sufficient; provide more than five when additional directions are genuinely useful. Do not ask a generic clarification question or silently select a direction. Keep the provisional plan honest about unselected alternatives.
 
 After every selected option, multi-selection, or free-text Other answer, treat the choice as a durable decision and rebuild every affected running-plan field around all accumulated decisions. The title, description, proposedChanges, acceptanceCriteria, keyDeliverables, and suggestedRefinements must make the selected direction—not the original vague complaint or an unselected alternative—the central intended outcome. Preserve Other text verbatim as steering. Then inspect the selected direction and relevant repository context and ask exactly one consequential next question that narrows it one level further with concrete, materially distinct options. A refine turn uses the selected or free-text focus to choose that next question. Continue this loop until the operator chooses Proceed with plan. The model never validates or terminates the session. Only the user can validate it through the visible Proceed with plan action.
 
-For every initial, answer, or refine turn respond only with JSON: {"type":"question","data":{"id":"unique-id","type":"single_select|multi_select","question":"...","description":"...","options":[{"id":"option-a","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"option-b","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"option-c","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"option-d","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"other","label":"...","isOther":true}],"runningPlan":{"title":"...","description":"...","proposedChanges":["specific change"],"acceptanceCriteria":["observable outcome"],"suggestedSize":"S|M|L","priority":"normal","suggestedDependencies":[],"keyDeliverables":["concrete work item"],"suggestedRefinements":["next focus 1","next focus 2"]}}}.
+For every initial, answer, or refine turn respond only with JSON: {"type":"question","data":{"id":"unique-id","type":"single_select|multi_select","question":"...","description":"...","options":[{"id":"option-a","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"option-b","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"option-c","label":"...","description":"...","pros":["..."],"cons":["..."]},{"id":"other","label":"...","isOther":true}],"runningPlan":{"title":"...","description":"...","proposedChanges":["specific change"],"acceptanceCriteria":["observable outcome"],"suggestedSize":"S|M|L","priority":"normal","suggestedDependencies":[],"keyDeliverables":["concrete work item"],"suggestedRefinements":["next focus 1","next focus 2"]}}}. Include normally 3–5 substantive alternatives in options; this example is illustrative rather than a maximum.
 
-Every turn must include the running-plan fields: only title, description, concrete proposedChanges, observable acceptanceCriteria, suggestedSize, optional priority, suggestedDependencies, concrete keyDeliverables, and concise suggestedRefinements informed by the idea and answers so far. Include every distinct, high-value unresolved refinement area; do not cap the list at three. Never use interview question text as a deliverable. Proceed with plan serializes the plan as plan.md without priority or suggestedRefinements; priority remains a task field. Every question must provide exactly four materially distinct actionable alternatives, each with a non-empty description, pros, and cons, plus exactly one Other/write-your-own option. Write every label, option, and Other label in the language of the user's original input. Incorporate free-text Other answers verbatim as steering context for the following question.`;
+Every turn must include the running-plan fields: only title, description, concrete proposedChanges, observable acceptanceCriteria, suggestedSize, optional priority, suggestedDependencies, concrete keyDeliverables, and concise suggestedRefinements informed by the idea and answers so far. Include every distinct, high-value unresolved refinement area; do not cap the list at three. Never use interview question text as a deliverable. Proceed with plan serializes the plan as plan.md without priority or suggestedRefinements; priority remains a task field. Every question must provide normally 3–5 materially distinct actionable alternatives, each with a non-empty description, pros, and cons, plus exactly one Other/write-your-own option. Never treat two alternatives as sufficient or truncate a genuinely useful larger set. Write every label, option, and Other label in the language of the user's original input. Incorporate free-text Other answers verbatim as steering context for the following question.`;
 
 /*
 FNXC:PlanningMode 2026-07-23-11:35:
@@ -905,10 +908,11 @@ function buildSessionFromRow(row: AiSessionRow): Session {
   pre-fix builds still carry the already-answered question; restoring it would let the SSE
   catch-up path re-emit it and re-trigger the answered-question retry loop after a restart.
 
-  FNXC:PlanningMode 2026-08-06-23:18:
+  FNXC:PlanningMode 2026-08-07-03:23:
   Restored awaiting-input questions are untrusted persisted model output, just like live
-  responses. Normalize them at the restore boundary so legacy or malformed rows retain the
-  four suggested alternatives and one Other choice guaranteed by the Planning Mode UI.
+  responses. Normalize them at the restore boundary so every substantive option survives while
+  duplicate model-authored Other entries collapse to the one canonical write-your-own choice.
+  The normally 3–5 alternative guidance is not an application maximum.
   */
   const history = safeParseJson<PlanningHistoryEntry[]>(
     row.conversationHistory,
@@ -2569,9 +2573,9 @@ for both agent entry points because system instructions alone can be displaced b
 export function formatInitialPlanRequestForAgent(initialPlan: string): string {
   return [
     "Create the initial running plan from this operator idea before asking the first interview question.",
-    "If the idea is vague, subjective, preference-based, or symptom-only, first inspect the relevant implementation surface and turn those findings into at least two concrete, materially distinct first-level directions plus exactly one Other option. Do not ask a generic question, invent repository findings, or commit the provisional plan to an unselected direction.",
+    "If the idea is vague, subjective, preference-based, or symptom-only, first inspect the relevant implementation surface and turn those findings into normally 3–5 concrete, materially distinct first-level directions plus exactly one Other option. Two directions are not sufficient; include more when genuinely useful. Do not ask a generic question, invent repository findings, or commit the provisional plan to an unselected direction.",
     "Return only type:\"question\" JSON with a full runningPlan: a work-product title, a concise implementation description, and concrete work-item keyDeliverables derived from the idea.",
-    "Then ask exactly one high-impact, option-driven question with alternatives and pros/cons. Never use that question text as a deliverable. Do not complete or validate the plan; only the user can validate it.",
+    "Then ask exactly one high-impact, option-driven question with normally 3–5 materially distinct alternatives, descriptions, and pros/cons plus one write-your-own option. Two alternatives are not sufficient; include more when genuinely useful. Never use that question text as a deliverable. Do not complete or validate the plan; only the user can validate it.",
     "Operator idea:",
     initialPlan,
   ].join("\n\n");
@@ -2582,9 +2586,9 @@ export function formatInitialRunningPlanRequestForAgent(initialPlan: string): st
   return [
     "Create a concrete initial implementation plan from this operator idea.",
     "Author the operator-facing plan in Markdown. Write the description as concise GitHub-flavored Markdown; the structured proposed changes, acceptance criteria, dependencies, and deliverables will render as Markdown sections and lists.",
-    "Inspect the relevant codebase and active-board context before drafting it. For a vague, subjective, preference-based, or symptom-only idea, turn that inspection into at least two concrete, materially distinct direction options plus exactly one Other option; do not invent findings or preselect a direction. Make the provisional description specific about the affected behavior and intended outcome without falsely committing to an unselected direction. Provide concrete proposedChanges that name what behavior, component, interface, data, or configuration should change, and acceptanceCriteria stated as observable pass/fail outcomes. Make every key deliverable an actionable work item rather than generic planning advice.",
+    "Inspect the relevant codebase and active-board context before drafting it. For a vague, subjective, preference-based, or symptom-only idea, turn that inspection into normally 3–5 concrete, materially distinct direction options plus exactly one Other option. Two directions are not sufficient; include more when genuinely useful. Do not invent findings or preselect a direction. Make the provisional description specific about the affected behavior and intended outcome without falsely committing to an unselected direction. Provide concrete proposedChanges that name what behavior, component, interface, data, or configuration should change, and acceptanceCriteria stated as observable pass/fail outcomes. Make every key deliverable an actionable work item rather than generic planning advice.",
     "Also propose concise suggestedRefinements covering every distinct, high-value unresolved area the operator could explore next; do not cap the list at three.",
-    "Return only type:\"question\" JSON with the complete plan in runningPlan and exactly one high-impact, option-driven next question. Give that question at least two useful alternatives with pros and cons plus one write-your-own option. Do not validate the plan; only the operator can proceed with it.",
+    "Return only type:\"question\" JSON with the complete plan in runningPlan and exactly one high-impact, option-driven next question. Give that question normally 3–5 useful, materially distinct alternatives with descriptions, pros, and cons, plus one write-your-own option; two alternatives are not sufficient, and a genuinely useful larger set is welcome. Do not validate the plan; only the operator can proceed with it.",
     "Operator idea:",
     initialPlan,
   ].join("\n\n");
@@ -2786,11 +2790,11 @@ function normalizedStringArray(value: unknown, fallback: string[]): string[] {
 }
 
 /*
-FNXC:PlanningMode 2026-08-06-22:54:
-Every Planning turn must expose four materially distinct routes plus one free-text Other choice.
-The model is instructed to provide that shape, while this canonical boundary normalizes Unicode,
-whitespace, case, and punctuation collisions and reserves every locale fallback archetype so bad
-model output, retries, and restored sessions cannot exhaust deterministic replacement choices.
+FNXC:PlanningMode 2026-08-07-03:10:
+Planning Mode normally requests 3–5 substantive routes, but normalization must preserve every
+valid model-authored route rather than imposing a maximum. This boundary still normalizes Unicode,
+whitespace, case, and punctuation collisions and reserves locale fallback archetypes so bad model
+output, retries, and restored sessions retain one canonical free-text Other choice.
 */
 /** Normalizes untrusted model output so select questions always meet the public option contract. */
 export function normalizePlanningQuestion(input: unknown, userInput = ""): PlanningQuestion {
@@ -2810,7 +2814,7 @@ export function normalizePlanningQuestion(input: unknown, userInput = ""): Plann
   const raw = Array.isArray(source.options) ? source.options : [];
 
   for (const item of raw) {
-    if (!item || typeof item !== "object" || alternatives.length === 4) continue;
+    if (!item || typeof item !== "object") continue;
     const option = item as Record<string, unknown>;
     if (option.isOther === true || option.id === "other" || option.id === "__other__") continue;
     const id = typeof option.id === "string" ? option.id.trim() : "";
@@ -2833,7 +2837,7 @@ export function normalizePlanningQuestion(input: unknown, userInput = ""): Plann
   }
 
   for (const option of fallback.options) {
-    if (alternatives.length === 4) break;
+    if (alternatives.length >= 4) break;
     if (!ids.has(option.id)) alternatives.push({ ...option, pros: [...option.pros], cons: [...option.cons] });
   }
   normalized.options = [...alternatives, { id: "other", label: fallback.other, isOther: true }];
@@ -3349,7 +3353,7 @@ function formatRefineRequestForAgent(summary: PlanningSummary, focus?: string): 
   return [
     "The user clicked Refine Further on the planning summary.",
     "Continue the planning interview from the existing context. Rebuild affected plan fields around every accumulated selection, Other answer, and requested focus; do not retain an unselected alternative as the plan backbone.",
-    "Inspect the selected direction and relevant repository context, then ask exactly one focused, high-impact option-driven follow-up question that narrows it one consequential level further with alternatives and pros/cons.",
+    "Inspect the selected direction and relevant repository context, then ask exactly one focused, high-impact option-driven follow-up question that narrows it one consequential level further with normally 3–5 materially distinct alternatives, descriptions, and pros/cons plus one write-your-own option. Two alternatives are not sufficient; include more when genuinely useful.",
     "Do not return a completion response: only the user can validate a plan.",
     ...(focus ? ["The operator wants this next question to focus on:", focus] : []),
     "Current summary:",
@@ -3376,7 +3380,7 @@ export function formatQuestionRegenerationForAgent(
     .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`);
   return [
     "The planning session currently has no active interview question; continue the interview instead of treating this as an error.",
-    "Rebuild affected plan fields around every accumulated selection and Other answer, then ask exactly one new high-impact, option-driven question that narrows the current direction, with at least two useful alternatives (pros and cons) plus one write-your-own option.",
+    "Rebuild affected plan fields around every accumulated selection and Other answer, then ask exactly one new high-impact, option-driven question that narrows the current direction, with normally 3–5 useful, materially distinct alternatives (descriptions, pros, and cons) plus one write-your-own option. Two alternatives are not sufficient; include more when genuinely useful.",
     'Return only type:"question" JSON with the complete runningPlan. Do not return a completion response: only the user can validate a plan.',
     ...(operatorInput.length
       ? ["The operator submitted this input while no question was active; honor it as context for the plan and the next question:", operatorInput.join("\n")]
@@ -3973,7 +3977,7 @@ export function formatResponseForAgent(
   FNXC:PlanningMode 2026-07-23-14:10:
   System prompts can be displaced by long tool/context turns. Repeat the selection-as-plan-backbone contract at the invocation boundary so every submitted option, multi-selection, or Other answer rebuilds the work product before the one deeper question, instead of becoming an append-only note or inviting model-authored completion.
   */
-  return `${answerContext}\n\nThis answer is a durable planning decision, not an append-only note. Regenerate the runningPlan fields (title, description, concrete proposedChanges, observable acceptanceCriteria, suggestedSize, optional priority, suggestedDependencies, concrete keyDeliverables, and all distinct high-value suggestedRefinements) around this selected label/description and every accumulated decision; do not cap suggestedRefinements at three. Rewrite every affected field so the selected direction is the central intended outcome, not the original vague complaint or an unselected alternative. Preserve free-text Other verbatim as steering. Author the operator-facing plan in Markdown: use concise GitHub-flavored Markdown in the description, with the structured fields supplying its Markdown sections and lists. Never list interview questions as deliverables or PROMPT.md sections such as Mission, Steps, File Scope, Review Level, Completion Criteria, or Do NOT. Inspect the selected direction and relevant repository context, return type:"question" with that complete runningPlan, and ask exactly one next question: a deeper concrete option-driven question with materially distinct alternatives and pros/cons. Do not validate the plan; only the user can proceed with it.`;
+  return `${answerContext}\n\nThis answer is a durable planning decision, not an append-only note. Regenerate the runningPlan fields (title, description, concrete proposedChanges, observable acceptanceCriteria, suggestedSize, optional priority, suggestedDependencies, concrete keyDeliverables, and all distinct high-value suggestedRefinements) around this selected label/description and every accumulated decision; do not cap suggestedRefinements at three. Rewrite every affected field so the selected direction is the central intended outcome, not the original vague complaint or an unselected alternative. Preserve free-text Other verbatim as steering. Author the operator-facing plan in Markdown: use concise GitHub-flavored Markdown in the description, with the structured fields supplying its Markdown sections and lists. Never list interview questions as deliverables or PROMPT.md sections such as Mission, Steps, File Scope, Review Level, Completion Criteria, or Do NOT. Inspect the selected direction and relevant repository context, return type:"question" with that complete runningPlan, and ask exactly one next question: a deeper concrete option-driven question with normally 3–5 materially distinct alternatives, descriptions, and pros/cons plus one write-your-own option. Two alternatives are not sufficient; include more when genuinely useful. Do not validate the plan; only the user can proceed with it.`;
 }
 
 function coerceResponseRecord(question: PlanningQuestion, response: unknown): Record<string, unknown> {
