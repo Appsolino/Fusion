@@ -44,6 +44,17 @@ export async function runExpertRepairLoop(input) {
   const attempts = [];
   let lastExpert = null;
   let lastVerifier = null;
+  /*
+  FNXC:UpstreamAiProtocol 2026-08-07-12:15:
+  Capture the worktree tip at loop start so verifier evidence includes ALL expert
+  edits (committed + staged + unstaged). A bare `git diff` was often empty after
+  the expert committed, which caused endless REQUEST_CHANGES on #135.
+  */
+  const startSha =
+    input.evidence?.candidateHeadSha ||
+    input.evidence?.candidateSha ||
+    readGitHead(input.worktreePath) ||
+    null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Race: upstream OR Appsolino main moved during repair → stop and refresh.
@@ -131,8 +142,13 @@ export async function runExpertRepairLoop(input) {
 
     const diffText =
       typeof input.getDiffText === "function"
-        ? await input.getDiffText({ attempt, worktreePath: input.worktreePath })
-        : gitDiff(input.worktreePath);
+        ? await input.getDiffText({
+            attempt,
+            worktreePath: input.worktreePath,
+            startSha,
+            expertDecision: expert.decision,
+          })
+        : collectExpertDiffEvidence(input.worktreePath, startSha);
 
     const candidateSha =
       input.evidence?.candidateHeadSha ||
@@ -338,13 +354,72 @@ export async function runExpertRepairLoop(input) {
 /**
  * @param {string} worktreePath
  */
-function gitDiff(worktreePath) {
+function readGitHead(worktreePath) {
+  if (!worktreePath || !existsSync(worktreePath)) return null;
+  const r = spawnSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], { encoding: "utf8" });
+  return r.status === 0 ? String(r.stdout || "").trim().toLowerCase() : null;
+}
+
+/**
+ * Collect verifier-visible evidence of expert edits.
+ * Prefer range-from-start + dirty tree; never silently present an empty package when
+ * the expert claimed filesChanged.
+ *
+ * @param {string} worktreePath
+ * @param {string|null} startSha
+ */
+export function collectExpertDiffEvidence(worktreePath, startSha = null) {
   if (!worktreePath || !existsSync(worktreePath)) return "";
-  const r = spawnSync("git", ["-C", worktreePath, "diff", "--binary"], {
+  const parts = [];
+  const status = spawnSync("git", ["-C", worktreePath, "status", "--porcelain", "-uall"], {
+    encoding: "utf8",
+    maxBuffer: 5 * 1024 * 1024,
+  });
+  if (status.status === 0 && status.stdout.trim()) {
+    parts.push("## git status --porcelain\n" + status.stdout.trim());
+  }
+  const unstaged = spawnSync("git", ["-C", worktreePath, "diff", "--binary"], {
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
   });
-  return r.stdout || "";
+  if (unstaged.status === 0 && unstaged.stdout.trim()) {
+    parts.push("## git diff (unstaged)\n" + unstaged.stdout.trim());
+  }
+  const staged = spawnSync("git", ["-C", worktreePath, "diff", "--cached", "--binary"], {
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  if (staged.status === 0 && staged.stdout.trim()) {
+    parts.push("## git diff --cached (staged)\n" + staged.stdout.trim());
+  }
+  if (startSha && /^[0-9a-f]{7,40}$/i.test(startSha)) {
+    const range = spawnSync(
+      "git",
+      ["-C", worktreePath, "diff", "--binary", `${startSha}...HEAD`],
+      { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 },
+    );
+    if (range.status === 0 && range.stdout.trim()) {
+      parts.push(`## git diff ${startSha.slice(0, 12)}...HEAD\n` + range.stdout.trim());
+    }
+    const log = spawnSync(
+      "git",
+      ["-C", worktreePath, "log", "--oneline", `${startSha}..HEAD`],
+      { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 },
+    );
+    if (log.status === 0 && log.stdout.trim()) {
+      parts.push("## git log since start\n" + log.stdout.trim());
+    }
+  }
+  const joined = parts.join("\n\n");
+  return joined.slice(0, 120_000);
+}
+
+/**
+ * @param {string} worktreePath
+ * @deprecated use collectExpertDiffEvidence
+ */
+function gitDiff(worktreePath) {
+  return collectExpertDiffEvidence(worktreePath, null);
 }
 
 /**
