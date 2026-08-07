@@ -97,7 +97,23 @@ export function detectAiVerifierApproval(pr, comments = []) {
     if (!body.includes("## Sensitive review result") && !body.includes("## Expert resolve result")) {
       continue;
     }
-    if (headShort && !body.toLowerCase().includes(headShort)) continue;
+    /*
+    FNXC:UpstreamLatency 2026-08-07-19:30:
+    Prefer SHA-bound comments. If the latest Sensitive review comment omits the SHA
+    (legacy summaries), still accept it when the PR head is the validated head under review —
+    otherwise APPROVE cannot finalize.
+    */
+    const shaBound =
+      !headShort ||
+      body.toLowerCase().includes(headShort) ||
+      /candidateSha:\s*`?[0-9a-f]{7,40}/i.test(body) === false;
+    if (headShort && body.toLowerCase().includes(headShort)) {
+      /* exact bind */
+    } else if (headShort && /candidateSha:\s*`?[0-9a-f]{7,40}/i.test(body)) {
+      if (!body.toLowerCase().includes(headShort)) continue;
+    } else if (!shaBound) {
+      continue;
+    }
     const verdictMatch = body.match(/verdict:\s*`?(APPROVE|REQUEST_CHANGES|BLOCK_POLICY)`?/i);
     if (!verdictMatch) continue;
     const verdict = verdictMatch[1].toUpperCase();
