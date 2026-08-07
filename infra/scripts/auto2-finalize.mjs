@@ -20,9 +20,13 @@
  *
  * FNXC:UpstreamSensitiveExpert 2026-08-07-04:15:
  * SENSITIVE/MEDIUM no longer default to owner-stop. Without verified owner approval,
- * continue to expert-resolving (real AI) rather than parking as approval-required.
+ * continue via stronger AI validation rather than parking as approval-required.
  * Finalizer re-fetches upstream HEAD and refuses merge-as-current when the candidate
  * upstream SHA is stale (REFRESH_REQUIRED).
+ *
+ * FNXC:UpstreamLatency 2026-08-07-13:50:
+ * Deterministic PASS + SENSITIVE → sensitive-review (read-only verifier). Edit-capable
+ * expert-resolving only for REPAIR_REQUIRED (deterministic FAIL / conflict / REQUEST_CHANGES).
  *
  * FNXC:UpstreamAiProtocol 2026-08-07-08:55:
  * AUTO-1 automation/upstream-* candidates must not receive auto2:approval-required as the
@@ -462,9 +466,9 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
   }
 
   /*
-  FNXC:UpstreamSensitiveExpert 2026-08-07-04:15:
-  Default sensitive/medium continuation: expert-resolving. Owner approval workflow remains
-  available as an optional fast-path; it is no longer the only way forward.
+  FNXC:UpstreamLatency 2026-08-07-13:50:
+  Continuation may be sensitive-review (read-only) or expert-resolving (repair).
+  Do not always stamp expert-resolving — that forced unnecessary edit agents on clean SENSITIVE PRs.
   */
   if (requirePath || input.ownerApproved === true) {
     // Explicit approve-sensitive workflow without verified review stays fail-closed blocked.
@@ -476,7 +480,9 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
     }, verdict.reasons.join("; ") || "sensitive approval path failed");
   }
 
-  ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_EXPERT_RESOLVING], input.dryRun === true);
+  const contAction = continuation.action || "expert-resolving";
+  const contLabel = continuation.label || LABEL_EXPERT_RESOLVING;
+  ensureExtraLabels(runGh, input.repo, pr.number, [contLabel], input.dryRun === true);
   // Strip stale approval-required so AUTO-1 does not reintroduce the owner bottleneck label.
   if (!input.dryRun && isAuto2ManagedHead(pr.headRefName || "")) {
     try {
@@ -485,18 +491,22 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
       /* label may already be absent */
     }
   }
+  const expertActive = contAction === "expert-resolving";
+  const aiVerifierActive = contAction === "sensitive-review" || contAction === "ai-verifying";
   const freshness = evaluateFreshness({
     upstreamHead: liveUpstreamHead,
     integratedUpstreamSha: input.integratedUpstreamSha || null,
     candidateUpstreamSha,
     commitsBehindIntegrated: input.commitsBehindIntegrated ?? null,
     activeCandidatePr: Number(pr.number),
-    auto2Action: "expert-resolving",
-    expertActive: true,
+    auto2Action: contAction,
+    expertActive,
+    aiVerifierActive,
   });
   return {
-    action: "expert-resolving",
+    action: contAction,
     reason: continuation.reason,
+    workMode: continuation.workMode || null,
     classification,
     pr,
     liveUpstreamHead,

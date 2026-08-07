@@ -32,10 +32,36 @@ export const EXPERT_MODEL = S1B_MODEL;
  *   failingTests?: string[],
  *   patchMetadata?: object[],
  *   previousAttempts?: object[],
+ *   requiredChanges?: string[],
+ *   targetedRepairInstructions?: string|null,
  *   architectureConstraints?: string[],
  * }} evidence
  */
 export function buildExpertEvidencePrompt(evidence) {
+  /*
+  FNXC:UpstreamLatency 2026-08-07-14:10:
+  Prefer targeted REQUEST_CHANGES instructions over unbounded previousAttempts dumps.
+  Expert is for a known problem — not open-ended exploration.
+  */
+  const targeted =
+    evidence.targetedRepairInstructions ||
+    (Array.isArray(evidence.requiredChanges) && evidence.requiredChanges.length
+      ? [
+          "TARGETED REPAIR — fix ONLY these unresolved reviewer requirements:",
+          ...evidence.requiredChanges.map((c, i) => `${i + 1}. ${c}`),
+          "Do not re-investigate already accepted areas.",
+        ].join("\n")
+      : "");
+  const prior = Array.isArray(evidence.previousAttempts)
+    ? evidence.previousAttempts.slice(-3).map((a) => ({
+        attempt: a.attempt,
+        phase: a.phase,
+        next: a.next || null,
+        verifierVerdict: a.verifierVerdict || null,
+        requiredChanges: (a.requiredChanges || []).slice(0, 12),
+        reason: a.reason ? String(a.reason).slice(0, 240) : null,
+      }))
+    : [];
   return [
     "You are the Appsolino upstream AI expert resolver.",
     "Resolve the engineering problem on this sandboxed candidate worktree.",
@@ -43,6 +69,7 @@ export function buildExpertEvidencePrompt(evidence) {
     "Do not ask the owner for routine technical decisions.",
     "Determine semantic intent of both upstream and Appsolino — do not blindly prefer either side.",
     "",
+    targeted ? targeted + "\n" : "",
     "Evidence package (bounded; no secrets):",
     JSON.stringify({
       upstreamHead: evidence.upstreamHead,
@@ -53,7 +80,8 @@ export function buildExpertEvidencePrompt(evidence) {
       changedFiles: (evidence.changedFiles || []).slice(0, 80),
       failingTests: evidence.failingTests || [],
       patchMetadata: evidence.patchMetadata || [],
-      previousAttempts: evidence.previousAttempts || [],
+      requiredChanges: (evidence.requiredChanges || []).slice(0, 40),
+      previousAttempts: prior,
       architectureConstraints: evidence.architectureConstraints || [
         "Host P prohibited",
         "enginePaused Host D posture must remain honest",
@@ -66,7 +94,7 @@ export function buildExpertEvidencePrompt(evidence) {
     "with fields:",
     'decision, problemType, rootCause, upstreamIntent, appsolinoIntent, resolution,',
     "filesChanged, testsAddedOrChanged, patchActions, remainingRisks, requiresPolicyDecision",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 /**
@@ -87,6 +115,8 @@ export function parseExpertStdout(text) {
  *   spawnFn?: typeof spawn,
  *   cursorBin?: string,
  *   timeoutMs?: number,
+ *   abortSignal?: AbortSignal|null,
+ *   onActivity?: (() => void)|null,
  *   skipModelProbe?: boolean,
  *   engine?: (input: object) => Promise<object>|object,
  *   apiKey?: string|null,
@@ -180,10 +210,30 @@ export async function runUpstreamExpertResolver(input) {
     timeoutMs: input.timeoutMs ?? DEFAULT_CURSOR_TIMEOUT_MS,
     spawnFn,
     label: "expert resolver",
+    abortSignal: input.abortSignal || null,
+    onActivity: input.onActivity || null,
   });
 
   if (!spawned.ok) {
     const msg = spawned.error.message || String(spawned.error);
+    if (spawned.aborted) {
+      const stale = spawned.abortReason && typeof spawned.abortReason === "object";
+      return {
+        ok: false,
+        action: stale ? "REFRESH_REQUIRED" : "LATENCY_BUDGET_EXHAUSTED",
+        failureClass: stale
+          ? spawned.abortReason.classification || "STALE_UPSTREAM"
+          : "LATENCY_BUDGET_EXHAUSTED",
+        reason: `expert aborted: ${msg}`,
+        abortReason: spawned.abortReason || null,
+        configuredProvider: EXPERT_PROVIDER,
+        configuredModel: EXPERT_MODEL,
+        actualProvider: null,
+        actualModel: null,
+        latencyMs: Date.now() - startedAt,
+        role: "resolver",
+      };
+    }
     const failureClass = classifyAiFailure({ reason: msg, action: "AI_PROVIDER_ERROR" });
     return {
       ok: false,

@@ -368,3 +368,32 @@ Patch registry: `FIX-VERIFICATION-PASSED-EVIDENCE`
 ### Permanent correction
 
 `applyBranchCommitsPreservingHistory` returns `verificationPassed` only after successful `runDeterministicVerification`.
+
+---
+
+## ISS-UP-LATENCY-001 — Blind long waits in autonomous upstream maintenance
+
+Status: **IN FIX** (branch `feat/maintenance-latency-audit`)
+Severity: High (operational reliability)
+Component: Upstream AUTO-2 expert / sensitive path / self-hosted runner
+First observed: 2026-08-07 (runs `31169133069`, `31171067130`, candidate #135)
+Evidence: `docs/appsolino/upstream/MAINTENANCE-LATENCY-AUDIT.md`
+
+### Failure fingerprint
+
+- Cursor/operator sees tens of minutes “waiting for the expert” without phase attribution.
+- SENSITIVE + deterministic AUTO-2 SUCCESS still opens an **edit-capable** resolver (UNNECESSARY_EXPERT_INVOCATION).
+- Per-child 15m timeouts multiply across repair×verifier attempts.
+- Freshness checked only at loop boundaries → STALE_WORK after long AI calls.
+- Runner queue conflated with AI time.
+
+### Permanent correction (in progress)
+
+- `SENSITIVE_REVIEW` (read-only verifier) vs `REPAIR_REQUIRED` (edit agent).
+- Total cycle wall-clock budget (`LATENCY_BUDGET_EXHAUSTED`); phase budgets; mid-flight stale watchdog.
+- Latency evidence artifact + heartbeat; `pnpm appsolino:maintenance-latency-report`.
+- Targeted REQUEST_CHANGES + NON_CONVERGING_LOOP; cancel superseded expert runs.
+
+### Do not
+
+Weaken deterministic validation or fail-closed trust to “go faster.”

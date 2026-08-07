@@ -26,6 +26,7 @@ import {
   nextFromAiFailureClass,
 } from "./structured-json.mjs";
 import { spawnCursorWithTimeout, DEFAULT_CURSOR_TIMEOUT_MS } from "./cursor-spawn-timeout.mjs";
+import { DEFAULT_PHASE_BUDGETS_MS } from "./cycle-budget.mjs";
 
 export const VERIFIER_PROVIDER = S1B_PROVIDER;
 /*
@@ -251,19 +252,49 @@ export async function invokeVerifierOnce(input) {
   });
   const spawnFn = input.spawnFn || spawn;
   const cwd = input.worktreePath || process.cwd();
+  /*
+  FNXC:UpstreamLatency 2026-08-07-14:10:
+  Schema-format repair must not reuse a full engineering timeout.
+  */
+  const mode = input.promptMode || "normal";
+  const defaultTimeout =
+    mode === "schema-repair"
+      ? DEFAULT_PHASE_BUDGETS_MS["schema-repair"]
+      : DEFAULT_CURSOR_TIMEOUT_MS;
 
   const spawned = await spawnCursorWithTimeout({
     bin,
     args: ["--print", "--force", "--mode", "ask", "--model", model, prompt],
     cwd,
     env: childEnv,
-    timeoutMs: input.timeoutMs ?? DEFAULT_CURSOR_TIMEOUT_MS,
+    timeoutMs: input.timeoutMs ?? defaultTimeout,
     spawnFn,
     label: "verifier",
+    abortSignal: input.abortSignal || null,
+    onActivity: input.onActivity || null,
   });
 
   if (!spawned.ok) {
     const msg = spawned.error.message || String(spawned.error);
+    if (spawned.aborted) {
+      const stale = spawned.abortReason && typeof spawned.abortReason === "object";
+      return {
+        ok: false,
+        action: stale ? "REFRESH_REQUIRED" : "LATENCY_BUDGET_EXHAUSTED",
+        failureClass: stale
+          ? spawned.abortReason.classification || "STALE_UPSTREAM"
+          : "LATENCY_BUDGET_EXHAUSTED",
+        reason: `verifier aborted: ${msg}`,
+        abortReason: spawned.abortReason || null,
+        configuredProvider: VERIFIER_PROVIDER,
+        configuredModel: model,
+        actualProvider: null,
+        actualModel: null,
+        latencyMs: Date.now() - startedAt,
+        role: "verifier",
+        attemptMeta: { mode },
+      };
+    }
     const failureClass = /timed out/i.test(msg) ? "AI_PROVIDER_ERROR" : classifyAiFailure({ reason: msg });
     return {
       ok: false,
@@ -276,7 +307,7 @@ export async function invokeVerifierOnce(input) {
       actualModel: null,
       latencyMs: Date.now() - startedAt,
       role: "verifier",
-      attemptMeta: { mode: input.promptMode || "normal" },
+      attemptMeta: { mode },
     };
   }
 
@@ -380,6 +411,10 @@ export async function runUpstreamAiVerifier(input) {
       promptMode: mode,
       priorError: last?.reason || null,
       modelOverride,
+      timeoutMs:
+        typeof input.resolveTimeoutMs === "function"
+          ? input.resolveTimeoutMs(mode)
+          : input.timeoutMs,
     });
     attemptLog.push({
       attempt: i,

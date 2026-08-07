@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "analyzedAtUtc": "2026-08-07T13:45:00Z",
+  "sample": {
+    "expertResolveRuns": 20,
+    "expertResolveCompleted": 18,
+    "outcomeComments": 14,
+    "auto1Runs": 15,
+    "auto2ValidateRuns": 13,
+    "auto2FinalizeRuns": 15
+  },
+  "totals": {
+    "expertWallClockMinutes": 324.6,
+    "runnerQueueMinutes": 9.6,
+    "setupMinutes": 2.3,
+    "expertStepMinutes": 256.1,
+    "residualMinutes": 56.7
+  },
+  "expertResolve": {
+    "queueMs": { "avg": 32100, "p50": 2000, "p90": 75000, "max": 335000 },
+    "expertStepMs": { "avg": 853500, "p50": 606000, "p90": 1619000, "max": 2122000 },
+    "wallClockMs": { "avg": 1082100, "p50": 966000, "p90": 1989000, "max": 3066000 }
+  },
+  "companionWallClockSeconds": {
+    "auto1": { "avg": 180, "p50": 181, "p90": 192, "max": 252 },
+    "auto2Validate": { "avg": 24, "p50": 30, "p90": 34, "max": 39 },
+    "auto2Finalize": { "avg": 29, "p50": 27, "p90": 38, "max": 41 }
+  },
+  "topCauses": [
+    "UNNECESSARY_EXPERT_INVOCATION",
+    "REPAIR_NON_CONVERGENCE",
+    "AI_TIMEOUT",
+    "STALE_APPSOLINO_BASE",
+    "STALE_UPSTREAM",
+    "RUNNER_QUEUE",
+    "AI_SCHEMA_REPAIR"
+  ],
+  "proposedSlo": {
+    "runnerQueueP95Seconds": 60,
+    "sensitiveReviewTargetMinutes": 8,
+    "sensitiveReviewHardMinutes": 12,
+    "repairCycleTargetMinutes": 12,
+    "repairCycleHardMinutes": 20,
+    "expertPhaseDefaultMinutes": 6,
+    "verifierPhaseDefaultMinutes": 4,
+    "schemaRepairSeconds": 90,
+    "cycleHardWallClockMinutes": 20
+  },
+  "keyRuns": {
+    "runnerQueueExample": 31169133069,
+    "longExpertExample": 31171067130,
+    "requestChangesExhaustion": 31178120100,
+    "fastRefreshRequired": 31166147731
+  }
+}
