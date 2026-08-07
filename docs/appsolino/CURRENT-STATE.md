@@ -9,7 +9,7 @@ Governance **#153 MERGED** (provenance, candidate lease, release-freshness, auto
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-07T21:08:00Z
+**Last updated UTC:** 2026-08-07T21:10:00Z
 
 | Field | Value |
 | --- | --- |
@@ -40,7 +40,7 @@ Governance **#153 MERGED** (provenance, candidate lease, release-freshness, auto
 
 | Item | State |
 | --- | --- |
-| Latency architecture | Landed [#141](https://github.com/Appsolino/Fusion/issues/141) |
+| Latency architecture | Landed [#141](https://github.com/Appsolino/Fusion/pull/141) |
 | AI-verified merge (no Anas966) | Landed [#150](https://github.com/Appsolino/Fusion/pull/150) / SHA bind [#151](https://github.com/Appsolino/Fusion/pull/151) |
 | Absorb #144 | **MERGED** |
 | `FIX-LANE-WIRING-TOUCH-FIXTURE` | **RETIRED** / `UPSTREAM_FIXED` |
@@ -63,8 +63,8 @@ Governance **#153 MERGED** (provenance, candidate lease, release-freshness, auto
 ## Owner priority
 
 ```text
-NOW:     Land full-autonomy CI-repair substrate (#feat/full-autonomy); verify next upstream PR has no cursor[bot]
-NEXT:    Close ISS-UP-GOV-001 after cursor[bot] verification; continue CI-repair IR + soak when engine unpause authorised
+NOW:     Complete and validate full-autonomy CI-repair routing (`feat/full-autonomy`); Host D remains paused
+NEXT:    Verify next upstream PR has no cursor[bot]; close ISS-UP-GOV-001; soak CI repair only after owner authorises engine unpause
 HOLD:    Host P / production — PROHIBITED; do not unpause Host D solely for maintenance or autonomy soak proof
 NOTE:    Official upstream easy to absorb; Appsolino product deltas get scrutiny; maintenance metadata is observability
 NOTE:    Do not auto-publish a GitHub Release on every upstream commit — version-change policy

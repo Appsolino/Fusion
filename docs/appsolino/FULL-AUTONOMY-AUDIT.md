@@ -31,12 +31,12 @@ Mission feature sync
 | Deterministic validation | Executor verify / merger verify | — |
 | Review + repair findings | Workflow review + pr-respond rework (bounded) | — |
 | PR create/update | `pr-create` + idempotent entity | — |
-| Wait for CI | PrReconciler polls checksRollup | **Was no checks-failed release event** |
-| Repair CI failures | Overseer `failed-check` → targeted fix (partial) | **No productized bounded CI repair route** |
+| Wait for CI | PrReconciler polls checksRollup | checks-failed/succeeded releases + hold outcome routing |
+| Repair CI failures | Gate `ci-failed` → `ci-repair` (pr-respond mode) | CI log fetch / agent prompt enrichment still thin |
 | Branch drift / conflict | Merger AI (direct); PR conflict holds | PR-head rebase/repair weaker than direct |
-| Merge when policy allows | auto-merge gate + pr-merge / merger | Failed CI previously collapsed to `auto-off` forever |
+| Merge when policy allows | auto-merge gate + pr-merge / merger | — |
 | Mission continuation | mission-feature-sync + scheduler | Duplicate-completion tests exist in places |
-| Restart recovery | Self-healing startup + PR entity R15 | Need soak under unpaused engine |
+| Restart recovery | Self-healing startup + PR entity R15 + pending hold outcome in sourceMetadata | Need soak under unpaused engine |
 
 ## Launch paths (must stay single-authority)
 
@@ -46,13 +46,14 @@ Mission feature sync
 - Overseer interventions (request fix — must not bypass claim)
 - CLI/dashboard promote/force (operator)
 
-## This PR slice (first implementation)
+## This PR slice
 
 1. `deriveTransitions` emits `checks-failed` / `checks-succeeded` → `github:pr-checks-*` hold releases.
 2. Auto-merge gate routes `outcome:ci-failed` when `autoMerge && checksRollup=failure`.
 3. Pure `ci-repair.ts` decision/classifier + dependability tests (budget, same-head anti-spam, transient vs deterministic).
-
-**Not yet in this slice:** default workflow IR edges from `ci-failed` → repair agent node; live Host D soak; full Phase 19 matrix.
+4. `releaseHeldTaskByEvent` persists `workflowExternalEventOutcome` and seeds a runnable continuation at the hold pin.
+5. Hold handler consumes that outcome so `outcome:approved` / `outcome:checks-failed` edges traverse.
+6. Builtin PR IR: `gate --ci-failed--> ci-repair`, `await-review --checks-failed--> ci-repair`, exhausted manual hold.
 
 ## Acceptance snapshot (honest)
 
@@ -60,14 +61,13 @@ Mission feature sync
 | --- | --- |
 | One authoritative scheduler | YES (architecture) |
 | Durable claims / self-healing | YES (mature) |
-| CI repair autonomous | **PARTIAL** — routing + decisions landed; agent dispatch IR wiring remains |
+| CI repair autonomous | **PARTIAL** — routing + decisions + IR + hold outcome plumbing; CI log→agent enrichment remains |
 | Merge conflict recovery | PARTIAL (strong direct-merge; PR path holds) |
 | Soak test | **BLOCKED** until Host D engine unpause authorised |
-| Duplicate events | Mostly YES (PR entity R15, claims) |
+| Duplicate events | Mostly YES (PR entity R15, claims, pending-outcome clear) |
 
 ## Next authorised work
 
-1. Wire builtin PR workflow IR: `auto-merge-gate --ci-failed--> ci-repair → await-checks`.
-2. Persist `ciRepairAttempts` / `lastRepairedHeadOid` on PR entity or task metadata.
-3. Expand dependability suite (restart points, workspace leak).
-4. Request Host D unpause for soak — **do not self-authorise**.
+1. Enrich `ci-repair` agent prompt with failed-check log excerpts (still bounded by decideCiRepairAction).
+2. Expand dependability suite (restart points, workspace leak).
+3. Request Host D unpause for soak — **do not self-authorise**.

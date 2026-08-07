@@ -31,10 +31,17 @@ import { parseWorkflowIr } from "./workflow-ir.js";
  *     → gate (auto-merge?)
  *         outcome:auto-on  → pr-merge
  *         outcome:auto-off → await-review (park for manual merge)
+ *         outcome:ci-failed → ci-repair (bounded; reuses pr-respond body) → await-review
  *     → pr-merge
  *         outcome:merged-requested → end   (reconcile corroborates `merged`)
  *         outcome:stale-head       → await-review (re-evaluate against new head)
  *     → end
+ *
+ * FNXC:FullAutonomy 2026-08-07-21:08:
+ * Failed required checks must not collapse forever into auto-off. The gate emits
+ * `outcome:ci-failed` when autoMerge is on and checksRollup is failure; the
+ * `ci-repair` node is a bounded pr-respond rework body that loops back to
+ * await-review so reconcile can re-fire checks-succeeded / approved edges.
  *
  * **Await states are hold columns with `external-event`/`manual` release (U4).**
  * The node handlers are fast/idempotent/fail-closed; the long waits (for review,
@@ -72,7 +79,11 @@ const RAW_BUILTIN_PR_WORKFLOW_IR: WorkflowIr = {
       // The PR-await dwell column. The reconcile fires external-event releases that
       // move whatever card is parked here; the generic hold-release sweep does the
       // move (no PR knowledge in the substrate).
-      traits: [{ trait: "merge-blocker" }, { trait: "stall-detection" }],
+      traits: [
+        { trait: "merge-blocker" },
+        { trait: "stall-detection" },
+        { trait: "hold", config: { release: "external-event" } },
+      ],
     },
     { id: "done", name: "Done", traits: [{ trait: "complete" }] },
     { id: "archived", name: "Archived", traits: [{ trait: "archived" }] },
@@ -108,9 +119,27 @@ const RAW_BUILTIN_PR_WORKFLOW_IR: WorkflowIr = {
       config: { release: "manual" },
     },
     // Auto-merge gate (U6, R10): routes outcome:auto-on → pr-merge,
-    // outcome:auto-off → park back on await-review for a manual merge.
+    // outcome:auto-off → park back on await-review for a manual merge,
+    // outcome:ci-failed → bounded CI repair (FullAutonomy).
     { id: "gate", kind: "gate", column: "await-review", config: { gate: "auto-merge" } },
     { id: "manual-merge-hold", kind: "manual-merge-hold", column: "await-review", config: { release: "manual" } },
+    /*
+    FNXC:FullAutonomy 2026-08-07-21:08:
+    CI repair reuses pr-respond as the mutating agent body. config.mode marks the
+    intent for handlers/prompts; maxReworkCycles bounds blind CI repair loops.
+    */
+    {
+      id: "ci-repair",
+      kind: "pr-respond",
+      column: "in-progress",
+      config: { mode: "ci-repair", maxReworkCycles: 3 },
+    },
+    {
+      id: "ci-repair-exhausted",
+      kind: "hold",
+      column: "await-review",
+      config: { release: "manual" },
+    },
     // await-rebase: the conflict dwell column. The reconcile fires
     // github:pr-conflict-cleared to release it back to await-review.
     {
@@ -147,6 +176,10 @@ const RAW_BUILTIN_PR_WORKFLOW_IR: WorkflowIr = {
     { from: "await-review", to: "await-rebase", condition: "outcome:conflict" },
     { from: "await-review", to: "pr-merge", condition: "outcome:force-merge" },
     { from: "await-review", to: "end", condition: "outcome:close" },
+    // Checks failed while awaiting review/merge readiness → CI repair (FullAutonomy).
+    { from: "await-review", to: "ci-repair", condition: "outcome:checks-failed" },
+    // Checks recovered → re-enter gate evaluation.
+    { from: "await-review", to: "gate", condition: "outcome:checks-succeeded" },
     // Rework exhaustion (await-review is the region head): park on a manual hold.
     { from: "await-review", to: "await-review-hold", condition: "outcome:rework-exhausted" },
     // pr-respond → bounded rework back to await-review (the review loop). Bounded
@@ -158,10 +191,19 @@ const RAW_BUILTIN_PR_WORKFLOW_IR: WorkflowIr = {
     // Conflict cleared → back to await-review (rework loop-back).
     { from: "await-rebase", to: "await-review", condition: "outcome:conflict-cleared", kind: "rework" },
     // auto-merge gate routing. auto-on goes forward to pr-merge; auto-off parks
-    // back on await-review for a manual merge (rework loop-back).
+    // back on await-review for a manual merge (rework loop-back); ci-failed
+    // enters the bounded CI repair loop (FullAutonomy).
     { from: "gate", to: "pr-merge", condition: "outcome:auto-on" },
     { from: "gate", to: "manual-merge-hold", condition: "outcome:auto-off" },
+    { from: "gate", to: "ci-repair", condition: "outcome:ci-failed" },
     { from: "manual-merge-hold", to: "pr-merge", condition: "success" },
+    // CI repair → back to await-review (rework) so checks can re-conclude; budget
+    // exhaustion parks on a manual hold instead of looping forever.
+    { from: "ci-repair", to: "await-review", condition: "outcome:fixed", kind: "rework" },
+    { from: "ci-repair", to: "await-review", condition: "outcome:disagreed-only", kind: "rework" },
+    { from: "ci-repair", to: "ci-repair-exhausted", condition: "outcome:exhausted" },
+    { from: "ci-repair", to: "ci-repair-exhausted", condition: "failure" },
+    { from: "ci-repair-exhausted", to: "await-review", condition: "success", kind: "rework" },
     // pr-merge outcomes: merged-requested ends (reconcile corroborates `merged`);
     // a stale-head race re-evaluates against the new head via await-review.
     { from: "pr-merge", to: "end", condition: "outcome:merged-requested" },

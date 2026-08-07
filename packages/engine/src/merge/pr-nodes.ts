@@ -35,7 +35,7 @@ import {
   type PrPushResult,
 } from "./pr-response-run.js";
 import { makePrResponseAgentRunner, makePrResponseGitOps } from "./pr-response-run-ops.js";
-import { autoMergeGateCiFailedValue } from "./ci-repair.js";
+import { autoMergeGateCiFailedValue, decideCiRepairAction } from "./ci-repair.js";
 
 /**
  * The narrow slice of the store the PR node handlers need. Declared structurally
@@ -49,6 +49,12 @@ export interface PrNodeStore extends PrResponseRunStore {
   getActivePrEntityBySource(sourceType: PrEntity["sourceType"], sourceId: string): Promise<PrEntity | null>;
   updatePrEntity(id: string, patch: PrEntityUpdate): Promise<PrEntity>;
   updatePrInfo?(id: string, prInfo: PrInfo | null): Promise<unknown>;
+  /** Optional: load and clear a durable external-event continuation outcome. */
+  getTask?(taskId: string): Promise<TaskDetail | null>;
+  updateTask?(
+    taskId: string,
+    patch: { sourceMetadataPatch: Record<string, unknown> },
+  ): Promise<unknown>;
 }
 
 /**
@@ -490,6 +496,33 @@ export function createPrNodeHandlers(deps: PrNodeDeps): Record<
       return { outcome: "success", value: "not-actionable" };
     }
 
+    /*
+    FNXC:FullAutonomy 2026-08-07-21:08:
+    CI-repair mode consults the pure decision surface before dispatching an agent.
+    Exhausted / out-of-scope / wait actions never launch duplicate repair work.
+    Attempt count is tracked via responseRounds on the PR entity (restart-safe).
+    */
+    if (node.config?.mode === "ci-repair") {
+      const decision = decideCiRepairAction({
+        checksRollup: entity.checksRollup,
+        attemptCount: entity.responseRounds,
+        maxAttempts:
+          typeof node.config.maxReworkCycles === "number" ? node.config.maxReworkCycles : undefined,
+        headOid: entity.headOid,
+        lastRepairedHeadOid:
+          typeof ctx.context.lastRepairedHeadOid === "string" ? ctx.context.lastRepairedHeadOid : null,
+        failureClass: "unknown",
+      });
+      if (decision.action === "exhausted" || decision.action === "ignore") {
+        audit("ci-repair-exhausted", `ci-repair '${node.id}' ${decision.reason}`);
+        return { outcome: "success", value: "exhausted" };
+      }
+      if (decision.action === "wait" || decision.action === "ready" || decision.action === "retry-wait") {
+        audit("ci-repair-wait", `ci-repair '${node.id}' ${decision.reason}`);
+        return { outcome: "success", value: "disagreed-only" };
+      }
+    }
+
     // Bump the rework-cycle counter (R8 cap backing; persisted). Forward the
     // POST-update entity so runPrResponseRun's cap check (`responseRounds > cap`)
     // sees this round's count — passing the stale pre-increment entity fires the
@@ -510,7 +543,16 @@ export function createPrNodeHandlers(deps: PrNodeDeps): Record<
       return { outcome: "failure", value: "respond-error" };
     }
 
-    return { outcome: "success", value: result.value, contextPatch: result.contextPatch };
+    return {
+      outcome: "success",
+      value: result.value,
+      contextPatch: {
+        ...(result.contextPatch ?? {}),
+        ...(node.config?.mode === "ci-repair" && updatedEntity.headOid
+          ? { lastRepairedHeadOid: updatedEntity.headOid }
+          : {}),
+      },
+    };
   };
 
   return {

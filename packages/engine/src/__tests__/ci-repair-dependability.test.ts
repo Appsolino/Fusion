@@ -11,7 +11,9 @@ import {
 } from "../merge/ci-repair.js";
 import { deriveTransitions } from "../merge/pr-reconcile.js";
 import { createAutoMergeGateHandler } from "../merge/pr-nodes.js";
-import type { PrEntity, TaskDetail } from "@fusion/core";
+import { BUILTIN_PR_WORKFLOW_IR, type PrEntity, type TaskDetail } from "@fusion/core";
+import { createDefaultNodeHandlers, createNoopLegacySeams } from "../workflows/workflow-node-handlers.js";
+import { PENDING_HOLD_OUTCOME_FIELD } from "../merge/hold-event-outcome.js";
 
 function entity(partial: Partial<PrEntity>): PrEntity {
   return {
@@ -132,5 +134,57 @@ describe("auto-merge gate ci-failed routing", () => {
       { task: { id: "FN-1" } as TaskDetail, context: {} },
     );
     expect(result).toEqual({ outcome: "success", value: "ci-failed" });
+  });
+});
+
+describe("PR external-event outcomes", () => {
+  it("declares external-event release and routes failed checks to bounded repair", () => {
+    const awaitReview = BUILTIN_PR_WORKFLOW_IR.columns.find((column) => column.id === "await-review");
+    expect(awaitReview?.traits).toContainEqual({
+      trait: "hold",
+      config: { release: "external-event" },
+    });
+    expect(BUILTIN_PR_WORKFLOW_IR.edges).toContainEqual({
+      from: "await-review",
+      to: "ci-repair",
+      condition: "outcome:checks-failed",
+    });
+    expect(BUILTIN_PR_WORKFLOW_IR.edges).toContainEqual({
+      from: "gate",
+      to: "ci-repair",
+      condition: "outcome:ci-failed",
+    });
+    expect(BUILTIN_PR_WORKFLOW_IR.edges).toContainEqual({
+      from: "ci-repair",
+      to: "await-review",
+      condition: "outcome:fixed",
+      kind: "rework",
+    });
+  });
+
+  it("consumes a persisted PR event exactly once before graph routing", async () => {
+    const persisted = {
+      id: "FN-1",
+      sourceMetadata: { [PENDING_HOLD_OUTCOME_FIELD]: "checks-failed" },
+    } as TaskDetail;
+    const updateTask = vi.fn(async () => persisted);
+    const handlers = createDefaultNodeHandlers(createNoopLegacySeams(), undefined, {
+      prNodes: {
+        getStore: () => ({
+          getTask: async () => persisted,
+          updateTask,
+        }) as never,
+      } as never,
+    });
+
+    await expect(
+      handlers.hold(
+        { id: "await-review", kind: "hold", column: "await-review" } as never,
+        { task: { id: "FN-1" } as TaskDetail, context: {} },
+      ),
+    ).resolves.toEqual({ outcome: "success", value: "checks-failed" });
+    expect(updateTask).toHaveBeenCalledWith("FN-1", {
+      sourceMetadataPatch: { [PENDING_HOLD_OUTCOME_FIELD]: null },
+    });
   });
 });
