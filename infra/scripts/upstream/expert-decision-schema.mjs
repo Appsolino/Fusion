@@ -125,9 +125,18 @@ export function validateExpertDecision(raw) {
 
 /**
  * Validate independent verifier verdict. Fail closed.
+ * Optional SHA binding: when expected SHAs are supplied, a verdict that omits them
+ * or refers to a different candidate/upstream/base is AI_PROTOCOL_ERROR (invalid).
+ *
  * @param {unknown} raw
+ * @param {{
+ *   expectedCandidateSha?: string|null,
+ *   expectedUpstreamSha?: string|null,
+ *   expectedBaseAppsolinoSha?: string|null,
+ *   requireShaBinding?: boolean,
+ * }} [opts]
  */
-export function validateVerifierVerdict(raw) {
+export function validateVerifierVerdict(raw, opts = {}) {
   /** @type {string[]} */
   const errors = [];
   if (!isObject(raw)) {
@@ -143,16 +152,64 @@ export function validateVerifierVerdict(raw) {
   }
   const summary = String(raw.summary || "").trim();
   if (!summary) errors.push("summary must be a non-empty string");
-  const blockingFindings = asStringArray(raw.blockingFindings ?? raw.blocking_findings ?? []);
-  if (!blockingFindings) errors.push("blockingFindings must be an array of strings");
+  const blockingFindings = asStringArray(
+    raw.blockingFindings ?? raw.blocking_findings ?? raw.findings ?? [],
+  );
+  if (!blockingFindings) errors.push("blockingFindings/findings must be an array of strings");
   const requiredChanges = asStringArray(raw.requiredChanges ?? raw.required_changes ?? []);
   if (!requiredChanges) errors.push("requiredChanges must be an array of strings");
+  const remainingRisks = asStringArray(raw.remainingRisks ?? raw.remaining_risks ?? []);
+  if (raw.remainingRisks != null || raw.remaining_risks != null) {
+    if (!remainingRisks) errors.push("remainingRisks must be an array of strings when present");
+  }
 
   if (verdict === "REQUEST_CHANGES" && requiredChanges && requiredChanges.length === 0) {
     errors.push("REQUEST_CHANGES requires non-empty requiredChanges");
   }
   if (verdict === "APPROVE" && blockingFindings && blockingFindings.length > 0) {
     errors.push("APPROVE cannot include blockingFindings");
+  }
+
+  const candidateSha = normalizeSha(raw.candidateSha ?? raw.candidate_sha);
+  const upstreamSha = normalizeSha(raw.upstreamSha ?? raw.upstream_sha);
+  const baseAppsolinoSha = normalizeSha(raw.baseAppsolinoSha ?? raw.base_appsolino_sha ?? raw.candidateBaseAppsolinoSha);
+
+  const requireBinding = opts.requireShaBinding === true
+    || Boolean(opts.expectedCandidateSha || opts.expectedUpstreamSha || opts.expectedBaseAppsolinoSha);
+
+  if (requireBinding) {
+    if (!candidateSha) errors.push("candidateSha required and must be a git SHA");
+    if (!upstreamSha) errors.push("upstreamSha required and must be a git SHA");
+    if (!baseAppsolinoSha) errors.push("baseAppsolinoSha required and must be a git SHA");
+    if (candidateSha && opts.expectedCandidateSha && !shaEquals(candidateSha, opts.expectedCandidateSha)) {
+      errors.push("candidateSha does not match the candidate under review");
+    }
+    if (upstreamSha && opts.expectedUpstreamSha && !shaEquals(upstreamSha, opts.expectedUpstreamSha)) {
+      errors.push("upstreamSha does not match the upstream tip under review");
+    }
+    if (baseAppsolinoSha && opts.expectedBaseAppsolinoSha && !shaEquals(baseAppsolinoSha, opts.expectedBaseAppsolinoSha)) {
+      errors.push("baseAppsolinoSha does not match the Appsolino base under review");
+    }
+  } else {
+    // When present without requireBinding, still reject clearly wrong shape.
+    if ((raw.candidateSha || raw.candidate_sha) && !candidateSha) {
+      errors.push("candidateSha when present must be a git SHA");
+    }
+  }
+
+  const deterministicEvidenceAccepted = raw.deterministicEvidenceAccepted ?? raw.deterministic_evidence_accepted;
+  if (deterministicEvidenceAccepted != null && typeof deterministicEvidenceAccepted !== "boolean") {
+    errors.push("deterministicEvidenceAccepted must be boolean when present");
+  }
+  if (verdict === "APPROVE" && deterministicEvidenceAccepted === false) {
+    errors.push("APPROVE cannot set deterministicEvidenceAccepted=false");
+  }
+  const requiresPolicyDecision = raw.requiresPolicyDecision ?? raw.requires_policy_decision;
+  if (requiresPolicyDecision != null && typeof requiresPolicyDecision !== "boolean") {
+    errors.push("requiresPolicyDecision must be boolean when present");
+  }
+  if (verdict === "APPROVE" && requiresPolicyDecision === true) {
+    errors.push("APPROVE cannot set requiresPolicyDecision=true");
   }
 
   if (errors.length) return { ok: false, errors, verdict: null };
@@ -163,11 +220,33 @@ export function validateVerifierVerdict(raw) {
       schemaVersion: VERIFIER_VERDICT_SCHEMA_VERSION,
       verdict,
       summary,
-      blockingFindings,
-      requiredChanges,
+      blockingFindings: blockingFindings || [],
+      requiredChanges: requiredChanges || [],
+      remainingRisks: remainingRisks || [],
       risk: String(raw.risk || "UNKNOWN").toUpperCase(),
+      candidateSha: candidateSha || null,
+      upstreamSha: upstreamSha || null,
+      baseAppsolinoSha: baseAppsolinoSha || null,
+      deterministicEvidenceAccepted:
+        typeof deterministicEvidenceAccepted === "boolean" ? deterministicEvidenceAccepted : null,
+      requiresPolicyDecision: typeof requiresPolicyDecision === "boolean" ? requiresPolicyDecision : false,
     },
   };
+}
+
+/** @param {unknown} value */
+function normalizeSha(value) {
+  const s = String(value || "").trim().toLowerCase();
+  return /^[0-9a-f]{7,40}$/.test(s) ? s : null;
+}
+
+/** @param {string} a @param {string} b */
+function shaEquals(a, b) {
+  const x = String(a || "").trim().toLowerCase();
+  const y = String(b || "").trim().toLowerCase();
+  if (!x || !y) return false;
+  const n = Math.min(x.length, y.length);
+  return n >= 7 && x.slice(0, n) === y.slice(0, n);
 }
 
 /**
@@ -242,9 +321,19 @@ export function combineResolutionGate(input) {
       next: attempt < maxAttempts ? "EXPERT_RESOLVING" : "BLOCKED_UNRESOLVED",
       reason: "verifier REQUEST_CHANGES — return to expert repair loop",
       failures: input.verifier.requiredChanges,
+      failureClass: "AI_VERIFIER_REQUEST_CHANGES",
     };
   }
   if (input.expert.decision === "RESOLVED" && input.verifier.verdict === "APPROVE") {
+    if (input.verifier.requiresPolicyDecision === true) {
+      return {
+        finalizable: false,
+        next: "BLOCKED_POLICY",
+        reason: "verifier APPROVE claimed requiresPolicyDecision",
+        failures: [],
+        failureClass: "POLICY_BLOCKED",
+      };
+    }
     return {
       finalizable: true,
       next: "CONTINUE",

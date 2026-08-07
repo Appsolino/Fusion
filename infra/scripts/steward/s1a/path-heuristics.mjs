@@ -46,8 +46,14 @@ export function classifyConflictFile(filePath) {
     return {
       path,
       kind: FILE_KIND.WORKFLOW,
-      playbook: "owner-sensitive-review",
-      notes: "Workflow YAML change — SENSITIVE; owner review required before any repair.",
+      /*
+      FNXC:UpstreamAiProtocol 2026-08-07-08:55:
+      AUTO-1/SENSITIVE workflow deltas are expert+verifier engineering work, not an
+      automatic human-owner stop. Owner remains only for genuine policy authority.
+      */
+      playbook: "expert-ai-sensitive",
+      notes:
+        "Workflow YAML change — SENSITIVE; route to expert resolver + independent AI verifier + deterministic gates. Owner only for genuine policy (Host P / production / secrets).",
     };
   }
 
@@ -55,8 +61,9 @@ export function classifyConflictFile(filePath) {
     return {
       path,
       kind: FILE_KIND.MIGRATION,
-      playbook: "owner-sensitive-review",
-      notes: "Migration/schema touch — SENSITIVE; freeze automation until owner guidance.",
+      playbook: "expert-ai-sensitive",
+      notes:
+        "Migration/schema touch — SENSITIVE; expert+verifier path with expanded deterministic suites. Freeze only for genuine policy authority.",
     };
   }
 
@@ -64,8 +71,9 @@ export function classifyConflictFile(filePath) {
     return {
       path,
       kind: FILE_KIND.LOCKFILE,
-      playbook: "owner-sensitive-review",
-      notes: "Lockfile conflict — SENSITIVE; regenerate lock via package manager after semantic resolve.",
+      playbook: "expert-ai-sensitive",
+      notes:
+        "Lockfile conflict — SENSITIVE; regenerate lock via package manager after semantic resolve under expert+verifier supervision.",
     };
   }
 
