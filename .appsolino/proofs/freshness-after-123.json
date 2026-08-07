@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "upstreamHead": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+  "integratedUpstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+  "candidateUpstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+  "candidateAppsolinoSha": "3c9ec4d5710ad0731b76915908386d530ca3df57",
+  "commitsBehindIntegrated": 0,
+  "commitsBehindCandidate": 0,
+  "state": "FRESH",
+  "overallHealthy": true,
+  "overallUnhealthy": false,
+  "inProgress": false,
+  "activeCandidatePr": null,
+  "reasons": [
+    "integratedUpstreamSha matches upstreamHead"
+  ],
+  "lastCheckedAt": "2026-08-07T04:35:16Z",
+  "lastIntegratedAt": "2026-08-07T04:33:35Z",
+  "expertActive": false,
+  "aiVerifierActive": false,
+  "auto1Outcome": null,
+  "auto2Action": "merged",
+  "blockedReason": null,
+  "patchesRetained": [
+    "FIX-ISS-CLI-005-CURSOR-ROUTING",
+    "FIX-ISS-GIT-007",
+    "FIX-ISS-REL-001-VERSION-IDENTITY",
+    "FIX-ISS-UI-001",
+    "FIX-ISS-WF-002-DETERMINISTIC-PARK",
+    "FIX-LANE-WIRING-TOUCH-FIXTURE"
+  ]
+}

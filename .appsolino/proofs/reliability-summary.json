@@ -1,0 +1,88 @@
+{
+  "attempted": 8,
+  "passed": 0,
+  "recovered": 0,
+  "truthfullyBlocked": 8,
+  "falseSuccessIncidents": 1,
+  "schemaInvalid": 0,
+  "syntheticExcluded": 5,
+  "unprovenSuccessClaims": 0,
+  "unprovenSuccessTaskIds": [],
+  "fixtureDrivenClaims": 0,
+  "fixtureDrivenTaskIds": [],
+  "humanInterventions": 0,
+  "levelsProvenByRealRun": [],
+  "levelsUnproven": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "partBClaimable": false,
+  "criticalDefects": [],
+  "highDefects": [],
+  "runs": [
+    {
+      "taskId": "REL-HOSTD-PAUSE-PROBE-KB-004",
+      "level": 0,
+      "finalStatus": "BLOCKED",
+      "reason": "Host D enginePaused=true: API created KB-004 in todo only; execution not claimed; quotas untouched. Probe is environment observation, not Part B SUCCESS.",
+      "schemaValid": true
+    },
+    {
+      "taskId": "REL-L10-HOSTD-ENGINE-PAUSED-BLOCK",
+      "level": 10,
+      "finalStatus": "BLOCKED",
+      "reason": "Host D enginePaused=true (trust soak #109). Technical capability exists; policy/soak constraint blocks live in-engine L4-L10 until unpause authorized without quota burn.",
+      "schemaValid": true
+    },
+    {
+      "taskId": "REL-L4-HOSTD-ENGINE-PAUSED-BLOCK",
+      "level": 4,
+      "finalStatus": "BLOCKED",
+      "reason": "Host D enginePaused=true (trust soak #109). Technical capability exists; policy/soak constraint blocks live in-engine L4-L10 until unpause authorized without quota burn.",
+      "schemaValid": true
+    },
+    {
+      "taskId": "REL-L5-HOSTD-ENGINE-PAUSED-BLOCK",
+      "level": 5,
+      "finalStatus": "BLOCKED",
+      "reason": "Host D enginePaused=true (trust soak #109). Technical capability exists; policy/soak constraint blocks live in-engine L4-L10 until unpause authorized without quota burn.",
+      "schemaValid": true
+    },
+    {
+      "taskId": "REL-L6-HOSTD-ENGINE-PAUSED-BLOCK",
+      "level": 6,
+      "finalStatus": "BLOCKED",
+      "reason": "Host D enginePaused=true (trust soak #109). Technical capability exists; policy/soak constraint blocks live in-engine L4-L10 until unpause authorized without quota burn.",
+      "schemaValid": true
+    },
+    {
+      "taskId": "REL-L7-HOSTD-ENGINE-PAUSED-BLOCK",
+      "level": 7,
+      "finalStatus": "BLOCKED",
+      "reason": "Host D enginePaused=true (trust soak #109). Technical capability exists; policy/soak constraint blocks live in-engine L4-L10 until unpause authorized without quota burn.",
+      "schemaValid": true
+    },
+    {
+      "taskId": "REL-L8-HOSTD-ENGINE-PAUSED-BLOCK",
+      "level": 8,
+      "finalStatus": "BLOCKED",
+      "reason": "Host D enginePaused=true (trust soak #109). Technical capability exists; policy/soak constraint blocks live in-engine L4-L10 until unpause authorized without quota burn.",
+      "schemaValid": true
+    },
+    {
+      "taskId": "REL-L9-HOSTD-ENGINE-PAUSED-BLOCK",
+      "level": 9,
+      "finalStatus": "BLOCKED",
+      "reason": "Host D enginePaused=true (trust soak #109). Technical capability exists; policy/soak constraint blocks live in-engine L4-L10 until unpause authorized without quota burn.",
+      "schemaValid": true
+    }
+  ]
+}
