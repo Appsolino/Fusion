@@ -65,9 +65,66 @@ import {
   LABEL_EXPERT_RESOLVING,
   LABEL_REFRESH_REQUIRED,
   LABEL_BLOCKED_POLICY,
+  LABEL_AI_VERIFIED,
+  LABEL_SENSITIVE_REVIEW,
 } from "./upstream/sensitive-expert-path.mjs";
 import { assertFinalizerFreshness } from "./upstream/rolling-candidate.mjs";
 import { evaluateFreshness, formatFreshnessReport } from "./upstream/freshness.mjs";
+
+/**
+ * FNXC:UpstreamLatency 2026-08-07-19:00:
+ * Recover independent verifier APPROVE from durable PR label or latest review comment
+ * so finalize can merge without re-running sensitive-review or demanding Anas966.
+ *
+ * @param {{ labels?: Array<{name?: string}>, headRefOid?: string }} pr
+ * @param {Array<{body?: string, created_at?: string}>} [comments]
+ */
+export function detectAiVerifierApproval(pr, comments = []) {
+  const labels = new Set((pr.labels || []).map((l) => String(l?.name || "")));
+  const head = String(pr.headRefOid || "").toLowerCase();
+  const headShort = head.slice(0, 12);
+  if (labels.has(LABEL_AI_VERIFIED)) {
+    return {
+      aiVerifiedLabel: true,
+      verifierCompleted: true,
+      verifierVerdict: "APPROVE",
+      source: "label",
+    };
+  }
+  const ordered = [...(Array.isArray(comments) ? comments : [])].reverse();
+  for (const c of ordered) {
+    const body = String(c?.body || "");
+    if (!body.includes("## Sensitive review result") && !body.includes("## Expert resolve result")) {
+      continue;
+    }
+    if (headShort && !body.toLowerCase().includes(headShort)) continue;
+    const verdictMatch = body.match(/verdict:\s*`?(APPROVE|REQUEST_CHANGES|BLOCK_POLICY)`?/i);
+    if (!verdictMatch) continue;
+    const verdict = verdictMatch[1].toUpperCase();
+    if (verdict === "APPROVE") {
+      return {
+        aiVerifiedLabel: false,
+        verifierCompleted: true,
+        verifierVerdict: "APPROVE",
+        source: "comment",
+      };
+    }
+    if (verdict === "REQUEST_CHANGES" || verdict === "BLOCK_POLICY") {
+      return {
+        aiVerifiedLabel: false,
+        verifierCompleted: true,
+        verifierVerdict: verdict,
+        source: "comment",
+      };
+    }
+  }
+  return {
+    aiVerifiedLabel: false,
+    verifierCompleted: false,
+    verifierVerdict: null,
+    source: null,
+  };
+}
 
 /**
  * @param {string[]} args
@@ -345,12 +402,42 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
     };
   }
 
+  /*
+  FNXC:UpstreamLatency 2026-08-07-19:00:
+  Prefer explicit finalize inputs; otherwise recover AI verifier APPROVE from
+  auto2:ai-verified or the latest Sensitive review / Expert resolve comment for this head.
+  */
+  let aiState = {
+    aiVerifiedLabel: input.aiVerifiedLabel === true,
+    verifierCompleted: input.verifierCompleted === true,
+    verifierVerdict: input.verifierVerdict || null,
+    source: input.verifierVerdict ? "input" : null,
+  };
+  if (!aiState.verifierCompleted && !aiState.aiVerifiedLabel) {
+    let comments = input.prCommentsForTest;
+    if (!comments) {
+      const listed = runGh(["api", `repos/${input.repo}/issues/${pr.number}/comments?per_page=100`]);
+      if (listed.status === 0) {
+        try {
+          comments = JSON.parse(listed.stdout || "[]");
+        } catch {
+          comments = [];
+        }
+      } else {
+        comments = [];
+      }
+    }
+    aiState = detectAiVerifierApproval(pr, comments);
+  }
+
   const continuation = resolveSensitiveContinuation({
     riskClass: classification.riskClass,
     ownerPolicy: input.ownerPolicy || {},
     expertCompleted: input.expertCompleted === true,
     expertDecision: input.expertDecision || null,
-    verifierVerdict: input.verifierVerdict || null,
+    verifierVerdict: aiState.verifierVerdict || input.verifierVerdict || null,
+    verifierCompleted: aiState.verifierCompleted === true || input.verifierCompleted === true,
+    aiVerifiedLabel: aiState.aiVerifiedLabel === true,
     deterministicPassed: input.validationConclusion !== "failure",
     liveUpstreamHead,
     candidateUpstreamSha,
@@ -437,7 +524,18 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
     });
   }
 
-  if (continuation.action === "merge-eligible" && input.expertCompleted === true) {
+  /*
+  FNXC:UpstreamLatency 2026-08-07-19:00:
+  AI verifier APPROVE (or expert+verifier) is merge-eligible for automation/upstream-*
+  without Anas966. Previously only expertCompleted triggered this branch, so a clean
+  sensitive-review APPROVE re-dispatched another verifier loop forever.
+  */
+  if (
+    continuation.action === "merge-eligible" &&
+    (input.expertCompleted === true ||
+      aiState.verifierCompleted === true ||
+      aiState.aiVerifiedLabel === true)
+  ) {
     const race = assertFinalizerFreshness({
       candidateUpstreamSha,
       liveUpstreamHead,
@@ -459,8 +557,17 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
         deployedHostD: false,
       };
     }
+    // Drop sensitive-review / keep ai-verified as durable proof.
+    if (!input.dryRun) {
+      try {
+        runGh(["pr", "edit", String(pr.number), "--repo", input.repo, "--remove-label", LABEL_SENSITIVE_REVIEW]);
+      } catch {
+        /* optional */
+      }
+      ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_AI_VERIFIED], false);
+    }
     return performExactHeadMergeAndMaybeAuto3(input, pr, runGh, classification, currentHead, {
-      reasonPrefix: "sensitive-expert-verified",
+      reasonPrefix: input.expertCompleted === true ? "sensitive-expert-verified" : "sensitive-ai-verified",
       auto3Profile: input.auto3Profile,
     });
   }

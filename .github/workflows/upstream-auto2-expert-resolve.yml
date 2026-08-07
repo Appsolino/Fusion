@@ -332,6 +332,27 @@ jobs:
             ].join('\n');
             spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', summary], { encoding: 'utf8' });
             if (verifier.ok && verifier.verdict?.verdict === 'APPROVE' && integrity.passed) {
+              /*
+              FNXC:UpstreamLatency 2026-08-07-19:00:
+              Create auto2:ai-verified if missing — `gh pr edit --add-label` fails closed when the
+              label does not exist, which previously left APPROVE unable to finalize without Anas966.
+              */
+              spawnSync(
+                'gh',
+                [
+                  'label',
+                  'create',
+                  'auto2:ai-verified',
+                  '--repo',
+                  repo,
+                  '--color',
+                  '0E8A16',
+                  '--description',
+                  'Independent AI verifier APPROVE for automation upstream candidate',
+                  '--force',
+                ],
+                { encoding: 'utf8' },
+              );
               spawnSync('gh', ['pr', 'edit', pr, '--repo', repo, '--add-label', 'auto2:ai-verified'], { encoding: 'utf8' });
               spawnSync('gh', ['pr', 'edit', pr, '--repo', repo, '--remove-label', 'auto2:sensitive-review'], { encoding: 'utf8' });
               spawnSync(
