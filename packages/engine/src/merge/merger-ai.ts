@@ -53,6 +53,7 @@ import {
   resolveValidatorSettingsModel,
   resolveMergerFallbackModel,
   resolveReboundTarget,
+  resolveReboundTargetForTask,
   resolveTerminalColumns,
   resolveWorkflowIrForTask,
   type MergeDetails,
@@ -1588,10 +1589,20 @@ async function runPushAfterMergeStep(input: {
       status: "failed",
       error: `PUSH_FAILED: ${message}`,
     }).catch(() => undefined);
+    /*
+    FNXC:MergeTruthfulness 2026-08-07-05:55:
+    Leave the DONE column via the board's resolved rebound lane — never a legacy
+    "in-review" literal (check:move-target-literals / no-legacy-move-targets gate).
+    */
     try {
-      await store.moveTask(taskId, "in-review");
+      const rebound = await resolveReboundTargetForTask(store, taskId);
+      await store.moveTask(taskId, rebound, {
+        preserveProgress: true,
+        moveSource: "engine",
+        recoveryRehome: true,
+      });
     } catch {
-      // Column may already be non-done; status/error above is the durable signal.
+      // status/error above remains the durable false-SUCCESS prevention signal
     }
     await store.logEntry(
       taskId,

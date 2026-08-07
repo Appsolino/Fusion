@@ -73,18 +73,22 @@ export function resolveSensitiveContinuation(input) {
     const fres = assertFinalizerFreshness({
       candidateUpstreamSha: input.candidateUpstreamSha,
       liveUpstreamHead: input.liveUpstreamHead,
+      candidateBaseAppsolinoSha: input.candidateBaseAppsolinoSha,
+      liveAppsolinoMain: input.liveAppsolinoMain,
     });
     if (!fres.ok && fres.action === "REFRESH_REQUIRED") {
       return {
         action: "refresh-required",
         reason: fres.reason,
         label: LABEL_REFRESH_REQUIRED,
+        mismatch: fres.mismatch || null,
       };
     }
     if (!fres.ok) {
       return {
         action: "blocked-unresolved",
         reason: fres.reason,
+        mismatch: fres.mismatch || null,
       };
     }
   }

@@ -41,26 +41,37 @@ export async function runExpertRepairLoop(input) {
   let lastVerifier = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    // Race: upstream moved during repair → stop and refresh.
-    if (typeof input.recheckUpstreamFn === "function") {
-      const live = await input.recheckUpstreamFn();
+    // Race: upstream OR Appsolino main moved during repair → stop and refresh.
+    if (typeof input.recheckUpstreamFn === "function" || typeof input.recheckAppsolinoMainFn === "function") {
+      const live =
+        typeof input.recheckUpstreamFn === "function" ? await input.recheckUpstreamFn() : input.evidence?.liveUpstreamHead;
+      const liveMain =
+        typeof input.recheckAppsolinoMainFn === "function"
+          ? await input.recheckAppsolinoMainFn()
+          : input.evidence?.liveAppsolinoMain;
       const cand =
         input.evidence?.candidateUpstreamSha ||
         parseUpstreamShaFromBranch(input.headRefName || "") ||
         null;
+      const baseCand = input.evidence?.candidateBaseAppsolinoSha || null;
       if (live && cand) {
         const race = assertFinalizerFreshness({
           candidateUpstreamSha: cand,
           liveUpstreamHead: live,
+          candidateBaseAppsolinoSha: baseCand,
+          liveAppsolinoMain: liveMain,
         });
         if (!race.ok) {
           return {
             finalizable: false,
             next: "REFRESH_REQUIRED",
             reason: race.reason,
+            mismatch: race.mismatch || null,
             attempts,
             liveUpstreamHead: live,
             candidateUpstreamSha: cand,
+            liveAppsolinoMain: liveMain || null,
+            candidateBaseAppsolinoSha: baseCand,
             expert: lastExpert,
             verifier: lastVerifier,
           };
@@ -178,6 +189,48 @@ export async function runExpertRepairLoop(input) {
     if (typeof input.onAttempt === "function") input.onAttempt(attempts[attempts.length - 1]);
 
     if (gate.finalizable) {
+      /*
+      FNXC:UpstreamRollingCandidate 2026-08-07-05:55:
+      Re-check dual race immediately before declaring expert repair finalizable —
+      Appsolino main or upstream may have moved during the expert/verifier round-trip.
+      */
+      if (typeof input.recheckUpstreamFn === "function" || typeof input.recheckAppsolinoMainFn === "function") {
+        const live =
+          typeof input.recheckUpstreamFn === "function" ? await input.recheckUpstreamFn() : input.evidence?.liveUpstreamHead;
+        const liveMain =
+          typeof input.recheckAppsolinoMainFn === "function"
+            ? await input.recheckAppsolinoMainFn()
+            : input.evidence?.liveAppsolinoMain;
+        const cand =
+          input.evidence?.candidateUpstreamSha ||
+          parseUpstreamShaFromBranch(input.headRefName || "") ||
+          null;
+        const baseCand = input.evidence?.candidateBaseAppsolinoSha || null;
+        if (live && cand) {
+          const race = assertFinalizerFreshness({
+            candidateUpstreamSha: cand,
+            liveUpstreamHead: live,
+            candidateBaseAppsolinoSha: baseCand,
+            liveAppsolinoMain: liveMain,
+          });
+          if (!race.ok) {
+            return {
+              finalizable: false,
+              next: "REFRESH_REQUIRED",
+              reason: race.reason,
+              mismatch: race.mismatch || null,
+              attempts,
+              liveUpstreamHead: live,
+              candidateUpstreamSha: cand,
+              liveAppsolinoMain: liveMain || null,
+              candidateBaseAppsolinoSha: baseCand,
+              expert: lastExpert,
+              verifier: lastVerifier,
+            };
+          }
+        }
+      }
+
       const freshness = evaluateFreshness({
         upstreamHead: input.liveUpstreamHead || input.evidence?.upstreamHead || null,
         integratedUpstreamSha: input.evidence?.integratedUpstreamSha || null,

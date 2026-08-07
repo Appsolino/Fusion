@@ -230,9 +230,9 @@ describe("runAiMerge push-after-merge", () => {
     });
 
     expect(result.merged).toBe(true);
-    expect(task.column).not.toBe("done");
     expect(task.status).toBe("failed");
     expect(String(task.error || "")).toContain("PUSH_FAILED");
+    expect(task.column).not.toBe("done");
     expect(result.pushedToRemote).toBe(false);
     expect(result.pushError).toBeTruthy();
     expect(logs.some((l) => l.action === "PushToRemoteFailed")).toBe(true);
