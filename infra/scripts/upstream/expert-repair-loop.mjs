@@ -77,7 +77,16 @@ export async function runExpertRepairLoop(input) {
   let lastExpert = null;
   let lastVerifier = null;
   let priorRequiredSignature = null;
-  let openRequiredChanges = [];
+  /*
+  FNXC:UpstreamLatency 2026-08-07-17:40:
+  Seed targeted repair from the prior SENSITIVE_REVIEW REQUEST_CHANGES package.
+  Do not re-investigate accepted areas when requiredChanges are already known.
+  */
+  let openRequiredChanges = Array.isArray(input.initialRequiredChanges)
+    ? input.initialRequiredChanges.map((x) => String(x)).filter(Boolean)
+    : Array.isArray(input.evidence?.requiredChanges)
+      ? input.evidence.requiredChanges.map((x) => String(x)).filter(Boolean)
+      : [];
   let sameSignatureRepeats = 0;
 
   /*

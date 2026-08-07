@@ -77,7 +77,44 @@ jobs:
           git config user.name "Appsolino Automation"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # FNXC:UpstreamLatency 2026-08-07-17:40:
+      # Scheduled AUTO-1 must not force-rebuild a candidate while SENSITIVE_REVIEW / repair is active
+      # for the same live upstream tip — that cancelled live AI work mid-cycle on #144.
+      - name: Skip rebuild when expert/sensitive-review owns matching candidate
+        id: skip-active-expert
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          LIVE="$(gh api repos/Runfusion/Fusion/commits/main --jq .sha | tr '[:upper:]' '[:lower:]')"
+          echo "live_upstream=$LIVE"
+          PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 50 --json number,headRefName,labels)"
+          SKIP="$(PRS="$PRS" LIVE="$LIVE" python3 - <<'PY'
+import json, os, sys
+prs=json.loads(os.environ["PRS"])
+live=os.environ["LIVE"].lower()
+active=False
+for p in prs:
+  ref=str(p.get("headRefName") or "")
+  if not ref.startswith("automation/upstream-"):
+    continue
+  sha=ref.split("automation/upstream-",1)[-1].lower()
+  labels={str(l.get("name") or "") for l in (p.get("labels") or [])}
+  busy=bool(labels & {"auto2:sensitive-review","auto2:expert-resolving","auto2:ai-verifying"})
+  if busy and (live.startswith(sha) or sha.startswith(live[:12])):
+    active=True
+    print(f"active_expert_pr={p.get('number')} labels={sorted(labels)}", file=sys.stderr)
+    break
+print("true" if active else "false")
+PY
+)"
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          if [[ "$SKIP" == "true" ]]; then
+            echo "::notice::AUTO-1 skip: sensitive-review/expert owns matching upstream candidate — refuse mid-cycle rebuild"
+          fi
+
       - name: Probe App git authentication (non-mutating)
+        if: steps.skip-active-expert.outputs.skip != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -90,11 +127,13 @@ jobs:
       # UPSTREAM_FIXED conflict resolution runs INSIDE AUTO-1 sync and needs node+pnpm
       # for clean-upstream regression (pnpm check:lane-wiring). Setup must precede sync.
       - name: Setup Node + pnpm (required for in-sync Finding Comparison)
+        if: steps.skip-active-expert.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
       - name: Enable corepack pnpm
+        if: steps.skip-active-expert.outputs.skip != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -104,6 +143,7 @@ jobs:
           pnpm -v
 
       - name: Run AUTO-1 sync
+        if: steps.skip-active-expert.outputs.skip != 'true'
         id: sync
         shell: bash
         env:
@@ -147,7 +187,7 @@ jobs:
           exit "$code"
 
       - name: Finding Comparison — reconcile remaining patches on clean upstream
-        if: steps.sync.outputs.outcome == 'merged' && steps.sync.outputs.upstream_sha != ''
+        if: steps.skip-active-expert.outputs.skip != 'true' && steps.sync.outputs.outcome == 'merged' && steps.sync.outputs.upstream_sha != ''
         id: patch-reconcile
         shell: bash
         env:

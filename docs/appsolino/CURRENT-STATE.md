@@ -1,5 +1,11 @@
 # Appsolino Fusion — current state
 
+<!-- latency-cycle-2026-08-07 -->
+## Live maintenance cycle (2026-08-07)
+
+Latency architecture landed (#141) + verifier budget 8m (#143). Dual race guard proven when main moved under #135. Rolling candidate is now #144 (`1f9b0e64…`). SENSITIVE_REVIEW runs verifier-first (no Composer on clean PASS path). Verifier REQUEST_CHANGES identified false patch retention from shell-executing bare regression file paths — fix in flight. Scheduled AUTO-1 must not rebuild while sensitive-review/expert owns the matching tip. Cursor Approval Agent still requests Anas966 on automation/upstream-* (cleared by AUTO-1/expert; automation should stop requesting owner for this pipeline).
+
+
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
 **Last updated UTC:** 2026-08-07T16:15:00Z
