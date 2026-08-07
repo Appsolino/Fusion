@@ -13,7 +13,11 @@ import { deriveTransitions } from "../merge/pr-reconcile.js";
 import { createAutoMergeGateHandler } from "../merge/pr-nodes.js";
 import { BUILTIN_PR_WORKFLOW_IR, type PrEntity, type TaskDetail } from "@fusion/core";
 import { createDefaultNodeHandlers, createNoopLegacySeams } from "../workflows/workflow-node-handlers.js";
-import { PENDING_HOLD_OUTCOME_FIELD } from "../merge/hold-event-outcome.js";
+import {
+  PENDING_HOLD_OUTCOME_FIELD,
+  parseGithubPrHoldEventTag,
+  pendingHoldOutcomeMetadataPatch,
+} from "../merge/hold-event-outcome.js";
 
 function entity(partial: Partial<PrEntity>): PrEntity {
   return {
@@ -138,6 +142,26 @@ describe("auto-merge gate ci-failed routing", () => {
 });
 
 describe("PR external-event outcomes", () => {
+  /*
+  FNXC:FullAutonomy 2026-08-07-21:18:
+  Pure eventTag → hold outcome mapping must stay aligned with deriveTransitions
+  tags and graph `outcome:*` edges. Persistence field is sourceMetadata only.
+  */
+  it("maps github:pr-* event tags onto hold outcome values", () => {
+    expect(parseGithubPrHoldEventTag("github:pr-checks-failed")).toBe("checks-failed");
+    expect(parseGithubPrHoldEventTag("github:pr-checks-succeeded")).toBe("checks-succeeded");
+    expect(parseGithubPrHoldEventTag("github:pr-approved")).toBe("approved");
+    expect(parseGithubPrHoldEventTag("github:pr-")).toBeNull();
+    expect(parseGithubPrHoldEventTag("other:pr-checks-failed")).toBeNull();
+    expect(parseGithubPrHoldEventTag("github:pr-CHECKS-FAILED")).toBeNull();
+    expect(pendingHoldOutcomeMetadataPatch("checks-failed")).toEqual({
+      [PENDING_HOLD_OUTCOME_FIELD]: "checks-failed",
+    });
+    expect(pendingHoldOutcomeMetadataPatch(null)).toEqual({
+      [PENDING_HOLD_OUTCOME_FIELD]: null,
+    });
+  });
+
   it("declares external-event release and routes failed checks to bounded repair", () => {
     const awaitReview = BUILTIN_PR_WORKFLOW_IR.columns.find((column) => column.id === "await-review");
     expect(awaitReview?.traits).toContainEqual({
