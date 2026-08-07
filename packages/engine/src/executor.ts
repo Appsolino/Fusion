@@ -6803,10 +6803,26 @@ export class TaskExecutor {
         beforeNodeExecution: async (node, nodeTask, context) => {
           const classifiedRole = classifyWorkflowAgentNode(node);
           if (!classifiedRole) return undefined;
-          // A classified session without the authoritative IR/agent store must
-          // fail closed; running it as an ambient executor defeats role routing.
+          /*
+           * A classified session without the authoritative IR/agent store must fail closed;
+           * running it as an ambient executor defeats role routing.
+           *
+           * FNXC:WorkflowAgentRouting 2026-08-07-23:05:
+           * Name WHICH dependency is missing and log it. Unlike every other refusal below,
+           * this one persists no held work item (the durable-hold helper needs the very IR
+           * that is missing), so it is the one routing outcome with no durable trace at all:
+           * the run suspends with a bare `capacity` marker and the card re-suspends at the
+           * same node every poll, indistinguishable from a dead engine. A missing agent-store
+           * wire deadlocked the whole board this way. Neither condition is transient — both
+           * are boot-time composition faults — so log at error, not warn.
+           */
           if (!this.options.agentStore || !columnAgentIr) {
-            return { outcome: "failure" as const, value: `workflow-principal-routing-unavailable:${classifiedRole}` };
+            const missing = !this.options.agentStore ? "no-agent-store" : "no-workflow-ir";
+            executorLog.error(
+              `[workflow-graph] ${nodeTask.id}: cannot route node '${node.id}' to a '${classifiedRole}' principal — ${missing}. `
+              + "This is a runtime composition fault, not a transient wait: the node will re-suspend every dispatch until it is repaired.",
+            );
+            return { outcome: "failure" as const, value: `workflow-principal-routing-unavailable:${missing}:${classifiedRole}` };
           }
           const agents = await this.options.agentStore.listAgents({ includeEphemeral: true });
           const activeSessions = new Map(agents.map((agent) => [agent.id, this.workflowAgentCapacity.activeSessions(agent.id, this.store.getRootDir())]));
@@ -6956,25 +6972,84 @@ export class TaskExecutor {
            * just-acquired capacity and fails closed rather than running ambient.
            */
           if (!durableWorkItemId && typeof this.store.upsertWorkflowWorkItem === "function") {
+            const writeFence = (): Promise<WorkflowWorkItem> => this.store.upsertWorkflowWorkItem!({
+              runId: `${resolvedRunId ?? `${nodeTask.id}:workflow`}:${nodeInstanceId}`,
+              taskId: nodeTask.id,
+              nodeId: node.id,
+              kind: "task",
+              state: "running",
+              leaseOwner: `executor:${nodeTask.id}`,
+              leaseExpiresAt: null,
+              principalAgentId: routed.route.agent.id,
+              workflowRole: routed.route.role,
+              authorityKind: routed.route.authority,
+              nodeInstanceId,
+            });
+            /*
+             * FNXC:WorkflowAgentRouting 2026-08-07-23:12:
+             * Never swallow the fence-write error. Failing closed is correct — a session must
+             * not run without its durable principal record — but the original bare `catch {}`
+             * discarded the ONLY evidence of why, and this hold is not transient: the same
+             * write fails on every dispatch. The store wraps driver errors, so the actionable
+             * text (constraint name, NOT NULL column) is on `cause`, not `message`.
+             */
+            const handleFenceFailure = async (fenceErr: unknown): Promise<WorkflowNodeResult> => {
+              const detail = fenceErr instanceof Error ? fenceErr.message : String(fenceErr);
+              const cause = fenceErr instanceof Error && fenceErr.cause instanceof Error
+                ? ` [cause: ${fenceErr.cause.message}]`
+                : "";
+              executorLog.error(
+                `[workflow-graph] ${nodeTask.id}: durable principal fence write failed for node '${node.id}' `
+                + `(role=${routed.route.role}, authority=${routed.route.authority}, agent=${routed.route.agent.id}): ${detail}${cause}`,
+              );
+              await this.store.logEntry(
+                nodeTask.id,
+                `Workflow principal fence write failed at node '${node.id}' — ${detail.slice(0, 300)}${cause}`,
+              ).catch(() => undefined);
+              void this.workflowAgentCapacity.release(attemptId, this.options.agentStore!.workflowProjectId ?? this.store.getRootDir());
+              return { outcome: "failure" as const, value: `workflow-principal-fence-unavailable:${routed.route.role}` };
+            };
             try {
-              const item = await this.store.upsertWorkflowWorkItem({
-                runId: `${resolvedRunId ?? `${nodeTask.id}:workflow`}:${nodeInstanceId}`,
-                taskId: nodeTask.id,
-                nodeId: node.id,
-                kind: "task",
-                state: "running",
-                leaseOwner: `executor:${nodeTask.id}`,
-                leaseExpiresAt: null,
-                principalAgentId: routed.route.agent.id,
-                workflowRole: routed.route.role,
-                authorityKind: routed.route.authority,
-                nodeInstanceId,
-              });
+              const item = await writeFence();
               durableWorkItemId = item.id;
               directWorkflowPrincipalWorkItemIds.add(item.id);
-            } catch {
-              void this.workflowAgentCapacity.release(attemptId, this.options.agentStore.workflowProjectId ?? this.store.getRootDir());
-              return { outcome: "failure" as const, value: `workflow-principal-fence-unavailable:${routed.route.role}` };
+            } catch (firstFenceErr) {
+              /*
+               * FNXC:WorkflowAgentRouting 2026-08-07-23:20:
+               * HAND OVER the task's single active-continuation slot before failing closed.
+               *
+               * `idx_workflow_work_items_one_active_task_continuation` allows at most ONE
+               * active (`runnable`/`running`/`held`/`retrying`) task work item per task, and
+               * the fence upsert's ON CONFLICT target is (run_id, task_id, node_id, kind) —
+               * a different index — so a still-active row for a node this run has ALREADY
+               * LEFT does not upsert, it raises. That is exactly the steady state of a resumed
+               * run: the continuation the run woke up on stays active until the interpreter
+               * returns, which is after this node needs its fence.
+               *
+               * The result was a permanent deadlock with no trace: every dispatch re-resumed
+               * at the continuation node, walked forward to the first role-classified node,
+               * failed this write, suspended, and left the same rows behind — so the card sat
+               * in its wip column forever and the only recovery was an operator bouncing it
+               * back to the hold column (which clears the continuation). Superseding the
+               * stale row here is what makes that bounce unnecessary.
+               *
+               * Only rows for a DIFFERENT node are superseded, and only after the write has
+               * actually failed, so the invariant still holds and a genuine concurrent claim
+               * on this same node is never stolen. `succeeded` is truthful: traversal reached
+               * a later node, which is only reachable through that one.
+               */
+              const superseded = await this.supersedeStaleActiveWorkItems(nodeTask.id, nodeInstanceId, node.id);
+              if (superseded > 0) {
+                try {
+                  const item = await writeFence();
+                  durableWorkItemId = item.id;
+                  directWorkflowPrincipalWorkItemIds.add(item.id);
+                } catch (retryErr) {
+                  return await handleFenceFailure(retryErr);
+                }
+              } else {
+                return await handleFenceFailure(firstFenceErr);
+              }
             }
           }
           workflowCapacityAttemptIds.add(attemptId);
@@ -7203,6 +7278,24 @@ export class TaskExecutor {
        * handling; the next direct resume must receive the same fenced identity.
        */
       if (principalHoldReason) {
+        /*
+         * FNXC:WorkflowAgentRouting 2026-08-07-22:39:
+         * A principal hold is a WAIT, so it writes no task error — but it must never be
+         * INVISIBLE. `workflow-principal-routing-unavailable:*` is a misconfiguration
+         * (no agent store / no resolvable IR), not a transient wait: nothing will ever
+         * clear it, so every resume re-parks and the card deadlocks in its wip column.
+         * A missing `agentStore` wire did exactly that to every task after FN-8764, with
+         * no log line, no audit row, and no task-log entry to find it by. Log the hold —
+         * loudly for the never-clears variant — so the next occurrence is greppable.
+         */
+        const neverClears = principalHoldReason.startsWith("workflow-principal-routing-unavailable:");
+        const holdMessage = `[workflow-graph] ${task.id} held at graph node — ${principalHoldReason}`;
+        if (neverClears) {
+          executorLog.error(`${holdMessage} (workflow principal routing is unavailable; this hold cannot self-clear)`);
+        } else {
+          executorLog.warn(holdMessage);
+        }
+        await this.store.logEntry(task.id, `Workflow stage held — ${principalHoldReason}`).catch(() => undefined);
         if (continuation && typeof this.store.transitionWorkflowWorkItem === "function") {
           await this.store.transitionWorkflowWorkItem(continuation.id, "held", {
             leaseOwner: null,
@@ -7238,6 +7331,40 @@ export class TaskExecutor {
         return;
       }
       if (result.disposition === "suspended") {
+        /*
+         * FNXC:WorkflowExecution 2026-08-07-22:52:
+         * A suspend is a WAIT, so it writes no task error — but a bare `return` made it
+         * INVISIBLE, and an invisible wait that never clears is indistinguishable from a
+         * dead board. `onSuspend` deliberately writes no fresh continuation when an ACTIVE
+         * work item already exists, so a card re-suspending at the SAME node leaves zero
+         * new state anywhere: no log line, no audit row, no work-item update. Operators saw
+         * only "Resuming execution after unpause" every poll forever, and the only recovery
+         * was manually bouncing the card to the hold column. Record the suspension point so
+         * the wait is answerable after the fact ("why is this card parked?") without a debug
+         * build. Metadata is ids/outcomes-only — node/run identifiers, reason, and columns.
+         */
+        const suspension = result.suspension;
+        await this.store.recordRunAuditEvent?.({
+          taskId: task.id,
+          agentId: "executor",
+          runId: resolvedRunId ?? generateSyntheticRunId("workflow-run-suspended", task.id),
+          domain: "database",
+          mutationType: "task:workflow-run-suspended",
+          target: task.id,
+          metadata: {
+            taskId: task.id,
+            nodeId: suspension?.nodeId ?? "unknown",
+            reason: suspension?.reason ?? "unknown",
+            fromColumn: suspension?.fromColumn ?? null,
+            toColumn: suspension?.toColumn ?? null,
+            continuationId: continuation?.id ?? null,
+            continuationNodeId: continuation?.nodeId ?? null,
+            continuationState: continuation?.state ?? null,
+          },
+        }).catch(() => undefined);
+        executorLog.log(
+          `[workflow-graph] ${task.id} suspended at node '${suspension?.nodeId ?? "unknown"}' (${suspension?.reason ?? "unknown"})`,
+        );
         return;
       }
       if (result.disposition === "failed") {
@@ -7571,6 +7698,86 @@ export class TaskExecutor {
     }
     if (documentReadError) throw documentReadError;
     return undefined;
+  }
+
+  /**
+   * FNXC:WorkflowAgentRouting 2026-08-07-23:20:
+   * Release the task's single active-continuation slot from rows this run has already
+   * advanced past, so the node currently executing can write its own durable principal
+   * fence.
+   *
+   * `idx_workflow_work_items_one_active_task_continuation` permits ONE active task work
+   * item per task. A resumed run keeps the continuation it woke on active until the
+   * interpreter returns, which is strictly after a later node needs its fence — so the
+   * fence write hits that partial unique index (NOT the upsert's ON CONFLICT target) and
+   * raises. Before this repair the run suspended there on every dispatch and the card
+   * deadlocked in its wip column until an operator bounced it back to the hold column.
+   *
+   * Deliberately narrow: called ONLY after a fence write has actually failed, and only rows
+   * for a DIFFERENT node/instance are superseded — a live claim on this same node is never
+   * stolen, so a genuine concurrent-owner conflict still fails closed. `succeeded` is the
+   * truthful terminal state: traversal reached a later node, which is reachable only
+   * through the one being superseded.
+   *
+   * @returns how many rows were released; 0 means the conflict was not a stale continuation
+   *          and the caller must fail closed.
+   */
+  private async supersedeStaleActiveWorkItems(
+    taskId: string,
+    currentNodeInstanceId: string,
+    currentNodeId: string,
+  ): Promise<number> {
+    if (typeof this.store.listWorkflowWorkItemsForTask !== "function"
+      || typeof this.store.transitionWorkflowWorkItem !== "function") {
+      return 0;
+    }
+    let items: WorkflowWorkItem[];
+    try {
+      items = await this.store.listWorkflowWorkItemsForTask(taskId, { kinds: ["task"] });
+    } catch (err) {
+      executorLog.warn(
+        `[workflow-graph] ${taskId}: could not read work items to supersede a stale continuation: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 0;
+    }
+    const stale = items.filter((item) =>
+      ACTIVE_WORKFLOW_WORK_ITEM_STATES.includes(item.state)
+      && item.nodeId !== currentNodeId
+      && (item.nodeInstanceId ?? item.nodeId) !== currentNodeInstanceId);
+    let released = 0;
+    for (const item of stale) {
+      try {
+        await this.store.transitionWorkflowWorkItem(item.id, "succeeded", {
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          lastError: null,
+        });
+        released += 1;
+        executorLog.log(
+          `[workflow-graph] ${taskId}: superseded stale active work item at node '${item.nodeId}' (state=${item.state}) so node '${currentNodeId}' can claim the continuation slot`,
+        );
+        await this.store.recordRunAuditEvent?.({
+          taskId,
+          agentId: "executor",
+          runId: generateSyntheticRunId("workflow-supersede-continuation", taskId),
+          domain: "database",
+          mutationType: "task:workflow-continuation-superseded",
+          target: taskId,
+          metadata: {
+            taskId,
+            supersededNodeId: item.nodeId,
+            supersededState: item.state,
+            currentNodeId,
+            currentNodeInstanceId,
+          },
+        }).catch(() => undefined);
+      } catch (err) {
+        executorLog.warn(
+          `[workflow-graph] ${taskId}: failed to supersede stale work item at node '${item.nodeId}': ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return released;
   }
 
   private buildParseStepsDeps(runId?: string): ParseStepsHandlerDeps {
