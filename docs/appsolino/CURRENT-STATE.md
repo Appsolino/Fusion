@@ -8,7 +8,7 @@ Latency architecture (#141), verifier budget 8m (#143), patch-reconcile runner (
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-07T18:35:00Z
+**Last updated UTC:** 2026-08-07T19:05:00Z
 
 | Field | Value |
 | --- | --- |
@@ -30,7 +30,8 @@ Latency architecture (#141), verifier budget 8m (#143), patch-reconcile runner (
 | --- | --- |
 | Latency architecture | Landed [#141](https://github.com/Appsolino/Fusion/pull/141) — `SENSITIVE_REVIEW` vs `REPAIR_REQUIRED`, cycle budget, stale watchdog |
 | Live sensitive-review proof | Verifier-first on #144 (~4m); no Composer on clean PASS path |
-| Review-package enrichment | **IN FIX** — declare migrations + patch registry before verifier |
+| Review-package enrichment | Landed [#149](https://github.com/Appsolino/Fusion/pull/149)
+| AI-verified merge path | **IN FIX** — finalize must merge on verifier APPROVE without Anas966 |
 | `FIX-LANE-WIRING-TOUCH-FIXTURE` | **RETIRED** / `UPSTREAM_FIXED` on #144 |
 | Freshness | **not FRESH** — awaiting enriched sensitive-review → APPROVE → finalize |
 | Part B / Host D unpause | **not authorised** — remain paused |

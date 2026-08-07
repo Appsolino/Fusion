@@ -548,6 +548,64 @@ describe("AUTO-2 sensitive exact-head approval", () => {
     assert.ok(!labels.includes(LABEL_APPROVAL));
   });
 
+  it("auto2:ai-verified label → merge without Anas966 (sensitive-ai-verified)", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      validationConclusion: "success",
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [],
+      checksConclusionForTest: "success",
+      liveUpstreamHead: UPSTREAM_FOR_SENSITIVE,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
+      prCommentsForTest: [],
+      gh: makeSensitiveGh({
+        merges,
+        pr: { labels: [{ name: "auto2:ai-verified" }] },
+      }),
+    });
+    assert.equal(r.action, "auto-merged");
+    assert.equal(merges.length, 1);
+    assert.ok(merges[0].includes(HEAD_A));
+  });
+
+  it("Sensitive review APPROVE comment for exact head → merge without Anas966", () => {
+    const merges = [];
+    const r = runAuto2Finalize({
+      repo: "Appsolino/Fusion",
+      prNumber: 47,
+      validatedHeadSha: HEAD_A,
+      validationConclusion: "success",
+      allowMissingApp: true,
+      dispatchAuto3: false,
+      reviewsForTest: [],
+      checksConclusionForTest: "success",
+      liveUpstreamHead: UPSTREAM_FOR_SENSITIVE,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
+      prCommentsForTest: [
+        {
+          created_at: "2026-08-07T18:55:10Z",
+          body: [
+            "## Sensitive review result",
+            "",
+            `- candidateSha: \`${HEAD_A}\``,
+            "- mode: `sensitive-review`",
+            "- verdict: `APPROVE`",
+            `- sha hint ${HEAD_A.slice(0, 12)}`,
+          ].join("\n"),
+        },
+      ],
+      gh: makeSensitiveGh({ merges }),
+    });
+    assert.equal(r.action, "auto-merged");
+    assert.equal(merges.length, 1);
+  });
+
   it("stale candidate upstream vs live tip → refresh-required", () => {
     const merges = [];
     const r = runAuto2Finalize({

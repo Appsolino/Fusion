@@ -57,17 +57,31 @@ describe("resolveSensitiveContinuation latency routing", () => {
     assert.equal(r.workMode, "REPAIR_REQUIRED");
   });
 
-  it("verifier REQUEST_CHANGES → expert-resolving", () => {
+  it("verifier APPROVE + deterministic → merge-eligible (no owner)", () => {
     const r = resolveSensitiveContinuation({
       riskClass: "sensitive",
       deterministicPassed: true,
-      verifierVerdict: "REQUEST_CHANGES",
+      verifierCompleted: true,
+      verifierVerdict: "APPROVE",
       candidateUpstreamSha: UP,
       liveUpstreamHead: UP,
       candidateBaseAppsolinoSha: MAIN,
       liveAppsolinoMain: MAIN,
     });
-    assert.equal(r.action, "expert-resolving");
-    assert.equal(r.workMode, "REPAIR_REQUIRED");
+    assert.equal(r.action, "merge-eligible");
+  });
+
+  it("auto2:ai-verified label → merge-eligible without re-running sensitive-review", () => {
+    const r = resolveSensitiveContinuation({
+      riskClass: "sensitive",
+      deterministicPassed: true,
+      aiVerifiedLabel: true,
+      candidateUpstreamSha: UP,
+      liveUpstreamHead: UP,
+      candidateBaseAppsolinoSha: MAIN,
+      liveAppsolinoMain: MAIN,
+    });
+    assert.equal(r.action, "merge-eligible");
+    assert.match(r.reason, /ai-verified/i);
   });
 });

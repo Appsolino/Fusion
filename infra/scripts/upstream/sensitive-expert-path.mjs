@@ -15,6 +15,12 @@ import { assertFinalizerFreshness } from "./rolling-candidate.mjs";
 export const LABEL_EXPERT_RESOLVING = "auto2:expert-resolving";
 export const LABEL_AI_VERIFYING = "auto2:ai-verifying";
 export const LABEL_SENSITIVE_REVIEW = "auto2:sensitive-review";
+/*
+FNXC:UpstreamLatency 2026-08-07-19:00:
+auto2:ai-verified marks an independent verifier APPROVE for the exact candidate head.
+Finalize must treat this as merge-eligible for automation/upstream-* without Anas966.
+*/
+export const LABEL_AI_VERIFIED = "auto2:ai-verified";
 export const LABEL_REFRESH_REQUIRED = "auto2:refresh-required";
 export const LABEL_BLOCKED_POLICY = "auto2:blocked-policy";
 
@@ -131,6 +137,18 @@ export function resolveSensitiveContinuation(input) {
     return {
       action: "merge-eligible",
       reason: "independent verifier APPROVE + deterministic gates passed",
+    };
+  }
+
+  /*
+  FNXC:UpstreamLatency 2026-08-07-19:00:
+  Durable label auto2:ai-verified (exact-head sensitive-review APPROVE) is also merge-eligible.
+  Do not re-dispatch sensitive-review or demand Anas966 for autonomous upstream candidates.
+  */
+  if (input.aiVerifiedLabel === true && input.deterministicPassed === true) {
+    return {
+      action: "merge-eligible",
+      reason: "auto2:ai-verified label present with deterministic PASS — AI verifier already APPROVE",
     };
   }
 
