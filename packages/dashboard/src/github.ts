@@ -2583,7 +2583,7 @@ export class GitHubClient {
       logExcerpt?: string | null;
     }>
   > {
-    const headers = this.getHeaders();
+    const headers = this.buildHeaders();
     const checksUrl = `${this.baseUrl}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100`;
     const checksRes = await fetch(checksUrl, { headers });
     if (!checksRes.ok) {
