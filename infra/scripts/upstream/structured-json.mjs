@@ -31,7 +31,9 @@ export function classifyAiFailure(input) {
     return "AI_PROTOCOL_ERROR";
   }
   if (
-    /model unavailable|provider|invocation failed|timed out|timeout|cursor-agent exit|api key|network/.test(reason)
+    /model unavailable|provider|invocation failed|timed out|timeout|cursor-agent exit|exit 143|sigkill|sigterm|api key|network/.test(
+      reason,
+    )
   ) {
     return "AI_PROVIDER_ERROR";
   }
