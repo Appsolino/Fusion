@@ -34,6 +34,12 @@ import {
   buildTargetedRepairInstructions,
   hasMeaningfulCandidateDelta,
 } from "./repair-convergence.mjs";
+/*
+FNXC:UpstreamLatency 2026-08-07-18:30:
+Merge orchestrator-derived migration/registry package into repair-loop verifier evidence
+so post-repair verification does not re-open undeclared-scope REQUEST_CHANGES.
+*/
+import { buildSensitiveReviewPackage, toVerifierEvidenceFields } from "./sensitive-review-package.mjs";
 
 export const DEFAULT_MAX_REPAIR_ATTEMPTS = 3;
 
@@ -369,6 +375,24 @@ export async function runExpertRepairLoop(input) {
         model: "claude-opus-5-thinking-high",
         classification: "AI_VERIFIER_REASONING",
       });
+      /** @type {Record<string, unknown>} */
+      let packageFields = {};
+      try {
+        if (candidateSha && upstreamSha && baseAppsolinoSha && input.worktreePath) {
+          const reviewPkg = buildSensitiveReviewPackage({
+            worktreePath: input.worktreePath,
+            candidateSha,
+            upstreamSha,
+            baseAppsolinoSha,
+            integrity: { passed: tests.passed === true, failures: tests.failures || [] },
+          });
+          packageFields = toVerifierEvidenceFields(reviewPkg);
+        }
+      } catch (err) {
+        packageFields = {
+          sensitiveReviewEvidenceOmission: `package build failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
       const verifier = await verifierFn({
         worktreePath: input.worktreePath,
         timeoutMs: verifierTimeout,
@@ -380,10 +404,19 @@ export async function runExpertRepairLoop(input) {
           originalProblem: summarizeProblem(input.evidence),
           upstreamIntent: expert.decision.upstreamIntent,
           diffText,
-          patchRegistryChanges: expert.decision.patchActions,
+          patchRegistryChanges:
+            Array.isArray(packageFields.patchRegistryChanges) && packageFields.patchRegistryChanges.length
+              ? packageFields.patchRegistryChanges
+              : expert.decision.patchActions,
+          migrationInfo: packageFields.migrationInfo ?? null,
+          resolverPatchActions: expert.decision.patchActions || [],
+          sensitiveReviewEvidenceOmission: packageFields.sensitiveReviewEvidenceOmission || null,
           deterministicTestResults: {
             passed: tests.passed,
             failures: tests.failures || [],
+            ...(packageFields.deterministicTestResults && typeof packageFields.deterministicTestResults === "object"
+              ? packageFields.deterministicTestResults
+              : {}),
           },
           riskClass: input.evidence?.riskClass || "SENSITIVE",
           candidateSha,
