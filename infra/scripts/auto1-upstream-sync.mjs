@@ -201,34 +201,123 @@ Merge-base: ${delta.mergeBase}
   let conflict = false;
   /** @type {string[]} */
   let conflictedFiles = [];
+  /** @type {object|null} */
+  let upstreamFixedResolution = null;
   if (merge.status !== 0) {
-    conflict = true;
     conflictedFiles = git(repoDir, ["diff", "--name-only", "--diff-filter=U"], { allowFailure: true })
       .stdout.split("\n")
       .filter(Boolean);
-    git(repoDir, ["merge", "--abort"], { allowFailure: true });
-    mkdirSync(join(repoDir, dirname(STATUS_PATH)), { recursive: true });
-    const status = {
-      outcome: "conflict",
-      recordedAt: new Date().toISOString(),
-      integrationBranch,
-      appsolinoSha: delta.appsolinoSha,
-      upstreamSha: delta.upstreamSha,
-      mergeBase: delta.mergeBase,
-      ahead: delta.ahead,
-      behind: delta.behind,
-      conflictedFiles,
-      touchesWorkflows: delta.touchesWorkflows,
-      touchesMigrations: delta.touchesMigrations,
-      touchesLockfile: delta.touchesLockfile,
-    };
-    writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
-    git(repoDir, ["add", STATUS_PATH]);
-    git(repoDir, [
-      "commit",
-      "-m",
-      `chore(auto1): record upstream merge conflict for ${delta.upstreamSha.slice(0, 12)}`,
-    ]);
+
+    /*
+    FNXC:UpstreamPatchReconcile 2026-08-07-06:20:
+    Before aborting, attempt Finding Comparison on clean upstream. If every conflicted
+    path is covered by a patch proven UPSTREAM_FIXED, take upstream and complete the
+    merge (real V1→V1.1 retirement path). Do not hand-edit the conflict.
+    */
+    if (conflictedFiles.length > 0 && input.skipUpstreamFixedConflictResolve !== true) {
+      const resolverScript = join(
+        dirname(fileURLToPath(import.meta.url)),
+        "upstream",
+        "resolve-upstream-fixed-conflicts.mjs",
+      );
+      const resolve = spawnSync(
+        process.execPath,
+        [
+          resolverScript,
+          "--repo-dir", repoDir,
+          "--upstream-sha", delta.upstreamSha,
+          "--upstream-before", delta.mergeBase,
+          "--conflicted-files", conflictedFiles.join(","),
+          "--json",
+        ],
+        {
+          encoding: "utf8",
+          cwd: repoDir,
+          env: process.env,
+          timeout: 1_200_000,
+        },
+      );
+      try {
+        upstreamFixedResolution = JSON.parse(resolve.stdout || "{}");
+      } catch {
+        upstreamFixedResolution = {
+          resolved: false,
+          parseError: true,
+          stderr: resolve.stderr,
+          status: resolve.status,
+        };
+      }
+    }
+
+    if (upstreamFixedResolution?.resolved === true) {
+      conflict = false;
+      conflictedFiles = [];
+      mkdirSync(join(repoDir, dirname(STATUS_PATH)), { recursive: true });
+      const status = {
+        outcome: "merged",
+        recordedAt: new Date().toISOString(),
+        integrationBranch,
+        appsolinoSha: delta.appsolinoSha,
+        candidateBaseAppsolinoSha: delta.appsolinoSha,
+        upstreamSha: delta.upstreamSha,
+        candidateUpstreamSha: delta.upstreamSha,
+        mergeBase: delta.mergeBase,
+        ahead: delta.ahead,
+        behind: delta.behind,
+        conflictedFiles: [],
+        touchesWorkflows: delta.touchesWorkflows,
+        touchesMigrations: delta.touchesMigrations,
+        touchesLockfile: delta.touchesLockfile,
+        changedFileCount: delta.changedFiles.length,
+        upstreamFixedConflictResolution: {
+          action: upstreamFixedResolution.decision?.action || "TAKE_UPSTREAM",
+          retiredPatchIds: upstreamFixedResolution.decision?.retiredPatchIds || [],
+          reason: upstreamFixedResolution.decision?.reason || null,
+        },
+      };
+      writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
+      git(repoDir, ["add", STATUS_PATH, ".appsolino/patches"], { allowFailure: true });
+      const staged = git(repoDir, ["diff", "--cached", "--name-only"], { allowFailure: true }).stdout;
+      if (staged) {
+        git(repoDir, [
+          "commit",
+          "-m",
+          `chore(auto1): retire UPSTREAM_FIXED patches after absorb ${delta.upstreamSha.slice(0, 12)}`,
+        ]);
+      }
+    } else {
+      conflict = true;
+      git(repoDir, ["merge", "--abort"], { allowFailure: true });
+      mkdirSync(join(repoDir, dirname(STATUS_PATH)), { recursive: true });
+      const status = {
+        outcome: "conflict",
+        recordedAt: new Date().toISOString(),
+        integrationBranch,
+        appsolinoSha: delta.appsolinoSha,
+        upstreamSha: delta.upstreamSha,
+        mergeBase: delta.mergeBase,
+        ahead: delta.ahead,
+        behind: delta.behind,
+        conflictedFiles,
+        touchesWorkflows: delta.touchesWorkflows,
+        touchesMigrations: delta.touchesMigrations,
+        touchesLockfile: delta.touchesLockfile,
+        upstreamFixedConflictResolution: upstreamFixedResolution
+          ? {
+              resolved: false,
+              action: upstreamFixedResolution.decision?.action || null,
+              reason: upstreamFixedResolution.decision?.reason || upstreamFixedResolution.reason || null,
+            }
+          : null,
+      };
+      writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
+      git(repoDir, ["add", STATUS_PATH]);
+      git(repoDir, [
+        "commit",
+        "-m",
+        `chore(auto1): record upstream merge conflict for ${delta.upstreamSha.slice(0, 12)}`,
+      ]);
+    }
   } else {
     mkdirSync(join(repoDir, dirname(STATUS_PATH)), { recursive: true });
     const status = {
