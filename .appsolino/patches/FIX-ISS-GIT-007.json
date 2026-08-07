@@ -20,7 +20,7 @@
     "relatedPr": null,
     "relatedCommit": "cb57093d0342bd8f19116121218f68742468e2e3",
     "evidence": "upstream-commit:7824150715aab77c6aa7146436631bec4b5520bc | path-overlap:.changeset/fn-8769-default-branch-group-auto-merge-gate.md,docs/architecture.md,docs/missions.md,packages/core/src/__tests__/mission-store.sync-auto-merge.test.ts,packages/core/src/__tests__/task-merge.test.ts | upstream-claims-behavior-fix | upstream-commit:cb57093d0342bd8f19116121218f68742468e2e3 | path-overlap:packages/cli/src/__tests__/bin-pr-router.test.ts,packages/cli/src/plugin-sdk-core-runtime-shim.mjs,packages/core/package.json,packages/core/src/__test-utils__/pg-test-harness.ts,packages/core/src/__test-utils__/vitest-setup.ts | upstream-claims-behavior-fix | defect still fails on clean upstream; overlapping paths",
-    "comparedAt": "2026-08-07T16:25:54Z"
+    "comparedAt": "2026-08-07T16:27:14Z"
   },
   "localAction": {
     "patchRequired": true,
@@ -56,7 +56,19 @@
         "packages/engine/src/merge/group-merge-coordinator.ts"
       ],
       "createdAt": "2026-08-07T16:25:54Z"
+    },
+    {
+      "revision": 3,
+      "againstUpstreamSha": "fc2040ca84762f6460e5259a8052af5eadab2a9f",
+      "summary": "defect still reproduces on clean upstream — retain/adapt patch identity",
+      "files": [
+        "infra/scripts/auto1-upstream-sync.mjs",
+        "packages/engine/src/merge/pr-nodes.ts",
+        "packages/engine/src/merge/integration-branch.ts",
+        "packages/engine/src/merge/group-merge-coordinator.ts"
+      ],
+      "createdAt": "2026-08-07T16:27:14Z"
     }
   ],
-  "updatedUtc": "2026-08-07T16:25:54Z"
+  "updatedUtc": "2026-08-07T16:27:14Z"
 }
