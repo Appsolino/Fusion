@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "run-patch-reconcile-live.mjs",
+  "recordedUtc": "2026-08-07T19:14:13Z",
+  "upstreamBefore": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+  "upstreamAfter": "1f9b0e644abb27e19803637803d74e37d7c45ce2",
+  "patch": "FIX-LANE-WIRING-TOUCH-FIXTURE",
+  "cleanUpstreamRegression": {
+    "result": "PASS"
+  },
+  "semanticComparison": {
+    "classification": "UPSTREAM_FIXED",
+    "evidence": [
+      "upstream-commit:5e718544acc6ab3c000630e38b9672d4c4c1da3c",
+      "path-overlap:packages/dashboard/app/task-modal-touch-resize-e2e-fixture.tsx",
+      "upstream-claims-behavior-fix",
+      "clean-upstream-regression-PASS + upstream behavior fix evidence"
+    ],
+    "relatedCommit": "5e718544acc6ab3c000630e38b9672d4c4c1da3c",
+    "equivalentBehavior": true
+  },
+  "classification": "UPSTREAM_FIXED",
+  "action": "RETIRED",
+  "status": "RETIRED"
+}

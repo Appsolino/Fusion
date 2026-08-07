@@ -1,6 +1,7 @@
 {
+  "schemaVersion": 1,
   "id": "FIX-FALSE-SUCCESS-PUSH",
-  "status": "active",
+  "status": "ACTIVE",
   "defect": {
     "description": "When pushAfterMerge is enabled, a failed push still finalized the task as done (false SUCCESS).",
     "reproduction": "Enable pushAfterMerge; merge succeeds locally; push fails; task column becomes done with pushedToRemote:false.",
@@ -14,31 +15,43 @@
     "packages/engine/src/__tests__/merger-ai-push-after-merge.test.ts"
   ],
   "upstreamComparison": {
-    "classification": "APPSOLINO_ONLY",
-    "comparedAgainstSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
-    "comparedAt": "2026-08-07T04:40:00Z",
-    "evidence": "Upstream documents non-fatal push-after-merge finalize. Appsolino truthfulness invariant forbids DONE when a configured mandatory push final fails.",
+    "classification": "UPSTREAM_RELATED",
+    "comparedAgainstSha": "1f9b0e644abb27e19803637803d74e37d7c45ce2",
     "relatedIssue": null,
-    "relatedPr": "https://github.com/Appsolino/Fusion/pull/124",
-    "relatedCommit": null
+    "relatedPr": null,
+    "relatedCommit": "eaadd153b1f3e90cf594b6e892d0851296a66b4e",
+    "evidence": "upstream-commit:eaadd153b1f3e90cf594b6e892d0851296a66b4e | path-overlap:.changeset/fn-8764-workflow-role-agents.md,CONCEPTS.md,docs/agents.md,docs/architecture.md,docs/cli-reference.md | defect still fails on clean upstream; overlapping paths",
+    "comparedAt": "2026-08-07T19:13:27Z"
   },
   "localAction": {
     "patchRequired": true,
-    "files": [
+    "applyPaths": [
       "packages/engine/src/merger.ts",
       "packages/engine/src/merge/merger-ai.ts"
     ]
   },
   "retirementCondition": {
-    "regressionTestPassesOnCleanUpstream": true
+    "regressionTestPassesOnCleanUpstream": true,
+    "notes": null
   },
   "revisions": [
     {
       "revision": 1,
       "againstUpstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
       "summary": "Refuse DONE on pushAfterMerge failure; park PUSH_FAILED",
+      "files": [],
       "createdAt": "2026-08-07T04:40:00Z"
+    },
+    {
+      "revision": 2,
+      "againstUpstreamSha": "1f9b0e644abb27e19803637803d74e37d7c45ce2",
+      "summary": "defect still reproduces on clean upstream — retain/adapt patch identity",
+      "files": [
+        "packages/engine/src/merger.ts",
+        "packages/engine/src/merge/merger-ai.ts"
+      ],
+      "createdAt": "2026-08-07T19:13:27Z"
     }
   ],
-  "updatedUtc": "2026-08-07T04:40:00Z"
+  "updatedUtc": "2026-08-07T19:13:27Z"
 }
