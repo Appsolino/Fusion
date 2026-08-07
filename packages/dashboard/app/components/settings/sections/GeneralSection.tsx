@@ -284,6 +284,19 @@ export function GeneralSection({ form, setForm, projectId, addToast, prefixError
           {!isKnownSelectableWorkflow(refinementTaskWorkflowValue) && (<option value={refinementTaskWorkflowValue}>{refinementTaskWorkflowValue}</option>)}
         </select>
       </div>
+      <div className="form-group">
+        <div className="settings-field-label-row">
+          <label htmlFor="ephemeralAgentsEnabled" className="checkbox-label">
+            <input id="ephemeralAgentsEnabled" type="checkbox" checked={form.ephemeralAgentsEnabled !== false} onChange={(e) => setForm((f) => ({ ...f, ephemeralAgentsEnabled: e.target.checked }))}/>{t("settings.general.useEphemeralTaskWorkerAgents", " Use ephemeral task-worker agents ")}
+          </label>
+          <SettingsHelpTip settingKey="ephemeralAgentsEnabled">{t("settings.general.ephemeralAgentsCompatibilityHint", " Retained for configuration compatibility. This setting does not affect scheduler assignment or admission, executor workflow dispatch or re-entry, mission start, or workflow-stage principal routing. ")}</SettingsHelpTip>
+        </div>
+      </div>
+      {/*
+        FNXC:WorkflowAgentRouting 2026-08-07-08:45:
+        Retain this project setting's UI round trip for operators with existing configuration.
+        Its value is intentionally routing-inert: durable workflow principals decide all stages.
+      */}
       {/*
         FNXC:EphemeralAgentTaskCreation 2026-07-30-12:00:
         Operators choose free creation, an operator-mailbox proposal, or denial for ephemeral worker follow-ups.

@@ -1392,6 +1392,29 @@ describe("SettingsModal", () => {
       expect(screen.getByRole("option", { name: "Require changelog update (existing changelog)" })).toBeInTheDocument();
     });
 
+    it("persists the routing-inert ephemeral agent compatibility input", async () => {
+      renderModal({ initialSection: "general" });
+      await waitForSettingsModalReady();
+
+      const toggle = screen.getByLabelText("Use ephemeral task-worker agents") as HTMLInputElement;
+      expect(toggle.checked).toBe(true);
+      await settingsModalUser.click(toggle);
+
+      await waitFor(() => expect(mockUpdateSettings).toHaveBeenCalled());
+      expect(mockUpdateSettings.mock.calls[0]?.[0]).toMatchObject({ ephemeralAgentsEnabled: false });
+    });
+
+    it("defaults the ephemeral agent compatibility input when an upgraded record omits it", async () => {
+      const { ephemeralAgentsEnabled: _omitted, ...upgradeSettings } = defaultSettings;
+      mockFetchSettings.mockResolvedValueOnce(upgradeSettings);
+      mockFetchSettingsByScope.mockResolvedValueOnce({ global: defaultSettings, project: {} });
+
+      renderModal({ initialSection: "general" });
+      await waitForSettingsModalReady();
+
+      expect((screen.getByLabelText("Use ephemeral task-worker agents") as HTMLInputElement).checked).toBe(true);
+    });
+
     it("reports Quick Chat launcher changes immediately before save", async () => {
       const onQuickChatButtonModeChange = vi.fn();
       renderModal({ initialSection: "general", onQuickChatButtonModeChange });

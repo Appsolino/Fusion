@@ -1746,8 +1746,9 @@ export interface ProjectSettings {
    */
   planApprovalMode?: "workflow" | "auto-approve-all" | "require-all";
   /**
-   * @deprecated FN-8764 accepts this legacy input only so upgrades can discard it.
-   * Workflow stages always route through durable multi-role principals; this flag has no effect.
+   * FNXC:WorkflowAgentRouting 2026-08-07-08:57:
+   * Retain this legacy input for persisted settings and client compatibility. Workflow stages
+   * always route through durable multi-role principals; this flag cannot affect that routing.
    */
   ephemeralAgentsEnabled?: boolean;
   /*

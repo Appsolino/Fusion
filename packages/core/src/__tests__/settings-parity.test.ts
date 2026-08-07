@@ -286,12 +286,12 @@ describe("settings key parity", () => {
     expect(isGlobalSettingsKey("executorAllowSiblingBranchRename")).toBe(false);
   });
 
-  it("retires the ephemeral workflow-stage setting while accepting stale input", () => {
-    expect(DEFAULT_PROJECT_SETTINGS).not.toHaveProperty("ephemeralAgentsEnabled");
-    expect(isProjectSettingsKey("ephemeralAgentsEnabled")).toBe(false);
+  it("defaults the routing-inert ephemeral compatibility input and keeps it project-scoped", () => {
+    expect(DEFAULT_PROJECT_SETTINGS.ephemeralAgentsEnabled).toBe(true);
+    expect(isProjectSettingsKey("ephemeralAgentsEnabled")).toBe(true);
     expect(isGlobalSettingsKey("ephemeralAgentsEnabled")).toBe(false);
     expect(canonicalizeSettings({ ephemeralAgentsEnabled: false } as import("../types.js").Settings))
-      .not.toHaveProperty("ephemeralAgentsEnabled");
+      .toMatchObject({ ephemeralAgentsEnabled: false });
   });
 
   it("defaults ephemeralAgentsCanCreateTasks to true and keeps it project-scoped", () => {

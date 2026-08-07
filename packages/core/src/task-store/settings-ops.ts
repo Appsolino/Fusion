@@ -89,15 +89,13 @@ export async function updateSettingsImpl(store: TaskStore, patch: Partial<Settin
           })()
         : patch;
     /*
-    FNXC:WorkflowAgentRouting 2026-08-07-06:08:
-    The removed ephemeral-stage setting remains accepted at this boundary for stale clients,
-    then is stripped before the atomic settings snapshot and revision are persisted.
+    FNXC:WorkflowAgentRouting 2026-08-07-08:45:
+    Preserve ephemeralAgentsEnabled in project updates for configuration compatibility. Its
+    routing-inert behavior is enforced exclusively by scheduler, executor, and mission consumers.
     */
-    const { ephemeralAgentsEnabled: _retiredEphemeralAgentsEnabled, ...workflowPrincipalPatch } = guardedPatch;
-
-    // Filter out global-only fields — they should go through updateGlobalSettings()
+    // Filter out global-only fields — they should go through updateGlobalSettings().
     const projectPatch: Partial<Settings> = {};
-    for (const [key, value] of Object.entries(workflowPrincipalPatch)) {
+    for (const [key, value] of Object.entries(guardedPatch)) {
       if (!isGlobalOnlySettingsKey(key)) {
         (projectPatch as Record<string, unknown>)[key] = value;
       }
