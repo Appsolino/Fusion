@@ -1,24 +1,24 @@
 {
   "schemaVersion": 1,
-  "upstreamHead": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
-  "integratedUpstreamSha": "8120c07b6a074755f44ed22f066b40eaeb19f199",
-  "candidateUpstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
-  "candidateAppsolinoSha": "b03677a4cc08e5b8a5640cf06526622c0fd8f9fc",
-  "commitsBehindIntegrated": 18,
+  "upstreamHead": "8eb050ed493dfe5eb59647c3cbfe2fa77327ae85",
+  "integratedUpstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+  "candidateUpstreamSha": "8eb050ed493dfe5eb59647c3cbfe2fa77327ae85",
+  "candidateAppsolinoSha": "d1f0cada06ac7d2ac5069f4652bbb177786a3972",
+  "commitsBehindIntegrated": 2,
   "commitsBehindCandidate": 0,
-  "state": "CANDIDATE_BUILDING",
+  "state": "UPSTREAM_CHANGED",
   "overallHealthy": false,
-  "overallUnhealthy": false,
-  "inProgress": true,
-  "activeCandidatePr": 123,
+  "overallUnhealthy": true,
+  "inProgress": false,
+  "activeCandidatePr": 129,
   "reasons": [
-    "candidate matches upstream; build/PR preparation"
+    "integrated 297ec17f8eeb is 2 commit(s) behind upstream 8eb050ed493d"
   ],
-  "lastCheckedAt": "2026-08-07T04:17:15Z",
+  "lastCheckedAt": "2026-08-07T06:58:01Z",
   "lastIntegratedAt": null,
   "expertActive": false,
   "aiVerifierActive": false,
-  "auto1Outcome": "merged",
+  "auto1Outcome": "conflict",
   "auto2Action": null,
   "blockedReason": null
 }
