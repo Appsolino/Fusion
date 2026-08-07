@@ -1,15 +1,24 @@
 {
   "outcome": "merged",
-  "recordedAt": "2026-08-07T04:17:00.025Z",
+  "recordedAt": "2026-08-07T09:32:29.982Z",
   "integrationBranch": "main",
-  "appsolinoSha": "b03677a4cc08e5b8a5640cf06526622c0fd8f9fc",
-  "upstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
-  "mergeBase": "8120c07b6a074755f44ed22f066b40eaeb19f199",
-  "ahead": 220,
-  "behind": 18,
+  "appsolinoSha": "5f1356a10aaf9fd66ced18bb5f67256a98f82a4f",
+  "candidateBaseAppsolinoSha": "5f1356a10aaf9fd66ced18bb5f67256a98f82a4f",
+  "upstreamSha": "eaadd153b1f3e90cf594b6e892d0851296a66b4e",
+  "candidateUpstreamSha": "eaadd153b1f3e90cf594b6e892d0851296a66b4e",
+  "mergeBase": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+  "ahead": 240,
+  "behind": 6,
   "conflictedFiles": [],
   "touchesWorkflows": false,
-  "touchesMigrations": false,
+  "touchesMigrations": true,
   "touchesLockfile": false,
-  "changedFileCount": 193
+  "changedFileCount": 143,
+  "upstreamFixedConflictResolution": {
+    "action": "TAKE_UPSTREAM",
+    "retiredPatchIds": [
+      "FIX-LANE-WIRING-TOUCH-FIXTURE"
+    ],
+    "reason": "all conflicted paths covered by patches retired via Finding Comparison on clean upstream"
+  }
 }
