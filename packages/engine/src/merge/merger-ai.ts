@@ -53,6 +53,7 @@ import {
   resolveValidatorSettingsModel,
   resolveMergerFallbackModel,
   resolveReboundTarget,
+  resolveReboundTargetForTask,
   resolveTerminalColumns,
   resolveWorkflowIrForTask,
   type MergeDetails,
@@ -1557,9 +1558,13 @@ export async function runAiMerge(
 
 /*
 FNXC:MergePush 2026-07-11-22:25:
-Post-finalization push step for the sole production merge path. Runs AFTER the task is
-finalized (mirrors the legacy contract: "task marked done anyway; local main may diverge
-from origin" on failure) so a push problem can never park or roll back a landed merge.
+Post-finalization push step for the sole production merge path.
+
+FNXC:MergeTruthfulness 2026-08-07-04:40:
+Prior contract finalized DONE before push and kept DONE on failure ("marked done anyway").
+That is a false SUCCESS when pushAfterMerge is enabled. On push failure we now reverse
+the finalize: park status=failed with PUSH_FAILED and move off done. Local merge is not
+rolled back. Shutdown aborts remain non-fatal for the local land but still refuse DONE.
 Also runs after an empty/no-op finalize: the integration ref may still be ahead of the
 remote from earlier merges whose pushes failed, and pushing an up-to-date remote is a
 free no-op — this makes the setting self-healing. Every attempt emits a `push:origin`
@@ -1578,6 +1583,34 @@ async function runPushAfterMergeStep(input: {
 }): Promise<void> {
   const { store, projectRootDir, taskId, settings, integrationBranch, audit, log, options, result } = input;
   if (settings.pushAfterMerge !== true || settings.mergeStrategy === "pull-request") return;
+
+  async function refuseDoneAfterPushFailure(message: string): Promise<void> {
+    await store.updateTask(taskId, {
+      status: "failed",
+      error: `PUSH_FAILED: ${message}`,
+    }).catch(() => undefined);
+    /*
+    FNXC:MergeTruthfulness 2026-08-07-05:55:
+    Leave the DONE column via the board's resolved rebound lane — never a legacy
+    "in-review" literal (check:move-target-literals / no-legacy-move-targets gate).
+    */
+    try {
+      const rebound = await resolveReboundTargetForTask(store, taskId);
+      await store.moveTask(taskId, rebound, {
+        preserveProgress: true,
+        moveSource: "engine",
+        recoveryRehome: true,
+      });
+    } catch {
+      // status/error above remains the durable false-SUCCESS prevention signal
+    }
+    await store.logEntry(
+      taskId,
+      `Push to remote failed after merge — refusing DONE (pushAfterMerge mandatory final failed); local ${integrationBranch} may diverge from origin: ${message}`,
+      "PushToRemoteFailed",
+    ).catch(() => undefined);
+  }
+
   try {
     const pushOutcome = await pushAfterMergeToRemote({
       store,
@@ -1626,19 +1659,18 @@ async function runPushAfterMergeStep(input: {
       }
     } else {
       aiMergeLog.warn(`${taskId}: push to remote failed: ${pushOutcome.error}`);
-      await store.logEntry(
-        taskId,
-        `Push to remote failed after merge — task finalized anyway; local ${integrationBranch} may diverge from ${pushOutcome.remote ?? "origin"}: ${pushOutcome.error}`,
-        "PushToRemoteFailed",
-      ).catch(() => undefined);
+      await refuseDoneAfterPushFailure(pushOutcome.error || "push failed");
     }
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "MergeAbortedError") {
       /*
       FNXC:MergePush 2026-07-22-18:48:
       Tchori-Labs/Fusion#5 requires shutdown aborts after finalization to remain non-fatal but never silent. The remote recovery branch preserves the approved squash; MergeResult, task log, and run-audit identify that the target push did not complete.
+
+      FNXC:MergeTruthfulness 2026-08-07-04:40:
+      Still refuse DONE — shutdown abort of a mandatory push is not SUCCESS.
       */
-      const message = "Push after merge aborted by shutdown signal; the local merge remains finalized and its divergence recovery branch is retained";
+      const message = "Push after merge aborted by shutdown signal; the local merge remains landed and its divergence recovery branch is retained";
       result.pushedToRemote = false;
       result.pushError = message;
       aiMergeLog.warn(`${taskId}: ${message}`);
@@ -1647,7 +1679,7 @@ async function runPushAfterMergeStep(input: {
         target: taskId,
         metadata: { integrationBranch, remote: settings.pushRemote ?? "origin", outcome: "aborted" },
       }).catch(() => undefined);
-      await store.logEntry(taskId, message, "PushToRemoteFailed").catch(() => undefined);
+      await refuseDoneAfterPushFailure(message);
       return;
     }
     const message = getErrorMessage(err);
@@ -1659,11 +1691,7 @@ async function runPushAfterMergeStep(input: {
       target: taskId,
       metadata: { integrationBranch, remote: settings.pushRemote ?? "origin", outcome: "failed", stderrPreview: message.slice(0, 500) },
     }).catch(() => undefined);
-    await store.logEntry(
-      taskId,
-      `Push to remote threw after merge — task finalized anyway; local ${integrationBranch} may diverge from origin: ${message}`,
-      "PushToRemoteFailed",
-    ).catch(() => undefined);
+    await refuseDoneAfterPushFailure(message);
   }
 }
 

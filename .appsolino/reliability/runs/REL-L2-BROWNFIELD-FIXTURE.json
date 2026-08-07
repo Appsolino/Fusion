@@ -39,8 +39,10 @@
   },
   "finalStatus": "SUCCESS",
   "mandatoryFinalFailed": false,
-  "reason": "L2 cross-file regression path",
+  "reason": "L2 cross-file regression path [fixture harness \u2014 not live Fusion agent proof]",
   "wallClockDurationMs": 382,
   "recoveredAfterFailure": false,
-  "recordedUtc": "2026-08-07T04:24:57Z"
+  "recordedUtc": "2026-08-07T04:24:57Z",
+  "synthetic": true,
+  "testInjection": true
 }

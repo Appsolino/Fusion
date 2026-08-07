@@ -309,6 +309,28 @@ describe("false-green / stale / race regressions", () => {
     assert.equal(r.action, "REFRESH_REQUIRED");
   });
 
+  it("finalizer race refuses Appsolino-main drift under candidate", () => {
+    const r = assertFinalizerFreshness({
+      candidateUpstreamSha: "u".padEnd(40, "1"),
+      liveUpstreamHead: "u".padEnd(40, "1"),
+      candidateBaseAppsolinoSha: "old-main".padEnd(40, "a"),
+      liveAppsolinoMain: "new-main".padEnd(40, "b"),
+    });
+    assert.equal(r.action, "REFRESH_REQUIRED");
+    assert.equal(r.mismatch, "appsolino-base");
+  });
+
+  it("finalizer race refuses when both tips moved", () => {
+    const r = assertFinalizerFreshness({
+      candidateUpstreamSha: "old-up".padEnd(40, "0"),
+      liveUpstreamHead: "new-up".padEnd(40, "1"),
+      candidateBaseAppsolinoSha: "old-main".padEnd(40, "a"),
+      liveAppsolinoMain: "new-main".padEnd(40, "b"),
+    });
+    assert.equal(r.action, "REFRESH_REQUIRED");
+    assert.equal(r.mismatch, "upstream");
+  });
+
   it("obsolete automation PRs are supersede-closed, not merged", () => {
     const sel = selectRollingCandidate({
       upstreamHead: "297ec17f8eeba5822b359957a7fb4e7e73d61d19",

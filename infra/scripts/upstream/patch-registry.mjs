@@ -85,7 +85,16 @@ export function validatePatchRecord(raw) {
       },
       localAction: {
         patchRequired: p.localAction?.patchRequired !== false,
-        applyPaths: Array.isArray(p.localAction?.applyPaths) ? p.localAction.applyPaths.map(String) : [],
+        /*
+        FNXC:UpstreamPatchRegistry 2026-08-07-05:55:
+        Accept both applyPaths and legacy files[] so Finding Comparison path-overlap
+        works for patches authored before the applyPaths rename.
+        */
+        applyPaths: Array.isArray(p.localAction?.applyPaths) && p.localAction.applyPaths.length > 0
+          ? p.localAction.applyPaths.map(String)
+          : Array.isArray(p.localAction?.files)
+            ? p.localAction.files.map(String)
+            : [],
       },
       retirementCondition: {
         regressionTestPassesOnCleanUpstream:

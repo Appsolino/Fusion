@@ -1,0 +1,42 @@
+{
+  "id": "FIX-VERIFICATION-PASSED-EVIDENCE",
+  "status": "active",
+  "defect": {
+    "description": "verificationPassed for rebase merges was assigned from command configuration presence rather than an explicit result of runDeterministicVerification.",
+    "reproduction": "Rebase post-merge audit path with testCommand set; verificationPassed true without returned execution evidence from applyBranchCommitsPreservingHistory.",
+    "affectedSubsystem": "engine/merger"
+  },
+  "introducedAgainst": {
+    "upstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19"
+  },
+  "regressionTests": [
+    "packages/engine/src/__tests__/post-merge-audit-action.test.ts"
+  ],
+  "upstreamComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "comparedAgainstSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+    "comparedAt": "2026-08-07T04:40:00Z",
+    "evidence": "Caller invented verificationPassed from Boolean(test||build). Now returned from the function that runs verification.",
+    "relatedIssue": null,
+    "relatedPr": "https://github.com/Appsolino/Fusion/pull/124",
+    "relatedCommit": null
+  },
+  "localAction": {
+    "patchRequired": true,
+    "files": [
+      "packages/engine/src/merger.ts"
+    ]
+  },
+  "retirementCondition": {
+    "regressionTestPassesOnCleanUpstream": true
+  },
+  "revisions": [
+    {
+      "revision": 1,
+      "againstUpstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+      "summary": "Return verificationPassed from applyBranchCommitsPreservingHistory after successful run",
+      "createdAt": "2026-08-07T04:40:00Z"
+    }
+  ],
+  "updatedUtc": "2026-08-07T04:40:00Z"
+}

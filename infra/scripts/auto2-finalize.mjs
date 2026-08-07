@@ -116,7 +116,7 @@ export function runAuto2Finalize(input) {
   const prRes = runGh([
     "pr", "view", prNumber,
     "--repo", repo,
-    "--json", "number,state,title,headRefName,baseRefName,headRefOid,mergeable,commits,labels,url,mergedAt",
+    "--json", "number,state,title,headRefName,baseRefName,headRefOid,mergeable,commits,labels,url,mergedAt,body",
   ]);
   if (prRes.status !== 0) throw new Error(`gh pr view failed: ${prRes.stderr || prRes.stdout}`);
   const pr = JSON.parse(prRes.stdout);
@@ -272,11 +272,16 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
     }, "head ref not automation/upstream-*");
   }
 
-  // Re-fetch live upstream HEAD before any merge-as-current decision.
+  // Re-fetch live upstream HEAD and Appsolino main before any merge-as-current decision.
   const liveUpstreamHead = resolveLiveUpstreamHead(input, runGh);
+  const liveAppsolinoMain = resolveLiveAppsolinoMain(input, runGh);
   const candidateUpstreamSha =
     input.candidateUpstreamSha ||
     candidateUpstreamFromHead(pr.headRefName || "", liveUpstreamHead);
+  const candidateBaseAppsolinoSha =
+    input.candidateBaseAppsolinoSha ||
+    parseCandidateBaseAppsolinoSha(pr.body || "") ||
+    null;
 
   let reviews;
   if (Array.isArray(input.reviewsForTest)) {
@@ -339,6 +344,8 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
     deterministicPassed: input.validationConclusion !== "failure",
     liveUpstreamHead,
     candidateUpstreamSha,
+    liveAppsolinoMain,
+    candidateBaseAppsolinoSha,
     skipUpstreamFreshnessCheck: input.skipUpstreamFreshnessCheck === true,
     legacyOwnerApprovalOk: verdict.ok === true,
   });
@@ -352,10 +359,13 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
       pr,
       liveUpstreamHead,
       candidateUpstreamSha,
+      liveAppsolinoMain,
+      candidateBaseAppsolinoSha,
       freshness: evaluateFreshness({
         upstreamHead: liveUpstreamHead,
         integratedUpstreamSha: input.integratedUpstreamSha || null,
         candidateUpstreamSha,
+        candidateAppsolinoSha: candidateBaseAppsolinoSha,
         commitsBehindIntegrated: null,
         auto2Action: "refresh-required",
       }),
@@ -388,10 +398,12 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
   }
 
   if (continuation.action === "merge-eligible" && verdict.ok) {
-    // Finalizer race: refuse if upstream moved between classification and merge.
+    // Finalizer race: refuse if upstream OR Appsolino main moved between classification and merge.
     const race = assertFinalizerFreshness({
       candidateUpstreamSha,
       liveUpstreamHead,
+      candidateBaseAppsolinoSha,
+      liveAppsolinoMain,
     });
     if (!race.ok) {
       ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_REFRESH_REQUIRED], input.dryRun === true);
@@ -402,6 +414,9 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
         pr,
         liveUpstreamHead,
         candidateUpstreamSha,
+        liveAppsolinoMain,
+        candidateBaseAppsolinoSha,
+        mismatch: race.mismatch || null,
         mutatedMain: false,
         deployedHostD: false,
       };
@@ -416,6 +431,8 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
     const race = assertFinalizerFreshness({
       candidateUpstreamSha,
       liveUpstreamHead,
+      candidateBaseAppsolinoSha,
+      liveAppsolinoMain,
     });
     if (!race.ok) {
       return {
@@ -423,6 +440,11 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
         reason: race.reason,
         classification,
         pr,
+        liveUpstreamHead,
+        candidateUpstreamSha,
+        liveAppsolinoMain,
+        candidateBaseAppsolinoSha,
+        mismatch: race.mismatch || null,
         mutatedMain: false,
         deployedHostD: false,
       };
@@ -490,6 +512,43 @@ function resolveLiveUpstreamHead(input, runGh) {
   if (res.status !== 0) return null;
   const sha = String(res.stdout || "").trim().toLowerCase();
   return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+/**
+ * FNXC:UpstreamRollingCandidate 2026-08-07-05:55:
+ * Live Appsolino main tip used by the dual finalizer race guard.
+ * @param {*} input
+ * @param {*} runGh
+ */
+function resolveLiveAppsolinoMain(input, runGh) {
+  if (input.liveAppsolinoMain && /^[0-9a-f]{7,40}$/i.test(String(input.liveAppsolinoMain))) {
+    return String(input.liveAppsolinoMain).trim().toLowerCase();
+  }
+  const repo = input.repo || process.env.GITHUB_REPOSITORY || "Appsolino/Fusion";
+  const res = runGh([
+    "api",
+    `repos/${repo}/commits/main`,
+    "--jq",
+    ".sha",
+  ]);
+  if (res.status !== 0) return null;
+  const sha = String(res.stdout || "").trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
+/**
+ * Parse candidateBaseAppsolinoSha from AUTO-1 PR body identity marker or table row.
+ * @param {string} body
+ */
+export function parseCandidateBaseAppsolinoSha(body) {
+  const text = String(body || "");
+  const marker = text.match(/candidateBaseAppsolinoSha:\s*([0-9a-f]{7,40})/i);
+  if (marker) return marker[1].toLowerCase();
+  const table = text.match(/\|\s*candidateBaseAppsolinoSha\s*\|\s*`([0-9a-f]{7,40})`\s*\|/i);
+  if (table) return table[1].toLowerCase();
+  const previous = text.match(/\|\s*Previous Appsolino SHA\s*\|\s*`([0-9a-f]{7,40})`\s*\|/i);
+  if (previous) return previous[1].toLowerCase();
+  return null;
 }
 
 /**

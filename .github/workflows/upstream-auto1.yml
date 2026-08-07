@@ -117,11 +117,55 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           outcome="$(python3 -c 'import json;print(json.load(open("/tmp/auto1-result.json"))["outcome"])')"
           echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          upstream_sha="$(python3 -c 'import json;d=json.load(open("/tmp/auto1-result.json"));print(d.get("upstreamSha") or "")')"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          appsolino_sha="$(python3 -c 'import json;d=json.load(open("/tmp/auto1-result.json"));print(d.get("appsolinoSha") or "")')"
+          echo "appsolino_sha=$appsolino_sha" >> "$GITHUB_OUTPUT"
+          sync_branch="$(python3 -c 'import json;d=json.load(open("/tmp/auto1-result.json"));print(d.get("syncBranch") or "")')"
+          echo "sync_branch=$sync_branch" >> "$GITHUB_OUTPUT"
           # conflict → workflow fails visibly; no-change/merged → success
           if [[ "$outcome" == "conflict" || "$code" -eq 2 ]]; then
             exit 2
           fi
           exit "$code"
+
+      - name: Setup Node for patch reconciliation
+        if: steps.sync.outputs.outcome == 'merged' && steps.sync.outputs.upstream_sha != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Finding Comparison — reconcile patches on clean upstream
+        if: steps.sync.outputs.outcome == 'merged' && steps.sync.outputs.upstream_sha != ''
+        id: patch-reconcile
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          UPSTREAM_SHA: ${{ steps.sync.outputs.upstream_sha }}
+          UPSTREAM_BEFORE: ${{ steps.sync.outputs.appsolino_sha }}
+          SYNC_BRANCH: ${{ steps.sync.outputs.sync_branch }}
+        run: |
+          set -euo pipefail
+          # FNXC:UpstreamPatchReconcile 2026-08-07-05:55:
+          # Automation-only retirement proof against exact clean upstream tip. Do not hand-edit registry.
+          node infra/scripts/upstream/run-patch-reconcile-live.mjs \
+            --repo-dir "$GITHUB_WORKSPACE" \
+            --upstream-sha "$UPSTREAM_SHA" \
+            --upstream-before "$UPSTREAM_BEFORE" \
+            --json > /tmp/patch-reconcile.json
+          cat /tmp/patch-reconcile.json
+          {
+            echo "## Patch reconciliation (clean upstream)"
+            echo
+            echo '```json'
+            cat /tmp/patch-reconcile.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "$(git status --porcelain .appsolino/patches || true)" ]]; then
+            git add .appsolino/patches
+            git commit -m "chore(auto1): reconcile product patches against upstream ${UPSTREAM_SHA:0:12}"
+            git push --force-with-lease origin "HEAD:refs/heads/${SYNC_BRANCH}"
+          fi
 
       - name: Guard — no Host D deploy in AUTO-1
         shell: bash

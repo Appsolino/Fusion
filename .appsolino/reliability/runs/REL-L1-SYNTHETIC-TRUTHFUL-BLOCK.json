@@ -1,13 +1,15 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "taskId": "REL-L1-SYNTHETIC-TRUTHFUL-BLOCK",
   "level": 1,
   "repo": "synthetic",
+  "synthetic": true,
   "startingSha": null,
   "requestedBehavior": "small bug fix",
   "finalStatus": "FAILED",
   "mandatoryFinalFailed": true,
   "reason": "targeted test remained red — truthful failure",
   "recoveredAfterFailure": false,
-  "recordedUtc": "2026-08-07T04:18:50Z"
+  "recordedUtc": "2026-08-07T04:28:13Z",
+  "schemaValid": true
 }

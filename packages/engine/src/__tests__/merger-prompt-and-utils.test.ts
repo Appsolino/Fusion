@@ -443,7 +443,7 @@ describe("push-after-merge", () => {
     ).toBe(false);
   });
 
-  it("records push error but still completes merge when push fails", async () => {
+  it("records push error and refuses DONE when push fails (truthfulness)", async () => {
     setupAiMergeExecSyncWithPush((attempt) => {
       if (attempt === 1) {
         const err = new Error("failed to push some refs");
@@ -466,7 +466,15 @@ describe("push-after-merge", () => {
     expect(result.merged).toBe(true);
     expect(result.pushedToRemote).toBe(false);
     expect(result.pushError).toContain("permission denied");
-    expect(store.moveTask).toHaveBeenCalledWith("FN-050", "done");
+    // FNXC:MergeTruthfulness 2026-08-07-04:40 — pushAfterMerge failure must not finalize DONE
+    expect(store.moveTask).not.toHaveBeenCalledWith("FN-050", "done");
+    expect(store.updateTask).toHaveBeenCalledWith(
+      "FN-050",
+      expect.objectContaining({
+        status: "failed",
+        error: expect.stringContaining("PUSH_FAILED"),
+      }),
+    );
 
     // FN-7625: a failed push must not vanish silently — it needs a persisted
     // audit event and a task log entry, not just a process-wide log line.
@@ -484,7 +492,7 @@ describe("push-after-merge", () => {
     );
     expect(store.logEntry).toHaveBeenCalledWith(
       "FN-050",
-      expect.stringContaining("Push to remote failed after merge"),
+      expect.stringContaining("refusing DONE"),
       "PushToRemoteFailed",
     );
   });

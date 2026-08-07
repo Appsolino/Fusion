@@ -236,7 +236,13 @@ Merge-base: ${delta.mergeBase}
       recordedAt: new Date().toISOString(),
       integrationBranch,
       appsolinoSha: delta.appsolinoSha,
+      /*
+      FNXC:UpstreamRollingCandidate 2026-08-07-05:55:
+      Dual race identity — finalizer must match both live upstream HEAD and live Appsolino main.
+      */
+      candidateBaseAppsolinoSha: delta.appsolinoSha,
       upstreamSha: delta.upstreamSha,
+      candidateUpstreamSha: delta.upstreamSha,
       mergeBase: delta.mergeBase,
       ahead: delta.ahead,
       behind: delta.behind,
@@ -453,7 +459,9 @@ export function buildPrBody(p) {
 | --- | --- |
 | Appsolino integration branch | \`${integrationBranch}\` |
 | Previous Appsolino SHA | \`${delta.appsolinoSha}\` |
+| candidateBaseAppsolinoSha | \`${delta.appsolinoSha}\` |
 | Upstream SHA | \`${delta.upstreamSha}\` |
+| candidateUpstreamSha | \`${delta.upstreamSha}\` |
 | Merge-base | \`${delta.mergeBase}\` |
 | Appsolino ahead | ${delta.ahead} |
 | Appsolino behind | ${delta.behind} |
@@ -470,6 +478,11 @@ ${conflict ? (conflictedFiles.map((f) => `- \`${f}\``).join("\n") || "_unlisted_
 
 ### Changed files (upstream vs merge-base, capped)
 ${sample}
+
+<!-- appsolino-candidate-identity
+candidateBaseAppsolinoSha: ${delta.appsolinoSha}
+candidateUpstreamSha: ${delta.upstreamSha}
+-->
 
 ---
 AUTO-1 only prepares the sync PR. Build/deploy/auto-merge are AUTO-2/AUTO-3.

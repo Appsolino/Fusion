@@ -159,6 +159,7 @@ describe("assertFinalizerFreshness", () => {
     });
     assert.equal(r.ok, false);
     assert.equal(r.action, "REFRESH_REQUIRED");
+    assert.equal(r.mismatch, "upstream");
   });
 
   it("allows matching candidate", () => {
@@ -167,6 +168,58 @@ describe("assertFinalizerFreshness", () => {
       liveUpstreamHead: UP,
     });
     assert.equal(r.ok, true);
+  });
+
+  /*
+  FNXC:UpstreamRollingCandidate 2026-08-07-05:55:
+  Dual race — Appsolino main may move (e.g. #124 merges) while a candidate is open.
+  */
+  it("refuses when Appsolino main moved under the candidate", () => {
+    const r = assertFinalizerFreshness({
+      candidateUpstreamSha: UP,
+      liveUpstreamHead: UP,
+      candidateBaseAppsolinoSha: "a".padEnd(40, "1"),
+      liveAppsolinoMain: "b".padEnd(40, "2"),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.action, "REFRESH_REQUIRED");
+    assert.equal(r.mismatch, "appsolino-base");
+  });
+
+  it("refuses when both upstream and Appsolino main moved", () => {
+    const r = assertFinalizerFreshness({
+      candidateUpstreamSha: CAND,
+      liveUpstreamHead: UP,
+      candidateBaseAppsolinoSha: "a".padEnd(40, "1"),
+      liveAppsolinoMain: "b".padEnd(40, "2"),
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.action, "REFRESH_REQUIRED");
+    // Upstream checked first.
+    assert.equal(r.mismatch, "upstream");
+  });
+
+  it("allows when both upstream and Appsolino base match", () => {
+    const main = "m".padEnd(40, "3");
+    const r = assertFinalizerFreshness({
+      candidateUpstreamSha: UP,
+      liveUpstreamHead: UP,
+      candidateBaseAppsolinoSha: main,
+      liveAppsolinoMain: main,
+    });
+    assert.equal(r.ok, true);
+  });
+
+  it("blocks unresolved when Appsolino base pair is incomplete", () => {
+    const r = assertFinalizerFreshness({
+      candidateUpstreamSha: UP,
+      liveUpstreamHead: UP,
+      candidateBaseAppsolinoSha: "a".padEnd(40, "1"),
+      liveAppsolinoMain: null,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.action, "BLOCKED_UNRESOLVED");
+    assert.equal(r.mismatch, "appsolino-base");
   });
 });
 

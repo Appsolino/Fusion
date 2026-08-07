@@ -12,11 +12,18 @@ import { spawn } from "node:child_process";
 import { validateVerifierVerdict, VERIFIER_VERDICT_SCHEMA_VERSION } from "./expert-decision-schema.mjs";
 import { assertModelAvailable } from "../steward/s1a/cursor-engine.mjs";
 import { cursorChildEnv, assertNoCredentialLeak } from "../steward/s1a/spawn-env.mjs";
-import { CURSOR_AGENT_BIN, S1B_MODEL, S1B_PROVIDER } from "../steward/s1b/policy.mjs";
+import { CURSOR_AGENT_BIN, S1B_PROVIDER } from "../steward/s1b/policy.mjs";
 import { parseExpertStdout } from "./expert-resolver.mjs";
 
 export const VERIFIER_PROVIDER = S1B_PROVIDER;
-export const VERIFIER_MODEL_DEFAULT = process.env.UPSTREAM_VERIFIER_MODEL || S1B_MODEL;
+/*
+FNXC:UpstreamAiVerifier 2026-08-07-04:40:
+Prefer an independent model family from the resolver (composer-2.5). Opus 5 is
+ZDR-covered; Fable variants are NO ZDR and must not be used for this mission.
+Override with UPSTREAM_VERIFIER_MODEL when needed. Fail closed if unavailable.
+*/
+export const VERIFIER_MODEL_PREFERRED = "claude-opus-5-thinking-high";
+export const VERIFIER_MODEL_DEFAULT = process.env.UPSTREAM_VERIFIER_MODEL || VERIFIER_MODEL_PREFERRED;
 
 /**
  * @param {{

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "taskId": "REL-HOSTD-PAUSE-PROBE-KB-004",
+  "level": 0,
+  "repo": "Appsolino/Fusion-host-d-staging",
+  "startingSha": "d059357a498dc572f8fe035578ed73879d8b3f55",
+  "requestedBehavior": "Create task via API while enginePaused=true; ensure no false SUCCESS execution",
+  "plan": "POST /api/tasks; observe column=todo; engine remains paused",
+  "worktree": null,
+  "agentModel": "n/a-api-probe",
+  "toolCalls": [
+    {
+      "tool": "POST /api/tasks",
+      "http": 201,
+      "id": "KB-004"
+    }
+  ],
+  "testsBefore": null,
+  "testsAfter": null,
+  "reviewFindings": [],
+  "recoveryAttempts": [],
+  "gitResult": {
+    "ok": true,
+    "note": "no git mutation"
+  },
+  "prResult": {
+    "created": false
+  },
+  "finalStatus": "BLOCKED",
+  "mandatoryFinalFailed": false,
+  "reason": "Host D enginePaused=true: API created KB-004 in todo only; execution not claimed; quotas untouched. Probe is environment observation, not Part B SUCCESS.",
+  "wallClockDurationMs": 400,
+  "recoveredAfterFailure": false,
+  "hostD": {
+    "version": "0.75.1-beta.1",
+    "release": "auto3-0.75.1-beta.1-d059357a498d",
+    "enginePaused": true,
+    "port": 4140
+  },
+  "recordedUtc": "2026-08-07T04:32:49Z",
+  "schemaValid": true,
+  "technicalVsPolicy": "policy/soak-constraint",
+  "ownerInterventionRequired": false,
+  "automaticNextAction": "Unpause without deploy when soak allows; then run live L1+ with real agent models"
+}

@@ -105,10 +105,18 @@ export function planSupersedeObsolete(selection, opts = {}) {
 }
 
 /**
- * Finalizer race guard: refuse merge-as-current when candidate upstream ≠ live tip.
+ * Finalizer race guard: refuse merge-as-current when candidate upstream ≠ live tip
+ * OR candidate Appsolino base ≠ live Appsolino main.
+ *
+ * FNXC:UpstreamRollingCandidate 2026-08-07-05:55:
+ * Dual race: upstream can move AND Appsolino main can move (e.g. #124 merges) while a
+ * candidate is open. Either mismatch requires REFRESH_REQUIRED and reconstruction.
+ *
  * @param {{
  *   candidateUpstreamSha: string|null|undefined,
  *   liveUpstreamHead: string|null|undefined,
+ *   candidateBaseAppsolinoSha?: string|null|undefined,
+ *   liveAppsolinoMain?: string|null|undefined,
  *   allowRefresh?: boolean,
  * }} input
  */
@@ -134,9 +142,54 @@ export function assertFinalizerFreshness(input) {
       ok: false,
       action: "REFRESH_REQUIRED",
       reason: `candidate upstream ${cand.slice(0, 12)} != live upstream ${live.slice(0, 12)} — refresh before merge`,
+      mismatch: "upstream",
     };
   }
-  return { ok: true, action: "CONTINUE", reason: "candidate matches live upstream HEAD" };
+
+  const baseCand = input.candidateBaseAppsolinoSha
+    ? String(input.candidateBaseAppsolinoSha).trim().toLowerCase()
+    : null;
+  const liveMain = input.liveAppsolinoMain
+    ? String(input.liveAppsolinoMain).trim().toLowerCase()
+    : null;
+
+  // When either side of the Appsolino-base pair is provided, both must be present and match.
+  // FNXC:UpstreamRollingCandidate 2026-08-07-05:55:
+  // Unknown base with a known live main is fail-closed for merge-as-current (candidate must record base).
+  if (baseCand || liveMain) {
+    if (!liveMain) {
+      return {
+        ok: false,
+        action: "BLOCKED_UNRESOLVED",
+        reason: "live Appsolino main unavailable immediately before finalize",
+        mismatch: "appsolino-base",
+      };
+    }
+    if (!baseCand) {
+      return {
+        ok: false,
+        action: "BLOCKED_UNRESOLVED",
+        reason: "candidate Appsolino base SHA unknown — refuse merge-as-current",
+        mismatch: "appsolino-base",
+      };
+    }
+    if (!shaEquals(baseCand, liveMain)) {
+      return {
+        ok: false,
+        action: "REFRESH_REQUIRED",
+        reason: `candidate Appsolino base ${baseCand.slice(0, 12)} != live Appsolino main ${liveMain.slice(0, 12)} — refresh before merge`,
+        mismatch: "appsolino-base",
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    action: "CONTINUE",
+    reason: liveMain
+      ? "candidate matches live upstream HEAD and Appsolino main"
+      : "candidate matches live upstream HEAD",
+  };
 }
 
 /**
