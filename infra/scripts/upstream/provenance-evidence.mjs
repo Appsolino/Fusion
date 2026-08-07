@@ -101,6 +101,11 @@ export function isMaintenanceMetadataPath(file, opts = {}) {
  * Classify paths changed by an edit-capable expert repair vs the pre-repair candidate.
  * Maintenance metadata alone does not create a product localDelta.
  *
+ * FNXC:AutomationGovernance 2026-08-07-20:40:
+ * Patch definitions (FIX-*.json / registry.json) are ADAPTED when the expert edits them.
+ * Do not route them through isMaintenanceMetadataPath (which treats patches as metadata
+ * unless hasLocalPatchAdaptation is already true — unreachable here).
+ *
  * @param {string[]} changedPaths
  * @returns {{
  *   kind: "NONE"|"ADAPTED"|"MODIFIED",
@@ -119,14 +124,29 @@ export function classifyExpertRepairPathDelta(changedPaths) {
   for (const raw of changedPaths || []) {
     const f = String(raw || "").replace(/\\/g, "/").trim();
     if (!f) continue;
-    if (isMaintenanceMetadataPath(f)) {
+
+    // Proofs + freshness/status planes only — not patch definitions.
+    if (
+      f === ".appsolino/upstream-sync-status.json" ||
+      f === ".appsolino/upstream-freshness.json" ||
+      f === ".appsolino/release-freshness.json" ||
+      f.startsWith(".appsolino/patches/proofs/")
+    ) {
       maintenanceMetadataPaths.push(f);
       continue;
     }
-    // Expert-authored edits to product (or non-proof patch files) are Appsolino delta.
-    if (f.startsWith(".appsolino/patches/") && !f.includes("/proofs/")) {
+
+    // Expert-changed patch definitions / registry → ADAPTED.
+    if (
+      f === ".appsolino/patches/registry.json" ||
+      (f.startsWith(".appsolino/patches/") && !f.includes("/proofs/"))
+    ) {
       adaptedPaths.push(f);
+      appsolinoProductPaths.push(f);
+      continue;
     }
+
+    // Any other non-maintenance path the expert touched is Appsolino product delta.
     appsolinoProductPaths.push(f);
   }
   const uniq = (xs) => [...new Set(xs)].sort();
@@ -238,8 +258,14 @@ export function stampSyncStatusAfterExpertRepair(input) {
   }
 
   const evidence = buildProvenanceEvidenceBlock({
-    conflictReconciliationComplete: status.conflictReconciliationComplete !== false,
-    patchReconciliationComplete: true,
+    /*
+    FNXC:AutomationGovernance 2026-08-07-20:40:
+    Preserve completeness only when the prior field was explicitly true — do not
+    upgrade missing/old-schema records into complete v1 via !== false.
+    Repair always sets localDeltaClassificationComplete after classifying the delta.
+    */
+    conflictReconciliationComplete: status.conflictReconciliationComplete === true,
+    patchReconciliationComplete: status.patchReconciliationComplete === true,
     localDeltaClassificationComplete: true,
     localDeltaKind: kind,
     appsolinoProductPaths,

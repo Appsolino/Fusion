@@ -196,6 +196,85 @@ describe("provenance-evidence-schema", () => {
     assert.equal(none.kind, "NONE");
   });
 
+  it("expert edits FIX-XYZ.json only → ADAPTED → MIXED → no human", () => {
+    const delta = classifyExpertRepairPathDelta([".appsolino/patches/FIX-XYZ.json"]);
+    assert.equal(delta.kind, "ADAPTED");
+    assert.deepEqual(delta.adaptedPaths, [".appsolino/patches/FIX-XYZ.json"]);
+    assert.deepEqual(delta.appsolinoProductPaths, [".appsolino/patches/FIX-XYZ.json"]);
+    assert.equal(delta.maintenanceMetadataPaths.length, 0);
+
+    const dir = mkdtempSync(join(tmpdir(), "prov-adapt-"));
+    mkdirSync(join(dir, ".appsolino/patches"), { recursive: true });
+    writeFileSync(
+      join(dir, ".appsolino/upstream-sync-status.json"),
+      JSON.stringify(
+        {
+          outcome: "merged",
+          ...buildProvenanceEvidenceBlock({
+            conflictReconciliationComplete: true,
+            patchReconciliationComplete: true,
+            localDeltaClassificationComplete: true,
+            localDeltaKind: "NONE",
+          }),
+        },
+        null,
+        2,
+      ),
+    );
+    const stamp = stampSyncStatusAfterExpertRepair({
+      worktreePath: dir,
+      baselineSha: CANDIDATE,
+      runGit: (args) => {
+        const joined = args.join(" ");
+        if (joined.includes("diff") && joined.includes("--name-only")) {
+          return { status: 0, stdout: ".appsolino/patches/FIX-XYZ.json\n", stderr: "" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(stamp.kind, "ADAPTED");
+    const disk = JSON.parse(readFileSync(join(dir, ".appsolino/upstream-sync-status.json"), "utf8"));
+    const evidence = extractProvenanceEvidenceFromSyncStatus(disk);
+    assert.equal(evidence.evidenceComplete, true);
+    const p = classifyChangeProvenance({
+      isAutomationUpstreamPr: true,
+      evidenceComplete: true,
+      conflictResolutionRecorded: false,
+      conflictedFiles: [],
+      localPatchPathsTouched: evidence.localPatchPathsTouched,
+      appsolinoOnlyPaths: evidence.appsolinoOnlyPaths,
+    });
+    assert.equal(p.provenance, "MIXED");
+    const full = classifyUpstreamWithProvenance({
+      changedFiles: [".appsolino/patches/FIX-XYZ.json"],
+      commitCount: 1,
+      isAutomationPr: true,
+      evidenceComplete: true,
+      appsolinoOnlyPaths: evidence.appsolinoOnlyPaths,
+      localPatchPathsTouched: evidence.localPatchPathsTouched,
+    });
+    assert.equal(full.provenance, "MIXED");
+    assert.equal(full.humanReviewRequired, false);
+  });
+
+  it("stamp does not upgrade missing conflict/patch flags to true", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prov-old-"));
+    mkdirSync(join(dir, ".appsolino"), { recursive: true });
+    writeFileSync(
+      join(dir, ".appsolino/upstream-sync-status.json"),
+      JSON.stringify({ outcome: "merged", localDelta: { kind: "NONE" } }, null, 2),
+    );
+    stampSyncStatusAfterExpertRepair({
+      worktreePath: dir,
+      baselineSha: CANDIDATE,
+      runGit: () => ({ status: 0, stdout: "", stderr: "" }),
+    });
+    const disk = JSON.parse(readFileSync(join(dir, ".appsolino/upstream-sync-status.json"), "utf8"));
+    assert.equal(disk.conflictReconciliationComplete, false);
+    assert.equal(disk.patchReconciliationComplete, false);
+    assert.equal(extractProvenanceEvidenceFromSyncStatus(disk).evidenceComplete, false);
+  });
+
   it("stampSyncStatusAfterExpertRepair: EXACT_UPSTREAM → MIXED after product repair", () => {
     const dir = mkdtempSync(join(tmpdir(), "prov-repair-"));
     mkdirSync(join(dir, ".appsolino"), { recursive: true });
