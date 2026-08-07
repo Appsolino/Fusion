@@ -6,9 +6,16 @@
  * Require provenanceEvidenceVersion + completion flags. Separate MAINTENANCE_METADATA
  * from APPSOLINO_PRODUCT_DELTA so routine proof/status refresh does not force MIXED.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { spawnSync } from "node:child_process";
 import { SYNC_STATUS_PATH, loadUpstreamSyncStatus } from "./sensitive-review-package.mjs";
+
+/*
+FNXC:AutomationGovernance 2026-08-07-20:24:
+Expert repair must restamp localDelta before push so Appsolino-authored product
+edits cannot remain EXACT_UPSTREAM under a stale NONE stamp.
+*/
 
 export const PROVENANCE_EVIDENCE_VERSION = 1;
 
@@ -88,6 +95,179 @@ export function classifyPathProvenanceRole(file, opts = {}) {
  */
 export function isMaintenanceMetadataPath(file, opts = {}) {
   return classifyPathProvenanceRole(file, opts) === "MAINTENANCE_METADATA";
+}
+
+/**
+ * Classify paths changed by an edit-capable expert repair vs the pre-repair candidate.
+ * Maintenance metadata alone does not create a product localDelta.
+ *
+ * @param {string[]} changedPaths
+ * @returns {{
+ *   kind: "NONE"|"ADAPTED"|"MODIFIED",
+ *   appsolinoProductPaths: string[],
+ *   adaptedPaths: string[],
+ *   maintenanceMetadataPaths: string[],
+ * }}
+ */
+export function classifyExpertRepairPathDelta(changedPaths) {
+  /** @type {string[]} */
+  const maintenanceMetadataPaths = [];
+  /** @type {string[]} */
+  const appsolinoProductPaths = [];
+  /** @type {string[]} */
+  const adaptedPaths = [];
+  for (const raw of changedPaths || []) {
+    const f = String(raw || "").replace(/\\/g, "/").trim();
+    if (!f) continue;
+    if (isMaintenanceMetadataPath(f)) {
+      maintenanceMetadataPaths.push(f);
+      continue;
+    }
+    // Expert-authored edits to product (or non-proof patch files) are Appsolino delta.
+    if (f.startsWith(".appsolino/patches/") && !f.includes("/proofs/")) {
+      adaptedPaths.push(f);
+    }
+    appsolinoProductPaths.push(f);
+  }
+  const uniq = (xs) => [...new Set(xs)].sort();
+  const product = uniq(appsolinoProductPaths);
+  const adapted = uniq(adaptedPaths);
+  /** @type {"NONE"|"ADAPTED"|"MODIFIED"} */
+  let kind = "NONE";
+  if (adapted.length > 0) kind = "ADAPTED";
+  else if (product.length > 0) kind = "MODIFIED";
+  return {
+    kind,
+    appsolinoProductPaths: product,
+    adaptedPaths: adapted,
+    maintenanceMetadataPaths: uniq(maintenanceMetadataPaths),
+  };
+}
+
+/**
+ * List paths changed since baseline SHA (committed + working tree + untracked).
+ * @param {string} worktreePath
+ * @param {string} baselineSha
+ * @param {(args: string[], opts?: object) => {status:number,stdout:string,stderr:string}} [runGit]
+ */
+export function listChangedPathsSinceBaseline(worktreePath, baselineSha, runGit) {
+  const git =
+    runGit ||
+    ((args) => {
+      const r = spawnSync("git", args, { encoding: "utf8" });
+      return { status: r.status ?? 1, stdout: r.stdout || "", stderr: r.stderr || "" };
+    });
+  const base = String(baselineSha || "").trim();
+  /** @type {Set<string>} */
+  const names = new Set();
+  const absorb = (stdout) => {
+    for (const line of String(stdout || "").split("\n")) {
+      const p = line.trim().replace(/\\/g, "/");
+      if (p) names.add(p);
+    }
+  };
+  if (base) {
+    for (const extra of [
+      ["diff", "--name-only", base],
+      ["diff", "--name-only", "--cached", base],
+      ["diff", "--name-only", `${base}...HEAD`],
+    ]) {
+      const r = git(["-C", worktreePath, ...extra]);
+      if (r.status === 0) absorb(r.stdout);
+    }
+  }
+  const others = git(["-C", worktreePath, "ls-files", "--others", "--exclude-standard"]);
+  if (others.status === 0) absorb(others.stdout);
+  const porcelain = git(["-C", worktreePath, "status", "--porcelain", "-uall"]);
+  if (porcelain.status === 0) {
+    for (const line of String(porcelain.stdout || "").split("\n")) {
+      if (!line.trim()) continue;
+      // XY PATH or XY ORIG -> PATH
+      const rest = line.slice(3).trim();
+      const arrow = rest.includes(" -> ") ? rest.split(" -> ").pop() : rest;
+      if (arrow) names.add(String(arrow).replace(/\\/g, "/"));
+    }
+  }
+  return [...names].sort();
+}
+
+/**
+ * Merge expert-repair localDelta into durable sync-status before commit/push.
+ * Preserves prior conflict-resolution records; refreshes provenance completion flags.
+ *
+ * @param {{
+ *   worktreePath: string,
+ *   baselineSha: string,
+ *   runGit?: Function,
+ * }} input
+ */
+export function stampSyncStatusAfterExpertRepair(input) {
+  const worktreePath = input.worktreePath;
+  const baselineSha = String(input.baselineSha || "").trim();
+  const changedPaths = listChangedPathsSinceBaseline(worktreePath, baselineSha, input.runGit);
+  const delta = classifyExpertRepairPathDelta(changedPaths);
+
+  const statusPath = join(worktreePath, SYNC_STATUS_PATH);
+  /** @type {object} */
+  let status = {};
+  if (existsSync(statusPath)) {
+    try {
+      status = JSON.parse(readFileSync(statusPath, "utf8"));
+    } catch {
+      status = {};
+    }
+  }
+
+  const priorKind = String(status.localDelta?.kind || "NONE").toUpperCase();
+  const priorProduct = Array.isArray(status.localDelta?.appsolinoProductPaths)
+    ? status.localDelta.appsolinoProductPaths.map(String)
+    : [];
+  const priorAdapted = Array.isArray(status.localDelta?.adaptedPaths)
+    ? status.localDelta.adaptedPaths.map(String)
+    : [];
+
+  // Union prior durable product delta with this repair (never silently drop MIXED history).
+  const appsolinoProductPaths = [...new Set([...priorProduct, ...delta.appsolinoProductPaths])].sort();
+  const adaptedPaths = [...new Set([...priorAdapted, ...delta.adaptedPaths])].sort();
+  /** @type {"NONE"|"ADAPTED"|"INTRODUCED"|"MODIFIED"} */
+  let kind = "NONE";
+  if (adaptedPaths.length > 0) kind = "ADAPTED";
+  else if (appsolinoProductPaths.length > 0) kind = "MODIFIED";
+  else if (priorKind === "ADAPTED" || priorKind === "INTRODUCED" || priorKind === "MODIFIED") {
+    kind = /** @type {*} */ (priorKind);
+  }
+
+  const evidence = buildProvenanceEvidenceBlock({
+    conflictReconciliationComplete: status.conflictReconciliationComplete !== false,
+    patchReconciliationComplete: true,
+    localDeltaClassificationComplete: true,
+    localDeltaKind: kind,
+    appsolinoProductPaths,
+    adaptedPaths,
+  });
+
+  const next = {
+    ...status,
+    ...evidence,
+    expertRepairProvenance: {
+      recordedAtUtc: new Date().toISOString(),
+      baselineSha,
+      changedPathCount: changedPaths.length,
+      maintenanceMetadataPaths: delta.maintenanceMetadataPaths,
+      productPathCount: delta.appsolinoProductPaths.length,
+    },
+  };
+  mkdirSync(dirname(statusPath), { recursive: true });
+  writeFileSync(statusPath, `${JSON.stringify(next, null, 2)}\n`);
+  return {
+    kind,
+    appsolinoProductPaths,
+    adaptedPaths,
+    maintenanceMetadataPaths: delta.maintenanceMetadataPaths,
+    changedPaths,
+    statusPath,
+    status: next,
+  };
 }
 
 /**

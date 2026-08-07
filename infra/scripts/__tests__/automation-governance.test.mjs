@@ -8,15 +8,17 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { classifyUpstream, LARGE_FILE_COUNT } from "../auto2-classify-upstream.mjs";
 import {
-  classifyChangeProvenance,
-  classifyUpstreamWithProvenance,
-} from "../upstream/provenance-risk.mjs";
-import {
   extractProvenanceEvidenceFromSyncStatus,
   buildProvenanceEvidenceBlock,
   classifyPathProvenanceRole,
+  classifyExpertRepairPathDelta,
+  stampSyncStatusAfterExpertRepair,
   PROVENANCE_EVIDENCE_VERSION,
 } from "../upstream/provenance-evidence.mjs";
+import {
+  classifyChangeProvenance,
+  classifyUpstreamWithProvenance,
+} from "../upstream/provenance-risk.mjs";
 import {
   canAcquireCandidateLease,
   matchExpertRunByIdentity,
@@ -171,6 +173,133 @@ describe("provenance-evidence-schema", () => {
       classifyPathProvenanceRole("packages/engine/src/a.ts"),
       "UPSTREAM_PRODUCT_DELTA",
     );
+  });
+
+  it("expert repair product edit restamps MIXED; proofs-only stays NONE", () => {
+    const productDelta = classifyExpertRepairPathDelta([
+      "packages/engine/src/foo.ts",
+      ".appsolino/patches/proofs/fix-x.json",
+      ".appsolino/upstream-freshness.json",
+    ]);
+    assert.equal(productDelta.kind, "MODIFIED");
+    assert.deepEqual(productDelta.appsolinoProductPaths, ["packages/engine/src/foo.ts"]);
+    assert.ok(productDelta.maintenanceMetadataPaths.includes(".appsolino/patches/proofs/fix-x.json"));
+
+    const proofsOnly = classifyExpertRepairPathDelta([
+      ".appsolino/patches/proofs/fix-x.json",
+      ".appsolino/release-freshness.json",
+    ]);
+    assert.equal(proofsOnly.kind, "NONE");
+    assert.equal(proofsOnly.appsolinoProductPaths.length, 0);
+
+    const none = classifyExpertRepairPathDelta([]);
+    assert.equal(none.kind, "NONE");
+  });
+
+  it("stampSyncStatusAfterExpertRepair: EXACT_UPSTREAM → MIXED after product repair", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prov-repair-"));
+    mkdirSync(join(dir, ".appsolino"), { recursive: true });
+    mkdirSync(join(dir, "packages/engine/src"), { recursive: true });
+    const initial = {
+      outcome: "merged",
+      conflictedFiles: [],
+      ...buildProvenanceEvidenceBlock({
+        conflictReconciliationComplete: true,
+        patchReconciliationComplete: true,
+        localDeltaClassificationComplete: true,
+        localDeltaKind: "NONE",
+        appsolinoProductPaths: [],
+        adaptedPaths: [],
+      }),
+    };
+    writeFileSync(join(dir, ".appsolino/upstream-sync-status.json"), JSON.stringify(initial, null, 2));
+    writeFileSync(join(dir, "packages/engine/src/foo.ts"), "export const x = 1;\n");
+
+    const stamp = stampSyncStatusAfterExpertRepair({
+      worktreePath: dir,
+      baselineSha: CANDIDATE,
+      runGit: (args) => {
+        // Simulate: git diff baseline lists product file; status porcelain too.
+        const joined = args.join(" ");
+        if (joined.includes("diff") && joined.includes("--name-only")) {
+          return { status: 0, stdout: "packages/engine/src/foo.ts\n", stderr: "" };
+        }
+        if (joined.includes("ls-files")) {
+          return { status: 0, stdout: "", stderr: "" };
+        }
+        if (joined.includes("status")) {
+          return { status: 0, stdout: " M packages/engine/src/foo.ts\n", stderr: "" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(stamp.kind, "MODIFIED");
+    assert.deepEqual(stamp.appsolinoProductPaths, ["packages/engine/src/foo.ts"]);
+
+    const disk = JSON.parse(readFileSync(join(dir, ".appsolino/upstream-sync-status.json"), "utf8"));
+    const evidence = extractProvenanceEvidenceFromSyncStatus(disk);
+    assert.equal(evidence.evidenceComplete, true);
+    const p = classifyChangeProvenance({
+      isAutomationUpstreamPr: true,
+      evidenceComplete: true,
+      conflictResolutionRecorded: false,
+      conflictedFiles: evidence.conflictedFiles,
+      localPatchPathsTouched: evidence.localPatchPathsTouched,
+      appsolinoOnlyPaths: evidence.appsolinoOnlyPaths,
+    });
+    assert.equal(p.provenance, "MIXED");
+    const full = classifyUpstreamWithProvenance({
+      changedFiles: ["packages/engine/src/foo.ts"],
+      commitCount: 1,
+      isAutomationPr: true,
+      evidenceComplete: true,
+      conflictResolutionRecorded: false,
+      conflictedFiles: [],
+      localPatchPathsTouched: evidence.localPatchPathsTouched,
+      appsolinoOnlyPaths: evidence.appsolinoOnlyPaths,
+    });
+    assert.equal(full.provenance, "MIXED");
+    assert.equal(full.humanReviewRequired, false);
+  });
+
+  it("stampSyncStatusAfterExpertRepair: proofs-only keeps NONE", () => {
+    const dir = mkdtempSync(join(tmpdir(), "prov-proof-"));
+    mkdirSync(join(dir, ".appsolino/patches/proofs"), { recursive: true });
+    writeFileSync(
+      join(dir, ".appsolino/upstream-sync-status.json"),
+      JSON.stringify(
+        {
+          outcome: "merged",
+          ...buildProvenanceEvidenceBlock({
+            conflictReconciliationComplete: true,
+            patchReconciliationComplete: true,
+            localDeltaClassificationComplete: true,
+            localDeltaKind: "NONE",
+          }),
+        },
+        null,
+        2,
+      ),
+    );
+    const stamp = stampSyncStatusAfterExpertRepair({
+      worktreePath: dir,
+      baselineSha: CANDIDATE,
+      runGit: (args) => {
+        const joined = args.join(" ");
+        if (joined.includes("diff") && joined.includes("--name-only")) {
+          return {
+            status: 0,
+            stdout: ".appsolino/patches/proofs/fix-x.json\n.appsolino/upstream-freshness.json\n",
+            stderr: "",
+          };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    assert.equal(stamp.kind, "NONE");
+    assert.equal(stamp.appsolinoProductPaths.length, 0);
+    const disk = JSON.parse(readFileSync(join(dir, ".appsolino/upstream-sync-status.json"), "utf8"));
+    assert.equal(disk.localDelta.kind, "NONE");
   });
 });
 
