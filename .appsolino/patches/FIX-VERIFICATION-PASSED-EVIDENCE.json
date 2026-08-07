@@ -1,6 +1,7 @@
 {
+  "schemaVersion": 1,
   "id": "FIX-VERIFICATION-PASSED-EVIDENCE",
-  "status": "active",
+  "status": "ACTIVE",
   "defect": {
     "description": "verificationPassed for rebase merges was assigned from command configuration presence rather than an explicit result of runDeterministicVerification.",
     "reproduction": "Rebase post-merge audit path with testCommand set; verificationPassed true without returned execution evidence from applyBranchCommitsPreservingHistory.",
@@ -14,29 +15,40 @@
   ],
   "upstreamComparison": {
     "classification": "APPSOLINO_ONLY",
-    "comparedAgainstSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
-    "comparedAt": "2026-08-07T04:40:00Z",
-    "evidence": "Caller invented verificationPassed from Boolean(test||build). Now returned from the function that runs verification.",
+    "comparedAgainstSha": "f7ca14beabc615d5a4ae044de67ac7c2c01adde8",
     "relatedIssue": null,
-    "relatedPr": "https://github.com/Appsolino/Fusion/pull/124",
-    "relatedCommit": null
+    "relatedPr": null,
+    "relatedCommit": null,
+    "evidence": "defect still fails on clean upstream; no strong upstream signal",
+    "comparedAt": "2026-08-07T08:23:19Z"
   },
   "localAction": {
     "patchRequired": true,
-    "files": [
+    "applyPaths": [
       "packages/engine/src/merger.ts"
     ]
   },
   "retirementCondition": {
-    "regressionTestPassesOnCleanUpstream": true
+    "regressionTestPassesOnCleanUpstream": true,
+    "notes": null
   },
   "revisions": [
     {
       "revision": 1,
       "againstUpstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
       "summary": "Return verificationPassed from applyBranchCommitsPreservingHistory after successful run",
+      "files": [],
       "createdAt": "2026-08-07T04:40:00Z"
+    },
+    {
+      "revision": 2,
+      "againstUpstreamSha": "f7ca14beabc615d5a4ae044de67ac7c2c01adde8",
+      "summary": "defect still reproduces on clean upstream — retain/adapt patch identity",
+      "files": [
+        "packages/engine/src/merger.ts"
+      ],
+      "createdAt": "2026-08-07T08:23:19Z"
     }
   ],
-  "updatedUtc": "2026-08-07T04:40:00Z"
+  "updatedUtc": "2026-08-07T08:23:19Z"
 }

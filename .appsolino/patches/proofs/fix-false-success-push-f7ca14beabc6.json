@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "run-patch-reconcile-live.mjs",
+  "recordedUtc": "2026-08-07T08:23:19Z",
+  "upstreamBefore": "1375a36e203e3c517d26276d598ea2428942b04c",
+  "upstreamAfter": "f7ca14beabc615d5a4ae044de67ac7c2c01adde8",
+  "patch": "FIX-FALSE-SUCCESS-PUSH",
+  "cleanUpstreamRegression": {
+    "result": "FAIL"
+  },
+  "semanticComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "evidence": [
+      "defect still fails on clean upstream; no strong upstream signal"
+    ],
+    "relatedCommit": null,
+    "equivalentBehavior": false
+  },
+  "classification": "APPSOLINO_ONLY",
+  "action": "RETAIN_OR_ADAPT",
+  "status": "ACTIVE"
+}

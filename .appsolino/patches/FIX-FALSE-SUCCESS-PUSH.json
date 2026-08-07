@@ -21,7 +21,7 @@
     "relatedPr": null,
     "relatedCommit": null,
     "evidence": "defect still fails on clean upstream; no strong upstream signal",
-    "comparedAt": "2026-08-07T08:21:37Z"
+    "comparedAt": "2026-08-07T08:23:01Z"
   },
   "localAction": {
     "patchRequired": true,
@@ -51,7 +51,17 @@
         "packages/engine/src/merge/merger-ai.ts"
       ],
       "createdAt": "2026-08-07T08:21:37Z"
+    },
+    {
+      "revision": 3,
+      "againstUpstreamSha": "f7ca14beabc615d5a4ae044de67ac7c2c01adde8",
+      "summary": "defect still reproduces on clean upstream — retain/adapt patch identity",
+      "files": [
+        "packages/engine/src/merger.ts",
+        "packages/engine/src/merge/merger-ai.ts"
+      ],
+      "createdAt": "2026-08-07T08:23:01Z"
     }
   ],
-  "updatedUtc": "2026-08-07T08:21:37Z"
+  "updatedUtc": "2026-08-07T08:23:01Z"
 }
