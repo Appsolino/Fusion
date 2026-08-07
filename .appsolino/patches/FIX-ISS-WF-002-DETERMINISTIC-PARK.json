@@ -16,12 +16,12 @@
   ],
   "upstreamComparison": {
     "classification": "APPSOLINO_ONLY",
-    "comparedAgainstSha": null,
+    "comparedAgainstSha": "f7ca14beabc615d5a4ae044de67ac7c2c01adde8",
     "relatedIssue": null,
     "relatedPr": null,
     "relatedCommit": null,
-    "evidence": null,
-    "comparedAt": null
+    "evidence": "defect still fails on clean upstream; no strong upstream signal",
+    "comparedAt": "2026-08-07T08:22:25Z"
   },
   "localAction": {
     "patchRequired": true,
@@ -41,7 +41,17 @@
       "summary": "Correction B deterministic park",
       "files": [],
       "createdAt": null
+    },
+    {
+      "revision": 2,
+      "againstUpstreamSha": "f7ca14beabc615d5a4ae044de67ac7c2c01adde8",
+      "summary": "defect still reproduces on clean upstream — retain/adapt patch identity",
+      "files": [
+        "packages/engine/src/errors/transient-error-detector.ts",
+        "packages/engine/src/executor.ts"
+      ],
+      "createdAt": "2026-08-07T08:22:25Z"
     }
   ],
-  "updatedUtc": "2026-08-07T04:11:18Z"
+  "updatedUtc": "2026-08-07T08:22:25Z"
 }
