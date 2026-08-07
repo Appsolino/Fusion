@@ -144,7 +144,14 @@ export interface PrReconcileTransition {
     | "changes-requested"
     | "approved"
     | "conflict"
-    | "conflict-cleared";
+    | "conflict-cleared"
+    /*
+    FNXC:FullAutonomy 2026-08-07-21:04:
+    Checks transitions release PR-await holds so CI repair / re-gate can run.
+    Previously only review + conflict edges advanced cards — failed CI parked forever.
+    */
+    | "checks-failed"
+    | "checks-succeeded";
   /** The hold-release event tag: `github:pr-<event>`. */
   tag: string;
   /** Whether this transition makes the entity terminal (drop from poll). */
@@ -188,6 +195,18 @@ export function deriveTransitions(prev: PrEntity, next: PrReconcileFetchResult):
       out.push({ event: "conflict", tag: tag("conflict"), terminal: false });
     } else if (prev.mergeable === "conflicting" && next.mergeable === "clean") {
       out.push({ event: "conflict-cleared", tag: tag("conflict-cleared"), terminal: false });
+    }
+  }
+
+  /*
+  FNXC:FullAutonomy 2026-08-07-21:04:
+  Edge into failure / success on checks rollup so held PR cards wake for repair or merge gate.
+  */
+  if (next.checksRollup !== undefined && next.checksRollup !== prev.checksRollup) {
+    if (next.checksRollup === "failure") {
+      out.push({ event: "checks-failed", tag: tag("checks-failed"), terminal: false });
+    } else if (next.checksRollup === "success") {
+      out.push({ event: "checks-succeeded", tag: tag("checks-succeeded"), terminal: false });
     }
   }
 

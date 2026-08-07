@@ -35,6 +35,7 @@ import {
   type PrPushResult,
 } from "./pr-response-run.js";
 import { makePrResponseAgentRunner, makePrResponseGitOps } from "./pr-response-run-ops.js";
+import { autoMergeGateCiFailedValue } from "./ci-repair.js";
 
 /**
  * The narrow slice of the store the PR node handlers need. Declared structurally
@@ -527,9 +528,13 @@ export function createPrNodeHandlers(deps: PrNodeDeps): Record<
  *   - `outcome:auto-on`  → toward `pr-merge`, when {@link isPrEntityAutoMergeReady}
  *     (opted in + approved + all checks concluded success + mergeable clean +
  *     verified).
- *   - `outcome:auto-off` → park for a manual-release merge, for EVERY non-ready
- *     case: not opted in, pending/failed checks, UNKNOWN/conflicting mergeability,
- *     unverified entity, or no live entity at all. The gate never blocks the run.
+ *   - `outcome:ci-failed` → toward bounded CI repair when checksRollup is failure
+ *     (FNXC:FullAutonomy 2026-08-07-21:04). Distinct from auto-off so workflows
+ *     can repair instead of parking forever.
+ *   - `outcome:auto-off` → park for a manual-release merge, for EVERY other
+ *     non-ready case: not opted in, pending checks, UNKNOWN/conflicting
+ *     mergeability, unverified entity, or no live entity at all. The gate never
+ *     blocks the run.
  *
  * Reuses the gate-routing contract (`{ outcome: "success", value }` consumed by
  * `outcome:` edges in shouldTraverseEdge) rather than forking a parallel routing
@@ -558,7 +563,13 @@ export function createAutoMergeGateHandler(deps: Pick<PrNodeDeps, "getStore" | "
 
     // Re-fetch authoritative state: the entity row IS the live copy here (store
     // read), so pending checks / UNKNOWN mergeable / unverified / not-opted-in all
-    // fall to auto-off via the shared predicate.
+    // fall to auto-off via the shared predicate — except explicit CI failure,
+    // which routes to ci-failed for the repair loop.
+    const ciFailed = autoMergeGateCiFailedValue(entity);
+    if (ciFailed) {
+      audit("auto-merge-gate-ci-failed", `auto-merge gate '${node.id}' routing ci-failed for task ${ctx.task.id}`);
+      return { outcome: "success", value: ciFailed };
+    }
     if (isPrEntityAutoMergeReady(entity)) {
       return { outcome: "success", value: "auto-on" };
     }
