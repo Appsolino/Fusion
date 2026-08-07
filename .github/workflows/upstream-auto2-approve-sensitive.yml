@@ -8,6 +8,11 @@
 # Merge uses gh pr merge --merge --match-head-commit <approved_head>, then dispatches
 # AUTO-3 for the exact merged main SHA. ROLLED_BACK/FAILED/BLOCKED/CRITICAL are durable
 # terminals with no retry loop. A raw --owner-approved flag is not used here.
+#
+# FNXC:AutomationGovernance 2026-08-07-19:57:
+# Status: LEGACY_BREAK_GLASS — not the normal autonomous upstream path.
+# Normal path: AUTO-2 Finalize → SENSITIVE_REVIEW (AI verifier) → auto2:ai-verified merge.
+# Keep for explicit owner exact-head recovery only. Do not schedule. Do not document as gold path.
 
 name: Upstream AUTO-2 Approve Sensitive
 

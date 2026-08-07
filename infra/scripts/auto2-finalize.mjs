@@ -38,7 +38,6 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  classifyUpstream,
   buildAuto2ReportBody,
   isAuto2ManagedHead,
   LABEL_APPROVAL,
@@ -47,6 +46,8 @@ import {
   LABEL_MEDIUM,
   REPORT_MARKER,
 } from "./auto2-classify-upstream.mjs";
+import { classifyUpstreamWithProvenance } from "./upstream/provenance-risk.mjs";
+import { canAcquireCandidateLease } from "./upstream/candidate-lease.mjs";
 import {
   evaluateExactHeadOwnerApproval,
   fetchPullRequestReviews,
@@ -70,6 +71,11 @@ import {
 } from "./upstream/sensitive-expert-path.mjs";
 import { assertFinalizerFreshness } from "./upstream/rolling-candidate.mjs";
 import { evaluateFreshness, formatFreshnessReport } from "./upstream/freshness.mjs";
+/*
+FNXC:AutomationGovernance 2026-08-07-19:57:
+Finalize uses provenance+impact classification for automation absorbs. Volume alone
+is not merge friction. Candidate lease gates concurrent expensive AI ops per head.
+*/
 
 /**
  * FNXC:UpstreamLatency 2026-08-07-19:00:
@@ -231,7 +237,7 @@ export function runAuto2Finalize(input) {
     "--jq", ".[].filename",
   ]);
   if (namesRes.status !== 0) {
-    return finalizeBlocked(input, pr, runGh, classifyUpstream({
+    return finalizeBlocked(input, pr, runGh, classifyUpstreamWithProvenance({
       changedFiles: [],
       commitCount: Array.isArray(pr.commits) ? pr.commits.length : 0,
       missingClassificationData: true,
@@ -246,7 +252,7 @@ export function runAuto2Finalize(input) {
   const conflict = String(pr.mergeable || "").toUpperCase() === "CONFLICTING";
   const checksFailed = input.validationConclusion === "failure" || input.validationConclusion === "cancelled";
 
-  const classification = classifyUpstream({
+  const classification = classifyUpstreamWithProvenance({
     changedFiles,
     commitCount: Array.isArray(pr.commits) ? pr.commits.length : Number(pr.commits?.length || 0),
     validatedHeadSha: input.validatedHeadSha || currentHead,
@@ -254,6 +260,7 @@ export function runAuto2Finalize(input) {
     requiredChecksFailed: checksFailed,
     staleValidatedSha: stale,
     isAutomationPr: true,
+    conflictedFiles: conflict ? changedFiles.slice(0, 20) : [],
   });
 
   // Prefer accurate commit count from API
@@ -605,6 +612,48 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
 
   const contAction = continuation.action || "expert-resolving";
   const contLabel = continuation.label || LABEL_EXPERT_RESOLVING;
+
+  /*
+  FNXC:AutomationGovernance 2026-08-07-19:57:
+  One candidate head → one expensive AI operation. Refuse concurrent sensitive-review
+  and repair for the same generation; same-mode is idempotent CONTINUE.
+  */
+  const leaseMode =
+    contAction === "expert-resolving"
+      ? "repair"
+      : contAction === "ai-verifying"
+        ? "ai-verifying"
+        : "sensitive-review";
+  const lease = canAcquireCandidateLease({
+    labels: pr.labels || [],
+    headRefOid: currentHead,
+    requestedMode: /** @type {*} */ (leaseMode),
+    validatedHead: String(input.validatedHeadSha || currentHead),
+  });
+  if (!lease.ok && lease.action === "LEASE_HELD") {
+    return {
+      action: "lease-held",
+      reason: lease.reason,
+      classification,
+      pr,
+      lease,
+      mutatedMain: false,
+      deployedHostD: false,
+    };
+  }
+  if (!lease.ok && lease.action === "REFRESH_REQUIRED") {
+    ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_REFRESH_REQUIRED], input.dryRun === true);
+    return {
+      action: "refresh-required",
+      reason: lease.reason,
+      classification,
+      pr,
+      lease,
+      mutatedMain: false,
+      deployedHostD: false,
+    };
+  }
+
   ensureExtraLabels(runGh, input.repo, pr.number, [contLabel], input.dryRun === true);
   // Strip stale approval-required so AUTO-1 does not reintroduce the owner bottleneck label.
   if (!input.dryRun && isAuto2ManagedHead(pr.headRefName || "")) {
@@ -1002,7 +1051,7 @@ function finalizeBlocked(input, pr, runGh, classification, reason) {
  * @param {*} runGh
  * @param {string} repo
  * @param {string} prNumber
- * @param {ReturnType<typeof classifyUpstream>} classification
+ * @param {ReturnType<typeof classifyUpstreamWithProvenance>} classification
  * @param {boolean} dryRun
  * @param {string} [headRefName]
  *

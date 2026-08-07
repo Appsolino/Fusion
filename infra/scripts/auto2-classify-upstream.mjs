@@ -235,13 +235,22 @@ export function classifyUpstream(input) {
     riskClass = "sensitive";
     reasons.push("touches governance or automation-control surfaces");
   }
+  /*
+  FNXC:AutomationGovernance 2026-08-07-19:57:
+  Large file/commit counts are observability and suite-selection signals — not automatic
+  merge-friction. Exact Runfusion content must not be treated as N files of new Appsolino
+  engineering. (This classifier only runs for automation-managed PRs after the
+  isAutomationPr gate; volume alone never elevates riskClass.)
+  */
   if (files.length >= LARGE_FILE_COUNT) {
-    riskClass = "sensitive";
-    reasons.push(`unusually large file count (${files.length} >= ${LARGE_FILE_COUNT})`);
+    reasons.push(
+      `large absorb file count (${files.length} >= ${LARGE_FILE_COUNT}) — observability/suite signal, not human-review trigger`,
+    );
   }
   if (commitCount >= LARGE_COMMIT_COUNT) {
-    riskClass = "sensitive";
-    reasons.push(`unusually large commit count (${commitCount} >= ${LARGE_COMMIT_COUNT})`);
+    reasons.push(
+      `large absorb commit count (${commitCount} >= ${LARGE_COMMIT_COUNT}) — observability/suite signal, not human-review trigger`,
+    );
   }
 
   // Unknown / non-docs residual paths that are not clearly docs-only → never low.
@@ -316,6 +325,8 @@ function blocked(reason, files, commitCount, flags, validatedHeadSha) {
  * @param {{ prNumber: number|string, headSha: string, baseRef: string, headRef: string, validationConclusion?: string }} meta
  */
 export function buildAuto2ReportBody(classification, meta) {
+  const provenance = classification.provenance || null;
+  const impact = classification.integrationImpact || null;
   const lines = [
     REPORT_MARKER,
     `## AUTO-2 report`,
@@ -327,6 +338,14 @@ export function buildAuto2ReportBody(classification, meta) {
     `| Base | \`${meta.baseRef}\` |`,
     `| Head ref | \`${meta.headRef}\` |`,
     `| Risk | **${classification.riskClass.toUpperCase()}** |`,
+    ...(provenance
+      ? [
+          `| Provenance | **${provenance}** |`,
+          `| Integration impact | **${impact || "n/a"}** |`,
+          `| Human review required | ${classification.humanReviewRequired ? "YES" : "NO"} |`,
+          `| Policy | ${classification.policySummary || "n/a"} |`,
+        ]
+      : []),
     `| Auto-merge eligible | ${classification.autoMergeEligible ? "YES" : "NO"} |`,
     `| Changed files | ${classification.changedFileCount} |`,
     `| Commits | ${classification.commitCount} |`,
@@ -342,6 +361,10 @@ export function buildAuto2ReportBody(classification, meta) {
     `| Validation | ${meta.validationConclusion ?? "n/a"} |`,
     `| Host D deploy | NO (AUTO-3) |`,
     ``,
+    `### Actor clarity`,
+    `- \`appsolino-fusion-automation[bot]\` + AI verifier = intended maintenance path`,
+    `- \`cursor[bot]\` Pull Request Router = external Cursor automation — must ignore \`automation/upstream-*\``,
+    ``,
     `### Reasons`,
     ...(classification.reasons.length ? classification.reasons.map((r) => `- ${r}`) : ["- _none_"]),
     ``,
@@ -352,6 +375,7 @@ export function buildAuto2ReportBody(classification, meta) {
     ``,
     `---`,
     `Trusted finalizer only. Candidate jobs never receive App credentials.`,
+    `Official upstream code should be easy to absorb; Appsolino deltas get scrutiny; integration gets tests.`,
   ];
   return `${lines.join("\n")}\n`;
 }

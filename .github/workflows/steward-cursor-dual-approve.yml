@@ -4,6 +4,11 @@
 # Writer job: App token; independently recomputes head/diff/checks + enforces gates.
 # Candidate branch cannot alter the writer — workflow always checks out Appsolino main.
 # No XAI_API_KEY. Activation gates must be ON for merge (default OFF).
+#
+# FNXC:AutomationGovernance 2026-08-07-19:57:
+# Status: MANUAL_BREAK_GLASS — workflow_dispatch only; dormant unless explicitly run.
+# Not part of the automation/upstream-* gold path. Distinct from external Cursor
+# Approval Agent 83ebd12a (which must IGNORE automation/upstream-*).
 
 name: Steward Cursor Dual Approve
 

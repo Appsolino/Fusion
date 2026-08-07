@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "updatedUtc": "2026-08-07T19:56:00Z",
+  "fnxc": "FNXC:AutomationGovernance 2026-08-07-19:56",
+  "purpose": "Machine-readable map of Appsolino maintenance automations: trigger → concurrency → write authority → downstream. Single source for operators and agents.",
+  "goldenRule": {
+    "upstreamExact": "easy to absorb — strong integration tests, no human, no edit agent unless concrete failure",
+    "appsolinoLocal": "scrutinize",
+    "integrationSeams": "test strongly"
+  },
+  "externalOverlaps": [
+    {
+      "id": "cursor-approval-agent-83ebd12a",
+      "name": "Cursor Approval Agent: Pull Request Router and Approver",
+      "automationId": "83ebd12a-8fb8-11f1-a7d1-d6b4613131ce",
+      "actor": "cursor[bot]",
+      "status": "OVERLAP_MUST_EXCLUDE",
+      "requiredScope": {
+        "ignoreBranches": ["automation/upstream-*", "auto2-proof/*"]
+      },
+      "notes": "Must not request Anas966 or review automation/upstream-* candidates. Maintenance controller is sole authority there."
+    }
+  ],
+  "actors": {
+    "appsolino-fusion-automation[bot]": "Intended Appsolino GitHub App for AUTO-1/2/3",
+    "cursor[bot]": "External Cursor cloud automations — not the AUTO-2 AI verifier",
+    "AUTO-2 AI verifier": "claude-opus-5-thinking-high via appsolino-fusion-automation[bot] comments"
+  },
+  "workflows": [
+    {
+      "file": ".github/workflows/upstream-auto1.yml",
+      "name": "Upstream AUTO-1 Sync",
+      "status": "ACTIVE_CANONICAL",
+      "triggers": ["schedule", "workflow_dispatch"],
+      "concurrencyKey": "upstream-auto1",
+      "cancelInProgress": true,
+      "writeAuthority": ["contents:write via App", "pull-requests:write"],
+      "branchesAffected": ["automation/upstream-*", "main (status files only)"],
+      "downstream": ["pull_request synchronize → AUTO-2 Validate"]
+    },
+    {
+      "file": ".github/workflows/upstream-auto2-validate.yml",
+      "name": "Upstream AUTO-2 Validate",
+      "status": "ACTIVE_CANONICAL",
+      "triggers": ["pull_request on automation/upstream-*"],
+      "concurrencyKey": "auto2-validate-${{ github.event.pull_request.number }}",
+      "cancelInProgress": true,
+      "writeAuthority": ["none (credential-free)"],
+      "downstream": ["workflow_run → AUTO-2 Finalize"]
+    },
+    {
+      "file": ".github/workflows/upstream-auto2-finalize.yml",
+      "name": "Upstream AUTO-2 Finalize",
+      "status": "ACTIVE_CANONICAL",
+      "triggers": ["workflow_run Validate completed", "workflow_dispatch"],
+      "concurrencyKey": "auto2-finalize-pr-${pr_number}-head-${validated_head}",
+      "cancelInProgress": false,
+      "writeAuthority": ["contents:write", "pull-requests:write", "workflows:write"],
+      "downstream": ["expert-resolve | sensitive-review | AUTO-3 | merge"]
+    },
+    {
+      "file": ".github/workflows/upstream-auto2-expert-resolve.yml",
+      "name": "Upstream AUTO-2 Expert Resolve",
+      "status": "ACTIVE_CANONICAL",
+      "triggers": ["workflow_dispatch from finalize"],
+      "concurrencyKey": "auto2-expert-${pr}-${mode}",
+      "cancelInProgress": true,
+      "writeAuthority": ["pull-requests:write", "candidate worktree edits in repair mode only"],
+      "notes": "mode=sensitive-review is read-only verifier; mode=repair is edit-capable resolver"
+    },
+    {
+      "file": ".github/workflows/upstream-auto3-deploy.yml",
+      "name": "Upstream AUTO-3 Deploy",
+      "status": "ACTIVE_CANONICAL",
+      "triggers": ["workflow_dispatch from finalize after merge"],
+      "writeAuthority": ["Host D staging deploy secrets"],
+      "notes": "Host P prohibited"
+    },
+    {
+      "file": ".github/workflows/upstream-auto2-approve-sensitive.yml",
+      "name": "Upstream AUTO-2 Approve Sensitive",
+      "status": "LEGACY_BREAK_GLASS",
+      "triggers": ["workflow_dispatch only"],
+      "notes": "Owner Anas966 exact-head path. Not the normal autonomous upstream path after SENSITIVE_REVIEW architecture."
+    },
+    {
+      "file": ".github/workflows/steward-cursor-dual-approve.yml",
+      "name": "Steward Cursor Dual Approve",
+      "status": "MANUAL_BREAK_GLASS",
+      "triggers": ["workflow_dispatch only"],
+      "notes": "Dormant unless explicitly dispatched. Not part of upstream absorb gold path."
+    },
+    {
+      "file": ".github/workflows/upstream-reliability-steward.yml",
+      "name": "Upstream Reliability Steward",
+      "status": "ACTIVE_CANONICAL",
+      "triggers": ["workflow_run / schedule"],
+      "notes": "Observability / steward plane — does not replace AUTO-2 finalize"
+    }
+  ],
+  "candidateLease": {
+    "invariant": "one candidate head SHA → one expensive AI operation (sensitive-review XOR repair)",
+    "implementation": "infra/scripts/upstream/candidate-lease.mjs + finalize concurrency keyed by PR+head"
+  },
+  "riskModel": {
+    "dimensions": ["provenance", "integrationImpact"],
+    "provenance": ["EXACT_UPSTREAM", "LOCAL_APPSOLINO", "CONFLICT_RESOLUTION", "MIXED"],
+    "integrationImpact": ["LOW", "MEDIUM", "HIGH"],
+    "rule": "Large exact-upstream file counts drive suites, not human review or edit agents"
+  },
+  "freshnessPlanes": ["sourceFreshness", "releaseFreshness", "deployFreshness"]
+}
