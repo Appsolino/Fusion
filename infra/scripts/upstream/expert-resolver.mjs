@@ -15,7 +15,8 @@ import { validateExpertDecision, EXPERT_DECISION_SCHEMA_VERSION } from "./expert
 import { assertModelAvailable } from "../steward/s1a/cursor-engine.mjs";
 import { cursorChildEnv, assertNoCredentialLeak } from "../steward/s1a/spawn-env.mjs";
 import { CURSOR_AGENT_BIN, S1B_MODEL, S1B_PROVIDER } from "../steward/s1b/policy.mjs";
-import { parseStructuredJson } from "./structured-json.mjs";
+import { parseStructuredJson, classifyAiFailure, nextFromAiFailureClass } from "./structured-json.mjs";
+import { spawnCursorWithTimeout, DEFAULT_CURSOR_TIMEOUT_MS } from "./cursor-spawn-timeout.mjs";
 
 export const EXPERT_PROVIDER = S1B_PROVIDER;
 export const EXPERT_MODEL = S1B_MODEL;
@@ -171,36 +172,24 @@ export async function runUpstreamExpertResolver(input) {
     prompt,
   ];
 
-  const stdout = await new Promise((resolve, reject) => {
-    const child = spawnFn(bin, args, {
-      cwd: worktreePath,
-      env: childEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let out = "";
-    let err = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`expert resolver timed out after ${input.timeoutMs || 600000}ms`));
-    }, input.timeoutMs || 600000);
-    child.stdout.on("data", (d) => { out += d; });
-    child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`cursor-agent exit ${code}: ${err.slice(0, 500)}`));
-      else resolve(out);
-    });
-  }).catch((error) => ({ __error: error }));
+  const spawned = await spawnCursorWithTimeout({
+    bin,
+    args,
+    cwd: worktreePath,
+    env: childEnv,
+    timeoutMs: input.timeoutMs ?? DEFAULT_CURSOR_TIMEOUT_MS,
+    spawnFn,
+    label: "expert resolver",
+  });
 
-  if (stdout && typeof stdout === "object" && stdout.__error) {
+  if (!spawned.ok) {
+    const msg = spawned.error.message || String(spawned.error);
+    const failureClass = classifyAiFailure({ reason: msg, action: "AI_PROVIDER_ERROR" });
     return {
       ok: false,
-      action: "BLOCKED_UNRESOLVED",
-      reason: `expert invocation failed: ${stdout.__error.message || String(stdout.__error)}`,
+      action: nextFromAiFailureClass(failureClass),
+      failureClass,
+      reason: `expert invocation failed: ${msg}`,
       configuredProvider: EXPERT_PROVIDER,
       configuredModel: EXPERT_MODEL,
       actualProvider: null,
@@ -210,11 +199,12 @@ export async function runUpstreamExpertResolver(input) {
     };
   }
 
-  const parsed = parseExpertStdout(String(stdout));
+  const parsed = parseExpertStdout(String(spawned.stdout));
   if (!parsed.ok) {
     return {
       ok: false,
-      action: "BLOCKED_UNRESOLVED",
+      action: "AI_PROTOCOL_ERROR",
+      failureClass: "AI_PROTOCOL_ERROR",
       reason: `malformed expert output (${parsed.error}) — fail closed`,
       configuredProvider: EXPERT_PROVIDER,
       configuredModel: EXPERT_MODEL,
@@ -228,7 +218,8 @@ export async function runUpstreamExpertResolver(input) {
   if (!validated.ok) {
     return {
       ok: false,
-      action: "BLOCKED_UNRESOLVED",
+      action: "AI_PROTOCOL_ERROR",
+      failureClass: "AI_PROTOCOL_ERROR",
       reason: `expert schema validation failed: ${validated.errors.join("; ")}`,
       configuredProvider: EXPERT_PROVIDER,
       configuredModel: EXPERT_MODEL,

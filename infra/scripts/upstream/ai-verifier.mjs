@@ -25,6 +25,7 @@ import {
   classifyAiFailure,
   nextFromAiFailureClass,
 } from "./structured-json.mjs";
+import { spawnCursorWithTimeout, DEFAULT_CURSOR_TIMEOUT_MS } from "./cursor-spawn-timeout.mjs";
 
 export const VERIFIER_PROVIDER = S1B_PROVIDER;
 /*
@@ -251,37 +252,18 @@ export async function invokeVerifierOnce(input) {
   const spawnFn = input.spawnFn || spawn;
   const cwd = input.worktreePath || process.cwd();
 
-  const stdout = await new Promise((resolve, reject) => {
-    const child = spawnFn(bin, ["--print", "--force", "--mode", "ask", "--model", model, prompt], {
-      cwd,
-      env: childEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let out = "";
-    let err = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`verifier timed out after ${input.timeoutMs || 600000}ms`));
-    }, input.timeoutMs || 600000);
-    child.stdout.on("data", (d) => {
-      out += d;
-    });
-    child.stderr.on("data", (d) => {
-      err += d;
-    });
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) reject(new Error(`cursor-agent exit ${code}: ${err.slice(0, 500)}`));
-      else resolve(out);
-    });
-  }).catch((error) => ({ __error: error }));
+  const spawned = await spawnCursorWithTimeout({
+    bin,
+    args: ["--print", "--force", "--mode", "ask", "--model", model, prompt],
+    cwd,
+    env: childEnv,
+    timeoutMs: input.timeoutMs ?? DEFAULT_CURSOR_TIMEOUT_MS,
+    spawnFn,
+    label: "verifier",
+  });
 
-  if (stdout && typeof stdout === "object" && stdout.__error) {
-    const msg = stdout.__error.message || String(stdout.__error);
+  if (!spawned.ok) {
+    const msg = spawned.error.message || String(spawned.error);
     const failureClass = /timed out/i.test(msg) ? "AI_PROVIDER_ERROR" : classifyAiFailure({ reason: msg });
     return {
       ok: false,
@@ -298,7 +280,7 @@ export async function invokeVerifierOnce(input) {
     };
   }
 
-  const parsed = parseAndValidateStructured(String(stdout), (r) => validateVerifierVerdict(r, shaOpts));
+  const parsed = parseAndValidateStructured(String(spawned.stdout), (r) => validateVerifierVerdict(r, shaOpts));
   return finalizeParsed(parsed, model, startedAt, {
     actualProvider: VERIFIER_PROVIDER,
     actualModel: model,
