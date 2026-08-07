@@ -18,6 +18,7 @@ export const FRESHNESS_STATUS_PATH = ".appsolino/upstream-freshness.json";
  *   "FRESH" |
  *   "UPSTREAM_CHANGED" |
  *   "CANDIDATE_BUILDING" |
+ *   "PATCH_RECONCILING" |
  *   "CANDIDATE_VALIDATING" |
  *   "EXPERT_RESOLVING" |
  *   "AI_VERIFYING" |
@@ -267,7 +268,7 @@ export function assertNoFalseGreen(input) {
       detail: "AUTO-1 and AUTO-2 success cannot yield FRESH while behind upstream",
     };
   }
-  if (behind >= 5 && !UNHEALTHY_FRESHNESS_STATES.includes(/** @type {FreshnessState} */ (state)) && state !== "EXPERT_RESOLVING" && state !== "AI_VERIFYING" && state !== "CANDIDATE_VALIDATING" && state !== "CANDIDATE_BUILDING" && state !== "HOST_D_VERIFYING") {
+  if (behind >= 5 && !UNHEALTHY_FRESHNESS_STATES.includes(/** @type {FreshnessState} */ (state)) && state !== "EXPERT_RESOLVING" && state !== "AI_VERIFYING" && state !== "CANDIDATE_VALIDATING" && state !== "CANDIDATE_BUILDING" && state !== "PATCH_RECONCILING" && state !== "HOST_D_VERIFYING") {
     return {
       ok: false,
       violation: "stale-not-marked-unhealthy",

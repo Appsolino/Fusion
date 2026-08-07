@@ -240,7 +240,12 @@ export function decidePatchReconciliation(input) {
  * @param {{ againstUpstreamSha: string, summary?: string, files?: string[] }} [rev]
  */
 export function applyReconciliationToPatch(patch, decision, rev) {
-  const next = structuredClone(patch);
+  /*
+   FNXC:UpstreamPatchRegistry 2026-08-07-04:20:
+   Avoid structuredClone — eslint no-undef under Node flat config without that global.
+   JSON round-trip is enough for plain patch registry records.
+   */
+  const next = JSON.parse(JSON.stringify(patch));
   next.upstreamComparison = {
     ...next.upstreamComparison,
     classification: decision.classification,
