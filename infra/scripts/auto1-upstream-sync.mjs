@@ -34,6 +34,66 @@ export const UPSTREAM_URL_DEFAULT = "https://github.com/Runfusion/Fusion.git";
 export const UPSTREAM_REF_DEFAULT = "main";
 export const STATUS_PATH = ".appsolino/upstream-sync-status.json";
 
+/*
+FNXC:UpstreamLatency 2026-08-07-15:10:
+SENSITIVE autonomous upstream candidates must not auto-request the owner.
+Legacy Anas966 reviewer residue on automation/upstream-* is cleared after PR open/edit.
+Owner remains for genuine policy/Host-P authority only (approve-sensitive path).
+*/
+export const AUTONOMOUS_OWNER_REVIEWER_LOGIN = "Anas966";
+
+/**
+ * Remove stale owner reviewer requests from an automation/upstream-* PR.
+ * @param {(args: string[]) => {status:number,stdout:string,stderr:string}} gh
+ * @param {{ repo: string, prNumber: number|string, headRefName?: string|null, reviewerLogin?: string }} opts
+ */
+export function clearAutonomousOwnerReviewRequests(gh, opts) {
+  const head = String(opts.headRefName || "");
+  if (head && !/^automation\/upstream-/i.test(head)) {
+    return { cleared: false, reason: "not-automation-upstream-branch" };
+  }
+  const login = opts.reviewerLogin || AUTONOMOUS_OWNER_REVIEWER_LOGIN;
+  const pr = String(opts.prNumber);
+  const repo = opts.repo;
+  // Prefer GraphQL delete when login is requested; fail soft — residue must not block AUTO-1.
+  const view = gh([
+    "pr",
+    "view",
+    pr,
+    "--repo",
+    repo,
+    "--json",
+    "reviewRequests,headRefName",
+  ]);
+  if (view.status !== 0) {
+    return { cleared: false, reason: `pr-view-failed:${view.stderr || view.stdout}` };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(view.stdout || "{}");
+  } catch {
+    return { cleared: false, reason: "pr-view-json-parse-failed" };
+  }
+  const requests = Array.isArray(parsed.reviewRequests) ? parsed.reviewRequests : [];
+  const match = requests.find((r) => String(r.login || "").toLowerCase() === login.toLowerCase());
+  if (!match) {
+    return { cleared: false, reason: "no-owner-review-request" };
+  }
+  // gh pr edit --remove-reviewer
+  const removed = gh([
+    "pr",
+    "edit",
+    pr,
+    "--repo",
+    repo,
+    "--remove-reviewer",
+    login,
+  ]);
+  if (removed.status !== 0) {
+    return { cleared: false, reason: `remove-reviewer-failed:${removed.stderr || removed.stdout}` };
+  }
+  return { cleared: true, reason: "removed-owner-review-request", reviewer: login };
+}
 /**
  * @param {string} repoDir
  * @param {string[]} args
@@ -442,6 +502,18 @@ Merge-base: ${delta.mergeBase}
       prUrl = created.stdout;
       const m = String(prUrl).match(/\/pull\/(\d+)/);
       prNumber = m ? Number(m[1]) : null;
+    }
+
+    /*
+    FNXC:UpstreamLatency 2026-08-07-15:10:
+    Strip legacy owner reviewer requests from autonomous rolling candidates.
+    */
+    if (prNumber != null) {
+      clearAutonomousOwnerReviewRequests(gh, {
+        repo,
+        prNumber,
+        headRefName: syncBranch,
+      });
     }
 
     /*

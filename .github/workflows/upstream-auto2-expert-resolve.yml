@@ -1,8 +1,11 @@
 # FNXC:UpstreamSensitiveExpert 2026-08-07-04:45:
 # Real AI expert + independent AI verifier for SENSITIVE/MEDIUM upstream candidates.
-# Dispatched from AUTO-2 finalize when action=expert-resolving.
+# Dispatched from AUTO-2 finalize when action=expert-resolving or sensitive-review.
 # Never merges as current without freshness check. Host P prohibited.
 # Host D trust quotas are not consumed here — source freshness is separate from deploy.
+# FNXC:UpstreamLatency 2026-08-07-13:50:
+# mode=sensitive-review → read-only verifier only (no edit-capable resolver).
+# mode=repair → expert repair loop. cancel-in-progress true so superseded runs die.
 
 name: Upstream AUTO-2 Expert Resolve
 
@@ -17,6 +20,11 @@ on:
         description: "Exact candidate head SHA"
         required: true
         type: string
+      mode:
+        description: "sensitive-review (read-only) | repair (edit-capable)"
+        required: false
+        type: string
+        default: repair
 
 permissions:
   contents: read
@@ -25,7 +33,7 @@ permissions:
 
 concurrency:
   group: auto2-expert-${{ inputs.pr_number }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   resolve:
@@ -85,11 +93,12 @@ jobs:
           echo "path=$WT" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
-      - name: Run expert repair loop
+      - name: Run expert repair loop or sensitive review
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR: ${{ inputs.pr_number }}
           HEAD: ${{ inputs.validated_head }}
+          MODE: ${{ inputs.mode || 'repair' }}
           WT: ${{ steps.wt.outputs.path }}
           CURSOR_AGENT_BIN: /home/fusion/.local/bin/cursor-agent
           PATH: /home/fusion/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -97,15 +106,33 @@ jobs:
           set -euo pipefail
           node --input-type=module <<'EOF'
           import { runExpertRepairLoop, writeRepairLoopEvidence } from './infra/scripts/upstream/expert-repair-loop.mjs';
+          import { runUpstreamAiVerifier } from './infra/scripts/upstream/ai-verifier.mjs';
           import { assertFinalizerFreshness, parseUpstreamShaFromBranch } from './infra/scripts/upstream/rolling-candidate.mjs';
           import { runExpertIntegrityChecks } from './infra/scripts/upstream/expert-integrity.mjs';
+          import { createCycleBudget } from './infra/scripts/upstream/cycle-budget.mjs';
+          import { createLatencyTracker } from './infra/scripts/upstream/latency-tracker.mjs';
           import { spawnSync } from 'node:child_process';
           import { writeFileSync, mkdirSync } from 'node:fs';
 
           const pr = process.env.PR;
           const head = process.env.HEAD;
           const wt = process.env.WT;
+          const mode = String(process.env.MODE || 'repair').toLowerCase();
           const repo = process.env.GITHUB_REPOSITORY;
+          const budget = createCycleBudget();
+          const tracker = createLatencyTracker({
+            cycleBudget: budget,
+            mode,
+            candidatePr: pr,
+            candidateSha: head,
+            runId: process.env.GITHUB_RUN_ID,
+          });
+          tracker.startHeartbeat();
+          mkdirSync(`${wt}/.appsolino/proofs`, { recursive: true });
+          const writeLatency = (extra = {}) => {
+            tracker.stopHeartbeat();
+            return tracker.writeArtifact(`${wt}/.appsolino/proofs`, extra);
+          };
           const view = spawnSync('gh', ['pr', 'view', pr, '--repo', repo, '--json', 'headRefName,headRefOid'], { encoding: 'utf8' });
           if (view.status !== 0) throw new Error(view.stderr || 'pr view failed');
           const prj = JSON.parse(view.stdout);
@@ -115,7 +142,6 @@ jobs:
           const liveMainR = spawnSync('gh', ['api', `repos/${repo}/commits/main`, '--jq', '.sha'], { encoding: 'utf8' });
           const liveMain = liveMainR.status === 0 ? liveMainR.stdout.trim().toLowerCase() : null;
           const cand = parseUpstreamShaFromBranch(prj.headRefName);
-          // candidateBaseAppsolinoSha: PR base = Appsolino main at candidate creation; re-fetch live for race.
           const baseMeta = spawnSync('gh', ['api', `repos/${repo}/pulls/${pr}`, '--jq', '.base.sha'], { encoding: 'utf8' });
           const candidateBase = baseMeta.status === 0 ? baseMeta.stdout.trim().toLowerCase() : null;
           const race = assertFinalizerFreshness({
@@ -144,9 +170,78 @@ jobs:
             process.exit(2);
           }
 
+          /*
+          FNXC:UpstreamLatency 2026-08-07-13:50:
+          SENSITIVE_REVIEW: deterministic already PASS — run read-only verifier only.
+          Do not invoke edit-capable expert "to invent a problem".
+          */
+          if (mode === 'sensitive-review') {
+            tracker.classify('SENSITIVE_REVIEW');
+            const integrity = runExpertIntegrityChecks(wt);
+            tracker.beginPhase({ name: 'sensitive-review', attempt: 1, model: 'claude-opus-5-thinking-high', classification: 'AI_VERIFIER_REASONING' });
+            const verifier = await runUpstreamAiVerifier({
+              worktreePath: wt,
+              requireShaBinding: true,
+              timeoutMs: budget.childTimeoutMs('sensitive-review'),
+              evidence: {
+                originalProblem: `SENSITIVE_REVIEW for automation upstream PR #${pr} — deterministic validation already PASS; do not invent repairs.`,
+                upstreamIntent: 'Absorb upstream tip with Appsolino patches retained only when still required',
+                diffText: [
+                  'Mode: SENSITIVE_REVIEW (read-only).',
+                  'Deterministic AUTO-2 validation: PASS.',
+                  `Integrity: ${integrity.passed ? 'PASS' : 'FAIL ' + (integrity.failures || []).join(';')}`,
+                  'Inspect the checked-out candidate worktree; do not require an embedded full-tree diff.',
+                ].join('\n'),
+                deterministicTestResults: { passed: integrity.passed === true, failures: integrity.failures || [] },
+                riskClass: 'SENSITIVE',
+                candidateSha: head,
+                upstreamSha: cand,
+                baseAppsolinoSha: candidateBase,
+              },
+            });
+            tracker.endPhase({ result: verifier.verdict?.verdict || verifier.failureClass || verifier.action });
+            writeFileSync(`${wt}/.appsolino/proofs/sensitive-review.json`, `${JSON.stringify(verifier, null, 2)}\n`);
+            writeLatency({ verifierOutcome: verifier.verdict?.verdict || verifier.action, integrityPassed: integrity.passed });
+            const summary = [
+              `## Sensitive review result`,
+              ``,
+              `- mode: \`sensitive-review\``,
+              `- ok: \`${verifier.ok}\``,
+              `- verdict: \`${verifier.verdict?.verdict || 'n/a'}\``,
+              `- failureClass: \`${verifier.failureClass || 'n/a'}\``,
+              `- reason: ${verifier.reason}`,
+              `- verifier model (accepted): \`${verifier.acceptedModel || verifier.actualModel || 'n/a'}\``,
+              `- verifier attempts: ${verifier.verifierAttempts?.length || 0}`,
+              `- cycle budget used: \`${budget.elapsedMs()}ms\` / \`${budget.cycleBudgetMs}ms\``,
+            ].join('\n');
+            spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', summary], { encoding: 'utf8' });
+            if (verifier.ok && verifier.verdict?.verdict === 'APPROVE' && integrity.passed) {
+              spawnSync('gh', ['pr', 'edit', pr, '--repo', repo, '--add-label', 'auto2:ai-verified'], { encoding: 'utf8' });
+              spawnSync('gh', ['pr', 'edit', pr, '--repo', repo, '--remove-label', 'auto2:sensitive-review'], { encoding: 'utf8' });
+              spawnSync(
+                'gh',
+                ['workflow', 'run', 'upstream-auto2-finalize.yml', '--repo', repo, '-f', `pr_number=${pr}`, '-f', `validated_head=${head}`, '-f', 'validation_conclusion=success'],
+                { encoding: 'utf8' },
+              );
+              process.exit(0);
+            }
+            if (verifier.verdict?.verdict === 'REQUEST_CHANGES') {
+              spawnSync('gh', ['pr', 'edit', pr, '--repo', repo, '--add-label', 'auto2:expert-resolving'], { encoding: 'utf8' });
+              spawnSync(
+                'gh',
+                ['workflow', 'run', 'upstream-auto2-expert-resolve.yml', '--repo', repo, '-f', `pr_number=${pr}`, '-f', `validated_head=${head}`, '-f', 'mode=repair'],
+                { encoding: 'utf8' },
+              );
+              process.exit(0);
+            }
+            process.exit(2);
+          }
+
           const result = await runExpertRepairLoop({
             worktreePath: wt,
             maxAttempts: 3,
+            cycleBudget: budget,
+            latencyTracker: tracker,
             liveUpstreamHead: liveSha,
             headRefName: prj.headRefName,
             evidence: {
@@ -169,24 +264,16 @@ jobs:
               const r = spawnSync('gh', ['api', `repos/${repo}/commits/main`, '--jq', '.sha'], { encoding: 'utf8' });
               return r.status === 0 ? r.stdout.trim().toLowerCase() : null;
             },
-            runDeterministicTests: async () => {
-              /*
-              FNXC:UpstreamAiProtocol 2026-08-07-09:20:
-              Use line-anchored conflict-marker detection. A substring grep for
-              `<<<<<<<` matches docs/prompts/fixtures and falsely fails every tree
-              (observed on #133: verifier schema-valid REQUEST_CHANGES looped on a
-              false deterministic failure).
-              */
-              return runExpertIntegrityChecks(wt);
-            },
+            runDeterministicTests: async () => runExpertIntegrityChecks(wt),
           });
 
-          mkdirSync(`${wt}/.appsolino/proofs`, { recursive: true });
           writeRepairLoopEvidence(`${wt}/.appsolino/proofs`, result);
+          writeLatency({ next: result.next, finalizable: result.finalizable, failureClass: result.failureClass || null });
           writeFileSync('/tmp/expert-resolve-result.json', JSON.stringify(result, null, 2));
           const summary = [
             `## Expert resolve result`,
             ``,
+            `- mode: \`repair\``,
             `- finalizable: \`${result.finalizable}\``,
             `- next: \`${result.next}\``,
             `- failureClass: \`${result.failureClass || 'n/a'}\``,
@@ -195,6 +282,7 @@ jobs:
             `- verifier model (accepted): \`${result.verifier?.acceptedModel || result.verifier?.actualModel || 'n/a'}\``,
             `- verifier attempts: ${result.verifier?.verifierAttempts?.length || result.attempts?.length || 0}`,
             `- repair-loop attempts: ${result.attempts?.length || 0}`,
+            `- cycle budget used: \`${budget.elapsedMs()}ms\` / \`${budget.cycleBudgetMs}ms\``,
           ].join('\n');
           spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', summary], { encoding: 'utf8' });
 
@@ -207,35 +295,17 @@ jobs:
             process.exit(2);
           }
           if (result.finalizable) {
-            /*
-            FNXC:UpstreamAiProtocol 2026-08-07-12:15:
-            Expert edits live in the detached worktree. Commit + push them to the
-            automation branch before labeling ai-verified, otherwise finalize would
-            merge a tip that never received the verified repair.
-            */
             const branch = prj.headRefName;
             const status = spawnSync('git', ['-C', wt, 'status', '--porcelain'], { encoding: 'utf8' });
             if (status.status === 0 && status.stdout.trim()) {
               spawnSync('git', ['-C', wt, 'add', '-A'], { encoding: 'utf8' });
               spawnSync(
                 'git',
-                [
-                  '-C',
-                  wt,
-                  '-c',
-                  'user.name=Appsolino Automation',
-                  '-c',
-                  'user.email=automation@appsolino.local',
-                  'commit',
-                  '-m',
-                  `chore(auto2): expert-verified repair for PR #${pr}`,
-                ],
+                ['-C', wt, '-c', 'user.name=Appsolino Automation', '-c', 'user.email=automation@appsolino.local', 'commit', '-m', `chore(auto2): expert-verified repair for PR #${pr}`],
                 { encoding: 'utf8' },
               );
             }
-            const push = spawnSync('git', ['-C', wt, 'push', 'origin', `HEAD:refs/heads/${branch}`], {
-              encoding: 'utf8',
-            });
+            const push = spawnSync('git', ['-C', wt, 'push', 'origin', `HEAD:refs/heads/${branch}`], { encoding: 'utf8' });
             if (push.status !== 0) {
               const body = `## Expert resolve — push failed\n\nCould not push expert worktree to \`${branch}\`:\n\`\`\`\n${(push.stderr || push.stdout || '').slice(0, 1500)}\n\`\`\`\n`;
               spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', body], { encoding: 'utf8' });
@@ -247,19 +317,7 @@ jobs:
             if (pushedSha) {
               spawnSync(
                 'gh',
-                [
-                  'workflow',
-                  'run',
-                  'upstream-auto2-finalize.yml',
-                  '--repo',
-                  repo,
-                  '-f',
-                  `pr_number=${pr}`,
-                  '-f',
-                  `validated_head=${pushedSha}`,
-                  '-f',
-                  'validation_conclusion=success',
-                ],
+                ['workflow', 'run', 'upstream-auto2-finalize.yml', '--repo', repo, '-f', `pr_number=${pr}`, '-f', `validated_head=${pushedSha}`, '-f', 'validation_conclusion=success'],
                 { encoding: 'utf8' },
               );
             }

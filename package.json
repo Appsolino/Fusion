@@ -90,6 +90,7 @@
     "mobile:sync": "pnpm --filter @fusion/mobile cap sync",
     "mobile:run:android": "bash scripts/mobile-run-android.sh",
     "ios:acceptance": "node scripts/ios-acceptance.mjs",
+    "appsolino:maintenance-latency-report": "node infra/scripts/upstream/maintenance-latency-report.mjs",
     "build:desktop": "pnpm --filter @fusion/desktop build",
     "dist:desktop:win": "pnpm --filter @fusion/desktop build && pnpm --filter @fusion/desktop dist:win"
   },

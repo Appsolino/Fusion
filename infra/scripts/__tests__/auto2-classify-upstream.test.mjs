@@ -348,7 +348,7 @@ describe("AUTO-2 finalize policy", () => {
     assert.equal(r.classification?.riskClass, "blocked");
   });
 
-  it("workflow PR is expert-resolving, never auto-merged", () => {
+  it("workflow PR is sensitive-review when validation PASS, never auto-merged", () => {
     const merges = [];
     const UP = "73bff5f88cf20000000000000000000000000000";
     const gh = (args) => {
@@ -397,7 +397,7 @@ describe("AUTO-2 finalize policy", () => {
       candidateBaseAppsolinoSha: MAIN_SHA,
       gh,
     });
-    assert.equal(r.action, "expert-resolving");
+    assert.equal(r.action, "sensitive-review");
     assert.equal(r.classification?.riskClass, "sensitive");
     assert.equal(merges.length, 0);
     assert.equal(r.deployedHostD, false);
@@ -515,7 +515,7 @@ describe("AUTO-2 sensitive exact-head approval", () => {
     assert.equal(v.ok, true);
   });
 
-  it("sensitive without approval → expert-resolving (not owner-stop)", () => {
+  it("sensitive without approval → sensitive-review when deterministic PASS (not edit agent)", () => {
     const merges = [];
     const labels = [];
     const gh = makeSensitiveGh({ merges, reviewsJson: "[]" });
@@ -542,11 +542,10 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       candidateBaseAppsolinoSha: MAIN_SHA,
       gh: wrapped,
     });
-    assert.equal(r.action, "expert-resolving");
+    assert.equal(r.action, "sensitive-review");
     assert.equal(merges.length, 0);
-    // AUTO-1 head must not re-park on approval-required; expert-resolving owns continuation.
+    // AUTO-1 head must not re-park on approval-required; sensitive-review owns continuation.
     assert.ok(!labels.includes(LABEL_APPROVAL));
-    assert.ok(labels.includes("remove:auto2:approval-required") || labels.includes(`remove:${LABEL_APPROVAL}`) || !labels.includes(LABEL_APPROVAL));
   });
 
   it("stale candidate upstream vs live tip → refresh-required", () => {

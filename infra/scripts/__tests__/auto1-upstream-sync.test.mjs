@@ -19,6 +19,7 @@ import {
   runAuto1Sync,
   syncBranchNameForUpstream,
   STATUS_PATH,
+  clearAutonomousOwnerReviewRequests,
 } from "../auto1-upstream-sync.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -358,5 +359,42 @@ describe("AUTO-1 upstream sync", () => {
     assert.doesNotMatch(yaml, /secrets\.(GH_PAT|GITHUB_PAT|OWNER_PAT|PERSONAL_ACCESS_TOKEN)\b/i);
     assert.match(yaml, /Owner OAuth and ad-hoc PATs are not the routine automation identity/);
     assert.match(yaml, /GH_CONFIG_DIR:\s*\$\{\{\s*runner\.temp\s*\}\}\/auto1-gh-config/);
+  });
+});
+
+describe("clearAutonomousOwnerReviewRequests", () => {
+  it("removes Anas966 reviewer request on automation/upstream-* PRs", () => {
+    const calls = [];
+    const gh = (args) => {
+      calls.push(args);
+      if (args[0] === "pr" && args[1] === "view") {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            headRefName: "automation/upstream-fc2040ca8476",
+            reviewRequests: [{ login: "Anas966" }],
+          }),
+          stderr: "",
+        };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const r = clearAutonomousOwnerReviewRequests(gh, {
+      repo: "Appsolino/Fusion",
+      prNumber: 135,
+      headRefName: "automation/upstream-fc2040ca8476",
+    });
+    assert.equal(r.cleared, true);
+    assert.ok(calls.some((c) => c.includes("--remove-reviewer") && c.includes("Anas966")));
+  });
+
+  it("skips non-automation branches", () => {
+    const r = clearAutonomousOwnerReviewRequests(() => ({ status: 0, stdout: "{}", stderr: "" }), {
+      repo: "Appsolino/Fusion",
+      prNumber: 1,
+      headRefName: "feat/something",
+    });
+    assert.equal(r.cleared, false);
+    assert.equal(r.reason, "not-automation-upstream-branch");
   });
 });

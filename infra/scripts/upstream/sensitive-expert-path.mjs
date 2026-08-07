@@ -14,8 +14,26 @@ import { assertFinalizerFreshness } from "./rolling-candidate.mjs";
 
 export const LABEL_EXPERT_RESOLVING = "auto2:expert-resolving";
 export const LABEL_AI_VERIFYING = "auto2:ai-verifying";
+export const LABEL_SENSITIVE_REVIEW = "auto2:sensitive-review";
 export const LABEL_REFRESH_REQUIRED = "auto2:refresh-required";
 export const LABEL_BLOCKED_POLICY = "auto2:blocked-policy";
+
+/**
+ * FNXC:UpstreamLatency 2026-08-07-13:50:
+ * Split SENSITIVE continuation: deterministic PASS → read-only SENSITIVE_REVIEW
+ * (independent verifier). Edit-capable resolver only for REPAIR_REQUIRED
+ * (deterministic FAIL, conflict, or verifier REQUEST_CHANGES). Latency audit
+ * showed most wall-clock burned by unnecessary edit agents on clean candidates.
+ */
+export function classifySensitiveWorkMode(input = {}) {
+  if (input.deterministicPassed === false) return "REPAIR_REQUIRED";
+  if (input.repairRequired === true) return "REPAIR_REQUIRED";
+  if (input.hasMergeConflict === true || input.hasPatchConflict === true) return "REPAIR_REQUIRED";
+  if (input.verifierVerdict === "REQUEST_CHANGES") return "REPAIR_REQUIRED";
+  if (input.deterministicPassed === true) return "SENSITIVE_REVIEW";
+  // Unknown deterministic outcome — fail closed to repair (do not invent green).
+  return "REPAIR_REQUIRED";
+}
 
 /**
  * Authority signals that legitimately require owner — not engineering difficulty.
@@ -48,7 +66,11 @@ export function isGenuineOwnerPolicyDecision(auth = {}) {
  *   expertCompleted?: boolean,
  *   expertDecision?: string|null,
  *   verifierVerdict?: string|null,
+ *   verifierCompleted?: boolean,
  *   deterministicPassed?: boolean,
+ *   repairRequired?: boolean,
+ *   hasMergeConflict?: boolean,
+ *   hasPatchConflict?: boolean,
  *   liveUpstreamHead?: string|null,
  *   candidateUpstreamSha?: string|null,
  *   skipUpstreamFreshnessCheck?: boolean,
@@ -101,22 +123,27 @@ export function resolveSensitiveContinuation(input) {
     };
   }
 
-  if (input.expertCompleted === true && input.verifierVerdict === "APPROVE" && input.deterministicPassed === true) {
+  if (
+    (input.expertCompleted === true || input.verifierCompleted === true) &&
+    input.verifierVerdict === "APPROVE" &&
+    input.deterministicPassed === true
+  ) {
     return {
       action: "merge-eligible",
-      reason: "expert RESOLVED + independent verifier APPROVE + deterministic gates passed",
+      reason: "independent verifier APPROVE + deterministic gates passed",
     };
   }
 
-  if (input.expertCompleted === true && input.verifierVerdict === "REQUEST_CHANGES") {
+  if (input.verifierVerdict === "REQUEST_CHANGES") {
     return {
       action: "expert-resolving",
-      reason: "independent AI verifier REQUEST_CHANGES — return to expert repair loop",
+      reason: "independent AI verifier REQUEST_CHANGES — targeted REPAIR_REQUIRED",
       label: LABEL_EXPERT_RESOLVING,
+      workMode: "REPAIR_REQUIRED",
     };
   }
 
-  if (input.expertCompleted === true && input.verifierVerdict === "BLOCK_POLICY") {
+  if (input.verifierVerdict === "BLOCK_POLICY") {
     return {
       action: "blocked-policy",
       reason: "independent AI verifier BLOCK_POLICY",
@@ -124,26 +151,46 @@ export function resolveSensitiveContinuation(input) {
     };
   }
 
-  if (input.expertCompleted === true && input.deterministicPassed === false) {
+  if (input.deterministicPassed === false) {
     return {
       action: "expert-resolving",
-      reason: "deterministic gates still failing after expert claim — AI cannot bypass tests",
+      reason: "deterministic gates failing — REPAIR_REQUIRED (edit-capable resolver)",
       label: LABEL_EXPERT_RESOLVING,
+      workMode: "REPAIR_REQUIRED",
     };
   }
 
-  if (input.expertCompleted !== true) {
+  const workMode = classifySensitiveWorkMode(input);
+
+  /*
+  FNXC:UpstreamLatency 2026-08-07-13:50:
+  Clean deterministic SENSITIVE candidates go to read-only sensitive-review first.
+  Do not open an edit-capable resolver "to find a problem".
+  */
+  if (workMode === "SENSITIVE_REVIEW" && input.verifierCompleted !== true && input.expertCompleted !== true) {
+    return {
+      action: "sensitive-review",
+      reason:
+        "SENSITIVE_REVIEW — deterministic validation already PASS; read-only independent AI verifier (no edit agent)",
+      label: LABEL_SENSITIVE_REVIEW,
+      workMode: "SENSITIVE_REVIEW",
+    };
+  }
+
+  if (workMode === "REPAIR_REQUIRED" && input.expertCompleted !== true) {
     return {
       action: "expert-resolving",
-      reason: "SENSITIVE/MEDIUM → real AI expert analysis (owner is not the technical fallback)",
+      reason: "REPAIR_REQUIRED — edit-capable AI expert for known failure/conflict",
       label: LABEL_EXPERT_RESOLVING,
+      workMode: "REPAIR_REQUIRED",
     };
   }
 
   return {
     action: "ai-verifying",
-    reason: "expert completed — independent AI verification required",
+    reason: "independent AI verification required",
     label: LABEL_AI_VERIFYING,
+    workMode,
   };
 }
 
