@@ -1,17 +1,21 @@
 #!/usr/bin/env node
 /* eslint-env node */
 /**
- * FNXC:AutomationGovernance 2026-08-07-19:56:
+ * FNXC:AutomationGovernance 2026-08-07-20:04:
  * Provenance-aware risk for upstream absorbs. Integration impact still selects
  * deterministic suites. Exact official Runfusion content must not be treated as
  * 169 files of new Appsolino engineering requiring human review or edit agents.
+ *
+ * Fail closed: missing durable AUTO-1 evidence never yields EXACT_UPSTREAM.
+ * Resolved conflicts remain CONFLICT_RESOLUTION via sync-status records even when
+ * GitHub later reports MERGEABLE.
  *
  * Dimensions:
  *   provenance: EXACT_UPSTREAM | LOCAL_APPSOLINO | CONFLICT_RESOLUTION | MIXED
  *   integrationImpact: LOW | MEDIUM | HIGH
  *
  * Gold path for EXACT_UPSTREAM + HIGH impact:
- *   strong tests + read-only SENSITIVE_REVIEW + no human + no Composer unless concrete failure.
+ *   strong tests + read-only integration review + no human + no Composer unless concrete failure.
  */
 import { classifyUpstream, LARGE_FILE_COUNT, LARGE_COMMIT_COUNT } from "../auto2-classify-upstream.mjs";
 
@@ -30,6 +34,8 @@ export const PROVENANCE = Object.freeze([
  *   localPatchPathsTouched?: string[],
  *   appsolinoOnlyPaths?: string[],
  *   changedFiles?: string[],
+ *   evidenceComplete?: boolean,
+ *   conflictResolutionRecorded?: boolean,
  * }} input
  */
 export function classifyChangeProvenance(input = {}) {
@@ -47,10 +53,31 @@ export function classifyChangeProvenance(input = {}) {
       reasons: ["not an automation/upstream-* absorb"],
     };
   }
-  if (conflicts.length) {
+
+  /*
+  FNXC:AutomationGovernance 2026-08-07-20:04:
+  Incomplete evidence must not grant the reduced-friction EXACT_UPSTREAM path.
+  evidenceComplete must be explicitly true (loaded durable sync status). Fail closed
+  to MIXED — still no human approval; only AI review scope + suites.
+  */
+  if (input.evidenceComplete !== true) {
+    return {
+      provenance: "MIXED",
+      reasons: [
+        "provenance evidence incomplete — fail closed away from EXACT_UPSTREAM",
+        "require upstream-sync-status / Finding Comparison / patch reconcile proof on candidate",
+      ],
+    };
+  }
+
+  if (input.conflictResolutionRecorded === true || conflicts.length) {
     return {
       provenance: "CONFLICT_RESOLUTION",
-      reasons: [`${conflicts.length} conflicted path(s) required Appsolino resolution`],
+      reasons: [
+        input.conflictResolutionRecorded
+          ? "AUTO-1 conflict/semantic resolution recorded in durable sync status"
+          : `${conflicts.length} conflicted path(s) required Appsolino resolution`,
+      ],
       conflictedFiles: conflicts,
     };
   }
@@ -68,7 +95,7 @@ export function classifyChangeProvenance(input = {}) {
   return {
     provenance: "EXACT_UPSTREAM",
     reasons: [
-      "automation/upstream-* absorb with no recorded conflict resolution or local-only path set",
+      "durable sync status present with no conflict resolution and no Appsolino-plane delta",
       "treat imported Runfusion commits as official upstream content — verify integration, do not re-architect",
     ],
   };
@@ -112,14 +139,12 @@ export function classifyIntegrationImpact(classification) {
 }
 
 /**
- * Compose provenance + impact. Softens "large file/commit count" friction for EXACT_UPSTREAM:
- * counts remain observability and still expand suites via path flags, but do not alone imply
- * human approval or edit-agent necessity.
- *
  * @param {Parameters<typeof classifyUpstream>[0] & {
  *   conflictedFiles?: string[],
  *   localPatchPathsTouched?: string[],
  *   appsolinoOnlyPaths?: string[],
+ *   evidenceComplete?: boolean,
+ *   conflictResolutionRecorded?: boolean,
  * }} input
  */
 export function classifyUpstreamWithProvenance(input) {
@@ -130,33 +155,36 @@ export function classifyUpstreamWithProvenance(input) {
     localPatchPathsTouched: input.localPatchPathsTouched,
     appsolinoOnlyPaths: input.appsolinoOnlyPaths,
     changedFiles: input.changedFiles,
+    evidenceComplete: input.evidenceComplete,
+    conflictResolutionRecorded: input.conflictResolutionRecorded,
   });
   const impact = classifyIntegrationImpact(base);
 
   /** @type {string[]} */
   const reasons = [...(base.reasons || [])];
   if (provenance.provenance === "EXACT_UPSTREAM") {
-    // Rephrase volume reasons so operators do not treat volume as Appsolino invention risk.
     for (let i = 0; i < reasons.length; i++) {
-      if (/unusually large file count/i.test(reasons[i])) {
+      if (/large absorb file count/i.test(reasons[i]) || /unusually large file count/i.test(reasons[i])) {
         reasons[i] = `exact-upstream absorb volume (${base.changedFileCount} files) — suite observability, not human-review trigger`;
       }
-      if (/unusually large commit count/i.test(reasons[i])) {
+      if (/large absorb commit count/i.test(reasons[i]) || /unusually large commit count/i.test(reasons[i])) {
         reasons[i] = `exact-upstream absorb volume (${base.commitCount} commits) — suite observability, not human-review trigger`;
       }
     }
   }
 
   /*
-  FNXC:AutomationGovernance 2026-08-07-19:56:
-  Continuation policy for EXACT_UPSTREAM + HIGH: keep riskClass sensitive so suites stay strong,
-  but mark humanReviewRequired=false and preferSensitiveReview=true (no Composer unless fail).
+  FNXC:AutomationGovernance 2026-08-07-20:04:
+  humanReviewRequired stays false for all automation absorbs — provenance only scopes
+  AI review depth and suites, never reintroduces Anas966.
   */
-  const humanReviewRequired = false; // autonomous upstream gold path never parks on Anas966
+  const humanReviewRequired = false;
   const preferSensitiveReview =
     base.riskClass === "sensitive" ||
     base.riskClass === "medium" ||
-    impact.integrationImpact === "HIGH";
+    impact.integrationImpact === "HIGH" ||
+    provenance.provenance === "CONFLICT_RESOLUTION" ||
+    provenance.provenance === "MIXED";
 
   return {
     ...base,
@@ -168,12 +196,13 @@ export function classifyUpstreamWithProvenance(input) {
     humanReviewRequired,
     preferSensitiveReview,
     volumeIsObservabilityOnly: provenance.provenance === "EXACT_UPSTREAM",
+    evidenceComplete: input.evidenceComplete !== false,
     policySummary:
       provenance.provenance === "EXACT_UPSTREAM"
         ? "EXACT_UPSTREAM: strong integration tests + read-only verifier; no human; no edit agent unless concrete failure"
         : provenance.provenance === "CONFLICT_RESOLUTION"
-          ? "CONFLICT_RESOLUTION: scrutinize Appsolino resolution + strong tests"
-          : "LOCAL/MIXED: scrutinize Appsolino delta + strong tests",
+          ? "CONFLICT_RESOLUTION: scrutinize Appsolino resolution + strong tests; no human"
+          : "LOCAL/MIXED: scrutinize Appsolino delta + strong tests; no human",
   };
 }
 

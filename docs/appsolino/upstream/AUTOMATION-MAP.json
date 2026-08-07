@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "updatedUtc": "2026-08-07T19:56:00Z",
-  "fnxc": "FNXC:AutomationGovernance 2026-08-07-19:56",
-  "purpose": "Machine-readable map of Appsolino maintenance automations: trigger → concurrency → write authority → downstream. Single source for operators and agents.",
+  "updatedUtc": "2026-08-07T20:04:00Z",
+  "fnxc": "FNXC:AutomationGovernance 2026-08-07-20:04",
+  "purpose": "Machine-readable map of Appsolino maintenance automations. Fields marked mechanicallyChecked are asserted against workflow YAML by automation-map-drift.test.mjs.",
   "goldenRule": {
     "upstreamExact": "easy to absorb — strong integration tests, no human, no edit agent unless concrete failure",
     "appsolinoLocal": "scrutinize",
@@ -32,19 +32,21 @@
       "name": "Upstream AUTO-1 Sync",
       "status": "ACTIVE_CANONICAL",
       "triggers": ["schedule", "workflow_dispatch"],
-      "concurrencyKey": "upstream-auto1",
-      "cancelInProgress": true,
+      "concurrencyKey": "auto1-upstream-sync",
+      "cancelInProgress": false,
+      "mechanicallyChecked": true,
       "writeAuthority": ["contents:write via App", "pull-requests:write"],
-      "branchesAffected": ["automation/upstream-*", "main (status files only)"],
+      "branchesAffected": ["automation/upstream-*"],
       "downstream": ["pull_request synchronize → AUTO-2 Validate"]
     },
     {
       "file": ".github/workflows/upstream-auto2-validate.yml",
       "name": "Upstream AUTO-2 Validate",
       "status": "ACTIVE_CANONICAL",
-      "triggers": ["pull_request on automation/upstream-*"],
-      "concurrencyKey": "auto2-validate-${{ github.event.pull_request.number }}",
+      "triggers": ["pull_request", "workflow_dispatch"],
+      "concurrencyKey": "auto2-validate-${{ github.event.pull_request.number || inputs.pr_number }}",
       "cancelInProgress": true,
+      "mechanicallyChecked": true,
       "writeAuthority": ["none (credential-free)"],
       "downstream": ["workflow_run → AUTO-2 Finalize"]
     },
@@ -52,9 +54,10 @@
       "file": ".github/workflows/upstream-auto2-finalize.yml",
       "name": "Upstream AUTO-2 Finalize",
       "status": "ACTIVE_CANONICAL",
-      "triggers": ["workflow_run Validate completed", "workflow_dispatch"],
-      "concurrencyKey": "auto2-finalize-pr-${pr_number}-head-${validated_head}",
+      "triggers": ["workflow_run", "workflow_dispatch"],
+      "concurrencyKey": "auto2-finalize-pr-${{ github.event.inputs.pr_number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_branch || github.run_id }}",
       "cancelInProgress": false,
+      "mechanicallyChecked": true,
       "writeAuthority": ["contents:write", "pull-requests:write", "workflows:write"],
       "downstream": ["expert-resolve | sensitive-review | AUTO-3 | merge"]
     },
@@ -62,9 +65,10 @@
       "file": ".github/workflows/upstream-auto2-expert-resolve.yml",
       "name": "Upstream AUTO-2 Expert Resolve",
       "status": "ACTIVE_CANONICAL",
-      "triggers": ["workflow_dispatch from finalize"],
-      "concurrencyKey": "auto2-expert-${pr}-${mode}",
+      "triggers": ["workflow_dispatch"],
+      "concurrencyKey": "auto2-expert-${{ inputs.pr_number }}-${{ inputs.mode || 'repair' }}",
       "cancelInProgress": true,
+      "mechanicallyChecked": true,
       "writeAuthority": ["pull-requests:write", "candidate worktree edits in repair mode only"],
       "notes": "mode=sensitive-review is read-only verifier; mode=repair is edit-capable resolver"
     },
@@ -72,7 +76,10 @@
       "file": ".github/workflows/upstream-auto3-deploy.yml",
       "name": "Upstream AUTO-3 Deploy",
       "status": "ACTIVE_CANONICAL",
-      "triggers": ["workflow_dispatch from finalize after merge"],
+      "triggers": ["workflow_dispatch"],
+      "concurrencyKey": "host-d-staging-deploy",
+      "cancelInProgress": false,
+      "mechanicallyChecked": true,
       "writeAuthority": ["Host D staging deploy secrets"],
       "notes": "Host P prohibited"
     },
@@ -80,33 +87,33 @@
       "file": ".github/workflows/upstream-auto2-approve-sensitive.yml",
       "name": "Upstream AUTO-2 Approve Sensitive",
       "status": "LEGACY_BREAK_GLASS",
-      "triggers": ["workflow_dispatch only"],
+      "triggers": ["workflow_dispatch"],
+      "concurrencyKey": "auto2-approve-sensitive-${{ inputs.pr_number }}-${{ inputs.approved_head }}",
+      "cancelInProgress": false,
+      "mechanicallyChecked": true,
       "notes": "Owner Anas966 exact-head path. Not the normal autonomous upstream path after SENSITIVE_REVIEW architecture."
     },
     {
       "file": ".github/workflows/steward-cursor-dual-approve.yml",
       "name": "Steward Cursor Dual Approve",
       "status": "MANUAL_BREAK_GLASS",
-      "triggers": ["workflow_dispatch only"],
-      "notes": "Dormant unless explicitly dispatched. Not part of upstream absorb gold path."
-    },
-    {
-      "file": ".github/workflows/upstream-reliability-steward.yml",
-      "name": "Upstream Reliability Steward",
-      "status": "ACTIVE_CANONICAL",
-      "triggers": ["workflow_run / schedule"],
-      "notes": "Observability / steward plane — does not replace AUTO-2 finalize"
+      "triggers": ["workflow_dispatch"],
+      "concurrencyKey": "steward-cursor-dual-${{ inputs.pr_number }}",
+      "cancelInProgress": false,
+      "mechanicallyChecked": true,
+      "notes": "Dormant unless explicitly dispatched. Not part of upstream absorb gold path. Distinct from external Cursor Approval Agent 83ebd12a."
     }
   ],
   "candidateLease": {
     "invariant": "one candidate head SHA → one expensive AI operation (sensitive-review XOR repair)",
-    "implementation": "infra/scripts/upstream/candidate-lease.mjs + finalize concurrency keyed by PR+head"
+    "antiThrash": "same head + same mode + active run → ALREADY_RUNNING / NO_DISPATCH",
+    "implementation": "infra/scripts/upstream/candidate-lease.mjs + finalize concurrency keyed by PR number"
   },
   "riskModel": {
     "dimensions": ["provenance", "integrationImpact"],
     "provenance": ["EXACT_UPSTREAM", "LOCAL_APPSOLINO", "CONFLICT_RESOLUTION", "MIXED"],
     "integrationImpact": ["LOW", "MEDIUM", "HIGH"],
-    "rule": "Large exact-upstream file counts drive suites, not human review or edit agents"
+    "rule": "Large exact-upstream file counts drive suites, not human review or edit agents; EXACT_UPSTREAM requires durable sync-status evidence"
   },
   "freshnessPlanes": ["sourceFreshness", "releaseFreshness", "deployFreshness"]
 }

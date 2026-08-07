@@ -44,8 +44,10 @@ provenance+impact risk, candidate lease, release-freshness (`RELEASE_STALE`), au
 | AI-verified merge (no Anas966) | Landed [#150](https://github.com/Appsolino/Fusion/pull/150) / SHA bind [#151](https://github.com/Appsolino/Fusion/pull/151) |
 | Absorb #144 | **MERGED** |
 | `FIX-LANE-WIRING-TOUCH-FIXTURE` | **RETIRED** / `UPSTREAM_FIXED` |
-| Cursor Approval Agent on upstream | **OVERLAP** — exclude `automation/upstream-*` ([ops note](upstream/CURSOR-APPROVAL-AGENT-EXCLUDE.md)) |
-| Automation map | [AUTOMATION-MAP.json](upstream/AUTOMATION-MAP.json) |
+| Cursor Approval Agent on upstream | **OVERLAP** — owner scopes `83ebd12a`; repo remains safe ([ops note](upstream/CURSOR-APPROVAL-AGENT-EXCLUDE.md)) |
+| Automation map | [AUTOMATION-MAP.json](upstream/AUTOMATION-MAP.json) + YAML drift test |
+| Provenance | Durable sync-status evidence; fail-closed away from false EXACT_UPSTREAM |
+| Release observation | AUTO-1 + finalize observe `RELEASE_STALE` (no auto-publish) |
 | Part B / Host D unpause | **not authorised** |
 
 ## Steward enablement

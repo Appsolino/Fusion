@@ -25,6 +25,10 @@ import {
   formatFreshnessReport,
 } from "./upstream/freshness.mjs";
 import {
+  observeReleaseFreshness,
+  RELEASE_FRESHNESS_PATH,
+} from "./upstream/observe-release-freshness.mjs";
+import {
   selectRollingCandidate,
   planSupersedeObsolete,
   parseUpstreamShaFromBranch,
@@ -325,6 +329,13 @@ Merge-base: ${delta.mergeBase}
     }
 
     if (upstreamFixedResolution?.resolved === true) {
+      /*
+      FNXC:AutomationGovernance 2026-08-07-20:04:
+      Persist resolvedConflictedFiles inside the resolution record. Live conflictedFiles
+      clears so GitHub becomes MERGEABLE, but provenance must still classify
+      CONFLICT_RESOLUTION — never silently promote to EXACT_UPSTREAM.
+      */
+      const resolvedConflictedFiles = [...conflictedFiles];
       conflict = false;
       conflictedFiles = [];
       mkdirSync(join(repoDir, dirname(STATUS_PATH)), { recursive: true });
@@ -348,6 +359,7 @@ Merge-base: ${delta.mergeBase}
           action: upstreamFixedResolution.decision?.action || "TAKE_UPSTREAM",
           retiredPatchIds: upstreamFixedResolution.decision?.retiredPatchIds || [],
           reason: upstreamFixedResolution.decision?.reason || null,
+          resolvedConflictedFiles,
         },
       };
       writeFileSync(join(repoDir, STATUS_PATH), `${JSON.stringify(status, null, 2)}\n`);
@@ -587,11 +599,42 @@ Merge-base: ${delta.mergeBase}
   });
   try {
     writeFreshnessStatus(join(repoDir, FRESHNESS_STATUS_PATH), freshness);
+    /*
+    FNXC:AutomationGovernance 2026-08-07-20:04:
+    Observe RELEASE_STALE as a separate plane (detection only — never publishes).
+    */
+    let releaseFreshness = null;
+    try {
+      const observeGh =
+        input.gh ??
+        ((args) => {
+          const env = {
+            ...process.env,
+            GH_TOKEN: process.env.AUTO1_GITHUB_APP_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "",
+          };
+          const result = spawnSync("gh", args, { encoding: "utf8", env });
+          return {
+            status: result.status ?? 1,
+            stdout: (result.stdout ?? "").trim(),
+            stderr: (result.stderr ?? "").trim(),
+          };
+        });
+      releaseFreshness = observeReleaseFreshness({
+        repoDir,
+        runGh: observeGh,
+        appsolinoRepo: input.ghRepo || process.env.GITHUB_REPOSITORY || "Appsolino/Fusion",
+      });
+    } catch {
+      releaseFreshness = null;
+    }
     // Keep status on the sync branch when we already have local commits.
     if (syncBranch && (push || createPr)) {
       git(repoDir, ["add", FRESHNESS_STATUS_PATH], { allowFailure: true });
+      if (releaseFreshness) {
+        git(repoDir, ["add", RELEASE_FRESHNESS_PATH], { allowFailure: true });
+      }
       const staged = git(repoDir, ["diff", "--cached", "--name-only"], { allowFailure: true }).stdout;
-      if (staged.includes(FRESHNESS_STATUS_PATH)) {
+      if (staged.includes(FRESHNESS_STATUS_PATH) || staged.includes(RELEASE_FRESHNESS_PATH)) {
         git(repoDir, [
           "commit",
           "-m",

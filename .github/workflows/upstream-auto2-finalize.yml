@@ -86,6 +86,23 @@ jobs:
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
 
+      # FNXC:AutomationGovernance 2026-08-07-20:04:
+      # Observe release freshness (detection only — never publishes). Persist for operators.
+      - name: Observe release freshness plane
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/auto2-gh-config
+        run: |
+          set -euo pipefail
+          mkdir -p "$GH_CONFIG_DIR"
+          node infra/scripts/upstream/observe-release-freshness.mjs .
+          {
+            echo "## Release freshness"
+            echo '```json'
+            cat .appsolino/release-freshness.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Resolve PR + validated SHA
         id: meta
         env:
@@ -170,11 +187,12 @@ jobs:
             auto-merged|auto-merged-deployed|already-merged-idempotent)
               exit 0
               ;;
-            expert-resolving|sensitive-review|ai-verifying|refresh-required|blocked-policy|blocked-unresolved|approval-required)
+            expert-resolving|sensitive-review|ai-verifying|refresh-required|blocked-policy|blocked-unresolved|approval-required|already-running|lease-held)
               # FNXC:UpstreamFreshness 2026-08-07-04:30:
               # Durable non-merge outcomes. Workflow succeeds so expert/refresh can continue;
               # overall freshness remains unhealthy until integratedUpstreamSha matches upstreamHead.
               # FNXC:UpstreamLatency 2026-08-07-13:50: sensitive-review is read-only verifier path.
+              # FNXC:AutomationGovernance 2026-08-07-20:04: already-running/lease-held = no redispatch thrash.
               exit 0
               ;;
             auto-merged-deploy-rolled-back|auto-merged-deploy-critical|auto-merged-deploy-failed|blocked)
@@ -201,6 +219,8 @@ jobs:
           if [[ "$ACTION" == "refresh-required" ]]; then
             gh workflow run upstream-auto1.yml --repo "$GITHUB_REPOSITORY"
             echo "Dispatched AUTO-1 refresh for live upstream HEAD"
+          elif [[ "$ACTION" == "already-running" || "$ACTION" == "lease-held" ]]; then
+            echo "AI lease $ACTION — no redispatch (anti-thrash)"
           elif [[ "$ACTION" == "sensitive-review" ]]; then
             gh workflow run upstream-auto2-expert-resolve.yml --repo "$GITHUB_REPOSITORY" \
               -f pr_number="$PR" \
