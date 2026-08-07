@@ -25,6 +25,14 @@ on:
         required: false
         type: string
         default: repair
+      # FNXC:UpstreamLatency 2026-08-07-17:40:
+      # Optional JSON array of requiredChanges from the prior SENSITIVE_REVIEW REQUEST_CHANGES.
+      # Prefer the "## Repair package" PR comment when this input is empty (input size limits).
+      required_changes_json:
+        description: "Optional JSON array of requiredChanges for targeted repair"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -101,6 +109,7 @@ jobs:
           PR: ${{ inputs.pr_number }}
           HEAD: ${{ inputs.validated_head }}
           MODE: ${{ inputs.mode || 'repair' }}
+          REQUIRED_CHANGES_JSON: ${{ inputs.required_changes_json || '' }}
           WT: ${{ steps.wt.outputs.path }}
           CURSOR_AGENT_BIN: /home/fusion/.local/bin/cursor-agent
           PATH: /home/fusion/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -113,6 +122,7 @@ jobs:
           import { runExpertIntegrityChecks } from './infra/scripts/upstream/expert-integrity.mjs';
           import { createCycleBudget } from './infra/scripts/upstream/cycle-budget.mjs';
           import { createLatencyTracker } from './infra/scripts/upstream/latency-tracker.mjs';
+          import { clearAutonomousOwnerReviewRequests } from './infra/scripts/auto1-upstream-sync.mjs';
           import { spawnSync } from 'node:child_process';
           import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -121,6 +131,53 @@ jobs:
           const wt = process.env.WT;
           const mode = String(process.env.MODE || 'repair').toLowerCase();
           const repo = process.env.GITHUB_REPOSITORY;
+
+          function gh(args) {
+            const r = spawnSync('gh', args, { encoding: 'utf8' });
+            return { status: r.status ?? 1, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim() };
+          }
+
+          /** @returns {string[]} */
+          function loadSeededRequiredChanges() {
+            const raw = String(process.env.REQUIRED_CHANGES_JSON || '').trim();
+            if (raw) {
+              try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) return parsed.map((x) => String(x)).filter(Boolean);
+              } catch {
+                /* fall through to PR comment */
+              }
+            }
+            const listed = spawnSync(
+              'gh',
+              ['api', `repos/${repo}/issues/${pr}/comments?per_page=100`],
+              { encoding: 'utf8' },
+            );
+            if (listed.status !== 0) return [];
+            let comments = [];
+            try {
+              comments = JSON.parse(listed.stdout || '[]');
+            } catch {
+              return [];
+            }
+            const headShort = String(head || '').slice(0, 12).toLowerCase();
+            for (const c of [...comments].reverse()) {
+              const body = String(c.body || '');
+              if (!body.includes('## Repair package')) continue;
+              if (headShort && !body.toLowerCase().includes(headShort)) continue;
+              const m = body.match(/```json\s*([\s\S]*?)```/);
+              if (!m) continue;
+              try {
+                const pkg = JSON.parse(m[1]);
+                if (Array.isArray(pkg.requiredChanges)) {
+                  return pkg.requiredChanges.map((x) => String(x)).filter(Boolean);
+                }
+              } catch {
+                /* continue */
+              }
+            }
+            return [];
+          }
           const budget = createCycleBudget();
           const tracker = createLatencyTracker({
             cycleBudget: budget,
@@ -138,6 +195,16 @@ jobs:
           const view = spawnSync('gh', ['pr', 'view', pr, '--repo', repo, '--json', 'headRefName,headRefOid'], { encoding: 'utf8' });
           if (view.status !== 0) throw new Error(view.stderr || 'pr view failed');
           const prj = JSON.parse(view.stdout);
+          /*
+          FNXC:UpstreamLatency 2026-08-07-17:40:
+          Cursor Approval Agent re-requests Anas966 on automation/upstream-* PRs.
+          Clear residue at expert start so SENSITIVE_REVIEW stays autonomous.
+          */
+          clearAutonomousOwnerReviewRequests(gh, {
+            repo,
+            prNumber: Number(pr),
+            headRefName: prj.headRefName,
+          });
           const live = spawnSync('gh', ['api', 'repos/Runfusion/Fusion/commits/main', '--jq', '.sha'], { encoding: 'utf8' });
           if (live.status !== 0) throw new Error('unable to fetch live upstream');
           const liveSha = live.stdout.trim().toLowerCase();
@@ -228,6 +295,39 @@ jobs:
               process.exit(0);
             }
             if (verifier.verdict?.verdict === 'REQUEST_CHANGES') {
+              /*
+              FNXC:UpstreamLatency 2026-08-07-17:40:
+              Persist the concrete requiredChanges package for the repair agent.
+              Repair must fix only unresolved required changes — do not re-investigate accepted areas.
+              */
+              const requiredChanges = Array.isArray(verifier.verdict.requiredChanges)
+                ? verifier.verdict.requiredChanges.map((x) => String(x)).filter(Boolean)
+                : [];
+              const repairPkg = [
+                `## Repair package`,
+                ``,
+                `- candidateSha: \`${head}\``,
+                `- upstreamSha: \`${cand}\``,
+                `- baseAppsolinoSha: \`${candidateBase || 'n/a'}\``,
+                `- instruction: Fix only the unresolved required changes. Do not re-investigate accepted areas.`,
+                ``,
+                '```json',
+                JSON.stringify(
+                  {
+                    candidateSha: head,
+                    upstreamSha: cand,
+                    baseAppsolinoSha: candidateBase,
+                    requiredChanges,
+                    blockingFindings: Array.isArray(verifier.verdict.blockingFindings)
+                      ? verifier.verdict.blockingFindings
+                      : [],
+                  },
+                  null,
+                  2,
+                ),
+                '```',
+              ].join('\n');
+              spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', repairPkg], { encoding: 'utf8' });
               spawnSync('gh', ['pr', 'edit', pr, '--repo', repo, '--add-label', 'auto2:expert-resolving'], { encoding: 'utf8' });
               spawnSync(
                 'gh',
@@ -239,6 +339,7 @@ jobs:
             process.exit(2);
           }
 
+          const seededRequiredChanges = loadSeededRequiredChanges();
           const result = await runExpertRepairLoop({
             worktreePath: wt,
             maxAttempts: 3,
@@ -246,6 +347,7 @@ jobs:
             latencyTracker: tracker,
             liveUpstreamHead: liveSha,
             headRefName: prj.headRefName,
+            initialRequiredChanges: seededRequiredChanges,
             evidence: {
               upstreamHead: liveSha,
               appsolinoBaseSha: candidateBase || liveMain,
@@ -255,8 +357,11 @@ jobs:
               candidateSha: head,
               liveAppsolinoMain: liveMain,
               conflictedFiles: [],
-              problemSummary: `Resolve engineering issues on automation upstream PR #${pr}`,
+              problemSummary: seededRequiredChanges.length
+                ? `Fix only the unresolved required changes on automation upstream PR #${pr}. Do not re-investigate accepted areas.`
+                : `Resolve engineering issues on automation upstream PR #${pr}`,
               riskClass: 'SENSITIVE',
+              requiredChanges: seededRequiredChanges,
             },
             recheckUpstreamFn: async () => {
               const r = spawnSync('gh', ['api', 'repos/Runfusion/Fusion/commits/main', '--jq', '.sha'], { encoding: 'utf8' });

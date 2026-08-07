@@ -60,6 +60,77 @@ function runShell(cwd, command, opts = {}) {
 }
 
 /**
+ * FNXC:UpstreamPatchReconcile 2026-08-07-17:35:
+ * regressionTests entries are often bare file paths (vitest/node:test targets), not shell commands.
+ * Executing a path via `shell: true` yields exit 126/127, which was misread as FAIL and falsely retained every ACTIVE patch.
+ * Resolve paths to the correct runner; missing files return missing:true (UNKNOWN) instead of a fake FAIL.
+ *
+ * @param {string} worktreePath
+ * @param {string} entry
+ * @returns {{ command?: string, missing?: boolean, path?: string, reason?: string }}
+ */
+export function resolveRegressionInvocation(worktreePath, entry) {
+  const raw = String(entry || "").trim();
+  if (!raw) {
+    return { missing: true, path: "", reason: "empty-regression-entry" };
+  }
+
+  // Explicit shell / package-manager commands stay as-is.
+  if (
+    /\s/.test(raw) ||
+    /^(pnpm|npm|yarn|node|npx|bun)\b/.test(raw) ||
+    raw.startsWith("./") ||
+    raw.startsWith("bash ") ||
+    raw.startsWith("sh ")
+  ) {
+    return { command: raw };
+  }
+
+  const looksLikeFile =
+    /\.(mjs|cjs|js|ts|tsx|mts|cts)$/.test(raw) ||
+    raw.startsWith("packages/") ||
+    raw.startsWith("infra/") ||
+    raw.startsWith("scripts/");
+
+  if (!looksLikeFile) {
+    return { command: raw };
+  }
+
+  const abs = pathResolve(worktreePath, raw);
+  if (!existsSync(abs)) {
+    return { missing: true, path: raw, reason: "regression-file-missing" };
+  }
+
+  if (raw.startsWith("infra/scripts/__tests__/") && /\.mjs$/.test(raw)) {
+    return { command: `node --test ${JSON.stringify(raw)}` };
+  }
+
+  const pkgMatch = raw.match(/^packages\/([^/]+)\//);
+  if (pkgMatch) {
+    const dir = pkgMatch[1];
+    const filterByDir = {
+      core: "@fusion/core",
+      engine: "@fusion/engine",
+      dashboard: "@fusion/dashboard",
+      cli: "@runfusion/fusion",
+      "plugin-sdk": "@fusion/plugin-sdk",
+    };
+    const filter = filterByDir[dir];
+    if (filter) {
+      return {
+        command: `pnpm --filter ${filter} exec vitest run ${JSON.stringify(raw)} --reporter=dot --silent=passed-only`,
+      };
+    }
+  }
+
+  if (raw.startsWith("scripts/__tests__/") || raw.startsWith("infra/scripts/__tests__/")) {
+    return { command: `node --test ${JSON.stringify(raw)}` };
+  }
+
+  return { command: `pnpm exec vitest run ${JSON.stringify(raw)} --reporter=dot --silent=passed-only` };
+}
+
+/**
  * Ensure a disposable clean worktree at exact upstream SHA (Appsolino patches absent).
  * Prefer an independent temporary clone when the caller repo is mid-merge — worktree add
  * from a conflicted repo is allowed by git but CI runners have been flaky; a fresh clone
@@ -224,12 +295,25 @@ export async function runLivePatchReconcile(input) {
       persist: input.persist !== false,
       onlyPatchIds: input.onlyPatchIds,
       runCleanRegression: async (patch) => {
-        const commands = patch.regressionTests || [];
+        const entries = patch.regressionTests || [];
         /** @type {string[]} */
         const logs = [];
-        for (const cmd of commands) {
+        if (!entries.length) {
+          return { passed: null, log: "no regressionTests registered" };
+        }
+        for (const entry of entries) {
+          const resolved = resolveRegressionInvocation(worktreePath, entry);
+          if (resolved.missing) {
+            logs.push(
+              `$ ${entry}\nMISSING regression file (${resolved.reason || "missing"}): ${resolved.path || entry}`,
+            );
+            // FNXC:UpstreamPatchReconcile 2026-08-07-17:35:
+            // Missing/non-runnable regression evidence must not count as FAIL (defect reproduces).
+            return { passed: null, log: logs.join("\n---\n") };
+          }
+          const cmd = resolved.command;
           const r = runShell(worktreePath, cmd);
-          logs.push(`$ ${cmd}\nexit=${r.status}\n${r.stdout}\n${r.stderr}`);
+          logs.push(`$ ${cmd}\n(from entry: ${entry})\nexit=${r.status}\n${r.stdout}\n${r.stderr}`);
           if (!r.passed) return { passed: false, log: logs.join("\n---\n") };
         }
         return { passed: true, log: logs.join("\n---\n") };
