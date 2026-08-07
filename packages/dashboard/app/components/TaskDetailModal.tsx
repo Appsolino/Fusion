@@ -4355,14 +4355,46 @@ export function TaskDetailContent({
     }
   }, [oversightActive, activitySegment]);
 
+  /*
+  FNXC:TaskActivityFeedFreshness 2026-08-07-08:30:
+  Task list and SSE snapshots intentionally strip task.log. If a shared detail host captured an
+  empty full-detail snapshot before activity was written, selecting Feed must retry that complete
+  read instead of preserving "(no activity)" forever. Populated feeds remain snapshot-stable and
+  incur no extra request; Live and Raw keep their independent streaming paths.
+  */
+  const activityFeedIsEmpty = !workingTask.log?.length;
+  const refreshEmptyActivityFeed = useCallback(() => {
+    if (!activityFeedIsEmpty) return;
+
+    const requestGeneration = ++detailRequestGenerationRef.current;
+    requestTaskDetail(task.id, projectId)
+      .then((detail) => {
+        if (!mountedRef.current
+          || detailRequestGenerationRef.current !== requestGeneration
+          || activeTaskIdRef.current !== detail.id) return;
+
+        const promptResponse = latestPromptResponseRef.current;
+        const promptResponseMatchesDetail = promptResponse?.key === `${projectId ?? ""}:${detail.id}`;
+        const detailWithLatestPrompt = promptResponseMatchesDetail
+          ? { ...detail, prompt: promptResponse.prompt } as TaskDetail
+          : detail;
+        setFullDetail((previous) => previous?.id === detail.id
+          ? mergeTaskSnapshot(previous, detailWithLatestPrompt, { fullSnapshot: true })
+          : detailWithLatestPrompt);
+        setDetailLoading(false);
+      })
+      .catch(() => undefined);
+  }, [activityFeedIsEmpty, task.id, projectId, requestTaskDetail]);
+
   const selectActivityView = useCallback((value: ActivitySegment) => {
     activityViewMenuViewportGuardUntilRef.current = 0;
     setActiveTab("chat");
     setActivitySegment(value);
+    if (value === "feed") refreshEmptyActivityFeed();
     setShowActivityViewMenu(false);
     setActivityViewMenuPosition(null);
     requestAnimationFrame(() => activityViewButtonRef.current?.focus());
-  }, []);
+  }, [refreshEmptyActivityFeed]);
 
   const handleActivityTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
     const shouldOpenMenu = event.key === "ArrowDown" || (event.altKey && event.key === "ArrowDown");

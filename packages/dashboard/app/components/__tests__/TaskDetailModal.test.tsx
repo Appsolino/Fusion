@@ -3,7 +3,7 @@ FNXC:TaskDetailTabs 2026-06-17-08:20:
 FN-7324 keeps the stable internal `chat` tab as Activity for explicit legacy links, but the omitted non-done default is now planner Chat. Tests that assert Definition-only sections must opt into `initialTab="definition"` so they verify the intended surface instead of the Chat landing state.
 */
 import { describe, it, expect, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React, { type ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -692,11 +692,14 @@ describe("TaskDetailModal GitHub tracking CTA", () => {
 });
 
 describe("TaskDetailModal Activity feed loading", () => {
-  function renderActivityFeedModal(task: ReturnType<typeof makeTask> | Record<string, unknown>) {
+  function renderActivityFeedModal(
+    task: ReturnType<typeof makeTask> | Record<string, unknown>,
+    initialTab: ComponentProps<typeof TaskDetailModal>["initialTab"] = "logs",
+  ) {
     return render(
       <TaskDetailModal
         task={task as any}
-        initialTab="logs"
+        initialTab={initialTab}
         onClose={noop}
         onMoveTask={noopMove}
         onDeleteTask={noopDelete}
@@ -780,6 +783,39 @@ describe("TaskDetailModal Activity feed loading", () => {
     await screen.findByText("newer entry");
     const actions = Array.from(document.querySelectorAll(".detail-log-action")).map((node) => node.textContent);
     expect(actions).toEqual(["newer entry", "older entry"]);
+    expect(screen.queryByText("(no activity)")).not.toBeInTheDocument();
+  });
+
+  /*
+  FNXC:TaskActivityFeedFreshness 2026-08-07-08:30:
+  Modal, main-panel, split-list, dock, popup, desktop, and mobile task details all render the shared
+  TaskDetailContent feed. Entering Feed must refresh its full task snapshot because board/SSE rows
+  deliberately carry log=[]; otherwise a detail opened before activity exists stays empty forever.
+  */
+  it("refreshes an empty Feed when the persisted task log has gained activity", async () => {
+    const user = userEvent.setup();
+    const { fetchTaskDetail } = await import("../../api");
+    const refresh = createDeferred<ReturnType<typeof makeTask>>();
+    vi.mocked(fetchTaskDetail).mockReset();
+    vi.mocked(fetchTaskDetail).mockReturnValueOnce(refresh.promise as any);
+
+    renderActivityFeedModal(
+      makeTask({ id: "FN-FEED-REFRESH", prompt: "# Already loaded", log: [] }),
+      "chat",
+    );
+
+    await selectActivityView(user, "feed");
+    expect(fetchTaskDetail).toHaveBeenCalledWith("FN-FEED-REFRESH", undefined);
+
+    await act(async () => {
+      refresh.resolve(makeTask({
+        id: "FN-FEED-REFRESH",
+        prompt: "# Already loaded",
+        log: [{ timestamp: "2026-08-07T08:20:00.000Z", action: "Executor started" }],
+      }));
+    });
+
+    expect(await screen.findByText("Executor started")).toBeInTheDocument();
     expect(screen.queryByText("(no activity)")).not.toBeInTheDocument();
   });
 
