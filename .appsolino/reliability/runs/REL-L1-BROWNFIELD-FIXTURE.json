@@ -38,12 +38,14 @@
   },
   "prResult": {
     "created": false,
-    "reason": "local fixture — no remote push (Host P/D deploy not required)"
+    "reason": "local fixture \u2014 no remote push (Host P/D deploy not required)"
   },
   "finalStatus": "SUCCESS",
   "mandatoryFinalFailed": false,
-  "reason": "L1 fixed with independent APPROVE",
+  "reason": "L1 fixed with independent APPROVE [fixture harness \u2014 not live Fusion agent proof]",
   "wallClockDurationMs": 240,
   "recoveredAfterFailure": true,
-  "recordedUtc": "2026-08-07T04:24:56Z"
+  "recordedUtc": "2026-08-07T04:24:56Z",
+  "synthetic": true,
+  "testInjection": true
 }

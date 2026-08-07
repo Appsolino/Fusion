@@ -1,0 +1,42 @@
+{
+  "id": "FIX-LANE-WIRING-TOUCH-FIXTURE",
+  "status": "active",
+  "defect": {
+    "description": "task-modal-touch-resize-e2e-fixture calls useRightDockController without columnFlagsByTaskId, raising Appsolino lane-wiring ratchet (baseline 0).",
+    "reproduction": "On Appsolino tree with lane-wiring baseline, absorb upstream containing the fixture; run pnpm check:lane-wiring.",
+    "affectedSubsystem": "dashboard/lane-wiring"
+  },
+  "introducedAgainst": {
+    "upstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19"
+  },
+  "regressionTests": [
+    "pnpm check:lane-wiring"
+  ],
+  "upstreamComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "comparedAgainstSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+    "comparedAt": "2026-08-07T04:28:00Z",
+    "evidence": "Upstream fixture omits lane arg; Appsolino ratchet baseline does not allow new unwired sites. Defect reproduces on clean absorb of this upstream SHA until fixture is wired.",
+    "relatedIssue": null,
+    "relatedPr": "https://github.com/Appsolino/Fusion/pull/123",
+    "relatedCommit": "11499f0637"
+  },
+  "localAction": {
+    "patchRequired": true,
+    "files": [
+      "packages/dashboard/app/task-modal-touch-resize-e2e-fixture.tsx"
+    ]
+  },
+  "retirementCondition": {
+    "regressionTestPassesOnCleanUpstream": true
+  },
+  "revisions": [
+    {
+      "revision": 1,
+      "againstUpstreamSha": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+      "summary": "Pass columnFlagsByTaskId: new Map() to useRightDockController in touch-resize fixture",
+      "createdAt": "2026-08-07T04:28:00Z"
+    }
+  ],
+  "updatedUtc": "2026-08-07T04:28:00Z"
+}

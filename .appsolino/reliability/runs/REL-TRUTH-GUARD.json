@@ -1,13 +1,25 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "taskId": "REL-TRUTH-GUARD",
   "level": 0,
   "repo": "synthetic",
+  "synthetic": true,
   "startingSha": null,
   "requestedBehavior": "ensure false SUCCESS cannot be recorded when mandatoryFinalFailed",
   "finalStatus": "CRITICAL_FALSE_SUCCESS_PREVENTED",
   "mandatoryFinalFailed": true,
   "reason": "synthetic guard",
-  "recordedUtc": "2026-08-07T04:18:50Z",
-  "truthfulnessViolationCaught": true
+  "recordedUtc": "2026-08-07T04:28:13Z",
+  "schemaValid": true,
+  "truthfulnessViolationCaught": true,
+  "truthfulnessViolationReasons": [
+    "run self-reports mandatoryFinalFailed",
+    "missing SUCCESS evidence field: startingSha",
+    "missing SUCCESS evidence field: finalSha",
+    "missing SUCCESS evidence field: mandatoryFinals",
+    "missing SUCCESS evidence field: configuredModel",
+    "missing SUCCESS evidence field: actualModel",
+    "synthetic/mock execution cannot be recorded as SUCCESS evidence"
+  ],
+  "claimedStatus": "SUCCESS"
 }

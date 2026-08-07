@@ -53,8 +53,10 @@
   },
   "finalStatus": "SUCCESS",
   "mandatoryFinalFailed": false,
-  "reason": "L3 architecture-style feature with redesign recovery",
+  "reason": "L3 architecture-style feature with redesign recovery [fixture harness \u2014 not live Fusion agent proof]",
   "wallClockDurationMs": 559,
   "recoveredAfterFailure": true,
-  "recordedUtc": "2026-08-07T04:24:57Z"
+  "recordedUtc": "2026-08-07T04:24:57Z",
+  "synthetic": true,
+  "testInjection": true
 }
