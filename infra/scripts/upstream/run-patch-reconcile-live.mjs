@@ -9,8 +9,9 @@
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join, dirname, resolve as pathResolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { reconcileAllPatches } from "./patch-reconcile.mjs";
 import { loadPatchRegistry } from "./patch-registry.mjs";
 
@@ -60,23 +61,36 @@ function runShell(cwd, command, opts = {}) {
 
 /**
  * Ensure a disposable clean worktree at exact upstream SHA (Appsolino patches absent).
- * @param {{ repoDir: string, cleanUpstreamSha: string, worktreePath?: string }} input
+ * Prefer an independent temporary clone when the caller repo is mid-merge — worktree add
+ * from a conflicted repo is allowed by git but CI runners have been flaky; a fresh clone
+ * is deterministic.
+ * @param {{ repoDir: string, cleanUpstreamSha: string, worktreePath?: string, upstreamUrl?: string }} input
  */
 export function ensureCleanUpstreamWorktree(input) {
   const sha = String(input.cleanUpstreamSha).trim().toLowerCase();
   const wt =
     input.worktreePath ||
-    join(input.repoDir, "..", `.appsolino-clean-upstream-${sha.slice(0, 12)}`);
+    join(tmpdir(), `appsolino-clean-upstream-${sha.slice(0, 12)}-${process.pid}`);
   if (existsSync(wt)) {
-    git(input.repoDir, ["worktree", "remove", "--force", wt], { allowFailure: true });
     rmSync(wt, { recursive: true, force: true });
   }
-  // Prefer upstream remote tip; fall back to fetch object from origin if present.
-  git(input.repoDir, ["fetch", "--no-tags", "upstream", sha], { allowFailure: true });
-  git(input.repoDir, ["fetch", "--no-tags", "origin", sha], { allowFailure: true });
-  const add = git(input.repoDir, ["worktree", "add", "--detach", wt, sha], { allowFailure: true });
-  if (add.status !== 0) {
-    throw new Error(`unable to create clean upstream worktree at ${sha}: ${add.stderr || add.stdout}`);
+  const upstreamUrl = input.upstreamUrl || "https://github.com/Runfusion/Fusion.git";
+  const clone = spawnSync(
+    "git",
+    ["clone", "--quiet", "--no-tags", upstreamUrl, wt],
+    { encoding: "utf8" },
+  );
+  if ((clone.status ?? 1) !== 0) {
+    throw new Error(`unable to clone clean upstream: ${(clone.stderr || clone.stdout || "").trim()}`);
+  }
+  const co = spawnSync("git", ["-C", wt, "checkout", "--detach", sha], { encoding: "utf8" });
+  if ((co.status ?? 1) !== 0) {
+    // Fetch the tip explicitly then retry.
+    spawnSync("git", ["-C", wt, "fetch", "--depth", "1", "origin", sha], { encoding: "utf8" });
+    const co2 = spawnSync("git", ["-C", wt, "checkout", "--detach", sha], { encoding: "utf8" });
+    if ((co2.status ?? 1) !== 0) {
+      throw new Error(`unable to checkout clean upstream ${sha}: ${(co2.stderr || co2.stdout || "").trim()}`);
+    }
   }
   return { worktreePath: wt, cleanUpstreamSha: sha };
 }
@@ -183,6 +197,7 @@ export function writePatchReconcileProof(repoRoot, reconcileResult, one, meta = 
  *   cleanupWorktree?: boolean,
  *   upstreamBefore?: string|null,
  *   installDeps?: boolean,
+ *   onlyPatchIds?: string[],
  * }} input
  */
 export async function runLivePatchReconcile(input) {
@@ -207,6 +222,7 @@ export async function runLivePatchReconcile(input) {
       repoRoot: input.repoDir,
       cleanUpstreamSha,
       persist: input.persist !== false,
+      onlyPatchIds: input.onlyPatchIds,
       runCleanRegression: async (patch) => {
         const commands = patch.regressionTests || [];
         /** @type {string[]} */
@@ -237,7 +253,6 @@ export async function runLivePatchReconcile(input) {
     return { ...result, worktreePath, proofs };
   } finally {
     if (input.cleanupWorktree !== false) {
-      git(input.repoDir, ["worktree", "remove", "--force", worktreePath], { allowFailure: true });
       rmSync(worktreePath, { recursive: true, force: true });
     }
   }
@@ -294,10 +309,14 @@ async function main() {
   }
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
+function isExecutedAsCli() {
+  return process.argv.includes("--repo-dir") || process.argv.includes("--upstream-sha") || process.argv.includes("--help") || process.argv.includes("-h");
+}
+
+if (isExecutedAsCli()) {
   main().catch((err) => {
     process.stderr.write(`${err?.stack || err}\n`);
     process.exit(1);
   });
 }
+

@@ -31,8 +31,12 @@ export async function reconcileAllPatches(input) {
   const retired = [];
   const adapted = [];
   const blocked = [];
+  const onlyIds = Array.isArray(input.onlyPatchIds)
+    ? new Set(input.onlyPatchIds.map((id) => String(id).toUpperCase()))
+    : null;
 
   for (const patch of registry.patches.filter((p) => p.status === "ACTIVE" || p.status === "ADAPTING" || p.status === "DRAFT")) {
+    if (onlyIds && !onlyIds.has(String(patch.id).toUpperCase())) continue;
     const regression = await input.runCleanRegression(patch);
     const signals =
       typeof input.gatherUpstreamSignals === "function"
