@@ -32,7 +32,9 @@ permissions:
   actions: write
 
 concurrency:
-  group: auto2-expert-${{ inputs.pr_number }}
+  # FNXC:UpstreamLatency 2026-08-07-16:15:
+  # Include mode so sensitive-review → repair dispatch does not cancel the finishing review job.
+  group: auto2-expert-${{ inputs.pr_number }}-${{ inputs.mode || 'repair' }}
   cancel-in-progress: true
 
 jobs:
