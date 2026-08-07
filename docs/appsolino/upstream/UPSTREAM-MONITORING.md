@@ -44,7 +44,7 @@ Regression: `node --test infra/scripts/__tests__/auto3-handoff.test.mjs`
 ## AUTO-2 trust zones
 
 1. **Candidate validate** — checkout PR head; `persist-credentials: false`; no App private key; no merge/comment/label; no Host D secrets.
-2. **Trusted finalize** — checkout Appsolino main (or dispatch ref for proofs); mint App token; recompute risk via `auto2-classify-upstream.mjs`; exact-head `--match-head-commit` merge for **low** only. Sensitive without verified owner review → `approval-required` (no merge).
+2. **Trusted finalize** — checkout Appsolino main (or dispatch ref for proofs); mint App token; recompute risk via `auto2-classify-upstream.mjs`; exact-head `--match-head-commit` merge for **low** only. AUTO-1 `automation/upstream-*` **SENSITIVE** without owner review → `expert-resolving` (real AI expert + independent verifier + deterministic gates) — not `approval-required` parking. Optional owner approve-sensitive remains a fast-path.
 3. **Trusted approve-sensitive** — `workflow_dispatch` only from trusted main code; independently verifies open `automation/upstream-*` PR, exact `approved_head`, sensitive classification, green checks, and APPROVED review from `Anas966` on that exact commit; then exact-head merge + AUTO-3. Boolean flags are not authorization.
 
 ### Prior gap (recorded)

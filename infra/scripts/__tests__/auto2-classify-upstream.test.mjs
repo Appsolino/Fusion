@@ -37,6 +37,7 @@ function sensitivePrView(overrides = {}) {
     baseRefName: "main",
     headRefOid: HEAD_A,
     mergeable: "MERGEABLE",
+    body: `candidateBaseAppsolinoSha: ${MAIN_SHA}\ncandidateUpstreamSha: ${UPSTREAM_FOR_SENSITIVE}\n`,
     commits: Array.from({ length: 50 }, (_, i) => ({ oid: String(i) })),
     labels: [],
     url: "u",
@@ -282,6 +283,8 @@ describe("AUTO-2 finalize policy", () => {
       validationConclusion: "success",
       allowMissingApp: true,
       dispatchAuto3: false,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh,
     });
     assert.equal(first.action, "auto-merged");
@@ -292,6 +295,8 @@ describe("AUTO-2 finalize policy", () => {
       validationConclusion: "success",
       allowMissingApp: true,
       dispatchAuto3: false,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh,
     });
     assert.equal(second.action, "auto-merged");
@@ -335,6 +340,8 @@ describe("AUTO-2 finalize policy", () => {
       validatedHeadSha: "oldsha",
       validationConclusion: "success",
       allowMissingApp: true,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh,
     });
     assert.equal(r.action, "blocked");
@@ -386,6 +393,8 @@ describe("AUTO-2 finalize policy", () => {
       validationConclusion: "success",
       allowMissingApp: true,
       liveUpstreamHead: UP,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh,
     });
     assert.equal(r.action, "expert-resolving");
@@ -404,7 +413,9 @@ describe("AUTO-2 finalize policy", () => {
           validatedHeadSha: "x",
           allowMissingApp: true,
           executeCandidateCode: true,
-          gh: () => ({ status: 0, stdout: "{}", stderr: "" }),
+          liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
+      gh: () => ({ status: 0, stdout: "{}", stderr: "" }),
         }),
       /never execute candidate code/i,
     );
@@ -506,7 +517,17 @@ describe("AUTO-2 sensitive exact-head approval", () => {
 
   it("sensitive without approval → expert-resolving (not owner-stop)", () => {
     const merges = [];
+    const labels = [];
     const gh = makeSensitiveGh({ merges, reviewsJson: "[]" });
+    const wrapped = (args) => {
+      if (args[0] === "pr" && args[1] === "edit" && args.includes("--add-label")) {
+        labels.push(args[args.indexOf("--add-label") + 1]);
+      }
+      if (args[0] === "pr" && args[1] === "edit" && args.includes("--remove-label")) {
+        labels.push(`remove:${args[args.indexOf("--remove-label") + 1]}`);
+      }
+      return gh(args);
+    };
     const r = runAuto2Finalize({
       repo: "Appsolino/Fusion",
       prNumber: 47,
@@ -517,10 +538,15 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       reviewsForTest: [],
       checksConclusionForTest: "success",
       liveUpstreamHead: UPSTREAM_FOR_SENSITIVE,
-      gh,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
+      gh: wrapped,
     });
     assert.equal(r.action, "expert-resolving");
     assert.equal(merges.length, 0);
+    // AUTO-1 head must not re-park on approval-required; expert-resolving owns continuation.
+    assert.ok(!labels.includes(LABEL_APPROVAL));
+    assert.ok(labels.includes("remove:auto2:approval-required") || labels.includes(`remove:${LABEL_APPROVAL}`) || !labels.includes(LABEL_APPROVAL));
   });
 
   it("stale candidate upstream vs live tip → refresh-required", () => {
@@ -535,6 +561,8 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       reviewsForTest: [],
       checksConclusionForTest: "success",
       liveUpstreamHead: "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh: makeSensitiveGh({ merges }),
     });
     assert.equal(r.action, "refresh-required");
@@ -554,6 +582,8 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       dispatchAuto3: false,
       reviewsForTest: [],
       checksConclusionForTest: "success",
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh: makeSensitiveGh({ merges }),
     });
     assert.equal(r.action, "blocked");
@@ -574,6 +604,8 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       dispatchAuto3: false,
       reviewsForTest: [{ state: "APPROVED", user: { login: "not-owner" }, commit_id: HEAD_A }],
       checksConclusionForTest: "success",
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh: makeSensitiveGh({ merges }),
     });
     assert.equal(r.action, "blocked");
@@ -594,6 +626,8 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       dispatchAuto3: false,
       reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_B }],
       checksConclusionForTest: "success",
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh: makeSensitiveGh({ merges }),
     });
     assert.equal(r.action, "blocked");
@@ -614,6 +648,8 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       dispatchAuto3: false,
       reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_B }],
       checksConclusionForTest: "success",
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh: makeSensitiveGh({ merges, pr: { headRefOid: HEAD_A } }),
     });
     assert.equal(r.action, "blocked");
@@ -633,6 +669,8 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       allowMissingApp: true,
       dispatchAuto3: false,
       reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_A }],
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh: makeSensitiveGh({ merges }),
     });
     assert.equal(r.action, "blocked");
@@ -656,6 +694,8 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       reviewsForTest: [{ state: "APPROVED", user: { login: "Anas966" }, commit_id: HEAD_A }],
       checksConclusionForTest: "success",
       liveUpstreamHead: UPSTREAM_FOR_SENSITIVE,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh: makeSensitiveGh({ merges, auto3 }),
     });
     assert.ok(["auto-merged", "auto-merged-deployed", "auto-merged-deploy-failed"].includes(r.action));
@@ -679,6 +719,8 @@ describe("AUTO-2 sensitive exact-head approval", () => {
       validationConclusion: "success",
       requireSensitiveApproval: true,
       allowMissingApp: true,
+      liveAppsolinoMain: MAIN_SHA,
+      candidateBaseAppsolinoSha: MAIN_SHA,
       gh: makeSensitiveGh({
         merges,
         pr: { state: "MERGED", mergedAt: "2026-08-01T00:00:00Z", headRefOid: HEAD_A },

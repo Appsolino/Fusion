@@ -5,6 +5,10 @@
  * Bounded sandboxed repair loop: expert → deterministic tests → independent verifier.
  * AI cannot bypass failing deterministic gates. REQUEST_CHANGES returns to expert.
  * Exhausted attempts → BLOCKED_UNRESOLVED with evidence. Never converts inability into green.
+ *
+ * FNXC:UpstreamAiProtocol 2026-08-07-08:50:
+ * Malformed verifier JSON is AI_PROTOCOL_ERROR (not ENGINEERING_UNRESOLVED / BLOCKED_UNRESOLVED).
+ * Verifier retries are owned by ai-verifier.mjs (bounded ≤3). Repair loop maps failureClass → next.
  */
 import { spawnSync } from "node:child_process";
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
@@ -14,6 +18,7 @@ import { runUpstreamAiVerifier } from "./ai-verifier.mjs";
 import { combineResolutionGate } from "./expert-decision-schema.mjs";
 import { assertFinalizerFreshness, parseUpstreamShaFromBranch } from "./rolling-candidate.mjs";
 import { evaluateFreshness, writeFreshnessStatus, FRESHNESS_STATUS_PATH } from "./freshness.mjs";
+import { classifyAiFailure, nextFromAiFailureClass } from "./structured-json.mjs";
 
 export const DEFAULT_MAX_REPAIR_ATTEMPTS = 3;
 
@@ -88,11 +93,15 @@ export async function runExpertRepairLoop(input) {
     });
     lastExpert = expert;
     if (!expert.ok || !expert.decision) {
+      const failureClass =
+        expert.failureClass ||
+        classifyAiFailure({ reason: expert.reason, action: expert.action, ok: false });
       attempts.push({
         attempt,
         phase: "expert",
         ok: false,
         reason: expert.reason,
+        failureClass,
         provider: expert.configuredProvider,
         model: expert.configuredModel,
         actualProvider: expert.actualProvider,
@@ -102,7 +111,8 @@ export async function runExpertRepairLoop(input) {
       if (typeof input.onAttempt === "function") input.onAttempt(attempts[attempts.length - 1]);
       return {
         finalizable: false,
-        next: "BLOCKED_UNRESOLVED",
+        next: nextFromAiFailureClass(failureClass),
+        failureClass,
         reason: expert.reason || "expert unavailable or malformed",
         attempts,
         expert,
@@ -124,6 +134,22 @@ export async function runExpertRepairLoop(input) {
         ? await input.getDiffText({ attempt, worktreePath: input.worktreePath })
         : gitDiff(input.worktreePath);
 
+    const candidateSha =
+      input.evidence?.candidateHeadSha ||
+      input.evidence?.candidateSha ||
+      input.evidence?.headSha ||
+      null;
+    const upstreamSha =
+      input.evidence?.candidateUpstreamSha ||
+      input.evidence?.upstreamSha ||
+      input.evidence?.upstreamHead ||
+      null;
+    const baseAppsolinoSha =
+      input.evidence?.candidateBaseAppsolinoSha ||
+      input.evidence?.baseAppsolinoSha ||
+      input.evidence?.appsolinoBaseSha ||
+      null;
+
     const verifier = await verifierFn({
       worktreePath: input.worktreePath,
       evidence: {
@@ -136,26 +162,38 @@ export async function runExpertRepairLoop(input) {
           failures: tests.failures || [],
         },
         riskClass: input.evidence?.riskClass || "SENSITIVE",
+        candidateSha,
+        upstreamSha,
+        baseAppsolinoSha,
       },
+      requireShaBinding: Boolean(candidateSha && upstreamSha && baseAppsolinoSha),
     });
     lastVerifier = verifier;
 
     if (!verifier.ok || !verifier.verdict) {
+      const failureClass =
+        verifier.failureClass ||
+        classifyAiFailure({ reason: verifier.reason, action: verifier.action, ok: false });
       attempts.push({
         attempt,
         phase: "verifier",
         ok: false,
         reason: verifier.reason,
+        failureClass,
         expertDecision: expert.decision.decision,
         testsPassed: tests.passed,
         provider: verifier.configuredProvider,
         model: verifier.configuredModel,
+        actualModel: verifier.actualModel,
+        acceptedModel: verifier.acceptedModel || null,
+        verifierAttempts: verifier.verifierAttempts || null,
         latencyMs: verifier.latencyMs,
       });
       if (typeof input.onAttempt === "function") input.onAttempt(attempts[attempts.length - 1]);
       return {
         finalizable: false,
-        next: "BLOCKED_UNRESOLVED",
+        next: nextFromAiFailureClass(failureClass),
+        failureClass,
         reason: verifier.reason || "verifier unavailable or malformed",
         attempts,
         expert,
@@ -178,11 +216,14 @@ export async function runExpertRepairLoop(input) {
       ok: gate.finalizable,
       next: gate.next,
       reason: gate.reason,
+      failureClass: gate.failureClass || null,
       expertDecision: expert.decision.decision,
       verifierVerdict: verifier.verdict.verdict,
       testsPassed: tests.passed,
       expertModel: expert.actualModel,
       verifierModel: verifier.actualModel,
+      acceptedVerifierModel: verifier.acceptedModel || verifier.actualModel,
+      verifierAttempts: verifier.verifierAttempts || null,
       expertLatencyMs: expert.latencyMs,
       verifierLatencyMs: verifier.latencyMs,
     });
@@ -355,18 +396,22 @@ export function writeRepairLoopEvidence(dir, result) {
       ? {
           ok: result.verifier.ok,
           action: result.verifier.action,
+          failureClass: result.verifier.failureClass || null,
           reason: result.verifier.reason,
           verdict: result.verifier.verdict,
           configuredProvider: result.verifier.configuredProvider,
           configuredModel: result.verifier.configuredModel,
           actualProvider: result.verifier.actualProvider,
           actualModel: result.verifier.actualModel,
+          acceptedModel: result.verifier.acceptedModel || result.verifier.actualModel || null,
+          verifierAttempts: result.verifier.verifierAttempts || null,
           latencyMs: result.verifier.latencyMs,
           schemaVersion: result.verifier.schemaVersion,
           role: result.verifier.role,
           testInjection: result.verifier.testInjection || false,
         }
       : null,
+    failureClass: result.failureClass || null,
     recordedUtc: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
   };
   const path = join(dir, "expert-repair-loop.json");

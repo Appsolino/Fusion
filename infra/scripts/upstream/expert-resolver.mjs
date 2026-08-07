@@ -15,6 +15,7 @@ import { validateExpertDecision, EXPERT_DECISION_SCHEMA_VERSION } from "./expert
 import { assertModelAvailable } from "../steward/s1a/cursor-engine.mjs";
 import { cursorChildEnv, assertNoCredentialLeak } from "../steward/s1a/spawn-env.mjs";
 import { CURSOR_AGENT_BIN, S1B_MODEL, S1B_PROVIDER } from "../steward/s1b/policy.mjs";
+import { parseStructuredJson } from "./structured-json.mjs";
 
 export const EXPERT_PROVIDER = S1B_PROVIDER;
 export const EXPERT_MODEL = S1B_MODEL;
@@ -69,23 +70,13 @@ export function buildExpertEvidencePrompt(evidence) {
 
 /**
  * Parse last JSON object from model stdout (fail closed).
+ * Uses production-robust structured extraction (fence / balanced braces).
  * @param {string} text
  */
 export function parseExpertStdout(text) {
-  const src = String(text || "");
-  const fence = src.match(/```json\s*([\s\S]*?)```/i);
-  const candidate = fence ? fence[1] : src;
-  // Prefer last object-looking blob
-  const start = candidate.lastIndexOf("{");
-  const end = candidate.lastIndexOf("}");
-  if (start < 0 || end <= start) {
-    return { ok: false, error: "no-json-object", raw: null };
-  }
-  try {
-    return { ok: true, error: null, raw: JSON.parse(candidate.slice(start, end + 1)) };
-  } catch (error) {
-    return { ok: false, error: `json-parse-failed:${error}`, raw: null };
-  }
+  const parsed = parseStructuredJson(text);
+  if (!parsed.ok) return { ok: false, error: parsed.error, raw: null };
+  return { ok: true, error: null, raw: parsed.raw, method: parsed.method };
 }
 
 /**

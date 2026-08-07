@@ -111,10 +111,30 @@ jobs:
           const live = spawnSync('gh', ['api', 'repos/Runfusion/Fusion/commits/main', '--jq', '.sha'], { encoding: 'utf8' });
           if (live.status !== 0) throw new Error('unable to fetch live upstream');
           const liveSha = live.stdout.trim().toLowerCase();
+          const liveMainR = spawnSync('gh', ['api', `repos/${repo}/commits/main`, '--jq', '.sha'], { encoding: 'utf8' });
+          const liveMain = liveMainR.status === 0 ? liveMainR.stdout.trim().toLowerCase() : null;
           const cand = parseUpstreamShaFromBranch(prj.headRefName);
-          const race = assertFinalizerFreshness({ candidateUpstreamSha: cand, liveUpstreamHead: liveSha });
+          // candidateBaseAppsolinoSha: PR base = Appsolino main at candidate creation; re-fetch live for race.
+          const baseMeta = spawnSync('gh', ['api', `repos/${repo}/pulls/${pr}`, '--jq', '.base.sha'], { encoding: 'utf8' });
+          const candidateBase = baseMeta.status === 0 ? baseMeta.stdout.trim().toLowerCase() : null;
+          const race = assertFinalizerFreshness({
+            candidateUpstreamSha: cand,
+            liveUpstreamHead: liveSha,
+            candidateBaseAppsolinoSha: candidateBase,
+            liveAppsolinoMain: liveMain,
+          });
           if (!race.ok) {
-            const body = `## Expert resolve — ${race.action}\n\n${race.reason}\n\nLive upstream: \`${liveSha}\`\nCandidate: \`${cand}\`\n`;
+            const body = [
+              `## Expert resolve — ${race.action}`,
+              ``,
+              race.reason,
+              ``,
+              `Live upstream: \`${liveSha}\``,
+              `Candidate upstream: \`${cand}\``,
+              `Live Appsolino main: \`${liveMain || 'n/a'}\``,
+              `Candidate base: \`${candidateBase || 'n/a'}\``,
+              race.mismatch ? `Mismatch: \`${race.mismatch}\`` : '',
+            ].filter(Boolean).join('\n');
             spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', body], { encoding: 'utf8' });
             if (race.action === 'REFRESH_REQUIRED') {
               spawnSync('gh', ['workflow', 'run', 'upstream-auto1.yml', '--repo', repo], { encoding: 'utf8' });
@@ -130,14 +150,22 @@ jobs:
             headRefName: prj.headRefName,
             evidence: {
               upstreamHead: liveSha,
-              appsolinoBaseSha: head,
+              appsolinoBaseSha: candidateBase || liveMain,
               candidateUpstreamSha: cand,
+              candidateBaseAppsolinoSha: candidateBase,
+              candidateHeadSha: head,
+              candidateSha: head,
+              liveAppsolinoMain: liveMain,
               conflictedFiles: [],
               problemSummary: `Resolve engineering issues on automation upstream PR #${pr}`,
               riskClass: 'SENSITIVE',
             },
             recheckUpstreamFn: async () => {
               const r = spawnSync('gh', ['api', 'repos/Runfusion/Fusion/commits/main', '--jq', '.sha'], { encoding: 'utf8' });
+              return r.status === 0 ? r.stdout.trim().toLowerCase() : null;
+            },
+            recheckAppsolinoMainFn: async () => {
+              const r = spawnSync('gh', ['api', `repos/${repo}/commits/main`, '--jq', '.sha'], { encoding: 'utf8' });
               return r.status === 0 ? r.stdout.trim().toLowerCase() : null;
             },
             runDeterministicTests: async () => {
@@ -160,16 +188,22 @@ jobs:
             ``,
             `- finalizable: \`${result.finalizable}\``,
             `- next: \`${result.next}\``,
+            `- failureClass: \`${result.failureClass || 'n/a'}\``,
             `- reason: ${result.reason}`,
             `- expert model: \`${result.expert?.actualModel || 'n/a'}\``,
-            `- verifier model: \`${result.verifier?.actualModel || 'n/a'}\``,
-            `- attempts: ${result.attempts?.length || 0}`,
+            `- verifier model (accepted): \`${result.verifier?.acceptedModel || result.verifier?.actualModel || 'n/a'}\``,
+            `- verifier attempts: ${result.verifier?.verifierAttempts?.length || result.attempts?.length || 0}`,
+            `- repair-loop attempts: ${result.attempts?.length || 0}`,
           ].join('\n');
           spawnSync('gh', ['pr', 'comment', pr, '--repo', repo, '--body', summary], { encoding: 'utf8' });
 
           if (result.next === 'REFRESH_REQUIRED') {
             spawnSync('gh', ['workflow', 'run', 'upstream-auto1.yml', '--repo', repo], { encoding: 'utf8' });
             process.exit(0);
+          }
+          if (result.next === 'AI_PROTOCOL_ERROR' || result.next === 'AI_PROVIDER_ERROR') {
+            spawnSync('gh', ['pr', 'edit', pr, '--repo', repo, '--add-label', 'auto2:expert-resolving'], { encoding: 'utf8' });
+            process.exit(2);
           }
           if (result.finalizable) {
             // Re-dispatch finalize with expert completion markers via PR comment labels.

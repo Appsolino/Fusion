@@ -23,6 +23,12 @@
  * continue to expert-resolving (real AI) rather than parking as approval-required.
  * Finalizer re-fetches upstream HEAD and refuses merge-as-current when the candidate
  * upstream SHA is stale (REFRESH_REQUIRED).
+ *
+ * FNXC:UpstreamAiProtocol 2026-08-07-08:55:
+ * AUTO-1 automation/upstream-* candidates must not receive auto2:approval-required as the
+ * default parking label. SENSITIVE → expert resolver → independent AI verifier →
+ * deterministic gates → finalizer. Bugbot/Cursor Approval Agent absence is an optional
+ * signal gap — never reintroduce owner review as the technical fallback.
  */
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -187,7 +193,7 @@ export function runAuto2Finalize(input) {
     validationConclusion: input.validationConclusion,
   });
 
-  ensureLabels(runGh, repo, prNumber, classification, input.dryRun === true);
+  ensureLabels(runGh, repo, prNumber, classification, input.dryRun === true, pr.headRefName);
   upsertReportComment(runGh, repo, prNumber, body, input.dryRun === true);
 
   if (classification.riskClass === "blocked" || classification.ignored) {
@@ -471,6 +477,14 @@ function finalizeSensitive(input, pr, runGh, classification, ctx) {
   }
 
   ensureExtraLabels(runGh, input.repo, pr.number, [LABEL_EXPERT_RESOLVING], input.dryRun === true);
+  // Strip stale approval-required so AUTO-1 does not reintroduce the owner bottleneck label.
+  if (!input.dryRun && isAuto2ManagedHead(pr.headRefName || "")) {
+    try {
+      runGh(["pr", "edit", String(pr.number), "--repo", input.repo, "--remove-label", LABEL_APPROVAL]);
+    } catch {
+      /* label may already be absent */
+    }
+  }
   const freshness = evaluateFreshness({
     upstreamHead: liveUpstreamHead,
     integratedUpstreamSha: input.integratedUpstreamSha || null,
@@ -845,7 +859,7 @@ function finalizeBlocked(input, pr, runGh, classification, reason) {
     validationConclusion: input.validationConclusion,
   });
   if (!input.dryRun) {
-    ensureLabels(runGh, input.repo, String(pr.number), classification, false);
+    ensureLabels(runGh, input.repo, String(pr.number), classification, false, pr.headRefName);
     upsertReportComment(runGh, input.repo, String(pr.number), body, false);
   }
   return { action: "blocked", reason, classification, pr, mutatedMain: false, deployedHostD: false };
@@ -857,11 +871,19 @@ function finalizeBlocked(input, pr, runGh, classification, reason) {
  * @param {string} prNumber
  * @param {ReturnType<typeof classifyUpstream>} classification
  * @param {boolean} dryRun
+ * @param {string} [headRefName]
+ *
+ * FNXC:UpstreamAiProtocol 2026-08-07-08:55:
+ * For automation/upstream-* heads, never apply auto2:approval-required.
+ * SENSITIVE still routes through finalizeSensitive → expert-resolving; the approval
+ * label was the silent owner bottleneck when Bugbot/Cursor Approval was unavailable.
  */
-function ensureLabels(runGh, repo, prNumber, classification, dryRun) {
+function ensureLabels(runGh, repo, prNumber, classification, dryRun, headRefName = "") {
   const want = new Set();
+  const auto1Head = isAuto2ManagedHead(headRefName);
   if (classification.riskClass === "blocked") want.add(LABEL_BLOCKED);
-  if (classification.riskClass === "sensitive") want.add(LABEL_APPROVAL);
+  // AUTO-1 governed heads: expert path owns continuation — do not stamp approval-required.
+  if (classification.riskClass === "sensitive" && !auto1Head) want.add(LABEL_APPROVAL);
   if (classification.riskClass === "medium") want.add(LABEL_MEDIUM);
   if (classification.riskClass === "low") want.add(LABEL_LOW);
 
