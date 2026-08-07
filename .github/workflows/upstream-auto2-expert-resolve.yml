@@ -98,6 +98,7 @@ jobs:
           node --input-type=module <<'EOF'
           import { runExpertRepairLoop, writeRepairLoopEvidence } from './infra/scripts/upstream/expert-repair-loop.mjs';
           import { assertFinalizerFreshness, parseUpstreamShaFromBranch } from './infra/scripts/upstream/rolling-candidate.mjs';
+          import { runExpertIntegrityChecks } from './infra/scripts/upstream/expert-integrity.mjs';
           import { spawnSync } from 'node:child_process';
           import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -169,14 +170,14 @@ jobs:
               return r.status === 0 ? r.stdout.trim().toLowerCase() : null;
             },
             runDeterministicTests: async () => {
-              // Targeted integrity: ensure worktree still has expected head and no merge conflict markers.
-              const oid = spawnSync('git', ['-C', wt, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
-              if (oid.status !== 0) return { passed: false, failures: ['cannot read HEAD'] };
-              const markers = spawnSync('git', ['-C', wt, 'grep', '-n', '<<<<<<<', '--', '.'], { encoding: 'utf8' });
-              if (markers.status === 0 && markers.stdout.trim()) {
-                return { passed: false, failures: ['conflict markers present'] };
-              }
-              return { passed: true, failures: [] };
+              /*
+              FNXC:UpstreamAiProtocol 2026-08-07-09:20:
+              Use line-anchored conflict-marker detection. A substring grep for
+              `<<<<<<<` matches docs/prompts/fixtures and falsely fails every tree
+              (observed on #133: verifier schema-valid REQUEST_CHANGES looped on a
+              false deterministic failure).
+              */
+              return runExpertIntegrityChecks(wt);
             },
           });
 
