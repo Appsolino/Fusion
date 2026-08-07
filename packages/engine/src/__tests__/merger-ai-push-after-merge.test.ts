@@ -13,7 +13,7 @@ Exact reproduction: init a repo with a bare `origin`, enable `pushAfterMerge`, r
 Assertion it is gone: origin/main equals the landed local main after the merge, across the
 enumerated surfaces — fast path (remote behind), divergence path (remote moved ahead →
 clean-room rebase + non-FF local ref advance), explicit "remote branch" push targets,
-setting disabled (no push), and push failure (non-fatal: task still finalizes done).
+setting disabled (no push), and push failure (truthfulness: refuse DONE).
 */
 import { describe, it, expect, vi, afterAll } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -220,7 +220,7 @@ describe("runAiMerge push-after-merge", () => {
     expect(git(originDir, "rev-parse main")).toBe(baseSha);
   });
 
-  it("finalizes the task even when the push fails (non-fatal contract)", async () => {
+  it("refuses DONE when the push fails (pushAfterMerge truthfulness)", async () => {
     const { dir } = initRepoWithRemote();
     const { store, task, logs } = makeStore({ pushRemote: "nonexistent-remote" });
 
@@ -230,7 +230,9 @@ describe("runAiMerge push-after-merge", () => {
     });
 
     expect(result.merged).toBe(true);
-    expect(task.column).toBe("done");
+    expect(task.column).not.toBe("done");
+    expect(task.status).toBe("failed");
+    expect(String(task.error || "")).toContain("PUSH_FAILED");
     expect(result.pushedToRemote).toBe(false);
     expect(result.pushError).toBeTruthy();
     expect(logs.some((l) => l.action === "PushToRemoteFailed")).toBe(true);

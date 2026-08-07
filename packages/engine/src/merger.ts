@@ -4688,7 +4688,7 @@ async function applyBranchCommitsPreservingHistory(params: {
   testSource?: "explicit" | "inferred" | "inferred-scoped";
   buildSource?: "explicit" | "inferred";
   signal?: AbortSignal;
-}): Promise<{ landedCommitCount: number; landedCommitShas: string[]; baseSha: string; fullySubsumedByMain: boolean; skippedEmptyCount: number }> {
+}): Promise<{ landedCommitCount: number; landedCommitShas: string[]; baseSha: string; fullySubsumedByMain: boolean; skippedEmptyCount: number; verificationPassed: boolean }> {
   const { rootDir, baseRef, branch, task, taskId, store, mergeConflictStrategy, smartConflictResolution, result, testCommand, buildCommand, testSource, buildSource, signal } = params;
   const { stdout: baseShaStdout } = await execAsync(`git rev-parse ${quoteArg(baseRef)}`, { cwd: rootDir, encoding: "utf-8" });
   const baseSha = baseShaStdout.trim();
@@ -4755,6 +4755,15 @@ async function applyBranchCommitsPreservingHistory(params: {
     }
   }
 
+  /*
+  FNXC:MergeTruthfulness 2026-08-07-04:40:
+  verificationPassed must reflect that deterministic verification actually ran and
+  succeeded — not merely that a test/build command is configured. Callers used to
+  set verificationPassed = Boolean(testCommand || buildCommand), which would still
+  short-circuit post-merge audit if this call were ever skipped. Return an explicit
+  flag from the function that performed the run (throws on failure).
+  */
+  let verificationPassed = false;
   if (testCommand || buildCommand) {
     throwIfAborted(signal, taskId);
     await runDeterministicVerification(
@@ -4767,6 +4776,7 @@ async function applyBranchCommitsPreservingHistory(params: {
       buildSource,
       signal,
     );
+    verificationPassed = true;
   }
 
   return {
@@ -4775,6 +4785,7 @@ async function applyBranchCommitsPreservingHistory(params: {
     baseSha,
     fullySubsumedByMain,
     skippedEmptyCount,
+    verificationPassed,
   };
 }
 
@@ -9108,7 +9119,7 @@ export async function aiMergeTask(
     if (rebaseResult.fullySubsumedByMain) {
       mergeWasEmpty = true;
     }
-    verificationPassed = Boolean(effectiveTestCommand || effectiveBuildCommand);
+    verificationPassed = rebaseResult.verificationPassed === true;
     merged = true;
   } else {
     // Attempt 1: Standard AI merge
@@ -9795,9 +9806,21 @@ export async function aiMergeTask(
         }).catch(() => undefined);
         await store.logEntry(
           taskId,
-          `Push to remote failed after merge — task marked done anyway; local main may diverge from origin: ${pushResult.error}`,
+          `Push to remote failed after merge — refusing DONE (pushAfterMerge mandatory final failed); local main may diverge from origin: ${pushResult.error}`,
           "PushToRemoteFailed",
         ).catch(() => undefined);
+        result.pushedToRemote = false;
+        result.pushError = pushResult.error;
+        /*
+        FNXC:MergeTruthfulness 2026-08-07-04:40:
+        pushAfterMerge enabled + push failed => do not complete as done (false SUCCESS).
+        Local merge remains landed; park failed with PUSH_FAILED and skip completeTask.
+        */
+        await store.updateTask(taskId, {
+          status: "failed",
+          error: `PUSH_FAILED: ${pushResult.error}`,
+        }).catch(() => undefined);
+        return result;
       }
       result.pushedToRemote = pushResult.pushed;
       if (pushResult.error) {
@@ -9819,9 +9842,14 @@ export async function aiMergeTask(
       }).catch(() => undefined);
       await store.logEntry(
         taskId,
-        `Push to remote threw after merge — task marked done anyway; local main may diverge from origin: ${err.message}`,
+        `Push to remote threw after merge — refusing DONE (pushAfterMerge mandatory final failed); local main may diverge from origin: ${err.message}`,
         "PushToRemoteFailed",
       ).catch(() => undefined);
+      await store.updateTask(taskId, {
+        status: "failed",
+        error: `PUSH_FAILED: ${err.message}`,
+      }).catch(() => undefined);
+      return result;
     }
   }
 
