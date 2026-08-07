@@ -38,11 +38,17 @@ export const DEFAULT_CYCLE_BUDGET_MS = Number(process.env.UPSTREAM_CYCLE_BUDGET_
 export const DEFAULT_PHASE_BUDGETS_MS = Object.freeze({
   probe: Number(process.env.UPSTREAM_BUDGET_PROBE_MS || 60_000),
   expert: Number(process.env.UPSTREAM_BUDGET_EXPERT_MS || 6 * 60_000),
-  verifier: Number(process.env.UPSTREAM_BUDGET_VERIFIER_MS || 4 * 60_000),
+  verifier: Number(process.env.UPSTREAM_BUDGET_VERIFIER_MS || 8 * 60_000),
   "schema-repair": Number(process.env.UPSTREAM_BUDGET_SCHEMA_REPAIR_MS || 90_000),
   "sensitive-review": Number(process.env.UPSTREAM_BUDGET_SENSITIVE_REVIEW_MS || 8 * 60_000),
   "targeted-repair": Number(process.env.UPSTREAM_BUDGET_TARGETED_REPAIR_MS || 6 * 60_000),
 });
+/*
+FNXC:UpstreamLatency 2026-08-07-16:15:
+Live #135 repair runs showed verifier exit 143 after ~4m under the initial 4m
+verifier phase budget (opus needed ~5.4m on sensitive-review). Calibrate verifier
+to 8m — still under the 20m cycle hard wall; nested children remain capped by remaining.
+*/
 
 /**
  * @param {{
