@@ -7291,7 +7291,38 @@ export class TaskExecutor {
               "workflow:node-instance-id": continuation.nodeInstanceId ?? continuation.nodeId,
             }
           : undefined;
-        result = await runner.run(detail, settings, continuation?.nodeId, continuationContext);
+        /*
+         * FNXC:WorkflowExecution 2026-08-08-01:40:
+         * Only a TOP-LEVEL node id is a legal resume point.
+         *
+         * A fence written for a node inside a foreach template stores the TEMPLATE node id
+         * (`step-execute`) with the materialized instance in `nodeInstanceId`
+         * (`steps#0:step-execute`). The template node is not in `ir.nodes` — it exists only
+         * under the `steps` foreach's `config.template` — so handing it to the interpreter as
+         * a start node resolves to nothing and throws `WorkflowIrError`, which the catch below
+         * converts into a terminal graph failure. That parks a healthy card on every dispatch.
+         *
+         * Fall back to the graph ENTRY CONTRACT instead: with no explicit start node the run
+         * re-enters at the card's own column (`resolveColumnResumeNode`), so an in-progress
+         * card re-enters at `parse`, which sees the foreach already expanded and hands control
+         * back to `steps`. The instance itself resumes from its own durable row in
+         * `workflow_run_step_instances`, so nothing is replayed and no progress is lost — this
+         * is the same path a run with no continuation at all already takes.
+         *
+         * Self-healing by construction: an already-persisted template-node continuation (there
+         * are such rows in the field) resumes correctly on its next dispatch without migration.
+         */
+        const resumeNodeId = continuation?.nodeId
+          && columnAgentIr?.nodes.some((candidate) => candidate.id === continuation?.nodeId)
+          ? continuation.nodeId
+          : undefined;
+        if (continuation?.nodeId && resumeNodeId === undefined) {
+          executorLog.debug(
+            `[workflow-graph] ${task.id}: continuation node '${continuation.nodeId}' is not a top-level graph node `
+            + `(instance '${continuation.nodeInstanceId ?? "none"}') — re-entering at the column resume node`,
+          );
+        }
+        result = await runner.run(detail, settings, resumeNodeId, continuationContext);
       } catch (err) {
         if (continuation) {
           await this.store.transitionWorkflowWorkItem(continuation.id, "failed", {
