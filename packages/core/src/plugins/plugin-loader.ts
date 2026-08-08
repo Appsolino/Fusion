@@ -9,9 +9,11 @@
  * - Error isolation (plugin crashes don't crash the loader)
  */
 
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { copyFile, readFile, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { EventEmitter } from "node:events";
 import type { TaskStore } from "../store.js";
@@ -642,10 +644,20 @@ export class PluginLoader extends EventEmitter<{
     let mod: unknown;
 
     if (bypassCache) {
+      /*
+      FNXC:SoakR3PluginFreshness 2026-08-08-10:15:
+      Host D AUTO-3 releases are immutable (no write for the fusion service user).
+      Cache-busting used to copy `.bundled.reload-N.js` beside the source entry,
+      which EACCES-fails on package-staged plugins and left Cursor in state=error
+      after #170 retargeted the install path. Copy into a writable FUSION_HOME
+      (or tmp) cache keyed by source path instead.
+      */
       moduleImportVersion += 1;
       const ext = extname(path);
       const baseName = basename(path, ext);
-      const reloadedPath = resolve(dirname(path), `.${baseName}.reload-${moduleImportVersion}${ext}`);
+      const cacheDir = this.resolveWritablePluginReloadCacheDir(path);
+      await mkdir(cacheDir, { recursive: true });
+      const reloadedPath = resolve(cacheDir, `.${baseName}.reload-${moduleImportVersion}${ext}`);
       await copyFile(path, reloadedPath);
       mod = await import(pathToFileURL(reloadedPath).href);
     } else {
@@ -653,6 +665,14 @@ export class PluginLoader extends EventEmitter<{
     }
     this.loadedModules.set(path, mod);
     return mod;
+  }
+
+  private resolveWritablePluginReloadCacheDir(pluginEntryPath: string): string {
+    const fusionHome = process.env.FUSION_HOME?.trim()
+      || process.env.HOME?.trim()
+      || tmpdir();
+    const key = createHash("sha256").update(pluginEntryPath).digest("hex").slice(0, 24);
+    return join(fusionHome, "plugin-reload-cache", key);
   }
 
   /**

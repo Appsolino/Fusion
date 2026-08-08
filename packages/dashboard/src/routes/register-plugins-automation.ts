@@ -954,6 +954,75 @@ export function registerPluginsAutomationRoutes(ctx: ApiRoutesContext, deps: Plu
     res.json([...installed, ...bundledFallback]);
   });
 
+  /*
+  FNXC:SoakR3PluginFreshness 2026-08-08-10:15:
+  Mounted on the real /api/plugins registrar (not only createPluginRouter) so
+  AUTO-3 / soak readiness can prove release-staged Cursor identity + load state.
+  */
+  router.get("/plugins/bundled-freshness", async (req: Request, res: Response) => {
+    const { store: scopedStore, engine } = await getProjectContext(req);
+    const pluginStore = scopedStore.getPluginStore();
+    const pluginLoader = await getProjectPluginLoader(scopedStore, engine);
+    const { assessBundledPluginFreshness, isBundledPluginId } = await import("@fusion/core");
+    const { dirname, join } = await import("node:path");
+    const requested = typeof req.query.id === "string" && req.query.id.trim()
+      ? [req.query.id.trim()]
+      : ["fusion-plugin-cursor-runtime"];
+    const getCandidatePluginDirs = (pluginId: string): string[] => {
+      const execDir = dirname(process.execPath);
+      const packageRoot = process.env.FUSION_PACKAGE_ROOT?.trim();
+      return [
+        join(execDir, "plugins", pluginId),
+        ...(packageRoot ? [join(packageRoot, "plugins", pluginId)] : []),
+        join(process.cwd(), "plugins", pluginId),
+        join(process.cwd(), "dist", "plugins", pluginId),
+      ];
+    };
+    const reports = [];
+    for (const id of requested) {
+      if (!isBundledPluginId(id)) {
+        reports.push({
+          pluginId: id,
+          status: "missing-bundle" as const,
+          bundledDir: null,
+          bundledEntryPath: null,
+          activePath: null,
+          bundledFingerprint: null,
+          activeFingerprint: null,
+          match: false,
+          loaded: false,
+          pluginState: null,
+          reason: "not a bundled plugin id",
+        });
+        continue;
+      }
+      const report = await assessBundledPluginFreshness(pluginStore, id, getCandidatePluginDirs);
+      let pluginState: string | null = null;
+      try {
+        pluginState = (await pluginStore.getPlugin(id)).state ?? null;
+      } catch {
+        pluginState = null;
+      }
+      const loaded = Boolean(pluginLoader?.isPluginLoaded?.(id));
+      reports.push({ ...report, loaded, pluginState });
+    }
+    const cursor = reports.find((r) => r.pluginId === "fusion-plugin-cursor-runtime") ?? null;
+    const ok = Boolean(
+      cursor
+      && cursor.status === "pass"
+      && cursor.match
+      && cursor.loaded
+      && cursor.pluginState === "started"
+      && cursor.settleFallbackDispatchMarkerPresent === true,
+    );
+    res.json({
+      ok,
+      status: ok ? "pass" : "fail",
+      cursor,
+      reports,
+    });
+  });
+
   /**
    * GET /api/plugins/:id
    * Get a single plugin by ID.
@@ -966,7 +1035,7 @@ export function registerPluginsAutomationRoutes(ctx: ApiRoutesContext, deps: Plu
     // path "/plugins/registry" (id === "registry") and throw
     // 'Plugin "registry" not found', shadowing the real registry handler.
     // Fall through so the mounted sub-router can serve the registry listing.
-    if (req.params.id === "registry") {
+    if (req.params.id === "registry" || req.params.id === "bundled-freshness") {
       next();
       return;
     }

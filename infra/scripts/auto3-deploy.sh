@@ -506,9 +506,9 @@ fi
 if [[ "$PROFILE" == "staging" ]]; then
   SETTINGS="$(curl -fsS -m 5 http://127.0.0.1:4140/api/settings)"
   echo "$SETTINGS" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("enginePaused") is True'
-  # FNXC:SoakR3PluginFreshness 2026-08-08-09:42:
-  # AUTO-3 success requires the live Cursor runtime to match the release-staged
-  # bundled entry (SOAK-R3-DEFECT-001). Health=ok alone is insufficient.
+  # FNXC:SoakR3PluginFreshness 2026-08-08-10:15:
+  # Fingerprint match alone is insufficient — the plugin must also load (Host D
+  # immutable release dirs EACCES'd sibling .bundled.reload copies after #170).
   FRESH="$(curl -fsS -m 10 http://127.0.0.1:4140/api/plugins/bundled-freshness?id=fusion-plugin-cursor-runtime)"
   echo "$FRESH" | python3 -c '
 import json,sys
@@ -518,15 +518,17 @@ c=d.get("cursor") or {}
 assert c.get("status")=="pass" and c.get("match") is True, c
 assert c.get("bundledFingerprint") and c.get("bundledFingerprint")==c.get("activeFingerprint"), c
 assert c.get("settleFallbackDispatchMarkerPresent") is True, c
-print("cursor_bundled_freshness=PASS", c.get("bundledFingerprint","")[:16])
+assert c.get("loaded") is True, c
+assert c.get("pluginState")=="started", c
+print("cursor_bundled_freshness=PASS", c.get("bundledFingerprint","")[:16], "loaded", c.get("loaded"))
 '
   PLUG="$(curl -fsS -m 5 http://127.0.0.1:4140/api/plugins)"
   echo "$PLUG" | python3 -c '
 import json,sys
 items=json.load(sys.stdin)
 cursor=next((p for p in items if p.get("id")=="fusion-plugin-cursor-runtime"), None)
-assert cursor and cursor.get("enabled") and cursor.get("state") in ("started","installed","active", cursor.get("state")), cursor
-print("cursor_plugin_loaded=PASS", cursor.get("path"))
+assert cursor and cursor.get("enabled") and cursor.get("state")=="started", cursor
+print("cursor_plugin_loaded=PASS", cursor.get("path"), cursor.get("state"))
 '
 fi
 
