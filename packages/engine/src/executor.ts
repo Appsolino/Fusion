@@ -6590,6 +6590,17 @@ export class TaskExecutor {
      */
     const directWorkflowPrincipalWorkItemIds = new Set<string>();
     /*
+     * FNXC:WorkflowAgentRouting 2026-08-07-23:50:
+     * The subset of the above that this run persisted as an availability HOLD. When it is
+     * non-empty the run already owns the task's single active continuation, parked `held`
+     * at the node that could not route — so the hold branch below must NOT also transition
+     * the row the run resumed on. That row was retired by the same atomic replace, and
+     * transitioning a terminal row throws (the store's terminal guard), which an earlier
+     * revision swallowed — leaving the task parked with ZERO active continuations, no
+     * error, and nothing scheduled to resume it.
+     */
+    const directWorkflowPrincipalHeldWorkItemIds = new Set<string>();
+    /*
     FNXC:GlobalConcurrencyControls 2026-07-14-18:30:
     The hold/release sweep may have already tryAcquired a global slot for this card before moving it to in-progress. Claim that pre-held slot for the full graph run so utilization stays honest between workflow nodes and triage cannot overfill the cap while this task is still graph-owned.
     */
@@ -6865,28 +6876,91 @@ export class TaskExecutor {
                 activeSessions,
               });
           if (routed.status === "unclassified") return undefined;
+          /*
+           * FNXC:WorkflowAgentRouting 2026-08-07-23:50:
+           * EVERY durable continuation write on this path goes through the atomic
+           * replace primitive, never a bare upsert.
+           *
+           * `idx_workflow_work_items_one_active_task_continuation` permits ONE active
+           * (`runnable`/`running`/`held`/`retrying`) `kind:"task"` row per task, and a
+           * plain upsert's ON CONFLICT target is a DIFFERENT constraint
+           * (run_id, task_id, node_id, kind). So a row this run has already left — the
+           * continuation it resumed on, or a previous foreach instance of the same
+           * template node, which shares `nodeId` and differs only by `runId` — does not
+           * upsert, it RAISES. That raise deadlocked the board: routing failed closed,
+           * the run re-suspended every dispatch, and only an operator bouncing the card
+           * cleared it.
+           *
+           * `replaceActiveTaskWorkflowContinuation` retires every active row that is not
+           * this exact (runId, nodeId, kind) and upserts the successor inside ONE
+           * transaction holding the task's advisory lock. That is what makes the handover
+           * atomic (no window with zero active rows), instance-aware (a sibling foreach
+           * instance has a different runId, so it is retired), and race-free against a
+           * concurrent engine (the lock serializes the read and the write). It is the
+           * repository's existing primitive for exactly this — `plan-review-continuation.ts`
+           * and `workflow-column-boundary-hooks.ts` already use it.
+           *
+           * Deliberately NOT an error-recovery path: an earlier revision reacted to a
+           * failed upsert by terminalizing other rows, which meant any transient database
+           * error destroyed a legitimate `held` continuation. Replacing unconditionally on
+           * the success path removes the need to classify errors at all.
+           */
+          const writeContinuation = async (
+            input: Parameters<NonNullable<TaskStore["upsertWorkflowWorkItem"]>>[0] & { kind: "task" },
+          ): Promise<WorkflowWorkItem | undefined> => {
+            if (typeof this.store.replaceActiveTaskWorkflowContinuation === "function") {
+              return await this.store.replaceActiveTaskWorkflowContinuation(input);
+            }
+            // Degradation for minimal/legacy stores without the atomic primitive:
+            // a bare upsert keeps the pre-primitive behavior rather than failing the run.
+            if (typeof this.store.upsertWorkflowWorkItem === "function") {
+              return await this.store.upsertWorkflowWorkItem(input);
+            }
+            return undefined;
+          };
+          /*
+           * FNXC:WorkflowAgentRouting 2026-08-07-23:50:
+           * A hold write must NEVER throw out of `beforeNodeExecution`. Only
+           * `WorkflowGraphSuspended` is rethrown by the interpreter, so any other throw
+           * here degrades a recoverable availability hold into a terminal graph failure —
+           * the card is parked failed instead of waiting for its principal. Failing to
+           * RECORD the hold is bad; failing the task because we could not record it is
+           * worse. Log and continue: the refusal value still fails the node closed.
+           */
           const holdDirectPrincipalWorkItem = async (
             reason: string,
             principalAgentId: string | null,
             authorityKind: "task-assignee" | "review-node-override" | "column-binding" | "role-pool" | null,
           ): Promise<void> => {
-            if (typeof this.store.upsertWorkflowWorkItem !== "function") return;
-            const item = await this.store.upsertWorkflowWorkItem({
-              runId: `${resolvedRunId ?? `${nodeTask.id}:workflow`}:${nodeInstanceId}`,
-              taskId: nodeTask.id,
-              nodeId: node.id,
-              nodeInstanceId,
-              kind: "task",
-              state: "held",
-              leaseOwner: null,
-              leaseExpiresAt: null,
-              blockedReason: reason,
-              lastError: reason,
-              principalAgentId,
-              workflowRole: classifiedRole,
-              authorityKind,
-            });
-            directWorkflowPrincipalWorkItemIds.add(item.id);
+            try {
+              const item = await writeContinuation({
+                runId: `${resolvedRunId ?? `${nodeTask.id}:workflow`}:${nodeInstanceId}`,
+                taskId: nodeTask.id,
+                nodeId: node.id,
+                nodeInstanceId,
+                kind: "task",
+                state: "held",
+                leaseOwner: null,
+                leaseExpiresAt: null,
+                blockedReason: reason,
+                lastError: reason,
+                principalAgentId,
+                workflowRole: classifiedRole,
+                authorityKind,
+              });
+              if (item) {
+                directWorkflowPrincipalWorkItemIds.add(item.id);
+                // The run now owns the task's single active continuation at THIS node, so
+                // the caller must not also transition the row it resumed on (that row is
+                // already retired, and transitioning a terminal row throws).
+                directWorkflowPrincipalHeldWorkItemIds.add(item.id);
+              }
+            } catch (holdErr) {
+              executorLog.error(
+                `[workflow-graph] ${nodeTask.id}: could not persist the availability hold for node '${node.id}' (${reason}): `
+                + `${holdErr instanceof Error ? holdErr.message : String(holdErr)}`,
+              );
+            }
           };
           if (routed.status === "held") {
             const reviewerOverride = classifiedRole === "reviewer" ? node.reviewerAgentId : undefined;
@@ -6971,29 +7045,40 @@ export class TaskExecutor {
            * fence as a claimed continuation. A persistence failure releases the
            * just-acquired capacity and fails closed rather than running ambient.
            */
-          if (!durableWorkItemId && typeof this.store.upsertWorkflowWorkItem === "function") {
-            const writeFence = (): Promise<WorkflowWorkItem> => this.store.upsertWorkflowWorkItem!({
-              runId: `${resolvedRunId ?? `${nodeTask.id}:workflow`}:${nodeInstanceId}`,
-              taskId: nodeTask.id,
-              nodeId: node.id,
-              kind: "task",
-              state: "running",
-              leaseOwner: `executor:${nodeTask.id}`,
-              leaseExpiresAt: null,
-              principalAgentId: routed.route.agent.id,
-              workflowRole: routed.route.role,
-              authorityKind: routed.route.authority,
-              nodeInstanceId,
-            });
+          if (!durableWorkItemId) {
             /*
-             * FNXC:WorkflowAgentRouting 2026-08-07-23:12:
-             * Never swallow the fence-write error. Failing closed is correct — a session must
-             * not run without its durable principal record — but the original bare `catch {}`
-             * discarded the ONLY evidence of why, and this hold is not transient: the same
-             * write fails on every dispatch. The store wraps driver errors, so the actionable
-             * text (constraint name, NOT NULL column) is on `cause`, not `message`.
+             * FNXC:WorkflowAgentRouting 2026-08-07-23:50:
+             * The fence is written through the atomic replace primitive (see
+             * `writeContinuation` above), so the row this run already left — the resumed
+             * continuation, or a sibling foreach instance sharing this template `nodeId` —
+             * is retired in the SAME locked transaction that installs this fence. There is
+             * therefore no conflict to react to and no window in which the task has zero
+             * active continuations.
+             *
+             * A failure here still fails CLOSED: no session may start without its durable
+             * principal record. Release the just-acquired capacity and surface the store
+             * error, whose actionable text (constraint name, NOT NULL column) the store
+             * layer puts on `cause` rather than `message`.
              */
-            const handleFenceFailure = async (fenceErr: unknown): Promise<WorkflowNodeResult> => {
+            try {
+              const item = await writeContinuation({
+                runId: `${resolvedRunId ?? `${nodeTask.id}:workflow`}:${nodeInstanceId}`,
+                taskId: nodeTask.id,
+                nodeId: node.id,
+                kind: "task",
+                state: "running",
+                leaseOwner: `executor:${nodeTask.id}`,
+                leaseExpiresAt: null,
+                principalAgentId: routed.route.agent.id,
+                workflowRole: routed.route.role,
+                authorityKind: routed.route.authority,
+                nodeInstanceId,
+              });
+              if (item) {
+                durableWorkItemId = item.id;
+                directWorkflowPrincipalWorkItemIds.add(item.id);
+              }
+            } catch (fenceErr) {
               const detail = fenceErr instanceof Error ? fenceErr.message : String(fenceErr);
               const cause = fenceErr instanceof Error && fenceErr.cause instanceof Error
                 ? ` [cause: ${fenceErr.cause.message}]`
@@ -7006,50 +7091,8 @@ export class TaskExecutor {
                 nodeTask.id,
                 `Workflow principal fence write failed at node '${node.id}' — ${detail.slice(0, 300)}${cause}`,
               ).catch(() => undefined);
-              void this.workflowAgentCapacity.release(attemptId, this.options.agentStore!.workflowProjectId ?? this.store.getRootDir());
+              void this.workflowAgentCapacity.release(attemptId, this.options.agentStore.workflowProjectId ?? this.store.getRootDir());
               return { outcome: "failure" as const, value: `workflow-principal-fence-unavailable:${routed.route.role}` };
-            };
-            try {
-              const item = await writeFence();
-              durableWorkItemId = item.id;
-              directWorkflowPrincipalWorkItemIds.add(item.id);
-            } catch (firstFenceErr) {
-              /*
-               * FNXC:WorkflowAgentRouting 2026-08-07-23:20:
-               * HAND OVER the task's single active-continuation slot before failing closed.
-               *
-               * `idx_workflow_work_items_one_active_task_continuation` allows at most ONE
-               * active (`runnable`/`running`/`held`/`retrying`) task work item per task, and
-               * the fence upsert's ON CONFLICT target is (run_id, task_id, node_id, kind) —
-               * a different index — so a still-active row for a node this run has ALREADY
-               * LEFT does not upsert, it raises. That is exactly the steady state of a resumed
-               * run: the continuation the run woke up on stays active until the interpreter
-               * returns, which is after this node needs its fence.
-               *
-               * The result was a permanent deadlock with no trace: every dispatch re-resumed
-               * at the continuation node, walked forward to the first role-classified node,
-               * failed this write, suspended, and left the same rows behind — so the card sat
-               * in its wip column forever and the only recovery was an operator bouncing it
-               * back to the hold column (which clears the continuation). Superseding the
-               * stale row here is what makes that bounce unnecessary.
-               *
-               * Only rows for a DIFFERENT node are superseded, and only after the write has
-               * actually failed, so the invariant still holds and a genuine concurrent claim
-               * on this same node is never stolen. `succeeded` is truthful: traversal reached
-               * a later node, which is only reachable through that one.
-               */
-              const superseded = await this.supersedeStaleActiveWorkItems(nodeTask.id, nodeInstanceId, node.id);
-              if (superseded > 0) {
-                try {
-                  const item = await writeFence();
-                  durableWorkItemId = item.id;
-                  directWorkflowPrincipalWorkItemIds.add(item.id);
-                } catch (retryErr) {
-                  return await handleFenceFailure(retryErr);
-                }
-              } else {
-                return await handleFenceFailure(firstFenceErr);
-              }
             }
           }
           workflowCapacityAttemptIds.add(attemptId);
@@ -7296,13 +7339,38 @@ export class TaskExecutor {
           executorLog.warn(holdMessage);
         }
         await this.store.logEntry(task.id, `Workflow stage held — ${principalHoldReason}`).catch(() => undefined);
-        if (continuation && typeof this.store.transitionWorkflowWorkItem === "function") {
-          await this.store.transitionWorkflowWorkItem(continuation.id, "held", {
-            leaseOwner: null,
-            leaseExpiresAt: null,
-            lastError: principalHoldReason,
-            blockedReason: principalHoldReason,
-          }).catch(() => undefined);
+        /*
+         * FNXC:WorkflowAgentRouting 2026-08-07-23:50:
+         * The task must end this run with EXACTLY ONE active continuation, and the hold
+         * write above may already be it.
+         *
+         * When routing persisted a `held` row, the atomic replace retired the row this run
+         * resumed on, so transitioning that resumed row here would (a) be redundant and
+         * (b) throw on the store's terminal guard. The previous `.catch(() => undefined)`
+         * hid exactly that throw and left the card parked with zero active rows, no error,
+         * and nothing to resume from — the same silent deadlock this whole change removes.
+         *
+         * So: skip when the hold is already durable. Otherwise (the fail-closed
+         * routing-unavailable path writes no row) fall back to parking the resumed
+         * continuation, and if even that fails, say so instead of swallowing it — a task
+         * with no durable continuation is stranded, and the stall watchdog only reports it.
+         */
+        if (directWorkflowPrincipalHeldWorkItemIds.size === 0
+          && continuation
+          && typeof this.store.transitionWorkflowWorkItem === "function") {
+          try {
+            await this.store.transitionWorkflowWorkItem(continuation.id, "held", {
+              leaseOwner: null,
+              leaseExpiresAt: null,
+              lastError: principalHoldReason,
+              blockedReason: principalHoldReason,
+            });
+          } catch (holdErr) {
+            executorLog.error(
+              `[workflow-graph] ${task.id}: could not park the resumed continuation as held (${principalHoldReason}); `
+              + `the task may have no active continuation to resume from: ${holdErr instanceof Error ? holdErr.message : String(holdErr)}`,
+            );
+          }
         }
         return;
       }
@@ -7698,86 +7766,6 @@ export class TaskExecutor {
     }
     if (documentReadError) throw documentReadError;
     return undefined;
-  }
-
-  /**
-   * FNXC:WorkflowAgentRouting 2026-08-07-23:20:
-   * Release the task's single active-continuation slot from rows this run has already
-   * advanced past, so the node currently executing can write its own durable principal
-   * fence.
-   *
-   * `idx_workflow_work_items_one_active_task_continuation` permits ONE active task work
-   * item per task. A resumed run keeps the continuation it woke on active until the
-   * interpreter returns, which is strictly after a later node needs its fence — so the
-   * fence write hits that partial unique index (NOT the upsert's ON CONFLICT target) and
-   * raises. Before this repair the run suspended there on every dispatch and the card
-   * deadlocked in its wip column until an operator bounced it back to the hold column.
-   *
-   * Deliberately narrow: called ONLY after a fence write has actually failed, and only rows
-   * for a DIFFERENT node/instance are superseded — a live claim on this same node is never
-   * stolen, so a genuine concurrent-owner conflict still fails closed. `succeeded` is the
-   * truthful terminal state: traversal reached a later node, which is reachable only
-   * through the one being superseded.
-   *
-   * @returns how many rows were released; 0 means the conflict was not a stale continuation
-   *          and the caller must fail closed.
-   */
-  private async supersedeStaleActiveWorkItems(
-    taskId: string,
-    currentNodeInstanceId: string,
-    currentNodeId: string,
-  ): Promise<number> {
-    if (typeof this.store.listWorkflowWorkItemsForTask !== "function"
-      || typeof this.store.transitionWorkflowWorkItem !== "function") {
-      return 0;
-    }
-    let items: WorkflowWorkItem[];
-    try {
-      items = await this.store.listWorkflowWorkItemsForTask(taskId, { kinds: ["task"] });
-    } catch (err) {
-      executorLog.warn(
-        `[workflow-graph] ${taskId}: could not read work items to supersede a stale continuation: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return 0;
-    }
-    const stale = items.filter((item) =>
-      ACTIVE_WORKFLOW_WORK_ITEM_STATES.includes(item.state)
-      && item.nodeId !== currentNodeId
-      && (item.nodeInstanceId ?? item.nodeId) !== currentNodeInstanceId);
-    let released = 0;
-    for (const item of stale) {
-      try {
-        await this.store.transitionWorkflowWorkItem(item.id, "succeeded", {
-          leaseOwner: null,
-          leaseExpiresAt: null,
-          lastError: null,
-        });
-        released += 1;
-        executorLog.log(
-          `[workflow-graph] ${taskId}: superseded stale active work item at node '${item.nodeId}' (state=${item.state}) so node '${currentNodeId}' can claim the continuation slot`,
-        );
-        await this.store.recordRunAuditEvent?.({
-          taskId,
-          agentId: "executor",
-          runId: generateSyntheticRunId("workflow-supersede-continuation", taskId),
-          domain: "database",
-          mutationType: "task:workflow-continuation-superseded",
-          target: taskId,
-          metadata: {
-            taskId,
-            supersededNodeId: item.nodeId,
-            supersededState: item.state,
-            currentNodeId,
-            currentNodeInstanceId,
-          },
-        }).catch(() => undefined);
-      } catch (err) {
-        executorLog.warn(
-          `[workflow-graph] ${taskId}: failed to supersede stale work item at node '${item.nodeId}': ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
-    return released;
   }
 
   private buildParseStepsDeps(runId?: string): ParseStepsHandlerDeps {
