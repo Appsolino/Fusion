@@ -24,7 +24,7 @@ import {
   resolveColumnFlags,
   type TraitFlags,
   allowsAutoMergeProcessing,
-  hasUserAutoMergeHold,
+  hasSharedBranchMemberAutoMergeHold,
   compareTasksByPriorityThenAgeAndId,
   emitOverseerConfirmation,
   emitOverseerEscalation,
@@ -78,6 +78,7 @@ import { sweepStaleAutostashes, VerificationError } from "./merger.js";
 import { runAiMerge, landWorkspaceTask, WorkspacePartialLandError, WorkspaceRepoLandBusyError } from "./merge/merger-ai.js";
 import { promoteBranchGroup, type BranchGroupPromotionResult, type CreateGroupPrFn, type SyncGroupPrFn } from "./merge/group-merge-coordinator.js";
 import {
+  formatAdmissionCapacityQueuedReason,
   persistedTopLevelAgentTaskIdsFromStore,
   projectAdmissionCoordinator,
   resolveActiveTaskCapacityLimit,
@@ -461,6 +462,8 @@ export class ProjectEngine {
   private mergeActive = new Set<string>();
   /** Capacity-deferred ids stay out of the runnable queue until their retry timer fires. */
   private readonly capacityDeferredMergeTaskIds = new Set<string>();
+  /** Last persisted live-cap reason per merge; avoids rewriting the task log each poll. */
+  private readonly capacityDeferredMergeReasons = new Map<string, string>();
   private readonly capacityDeferredMerges = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     resolvers: MergeResolver[];
@@ -1356,6 +1359,7 @@ export class ProjectEngine {
     }
     this.capacityDeferredMerges.clear();
     this.capacityDeferredMergeTaskIds.clear();
+    this.capacityDeferredMergeReasons.clear();
     this.stopPlannerOverseerPoll();
 
     /*
@@ -2937,10 +2941,9 @@ export class ProjectEngine {
    * older low-priority task would start before a later urgent one.
    */
   private async allowInReviewMergeProcessing(task: Pick<Task, "branchContext" | "autoMerge" | "autoMergeProvenance">, settings: Pick<Settings, "autoMerge">, store: Partial<Pick<TaskStore, "getBranchGroup">> = this.runtime.getTaskStore()): Promise<boolean> {
-    // FNXC:SharedBranchMemberHold 2026-08-05-23:35: resolve group liveness before
-    // general admission. Only a live intermediate group may bypass false policy;
-    // a user-authored Off always remains a manual hold.
-    if (hasUserAutoMergeHold(task)) return false;
+    // FNXC:SharedBranchMemberHold 2026-08-08-01:58: project Off is operator
+    // consent for every non-opted-in member, so evaluate it before liveness.
+    if (hasSharedBranchMemberAutoMergeHold(task, settings)) return false;
 
     const groupId = task.branchContext?.groupId?.trim();
     const branchGroup = groupId ? await store.getBranchGroup?.(groupId) : null;
@@ -4009,7 +4012,35 @@ export class ProjectEngine {
                 },
               }],
             });
-            if (!selected) return undefined;
+            if (!selected) {
+              const snapshot = await getMergeClaimSnapshot();
+              const limit = resolveActiveTaskCapacityLimit({
+                maxConcurrent: admissionSettings.maxConcurrent ?? 2,
+                maxWorktrees: admissionSettings.maxWorktrees ?? 4,
+                worktreeLimitEnabled: admissionSettings.worktreeLimitEnabled,
+              });
+              if (snapshot.count >= limit) {
+                /*
+                FNXC:ConcurrencyAdmission 2026-08-08-04:27:
+                A merge capacity defer used to be invisible because its queue is internal. Persist
+                the shared live-cap reason on the task itself, but only when the fresh serialized
+                snapshot proves exhaustion rather than a higher-priority candidate winning.
+                */
+                const reason = formatAdmissionCapacityQueuedReason({
+                  maxConcurrent: admissionSettings.maxConcurrent ?? 2,
+                  maxWorktrees: admissionSettings.maxWorktrees ?? 4,
+                  worktreeLimitEnabled: admissionSettings.worktreeLimitEnabled,
+                  claimed: snapshot.count,
+                  holderTaskIds: snapshot.ids,
+                });
+                if (this.capacityDeferredMergeReasons.get(taskId) !== reason) {
+                  this.capacityDeferredMergeReasons.set(taskId, reason);
+                  await store.logEntry(taskId, reason);
+                }
+              }
+              return undefined;
+            }
+            this.capacityDeferredMergeReasons.delete(taskId);
             try {
               return await start();
             } finally {

@@ -417,6 +417,8 @@ export const DEFAULT_GLOBAL_SETTINGS = {
 
 /** Default values for project-level settings. */
 export const DEFAULT_PROJECT_SETTINGS = {
+  // FNXC:TaskRecommendations 2026-08-08-05:02: completion follows-ups stay bounded by default; 0 disables writing them.
+  maxRecommendationsPerTask: 3,
   globalPause: false,
   globalPauseReason: undefined,
   defaultWorkflowId: undefined,
