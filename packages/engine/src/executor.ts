@@ -6984,7 +6984,17 @@ export class TaskExecutor {
             await holdDirectPrincipalWorkItem(reason, namedPrincipal ?? null, authorityKind);
             return { outcome: "failure" as const, value: reason };
           }
-          const attemptId = `${resolvedRunId}:${nodeInstanceId}`;
+          /*
+           * FNXC:WorkflowAgentRouting 2026-08-08-03:20:
+           * Use the SAME run-id fallback the two durable writes below use. `resolvedRunId` is
+           * optional by construction (a definition load failure leaves it undefined), and this
+           * interpolated it raw — producing the literal attempt id `undefined:<nodeInstance>`,
+           * shared by every task in the project that hit that failure. The capacity lease is
+           * keyed on `(projectId, attemptId)` and returns `acquired` for a pre-existing row
+           * REGARDLESS of agent, so colliding tasks bypass both the project and per-agent caps,
+           * and one task's release deletes another's live lease.
+           */
+          const attemptId = `${resolvedRunId ?? `${nodeTask.id}:workflow`}:${nodeInstanceId}`;
           /*
            * FNXC:WorkflowAgentRouting 2026-08-07-05:29:
            * Workflow-stage admission consumes the project workflow budget, while
@@ -7466,23 +7476,41 @@ export class TaskExecutor {
         );
         return;
       }
-      if (result.disposition === "failed") {
-        if (continuation) {
-          await this.store.transitionWorkflowWorkItem(continuation.id, "failed", {
+      /*
+       * FNXC:WorkflowExecution 2026-08-08-03:20:
+       * Closing out the continuation is BOOKKEEPING and must never pre-empt the lifecycle
+       * action that follows it.
+       *
+       * The row is very often already terminal by the time we get here: the first fence write
+       * of the run retires the continuation it resumed on (that is what makes the handover
+       * atomic), so `succeeded -> failed` hits the store's terminal guard and THROWS. These two
+       * calls sit outside the interpreter try/catch and used to be unguarded, so that throw
+       * escaped `executeWorkflowGraph` and skipped `handleGraphFailure` entirely — leaving a
+       * failed run's card sitting in its wip column, unparked and with no error recorded. The
+       * sibling calls in this same function already tolerate it; these two did not.
+       */
+      const closeContinuation = async (state: "failed" | "succeeded"): Promise<void> => {
+        if (!continuation || typeof this.store.transitionWorkflowWorkItem !== "function") return;
+        try {
+          await this.store.transitionWorkflowWorkItem(continuation.id, state, {
             leaseOwner: null,
             leaseExpiresAt: null,
-            lastError: "workflow-continuation-failed",
+            lastError: state === "failed" ? "workflow-continuation-failed" : null,
           });
+        } catch (closeErr) {
+          // Already retired by this run's own fence write, or by a peer — either way the row is
+          // finished work and the lifecycle transition below is what actually matters.
+          executorLog.debug(
+            `[workflow-graph] ${task.id}: continuation ${continuation.id} could not be closed as ${state} `
+            + `(likely already terminal): ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
+          );
         }
+      };
+      if (result.disposition === "failed") {
+        await closeContinuation("failed");
         await this.handleGraphFailure(task, result);
       } else if (result.disposition === "completed") {
-        if (continuation) {
-          await this.store.transitionWorkflowWorkItem(continuation.id, "succeeded", {
-            leaseOwner: null,
-            leaseExpiresAt: null,
-            lastError: null,
-          });
-        }
+        await closeContinuation("succeeded");
         const live = await this.store.getTask(task.id).catch(() => task);
         if ((live as TaskDetail).mergeDetails?.mergeConfirmed === true && (live as TaskDetail).column !== await resolveCompleteColumnFor(this.store, task.id)) {
           await this.finalizeMergeConfirmedWorkflowGraphTask(task.id, "graph-completed");
