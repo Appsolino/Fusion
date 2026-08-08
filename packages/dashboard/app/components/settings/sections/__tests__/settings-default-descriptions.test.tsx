@@ -296,6 +296,7 @@ const SETTING_DESCRIPTION_KEYS: Record<string, string> = {
   quickChatCloseOnOutsideClick: "general.quickChatCloseOnOutsideClickHint",
   showTaskChatsInCommonFeed: "general.showTaskChatsInCommonFeedHint",
   taskPrefix: "general.prefixForNewTaskIDsEGKB",
+  maxRecommendationsPerTask: "general.maxRecommendationsPerTaskHelp",
   workspaceMode: "general.workspaceModeHint",
   defaultWorkflowId: "general.newTasksInheritThisCustomWorkflowsStepsOverridable",
   enabledBuiltinWorkflowIds: "general.disabledFusionWorkflowsAreHiddenFromWorkflow",

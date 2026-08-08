@@ -1369,6 +1369,16 @@ describe("SettingsModal", () => {
   });
 
   describe("General · Project", () => {
+    it("renders the recommendation cap with the default and bounded numeric control", async () => {
+      renderModal({ initialSection: "general" });
+      await waitForSettingsModalReady();
+
+      const input = screen.getByLabelText("Maximum recommendations per task") as HTMLInputElement;
+      expect(input.value).toBe("3");
+      expect(input).toHaveAttribute("min", "0");
+      expect(input).toHaveAttribute("max", "20");
+    });
+
     it("populates the Discussion category selector from the report category route", async () => {
       mockListDiscussionCategories.mockResolvedValue({ categories: [{ id: "DC_ideas", name: "Ideas", slug: "ideas" }] });
       renderModal({ initialSection: "general" });
@@ -2288,6 +2298,7 @@ describe("SettingsModal", () => {
       expect(payload.taskPrefix).toBeNull();
       expect(payload.autoMerge).toBeNull();
       expect(payload.maxConcurrent).toBeNull();
+      expect(payload.maxRecommendationsPerTask).toBeNull();
       // Global-only key must never appear in a project-scope reset payload.
       expect(payload).not.toHaveProperty("themeMode");
       expect(mockUpdateGlobalSettings).not.toHaveBeenCalled();

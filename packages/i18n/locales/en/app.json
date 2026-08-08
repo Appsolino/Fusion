@@ -6025,7 +6025,9 @@
       "reportDiscussionCategorySelect": "Select a Discussion category",
       "reportDiscussionCategoryUnavailable": "Discussion categories are unavailable for the configured repository.",
       "reportDiscussionCategoryEmpty": "No Discussion categories are available for the configured repository.",
-      "reportTargetByActionHelp": "Optional per-action override of the default report target for bug, feedback, idea, or help. No default — unset actions inherit reportTarget / action defaults."
+      "reportTargetByActionHelp": "Optional per-action override of the default report target for bug, feedback, idea, or help. No default — unset actions inherit reportTarget / action defaults.",
+      "maxRecommendationsPerTask": "Maximum recommendations per task",
+      "maxRecommendationsPerTaskHelp": "Default: 3. Set 0 to disable recommendations; choose a whole number from 1 to 20 to cap each completed task."
     },
     "globalGeneral": {
       "andShowsUpdateNoticesInTheCLIAnd": " and shows update notices in the CLI and dashboard. Cadence is governed by the frequency below. Default: enabled. ",
@@ -8086,7 +8088,8 @@
       "terminal": "Session",
       "worktreeTerminal": "Terminal",
       "workflow": "Workflow",
-      "cost": "Cost"
+      "cost": "Cost",
+      "recommendations": "Recommendations"
     },
     "terminal": {
       "loading": "Loading terminal…"
@@ -8133,6 +8136,14 @@
       "totalCostLabel": "Total",
       "totalTokens": "Total tokens",
       "unknownModel": "(unknown)"
+    },
+    "recommendations": {
+      "title": "Recommendations",
+      "created": "Created {{taskId}}",
+      "creating": "Creating…",
+      "retry": "Retry creating task",
+      "create": "Create task",
+      "error": "Could not create task. Try again."
     }
   },
   "taskDocuments": {

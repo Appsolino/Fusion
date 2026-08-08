@@ -178,6 +178,20 @@ export function GeneralSection({ form, setForm, projectId, addToast, prefixError
       >
         <ReportActionMenu onSelect={setReportAction} />
       </SettingsFieldRow>
+      {/* FNXC:TaskRecommendations 2026-08-08-05:10: Project policy caps only accepted completion suggestions; zero explicitly disables them while the API remains authoritative for malformed values. */}
+      <SettingsNumberRow
+        descriptor={{
+          key: "maxRecommendationsPerTask",
+          label: t("settings.general.maxRecommendationsPerTask", "Maximum recommendations per task"),
+          help: t("settings.general.maxRecommendationsPerTaskHelp", "Default: 3. Set 0 to disable recommendations; choose a whole number from 1 to 20 to cap each completed task."),
+          scope: "project",
+          min: 0,
+          max: 20,
+          placeholder: "3",
+        }}
+        value={form.maxRecommendationsPerTask ?? 3}
+        onChange={(value) => setForm((current) => ({ ...current, maxRecommendationsPerTask: value ?? 3 }))}
+      />
       {/*
         FNXC:SettingsGeneral 2026-07-15-17:35:
         A blank prefix stores `undefined`, not "": empty means "no prefix configured" and must delete the

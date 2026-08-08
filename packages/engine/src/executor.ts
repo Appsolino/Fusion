@@ -12,7 +12,7 @@ const WORKFLOW_THINKING_LEVEL_SET: ReadonlySet<string> = new Set(THINKING_LEVELS
 import { basename, delimiter, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
-import { DEFAULT_PROVIDER_INSTANCE_ID, type ProviderInstanceRef, type TaskStore, type Task, type TaskDetail, type TaskTokenUsage, type StepStatus, type Settings, type WorkflowStep, type MissionStore, type AsyncMissionStore, type Slice, type AgentState, type AgentCapability, type RunMutationContext, type AgentHeartbeatConfig, type Agent, type AgentMemoryInclusionMode, type ProjectSettings, type MergeResult, type WorkflowIrNode, type WorkflowIrNodeKind, type WorkflowStepResult as CoreWorkflowStepResult, type WorkflowReviewFinding, type ThinkingLevel } from "@fusion/core";
+import { DEFAULT_PROVIDER_INSTANCE_ID, type ProviderInstanceRef, type TaskStore, type Task, type TaskDetail, type TaskRecommendation, type TaskTokenUsage, type StepStatus, type Settings, type WorkflowStep, type MissionStore, type AsyncMissionStore, type Slice, type AgentState, type AgentCapability, type RunMutationContext, type AgentHeartbeatConfig, type Agent, type AgentMemoryInclusionMode, type ProjectSettings, type MergeResult, type WorkflowIrNode, type WorkflowIrNodeKind, type WorkflowStepResult as CoreWorkflowStepResult, type WorkflowReviewFinding, type ThinkingLevel } from "@fusion/core";
 import { getUnmetSchedulingDependencies } from "./scheduler.js";
 import type { ImplementationExit, ImplementationExitReporter } from "./executor/implementation-exit.js";
 import { emitWorkflowLifecycleEvent } from "@fusion/core";
@@ -614,6 +614,48 @@ const WORKFLOW_RERUN_WATCHDOG_MS = 15_000;
 const LOOP_COMPACTION_TIMEOUT_MS = 60_000;
 
 const TASK_DONE_REFUSAL_SUFFIX = "Either finish the work and resubmit, or do not call fn_task_done — exit the session and the engine will requeue.";
+
+/*
+FNXC:TaskRecommendations 2026-08-08-07:06:
+Keep completion validation aligned with TaskStore's authoritative no-command boundary. This early
+refusal gives executors an actionable tool response, while the store remains the final safeguard.
+*/
+/*
+FNXC:TaskRecommendations 2026-08-08-07:15:
+Keep the production tool's refusal aligned with the authoritative store policy: imperative shell
+forms with flags, paths, or script extensions are executable instructions, not task-ready prose.
+*/
+/* FNXC:TaskRecommendations 2026-08-08-07:26: Treat credential-like values, not ordinary security work such as a password-reset feature, as secrets. */
+const UNSAFE_RECOMMENDATION_CONTENT = /(?:```|\b(?:api[_-]?key|password|secret|token)\b\s*(?:=|:)\s*\S+|(?:^|\n)\s*(?:[$#]\s*)?(?:npm|pnpm|yarn|bun|npx|node|deno|python(?:3)?|bash|sh|zsh|fish|cmd(?:\.exe)?|powershell|curl|wget|git|docker|kubectl|make|just|rm|cp|mv|chmod|sudo)\b|(?:^|\n)\s*(?:run|execute)\s+(?:(?:npm|pnpm|yarn|bun|npx|node|deno|python(?:3)?|bash|sh|zsh|fish|cmd(?:\.exe)?|powershell|curl|wget|git|docker|kubectl|make|just|rm|cp|mv|chmod|sudo)\b|(?:\.?\.?[\\/]|~[\\/])\S*|\S+\s+(?:-{1,2}\S*|\S*[\\/]\S*|\S+\.(?:sh|py|js|ts|mjs|cjs|exe|bat|cmd)\b))|`(?:npm|pnpm|yarn|bun|npx|node|deno|python(?:3)?|bash|sh|zsh|fish|cmd|powershell|curl|wget|git|docker|kubectl|make|just|rm|cp|mv|chmod|sudo)\b)/im;
+
+/**
+ * FNXC:TaskRecommendations 2026-08-08-05:02:
+ * `fn_task_done` accepts only task-ready, out-of-scope suggestions. Refuse
+ * executable or credential-like material so the durable operator surface cannot
+ * become a second channel for agent reasoning, commands, or secrets.
+ */
+export function validateCompletionRecommendations(value: unknown, maximum: number): TaskRecommendation[] | string {
+  if (!Array.isArray(value)) return "recommendations must be an array";
+  if (value.length > maximum) return `recommendations exceed the project maximum of ${maximum}`;
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") return "each recommendation must be an object";
+    const recommendation = item as TaskRecommendation;
+    /*
+    FNXC:TaskRecommendations 2026-08-08-05:56:
+    Completion recommendations are a compact, task-ready handoff rather than an executor transcript.
+    Keep the accepted shape closed so agents cannot persist reasoning, tool output, or a pre-linked
+    child id alongside an otherwise valid suggestion.
+    */
+    if (Object.keys(recommendation).some((key) => !["id", "title", "description", "category"].includes(key))) return "each recommendation may contain only id, title, description, and category";
+    if (typeof recommendation.id !== "string" || typeof recommendation.title !== "string" || typeof recommendation.description !== "string" || !recommendation.id.trim() || !recommendation.title.trim() || !recommendation.description.trim()) return "each recommendation requires id, title, and description";
+    if (!["improvement", "feature", "bug", "other"].includes(recommendation.category)) return "each recommendation category must be improvement, feature, bug, or other";
+    if (ids.has(recommendation.id)) return "recommendation ids must be unique";
+    if (UNSAFE_RECOMMENDATION_CONTENT.test(`${recommendation.title}\n${recommendation.description}`)) return "recommendations must not contain secrets or executable commands";
+    ids.add(recommendation.id);
+  }
+  return value as TaskRecommendation[];
+}
 
 type TaskDoneRefusalClass =
   | "bulk-step-completion-without-review"
@@ -18136,6 +18178,12 @@ export class TaskExecutor {
         summary: Type.Optional(Type.String({
           description: "Optional summary of what was changed/fixed and what was verified (2-4 sentences). Used when outcome=\"completed\".",
         })),
+        recommendations: Type.Optional(Type.Array(Type.Object({
+          id: Type.String(),
+          title: Type.String(),
+          description: Type.String(),
+          category: Type.Union([Type.Literal("improvement"), Type.Literal("feature"), Type.Literal("bug"), Type.Literal("other")]),
+        }), { description: "Optional bounded out-of-scope, task-ready follow-up suggestions. Do not include mandatory fixes, secrets, commands, or execution reasoning." })),
         /*
         FNXC:Lifecycle 2026-07-16-10:20:
         FN-8141 laundered a genuinely-impossible task into `done`: fn_task_done only expressed success, the bulk-completion
@@ -18155,7 +18203,7 @@ export class TaskExecutor {
           description: "Required when outcome=\"blocked\": concrete explanation of what is blocking the work and what is needed to unblock it.",
         })),
       }),
-      execute: async (_id: string, params: { summary?: string; outcome?: "completed" | "blocked"; blockedBy?: string[]; reason?: string }) => {
+      execute: async (_id: string, params: { summary?: string; recommendations?: TaskRecommendation[]; outcome?: "completed" | "blocked"; blockedBy?: string[]; reason?: string }) => {
         /*
         FNXC:Lifecycle 2026-07-16-10:20:
         FN-8141 — the blocked exit runs BEFORE every completion gate (completion blocker, verdict providers, worktree
@@ -18447,6 +18495,16 @@ export class TaskExecutor {
           };
         }
 
+        const completionRecommendations = params.recommendations === undefined
+          ? undefined
+          : validateCompletionRecommendations(params.recommendations, settings.maxRecommendationsPerTask ?? 3);
+        if (typeof completionRecommendations === "string") {
+          return {
+            content: [{ type: "text" as const, text: `Cannot mark task done yet — ${completionRecommendations}.` }],
+            details: { error: completionRecommendations },
+          };
+        }
+
         if (noOpMarker) {
           const runContext = this.getRunContextFor(taskId);
           await store.updateTask(taskId, { noCommitsExpected: true });
@@ -18517,6 +18575,10 @@ export class TaskExecutor {
           } else if (!existingSummary || !hasRunWorkflowSteps) {
             await store.updateTask(taskId, { summary: params.summary });
           }
+        }
+        // FNXC:TaskRecommendations 2026-08-08-05:02: write only after every completion gate accepts; retries replace the list deterministically.
+        if (completionRecommendations !== undefined) {
+          await store.updateTask(taskId, { recommendations: completionRecommendations });
         }
         const hardPauseActive = Boolean(settings.globalPause);
         // Task-level pause prevents new work from starting, not completion of
