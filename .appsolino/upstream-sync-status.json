@@ -1,24 +1,26 @@
 {
   "outcome": "merged",
-  "recordedAt": "2026-08-07T19:14:16.364Z",
+  "recordedAt": "2026-08-08T05:54:41.328Z",
   "integrationBranch": "main",
-  "appsolinoSha": "e3c3986bf290964964f0a646e86a0963db25c9d8",
-  "candidateBaseAppsolinoSha": "e3c3986bf290964964f0a646e86a0963db25c9d8",
-  "upstreamSha": "1f9b0e644abb27e19803637803d74e37d7c45ce2",
-  "candidateUpstreamSha": "1f9b0e644abb27e19803637803d74e37d7c45ce2",
-  "mergeBase": "297ec17f8eeba5822b359957a7fb4e7e73d61d19",
-  "ahead": 250,
-  "behind": 9,
+  "appsolinoSha": "ff3faf3840390253bafe2f4d9d9de9bf6e964a43",
+  "candidateBaseAppsolinoSha": "ff3faf3840390253bafe2f4d9d9de9bf6e964a43",
+  "upstreamSha": "38cdf3a589a9bb9fcad25a4ea66d9d09d0a24c96",
+  "candidateUpstreamSha": "38cdf3a589a9bb9fcad25a4ea66d9d09d0a24c96",
+  "mergeBase": "1f9b0e644abb27e19803637803d74e37d7c45ce2",
+  "ahead": 267,
+  "behind": 15,
   "conflictedFiles": [],
   "touchesWorkflows": false,
-  "touchesMigrations": true,
+  "touchesMigrations": false,
   "touchesLockfile": false,
-  "changedFileCount": 150,
-  "upstreamFixedConflictResolution": {
-    "action": "TAKE_UPSTREAM",
-    "retiredPatchIds": [
-      "FIX-LANE-WIRING-TOUCH-FIXTURE"
-    ],
-    "reason": "all conflicted paths covered by patches retired via Finding Comparison on clean upstream"
+  "changedFileCount": 90,
+  "provenanceEvidenceVersion": 1,
+  "conflictReconciliationComplete": true,
+  "patchReconciliationComplete": true,
+  "localDeltaClassificationComplete": true,
+  "localDelta": {
+    "kind": "NONE",
+    "appsolinoProductPaths": [],
+    "adaptedPaths": []
   }
 }
