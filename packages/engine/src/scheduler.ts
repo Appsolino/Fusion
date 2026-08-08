@@ -2259,9 +2259,8 @@ export class Scheduler {
         isReviewColumnRole(columnFlagsForTask(task), task.column);
       /*
       FNXC:ConcurrencyIndicators 2026-08-01-19:22:
-      Failed WIP is not a live holder (isRunningAgentTask). Keep the WIP id list aligned so
-      diagnostic maxConcurrent holders and any WIP-only arithmetic do not re-count stranded failed
-      parks that the worktree ledger already excludes.
+      Failed WIP is not a live holder (isRunningAgentTask). Keep the WIP list aligned so
+      same-sweep executor reservation arithmetic does not re-count stranded failed parks.
       */
       const wipTaskIds = tasks
         .filter((task) => isWipColumnTask(task) && task.status !== "failed")
@@ -2278,7 +2277,6 @@ export class Scheduler {
       const activeWorktreeTaskIds = await persistedTopLevelAgentTaskIdsFromStore(this.store, tasks);
       let reservedWorktreeSlots = activeWorktreeTaskIds.length;
       let reservedConcurrentSlots = wipTaskIds.length;
-      const inProgressTaskIds = wipTaskIds;
       const dispatchPrepByTaskId = new Map<string, {
         baseBranch: string | null;
         dispatchStormCount: number;
@@ -2818,23 +2816,6 @@ export class Scheduler {
             }
           }
 
-          const concurrencyDiagnostic = computeConcurrencyGateDiagnostic({
-            agentSlots: reservedConcurrentSlots,
-            maxConcurrent,
-            activeWorktrees: reservedWorktreeSlots,
-            maxWorktrees,
-            worktreeHolderTaskIds: [...activeWorktreeTaskIds, ...dispatchPrepByTaskId.keys()],
-            semaphore: this.options.semaphore,
-            inProgressTaskIds,
-            topLevelClaimedSlots: reservedWorktreeSlots,
-          });
-          /*
-          The sweep diagnostic is intentionally descriptive only. Worktree preparation can outlive
-          a holder, so using this older snapshot as an admission gate strands queued cards even after
-          capacity frees. The serialized fresh reservation below is the sole capacity authority; the
-          diagnostic remains available to explain a rejection from that authoritative check.
-          */
-
           /*
           FNXC:WorktreeCapacity 2026-08-01-04:38:
           Serialize the workflow scheduler's direct hold release with planning and merge admission.
@@ -2859,7 +2840,7 @@ export class Scheduler {
             return { count: ids.length, ids };
           })();
           let projectSlotReserved = false;
-          await projectAdmissionCoordinator.admitNext({
+          const admittedTaskId = await projectAdmissionCoordinator.admitNext({
             projectId: this.store.getRootDir(),
             maxConcurrent: activeTaskLimit,
             claimed: async () => (await getFinalClaimSnapshot()).count,
@@ -2882,14 +2863,28 @@ export class Scheduler {
               activeScopes.delete(task.id);
               activeScopeColumns.delete(task.id);
             }
-            const bindingGate: ConcurrencyGateName = maxWorktrees !== null && maxWorktrees <= maxConcurrent
-              ? "maxWorktrees"
-              : "maxConcurrent";
-            const reason = formatConcurrencyLimitReason({
-              ...concurrencyDiagnostic,
-              available: 0,
-              bindingGates: [...new Set([...concurrencyDiagnostic.bindingGates, bindingGate])],
+            /*
+            FNXC:WorktreeCapacity 2026-08-08-04:17:
+            A scheduler candidate can lose one serialized admission pass because a higher-priority
+            merge/planning provider was selected, even with a free slot. Only call it exhaustion
+            after the coordinator admitted nobody and report the fresh canonical holder snapshot
+            that made that decision; the pre-sweep snapshot is diagnostic-only and can be stale.
+            */
+            const freshClaims = await getFinalClaimSnapshot();
+            const exhausted = admittedTaskId === undefined;
+            const freshDiagnostic = computeConcurrencyGateDiagnostic({
+              agentSlots: freshClaims.count,
+              maxConcurrent,
+              activeWorktrees: freshClaims.count,
+              maxWorktrees,
+              worktreeHolderTaskIds: freshClaims.ids,
+              semaphore: this.options.semaphore,
+              inProgressTaskIds: freshClaims.ids,
+              topLevelClaimedSlots: freshClaims.count,
             });
+            const reason = exhausted
+              ? formatConcurrencyLimitReason(freshDiagnostic)
+              : `queued — higher-priority lifecycle admission started: task=${admittedTaskId}`;
             await this.store.updateTask(task.id, { status: "queued" });
             await this.logDispatchQueuedReason(task.id, reason);
             return null;
@@ -3256,17 +3251,6 @@ export class Scheduler {
         return;
       }
 
-      const missionHierarchy = await missionStore.getMissionWithHierarchy(mission.id);
-      const hasActiveSlice = missionHierarchy?.milestones.some((candidateMilestone) =>
-        candidateMilestone.slices.some((candidateSlice) =>
-          candidateSlice.id !== slice.id && candidateSlice.status === "active"
-        )
-      );
-      if (hasActiveSlice) {
-        schedulerLog.log(`Mission ${mission.id} already has an active slice; skipping auto-advance`);
-        return;
-      }
-
       const nextSlice = await this.activateNextPendingSlice(mission.id);
       if (nextSlice) {
         schedulerLog.log(`Auto-advanced: activated slice ${nextSlice.id} for mission ${mission.id}`);
@@ -3290,36 +3274,15 @@ export class Scheduler {
     const missionStore = this.options.missionStore;
 
     try {
-      const mission = await missionStore.getMissionWithHierarchy(missionId);
-      if (!mission || mission.status !== "active") {
-        schedulerLog.log(`Mission ${missionId}: not active, skipping slice activation`);
-        return null;
-      }
-
-      const sortedMilestones = [...mission.milestones].sort((a, b) => a.orderIndex - b.orderIndex);
-
-      for (const milestone of sortedMilestones) {
-        const dependenciesMet = milestone.dependencies.every((dependencyId) => {
-          const dependency = mission.milestones.find((candidate) => candidate.id === dependencyId);
-          return dependency?.status === "complete";
-        });
-        if (!dependenciesMet) {
-          continue;
-        }
-
-        const pendingSlice = [...milestone.slices]
-          .sort((a, b) => a.orderIndex - b.orderIndex)
-          .find((slice) => slice.status === "pending");
-        if (!pendingSlice) {
-          continue;
-        }
-
-        const activated = await missionStore.activateSlice(pendingSlice.id);
+      // The store atomically re-reads the hierarchy and claims the candidate.
+      // A duplicate signal is an expected no-op, not a scheduler error.
+      const activated = await missionStore.tryActivateNextPendingSlice(missionId);
+      if (activated) {
         schedulerLog.log(`Activated slice ${activated.id} for mission ${missionId}`);
         return activated;
       }
 
-      schedulerLog.log(`Mission ${missionId}: no pending slices to activate`);
+      schedulerLog.log(`Mission ${missionId}: no serially eligible slice to activate`);
       return null;
     } catch (err) {
       schedulerLog.error(`Error activating next slice for mission ${missionId}:`, err);
