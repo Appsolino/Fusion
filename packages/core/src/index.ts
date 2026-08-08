@@ -1523,11 +1523,19 @@ export {
   BUNDLED_PLUGIN_IDS,
   isBundledPluginId,
   ensureBundledPluginInstalled,
+  fingerprintPluginEntry,
+  assessBundledPluginFreshness,
   ensureBundledDependencyGraphPluginInstalled,
   ensureBundledCursorRuntimePluginInstalled,
   ensureBundledGrokRuntimePluginInstalled,
 } from "./plugins/bundled-plugin-install.js";
-export type { BundledPluginId, EnsureBundledResult, BundledPluginDirResolver } from "./plugins/bundled-plugin-install.js";
+export type {
+  BundledPluginId,
+  EnsureBundledResult,
+  BundledPluginDirResolver,
+  BundledPluginFreshnessReport,
+  BundledPluginFreshnessStatus,
+} from "./plugins/bundled-plugin-install.js";
 export { scanPluginSecurity } from "./plugins/plugin-security-scan.js";
 export type { PluginSecurityScanResult, PluginSecurityFinding } from "./plugins/plugin-security-scan.js";
 export type {

@@ -328,6 +328,13 @@ if [[ "$SKIP_PROBE" != "1" ]]; then
     write_result BLOCKED '["Cursor plugin/package missing in candidate"]'
     exit 2
   fi
+  # FNXC:SoakR3PluginFreshness 2026-08-08-09:42: candidate must ship settleFallbackDispatch in Cursor bundle.
+  if ! grep -q 'settleFallbackDispatch' "$CANDIDATE_DEST/plugins/fusion-plugin-cursor-runtime/bundled.js"; then
+    kill "$PROBE_PID" 2>/dev/null || true
+    PROBE_PID=""
+    write_result BLOCKED '["Cursor bundled runtime missing settleFallbackDispatch marker"]'
+    exit 2
+  fi
   kill "$PROBE_PID" 2>/dev/null || true
   wait "$PROBE_PID" 2>/dev/null || true
   PROBE_PID=""
@@ -499,6 +506,28 @@ fi
 if [[ "$PROFILE" == "staging" ]]; then
   SETTINGS="$(curl -fsS -m 5 http://127.0.0.1:4140/api/settings)"
   echo "$SETTINGS" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("enginePaused") is True'
+  # FNXC:SoakR3PluginFreshness 2026-08-08-09:42:
+  # AUTO-3 success requires the live Cursor runtime to match the release-staged
+  # bundled entry (SOAK-R3-DEFECT-001). Health=ok alone is insufficient.
+  FRESH="$(curl -fsS -m 10 http://127.0.0.1:4140/api/plugins/bundled-freshness?id=fusion-plugin-cursor-runtime)"
+  echo "$FRESH" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+assert d.get("ok") is True and d.get("status")=="pass", d
+c=d.get("cursor") or {}
+assert c.get("status")=="pass" and c.get("match") is True, c
+assert c.get("bundledFingerprint") and c.get("bundledFingerprint")==c.get("activeFingerprint"), c
+assert c.get("settleFallbackDispatchMarkerPresent") is True, c
+print("cursor_bundled_freshness=PASS", c.get("bundledFingerprint","")[:16])
+'
+  PLUG="$(curl -fsS -m 5 http://127.0.0.1:4140/api/plugins)"
+  echo "$PLUG" | python3 -c '
+import json,sys
+items=json.load(sys.stdin)
+cursor=next((p for p in items if p.get("id")=="fusion-plugin-cursor-runtime"), None)
+assert cursor and cursor.get("enabled") and cursor.get("state") in ("started","installed","active", cursor.get("state")), cursor
+print("cursor_plugin_loaded=PASS", cursor.get("path"))
+'
 fi
 
 EVIDENCE_HEALTH="ok"

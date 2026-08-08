@@ -10,6 +10,14 @@
  * `serve.ts`, and `daemon.ts` already depend on. `resolvePluginEntryPath` is
  * re-exported directly from `@fusion/core` (no local duplicate) since the
  * shared helper already delegates to it.
+ *
+ * FNXC:SoakR3PluginFreshness 2026-08-08-09:42:
+ * Host D AUTO-3 SEA layout stages plugins beside the compiled `fn` binary
+ * (`<execDir>/plugins/<id>`). import.meta-relative probes alone returned
+ * missing-bundle and left the stale FUSION_HOME registration active
+ * (SOAK-R3-DEFECT-001). Probe execPath-adjacent plugins first for packaged SEA
+ * installs; Node/npm installs keep succeeding via the subsequent dist-relative
+ * candidates when execDir/plugins does not exist.
  */
 
 import { dirname, join, resolve } from "node:path";
@@ -19,13 +27,15 @@ import {
   ensureBundledGrokRuntimePluginInstalled as coreEnsureBundledGrokRuntimePluginInstalled,
   ensureBundledDependencyGraphPluginInstalled as coreEnsureBundledDependencyGraphPluginInstalled,
   ensureBundledPluginInstalled as coreEnsureBundledPluginInstalled,
+  assessBundledPluginFreshness as coreAssessBundledPluginFreshness,
   type EnsureBundledResult,
   type PluginLoader,
   type PluginStore,
+  type BundledPluginFreshnessReport,
 } from "@fusion/core";
 
 export { BUNDLED_PLUGIN_IDS, isBundledPluginId, resolvePluginEntryPath } from "@fusion/core";
-export type { BundledPluginId, EnsureBundledResult } from "@fusion/core";
+export type { BundledPluginId, EnsureBundledResult, BundledPluginFreshnessReport } from "@fusion/core";
 
 /*
 FNXC:PluginLoader 2026-07-10-00:00:
@@ -48,13 +58,19 @@ whose entry `resolvePluginEntryPath` freshness-checks (dist vs src) — self-hea
 even when the prebuild is skipped. The workspace dir only exists in a checkout, so
 published installs are unaffected.
 */
-function getCandidatePluginDirs(pluginId: string): string[] {
+export function getCandidatePluginDirs(pluginId: string): string[] {
   const moduleDir = dirname(fileURLToPath(import.meta.url));
   const cliPackageRoot = resolve(moduleDir, "..", "..");
+  const execDir = dirname(process.execPath);
+  const packageRootOverride = process.env.FUSION_PACKAGE_ROOT?.trim();
 
-  return [
+  const candidates = [
+    // SEA / Host D packaged layout: plugins next to compiled `fn` (SOAK-R3-DEFECT-001).
+    join(execDir, "plugins", pluginId),
+    // Optional deploy override (tests / alternate package roots).
+    ...(packageRootOverride ? [join(packageRootOverride, "plugins", pluginId)] : []),
     // Bundled/global runtime: moduleDir is typically <cli>/dist, and plugins are
-    // staged under <cli>/dist/plugins/<id>. Keep first for the global-install regression.
+    // staged under <cli>/dist/plugins/<id>. Keep for the global-install regression.
     join(moduleDir, "plugins", pluginId),
     // Source checkout: prefer the live workspace plugin (freshness-checked by
     // resolvePluginEntryPath) over the stale staged tsup bundle below.
@@ -63,6 +79,7 @@ function getCandidatePluginDirs(pluginId: string): string[] {
     join(cliPackageRoot, "dist", "plugins", pluginId),
     join(cliPackageRoot, "plugins", pluginId),
   ];
+  return [...new Set(candidates)];
 }
 
 export async function ensureBundledPluginInstalled(
@@ -96,4 +113,11 @@ export async function ensureBundledGrokRuntimePluginInstalled(
   pluginLoader: PluginLoader,
 ): Promise<EnsureBundledResult> {
   return coreEnsureBundledGrokRuntimePluginInstalled(pluginStore, pluginLoader, getCandidatePluginDirs);
+}
+
+export async function assessBundledPluginFreshness(
+  pluginStore: PluginStore,
+  pluginId: string,
+): Promise<BundledPluginFreshnessReport> {
+  return coreAssessBundledPluginFreshness(pluginStore, pluginId, getCandidatePluginDirs);
 }

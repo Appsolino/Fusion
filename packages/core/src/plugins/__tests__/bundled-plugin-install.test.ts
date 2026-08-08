@@ -141,11 +141,13 @@ function makePluginStore() {
 }
 
 function makePluginLoader() {
+  const loaded = new Set<string>();
   return {
-    loadPlugin: vi.fn(async () => {}),
+    loadPlugin: vi.fn(async (id: string) => { loaded.add(id); }),
     unloadPlugin: vi.fn(async () => {}),
+    reloadPlugin: vi.fn(async (id: string) => { loaded.add(id); }),
     getLoadedPlugins: vi.fn(() => new Map()),
-    isPluginLoaded: vi.fn(() => false),
+    isPluginLoaded: vi.fn((id: string) => loaded.has(id)),
   };
 }
 
@@ -265,6 +267,65 @@ describe("ensureBundledPluginInstalled (host-agnostic shared helper)", () => {
     expect(result).toBe("updated");
     expect(store.updatePlugin).toHaveBeenCalledWith(BUNDLED_PLUGIN_ID, expect.objectContaining({ version: "0.2.0" }));
     expect(loader.loadPlugin).toHaveBeenCalledWith(BUNDLED_PLUGIN_ID);
+  });
+
+  /*
+  FNXC:SoakR3PluginFreshness 2026-08-08-09:42:
+  Same id + same manifest version + persistent stale entry must still reconcile to
+  the release-staged bundled entry (SOAK-R3-DEFECT-001 / settleFallbackDispatch).
+  */
+  it("same version but different entry content → updates path to bundled entry and reloads", async () => {
+    const { dir } = setupBundleExists(cliShapedResolver);
+    const bundledEntry = `${dir}/src/index.ts`;
+    const staleHomeEntry = "/fusion-home/plugins/fusion-plugin-dependency-graph/bundled.js";
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      return p === `${dir}/manifest.json` || p === bundledEntry || p === staleHomeEntry;
+    });
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === `${dir}/manifest.json`) return JSON.stringify(makeManifest());
+      if (p === bundledEntry) return "export const settleFallbackDispatch = async () => undefined;\n";
+      if (p === staleHomeEntry) return "export const createSession = async () => ({ session: {} });\n";
+      throw new Error(`unexpected read ${p}`);
+    });
+    const store = makePluginStore();
+    const loader = makePluginLoader();
+    store._inject(makePlugin({ path: staleHomeEntry, version: "0.1.0" }));
+    // Pretend the stale plugin is already loaded so ensure must reload.
+    await loader.loadPlugin(BUNDLED_PLUGIN_ID);
+
+    const result = await ensureBundledPluginInstalled(store as never, loader as never, BUNDLED_PLUGIN_ID, cliShapedResolver);
+
+    expect(result).toBe("updated");
+    expect(store.updatePlugin).toHaveBeenCalledWith(
+      BUNDLED_PLUGIN_ID,
+      expect.objectContaining({ path: bundledEntry }),
+    );
+    expect(loader.reloadPlugin).toHaveBeenCalledWith(BUNDLED_PLUGIN_ID);
+  });
+
+  it("same path and same content → already-installed without reload", async () => {
+    const { dir } = setupBundleExists(cliShapedResolver);
+    const bundledEntry = `${dir}/src/index.ts`;
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      return p === `${dir}/manifest.json` || p === bundledEntry;
+    });
+    mockReadFile.mockImplementation(async (p: string) => {
+      if (p === `${dir}/manifest.json`) return JSON.stringify(makeManifest());
+      if (p === bundledEntry) return "identical-body";
+      throw new Error(`unexpected read ${p}`);
+    });
+    const store = makePluginStore();
+    const loader = makePluginLoader();
+    store._inject(makePlugin({ path: bundledEntry, version: "0.1.0" }));
+    await loader.loadPlugin(BUNDLED_PLUGIN_ID);
+
+    const result = await ensureBundledPluginInstalled(store as never, loader as never, BUNDLED_PLUGIN_ID, cliShapedResolver);
+
+    expect(result).toBe("already-installed");
+    expect(store.updatePlugin).not.toHaveBeenCalled();
+    expect(loader.reloadPlugin).not.toHaveBeenCalled();
   });
 
   it("disabled plugin → path/version updated but plugin NOT loaded (user choice respected)", async () => {
