@@ -328,6 +328,18 @@ const OPERATOR_ACTIONABLE_AGENT_ERROR_PATTERNS: RegExp[] = [
   /no api key/i,
   /billing/i,
   /quota exceeded/i,
+  /*
+  FNXC:SoakPlanningConfigFailure 2026-08-08-03:11:
+  Host D soak #1: a missing/disabled Cursor runtime plugin produced a deterministic
+  "Cursor CLI models require the bundled Cursor runtime plugin" failure that triage
+  treated as a generic planning error, restored claimable status, and re-dispatched
+  12+ times in ~1 minute while leaving planning worktrees behind. Configuration /
+  bootstrap failures require operator action (install/enable plugin, authenticate
+  service HOME) — park failed like other credential/model-access errors; never storm.
+  */
+  /bundled Cursor runtime plugin/i,
+  /Install and enable the Cursor Runtime plugin/i,
+  /require the bundled .+ runtime plugin/i,
 ];
 
 export function isOperatorActionableAgentError(errorMessage: string): boolean {

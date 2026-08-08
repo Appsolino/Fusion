@@ -279,6 +279,14 @@ export interface TriageProcessorOptions {
   planning falls back to the repo root exactly as before.
   */
   acquirePlanningWorktree?: (taskId: string) => Promise<string | null>;
+  /*
+  FNXC:SoakPlanningConfigFailure 2026-08-08-03:11:
+  When planning parks for an operator-actionable configuration/bootstrap failure
+  (e.g. missing Cursor runtime plugin), release the pre-execution worktree so a
+  failed plan cannot leave unowned trees consuming capacity. Same seam the move
+  and self-healing sweeps use — optional so older callers/tests stay unchanged.
+  */
+  releasePreExecutionWorktree?: (taskId: string, reason: string) => Promise<boolean>;
 }
 
 /**
@@ -3605,6 +3613,8 @@ export class TriageProcessor {
           });
           if (!persisted) return;
           await this.backfillBlankTitleAfterTerminalTriageFailure(task);
+          await this.releasePlanningWorktreeAfterConfigurationPark(task.id, registeredPlanningPath, "planner model fallback exhausted");
+          registeredPlanningPath = null;
           this.options.onSpecifyError?.(task, err);
           return;
         } else if (isOperatorActionableAgentError(errorMessage) && !isTransientError(errorMessage)) {
@@ -3614,6 +3624,9 @@ export class TriageProcessor {
 
           FNXC:TriageAuth 2026-07-14-16:08:
           Transient infrastructure signals take precedence when an error also mentions credentials, such as a connection reset during refresh. Those mixed failures keep the bounded retry policy; only genuinely permanent authentication failures park immediately.
+
+          FNXC:SoakPlanningConfigFailure 2026-08-08-03:11:
+          Missing/disabled Cursor (or other CLI) runtime plugins are the same class: deterministic configuration bootstrap failures. Park failed, release the planning worktree, and do not restore a claimable status that would redispatch every poll.
           */
           const failureMessage = `Specification failed: ${errorMessage}`;
           planLog.error(`✗ ${task.id} planning needs operator action: ${errorDetail}`);
@@ -3633,6 +3646,8 @@ export class TriageProcessor {
           });
           if (!persisted) return;
           await this.backfillBlankTitleAfterTerminalTriageFailure(task);
+          await this.releasePlanningWorktreeAfterConfigurationPark(task.id, registeredPlanningPath, "operator-actionable planning configuration failure");
+          registeredPlanningPath = null;
           this.options.onSpecifyError?.(task, err instanceof Error ? err : new Error(errorMessage));
           return;
         } else if (isTransientError(errorMessage)) {
@@ -4136,6 +4151,32 @@ export class TriageProcessor {
       await operation();
       return true;
     });
+  }
+
+  /*
+  FNXC:SoakPlanningConfigFailure 2026-08-08-03:11:
+  Drop the planning session registry hold first so releasePreExecutionWorktree's
+  isPathActive guard can succeed, then release the tree. Idempotent: a second call
+  with a null path and no on-disk tree is a no-op.
+  */
+  private async releasePlanningWorktreeAfterConfigurationPark(
+    taskId: string,
+    registeredPlanningPath: string | null,
+    reason: string,
+  ): Promise<void> {
+    if (registeredPlanningPath) {
+      const record = activeSessionRegistry.lookupByPath(registeredPlanningPath);
+      if (record?.ownerKey === `planning:${taskId}`) {
+        activeSessionRegistry.unregisterPath(registeredPlanningPath);
+      }
+    }
+    if (!this.options.releasePreExecutionWorktree) return;
+    try {
+      await this.options.releasePreExecutionWorktree(taskId, reason);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      planLog.warn(`${taskId}: failed to release planning worktree after configuration park: ${msg}`);
+    }
   }
 
   private restoreStatusAfterInterruptedTriageWork(task: Task): Task["status"] | null {

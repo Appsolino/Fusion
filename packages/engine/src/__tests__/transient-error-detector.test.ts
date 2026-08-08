@@ -470,6 +470,25 @@ describe("Transient Error Detector", () => {
       ).toBe(true);
     });
 
+    /*
+    FNXC:SoakPlanningConfigFailure 2026-08-08-03:11:
+    Missing Cursor runtime plugin must classify as operator-actionable (not transient) so triage parks.
+    */
+    it("returns true for missing Cursor/CLI runtime plugin bootstrap errors", () => {
+      const cursorMissing =
+        "Cursor CLI models require the bundled Cursor runtime plugin. "
+        + "Install and enable the Cursor Runtime plugin (fusion-plugin-cursor-runtime), "
+        + "authenticate `cursor-agent` under the Fusion service HOME, and select a discovered cursor-cli model.";
+      expect(isOperatorActionableAgentError(cursorMissing)).toBe(true);
+      expect(isTransientError(cursorMissing)).toBe(false);
+      expect(classifyError(cursorMissing)).toBe("permanent");
+      expect(
+        isOperatorActionableAgentError(
+          "Grok CLI models require the bundled Grok CLI runtime plugin when no key is set.",
+        ),
+      ).toBe(true);
+    });
+
     it("returns true for unsupported message-role errors", () => {
       const message =
         "developer is not one of ['system', 'assistant', 'user', 'tool', 'function'] - 'messages.[0].role'";
