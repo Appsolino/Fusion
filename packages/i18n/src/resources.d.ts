@@ -3658,6 +3658,7 @@ export default interface Resources {
       "assertionUpdated": "Assertion updated",
       "attemptRetries_one": "Attempt {{attempt}} · {{count}} {{label}} left",
       "attemptRetries_other": "Attempt {{attempt}} · {{count}} {{label}} left",
+      "autoMergeOverrideDescription": "Inherited follows the project setting. Auto-merge lands each feature as it passes. Single pull request keeps every feature on one shared branch for joint review and merge.",
       "autopilotActivatingSlice": "Activating slice",
       "autopilotCompleting": "Completing",
       "autopilotDescription": "When on, Fusion automatically activates the next slice and plans its features as work completes.",
