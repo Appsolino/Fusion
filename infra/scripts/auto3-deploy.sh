@@ -509,6 +509,9 @@ if [[ "$PROFILE" == "staging" ]]; then
   # FNXC:SoakR3PluginFreshness 2026-08-08-10:15:
   # Fingerprint match alone is insufficient — the plugin must also load (Host D
   # immutable release dirs EACCES'd sibling .bundled.reload copies after #170).
+  # FNXC:SoakR3PluginFreshness 2026-08-08-10:42:
+  # Also fail closed when reload-cache copies inherit 0444 and a restart cannot
+  # overwrite `.bundled.reload-N.js` — require loaded+started after restart.
   FRESH="$(curl -fsS -m 10 http://127.0.0.1:4140/api/plugins/bundled-freshness?id=fusion-plugin-cursor-runtime)"
   echo "$FRESH" | python3 -c '
 import json,sys

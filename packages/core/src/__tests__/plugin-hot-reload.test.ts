@@ -5,9 +5,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { writeFile, mkdir, rm } from "node:fs/promises";
+import { writeFile, mkdir, rm, copyFile } from "node:fs/promises";
 import { join } from "node:path";
-import { mkdtempSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { EventEmitter } from "node:events";
 import { PluginLoader } from "../plugins/plugin-loader.js";
@@ -512,5 +513,84 @@ describe("PluginLoader Hot-Reload", () => {
       expect(pluginLoader.isPluginLoaded("hot-reload-test")).toBe(false);
       expect(pluginLoader.getPluginTools()).toEqual([]);
     });
+  });
+});
+
+/*
+FNXC:SoakR3PluginFreshness 2026-08-08-10:42:
+SOAK-R3 follow-up — package-staged entries are 0444; copyFile preserved that mode
+on `.bundled.reload-N.js`. A process restart reused the same name and EACCES'd.
+Prove unique writable cache copies still load when a stale 0444 sibling exists.
+*/
+describe("PluginLoader writable reload cache vs read-only package entries", () => {
+  let fusionHome: string;
+  let packageDir: string;
+  let prevFusionHome: string | undefined;
+
+  beforeEach(() => {
+    fusionHome = makeTmpDir();
+    packageDir = makeTmpDir();
+    prevFusionHome = process.env.FUSION_HOME;
+    process.env.FUSION_HOME = fusionHome;
+  });
+
+  afterEach(async () => {
+    if (prevFusionHome === undefined) delete process.env.FUSION_HOME;
+    else process.env.FUSION_HOME = prevFusionHome;
+    await rm(fusionHome, { recursive: true, force: true });
+    await rm(packageDir, { recursive: true, force: true });
+  });
+
+  it("loads twice across loader instances when a prior 0444 reload cache file exists", async () => {
+    const manifest = makeManifest({ id: "readonly-package-plugin", name: "RO Package", version: "0.1.0" });
+    const entryPath = await writePluginModule(packageDir, "bundled.js", manifest, {
+      tools: [{ name: "ro_tool", description: "from package" }],
+    });
+    chmodSync(entryPath, 0o444);
+    chmodSync(packageDir, 0o555);
+
+    const cacheKey = createHash("sha256").update(entryPath).digest("hex").slice(0, 24);
+    const cacheDir = join(fusionHome, "plugin-reload-cache", cacheKey);
+    await mkdir(cacheDir, { recursive: true });
+    const staleCache = join(cacheDir, ".bundled.reload-1.js");
+    await copyFile(entryPath, staleCache);
+    chmodSync(staleCache, 0o444);
+
+    const installation: PluginInstallation = {
+      id: "readonly-package-plugin",
+      name: "RO Package",
+      version: "0.1.0",
+      description: "immutable package staged plugin",
+      path: entryPath,
+      enabled: true,
+      state: "installed",
+      settings: {},
+      dependencies: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    const loadOnce = async () => {
+      const store = createMockPluginStore(installation, listeners);
+      const loader = new PluginLoader({
+        pluginStore: store,
+        taskStore: createMockTaskStore(),
+      });
+      await loader.loadPlugin("readonly-package-plugin");
+      expect(loader.isPluginLoaded("readonly-package-plugin")).toBe(true);
+      await loader.stopAllPlugins();
+    };
+
+    await loadOnce();
+    await loadOnce();
+
+    const cached = readdirSync(cacheDir).filter((name) => name.startsWith(".bundled.reload-"));
+    expect(cached.length).toBeGreaterThanOrEqual(2);
+    for (const name of cached) {
+      if (name === ".bundled.reload-1.js") continue;
+      const mode = statSync(join(cacheDir, name)).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
   });
 });

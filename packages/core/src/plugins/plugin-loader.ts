@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
+import { copyFile, chmod, mkdir, readFile, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { EventEmitter } from "node:events";
 import type { TaskStore } from "../store.js";
@@ -651,14 +651,24 @@ export class PluginLoader extends EventEmitter<{
       which EACCES-fails on package-staged plugins and left Cursor in state=error
       after #170 retargeted the install path. Copy into a writable FUSION_HOME
       (or tmp) cache keyed by source path instead.
+
+      FNXC:SoakR3PluginFreshness 2026-08-08-10:42:
+      copyFile preserves the package entry's 0444 mode. A later process restart
+      resets the in-memory reload counter and tried to overwrite the same
+      read-only cache file → EACCES. Use a pid+counter+time unique name and
+      chmod the cache copy writable for the service user.
       */
       moduleImportVersion += 1;
       const ext = extname(path);
       const baseName = basename(path, ext);
       const cacheDir = this.resolveWritablePluginReloadCacheDir(path);
       await mkdir(cacheDir, { recursive: true });
-      const reloadedPath = resolve(cacheDir, `.${baseName}.reload-${moduleImportVersion}${ext}`);
+      const reloadedPath = resolve(
+        cacheDir,
+        `.${baseName}.reload-${process.pid}-${moduleImportVersion}-${Date.now()}${ext}`,
+      );
       await copyFile(path, reloadedPath);
+      await chmod(reloadedPath, 0o600);
       mod = await import(pathToFileURL(reloadedPath).href);
     } else {
       mod = await import(moduleUrl);
