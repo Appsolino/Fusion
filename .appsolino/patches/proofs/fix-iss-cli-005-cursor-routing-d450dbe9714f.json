@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "run-patch-reconcile-live.mjs",
+  "recordedUtc": "2026-08-08T09:53:19Z",
+  "upstreamBefore": "50ef752f492e386467d676cc8fa1100f2d17842b",
+  "upstreamAfter": "d450dbe9714fb480a21946998f32854cfffb4a59",
+  "patch": "FIX-ISS-CLI-005-CURSOR-ROUTING",
+  "cleanUpstreamRegression": {
+    "result": "UNKNOWN"
+  },
+  "semanticComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "evidence": [
+      "upstream-commit:4ff41a723cf7eb14056b94174c56b9dc17ce1c37",
+      "path-overlap:.changeset/credential-instance-self-heal.md,packages/engine/src/__tests__/agent-session-helpers.test.ts,packages/engine/src/__tests__/credential-instance-resolution.test.ts,packages/engine/src/agents/agent-session-helpers.ts,packages/engine/src/auth/auth-storage.ts",
+      "upstream-claims-behavior-fix",
+      "upstream-commit:cb57093d0342bd8f19116121218f68742468e2e3",
+      "path-overlap:packages/cli/src/__tests__/bin-pr-router.test.ts,packages/cli/src/plugin-sdk-core-runtime-shim.mjs,packages/core/package.json,packages/core/src/__test-utils__/pg-test-harness.ts,packages/core/src/__test-utils__/vitest-setup.ts",
+      "upstream-claims-behavior-fix"
+    ],
+    "relatedCommit": "cb57093d0342bd8f19116121218f68742468e2e3",
+    "equivalentBehavior": false
+  },
+  "classification": "APPSOLINO_ONLY",
+  "action": "NEEDS_EVIDENCE",
+  "status": "ACTIVE"
+}

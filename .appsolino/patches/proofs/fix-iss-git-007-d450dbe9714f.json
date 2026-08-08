@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "run-patch-reconcile-live.mjs",
+  "recordedUtc": "2026-08-08T09:53:19Z",
+  "upstreamBefore": "50ef752f492e386467d676cc8fa1100f2d17842b",
+  "upstreamAfter": "d450dbe9714fb480a21946998f32854cfffb4a59",
+  "patch": "FIX-ISS-GIT-007",
+  "cleanUpstreamRegression": {
+    "result": "UNKNOWN"
+  },
+  "semanticComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "evidence": [
+      "upstream-commit:7824150715aab77c6aa7146436631bec4b5520bc",
+      "path-overlap:.changeset/fn-8769-default-branch-group-auto-merge-gate.md,docs/architecture.md,docs/missions.md,packages/core/src/__tests__/mission-store.sync-auto-merge.test.ts,packages/core/src/__tests__/task-merge.test.ts",
+      "upstream-claims-behavior-fix",
+      "upstream-commit:cb57093d0342bd8f19116121218f68742468e2e3",
+      "path-overlap:packages/cli/src/__tests__/bin-pr-router.test.ts,packages/cli/src/plugin-sdk-core-runtime-shim.mjs,packages/core/package.json,packages/core/src/__test-utils__/pg-test-harness.ts,packages/core/src/__test-utils__/vitest-setup.ts",
+      "upstream-claims-behavior-fix"
+    ],
+    "relatedCommit": "cb57093d0342bd8f19116121218f68742468e2e3",
+    "equivalentBehavior": false
+  },
+  "classification": "APPSOLINO_ONLY",
+  "action": "NEEDS_EVIDENCE",
+  "status": "ACTIVE"
+}
