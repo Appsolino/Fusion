@@ -13,8 +13,17 @@ const severityAuditLog = createLogger("core-bundled-plugin-install");
  * the CLI package (FN-7637; builds on FN-7623's desktop pluginStore/pluginLoader
  * wiring). Everything below except `getCandidatePluginDirs`/`resolveBundledPluginDir`
  * is a direct, behavior-preserving port of `packages/cli/src/plugins/bundled-plugin-install.ts`.
+ *
+ * FNXC:SoakR3PluginFreshness 2026-08-08-09:42:
+ * SOAK-R3-DEFECT-001: Host D SEA packages stage plugins next to `fn`, but ensure
+ * previously only probed import.meta-relative paths and skipped when the bundle
+ * was "not found". The stale FUSION_HOME registration (same id + manifest 0.1.0)
+ * kept serving old code without settleFallbackDispatch. Contract A: bundled plugin
+ * content freshness is independent of manifest semver — compare SHA-256 of the
+ * loadable entry and always point the active install at the release-staged entry.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -64,6 +73,26 @@ export type EnsureBundledResult =
 /** Host-supplied resolver: given a plugin id, return candidate directories to probe for `manifest.json`. */
 export type BundledPluginDirResolver = (pluginId: string) => string[];
 
+export type BundledPluginFreshnessStatus =
+  | "pass"
+  | "missing-bundle"
+  | "missing-active"
+  | "mismatch"
+  | "unreadable";
+
+export type BundledPluginFreshnessReport = {
+  pluginId: string;
+  status: BundledPluginFreshnessStatus;
+  bundledDir: string | null;
+  bundledEntryPath: string | null;
+  activePath: string | null;
+  bundledFingerprint: string | null;
+  activeFingerprint: string | null;
+  match: boolean;
+  settleFallbackDispatchMarkerPresent?: boolean | null;
+  reason?: string;
+};
+
 async function loadManifest(pluginDir: string): Promise<PluginManifest> {
   const manifestPath = join(pluginDir, "manifest.json");
   const content = await readFile(manifestPath, "utf-8");
@@ -93,11 +122,149 @@ function isDirectoryPath(path: string): boolean {
 }
 
 /**
+ * Content identity for a loadable plugin entry. Manifest semver alone cannot prove
+ * bundled runtime freshness when implementation changes land under the same version.
+ */
+export async function fingerprintPluginEntry(entryPath: string): Promise<string | null> {
+  try {
+    const bytes = await readFile(entryPath);
+    return createHash("sha256").update(bytes).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function entryExposesSettleFallbackDispatch(source: string): boolean {
+  return source.includes("settleFallbackDispatch");
+}
+
+/**
+ * Read-only freshness verdict for a bundled plugin id against the running release's
+ * staged bundle and the currently registered active install path.
+ */
+export async function assessBundledPluginFreshness(
+  pluginStore: PluginStore,
+  pluginId: string,
+  getCandidatePluginDirs: BundledPluginDirResolver,
+): Promise<BundledPluginFreshnessReport> {
+  const bundledDir = resolveBundledPluginDir(pluginId, getCandidatePluginDirs);
+  if (!bundledDir) {
+    return {
+      pluginId,
+      status: "missing-bundle",
+      bundledDir: null,
+      bundledEntryPath: null,
+      activePath: null,
+      bundledFingerprint: null,
+      activeFingerprint: null,
+      match: false,
+      reason: "bundled plugin directory not found for running release",
+    };
+  }
+
+  const bundledEntryPath = resolvePluginEntryPath(bundledDir);
+  if (!bundledEntryPath) {
+    return {
+      pluginId,
+      status: "missing-bundle",
+      bundledDir,
+      bundledEntryPath: null,
+      activePath: null,
+      bundledFingerprint: null,
+      activeFingerprint: null,
+      match: false,
+      reason: "bundled plugin has no loadable entry",
+    };
+  }
+
+  const bundledFingerprint = await fingerprintPluginEntry(bundledEntryPath);
+  let settleMarker: boolean | null = null;
+  try {
+    settleMarker = entryExposesSettleFallbackDispatch(await readFile(bundledEntryPath, "utf-8"));
+  } catch {
+    settleMarker = null;
+  }
+
+  let existing: PluginInstallation | null = null;
+  try {
+    existing = await pluginStore.getPlugin(pluginId);
+  } catch {
+    existing = null;
+  }
+
+  if (!existing) {
+    return {
+      pluginId,
+      status: "missing-active",
+      bundledDir,
+      bundledEntryPath,
+      activePath: null,
+      bundledFingerprint,
+      activeFingerprint: null,
+      match: false,
+      settleFallbackDispatchMarkerPresent: settleMarker,
+      reason: "plugin not registered in plugin store",
+    };
+  }
+
+  const activePath = existing.path;
+  const activeFingerprint = await fingerprintPluginEntry(activePath);
+  if (!bundledFingerprint || !activeFingerprint) {
+    return {
+      pluginId,
+      status: "unreadable",
+      bundledDir,
+      bundledEntryPath,
+      activePath,
+      bundledFingerprint,
+      activeFingerprint,
+      match: false,
+      settleFallbackDispatchMarkerPresent: settleMarker,
+      reason: "unable to fingerprint bundled or active entry",
+    };
+  }
+
+  const match = bundledFingerprint === activeFingerprint && activePath === bundledEntryPath;
+  return {
+    pluginId,
+    status: match ? "pass" : "mismatch",
+    bundledDir,
+    bundledEntryPath,
+    activePath,
+    bundledFingerprint,
+    activeFingerprint,
+    match,
+    settleFallbackDispatchMarkerPresent: settleMarker,
+    reason: match
+      ? undefined
+      : activePath !== bundledEntryPath
+        ? "active path differs from release-staged bundled entry"
+        : "active entry fingerprint differs from bundled entry",
+  };
+}
+
+async function activateBundledPlugin(
+  pluginLoader: PluginLoader,
+  pluginId: string,
+  forceReload: boolean,
+): Promise<void> {
+  try {
+    if (forceReload && typeof pluginLoader.reloadPlugin === "function" && pluginLoader.isPluginLoaded?.(pluginId)) {
+      await pluginLoader.reloadPlugin(pluginId);
+      return;
+    }
+    await pluginLoader.loadPlugin(pluginId);
+  } catch (err) {
+    severityAuditLog.warn("[plugins] failed to load bundled plugin", pluginId, err);
+  }
+}
+
+/**
  * Ensure a bundled runtime plugin is registered (and, if enabled, loaded) in the
  * given `pluginStore`/`pluginLoader`. The only host-specific input is
  * `getCandidatePluginDirs`, which returns the ordered list of directories to probe
  * for a `manifest.json` for the given plugin id — the CLI supplies its
- * `<cli>/dist/plugins/<id>` search paths, desktop supplies its
+ * `<cli>/dist/plugins/<id>` search paths (plus SEA `execPath/plugins/<id>`), desktop supplies its
  * `node_modules/@fusion-plugin-examples/<short>` resolution. See `resolvePluginEntryPath`
  * (also in `@fusion/core`) for the loadable-entry-file selection this helper reuses
  * rather than re-duplicating.
@@ -128,35 +295,44 @@ export async function ensureBundledPluginInstalled(
     return "missing-bundle";
   }
 
+  const bundledFingerprint = await fingerprintPluginEntry(entryPath);
+
   if (existingPlugin) {
     const existingPathIsDirectory = isDirectoryPath(existingPlugin.path);
     const pathChanged = existingPathIsDirectory || existingPlugin.path !== entryPath;
     const versionChanged = existingPlugin.version !== manifest.version;
+    const activeFingerprint = await fingerprintPluginEntry(existingPlugin.path);
+    const contentChanged =
+      bundledFingerprint !== null
+      && activeFingerprint !== null
+      && bundledFingerprint !== activeFingerprint;
 
-    if (!pathChanged && !versionChanged) {
+    if (!pathChanged && !versionChanged && !contentChanged) {
       if (existingPlugin.enabled) {
-        try {
-          await pluginLoader.loadPlugin(existingPlugin.id);
-        } catch (err) {
-          severityAuditLog.warn("[plugins] failed to load bundled plugin", existingPlugin.id, err);
-        }
+        await activateBundledPlugin(pluginLoader, existingPlugin.id, false);
       }
       return "already-installed";
     }
 
+    /*
+    FNXC:SoakR3PluginFreshness 2026-08-08-09:42:
+    Always retarget the registered path to the release-staged entry when content
+    or path drifts — never leave a persistent FUSION_HOME copy authoritative for
+    a bundled plugin id after a Fusion deploy that shipped newer code.
+    */
     await pluginStore.updatePlugin(pluginId, {
-      ...(pathChanged ? { path: entryPath } : {}),
+      path: entryPath,
       ...(versionChanged ? { version: manifest.version } : {}),
     });
 
     if (existingPlugin.enabled) {
-      try {
-        await pluginLoader.loadPlugin(existingPlugin.id);
-      } catch (err) {
-        severityAuditLog.warn("[plugins] failed to load bundled plugin", existingPlugin.id, err);
-      }
+      await activateBundledPlugin(pluginLoader, existingPlugin.id, true);
     }
 
+    severityAuditLog.log(
+      `[plugins] Reconciled bundled plugin "${pluginId}" `
+      + `(pathChanged=${pathChanged} versionChanged=${versionChanged} contentChanged=${contentChanged})`,
+    );
     return "updated";
   }
 
@@ -166,11 +342,7 @@ export async function ensureBundledPluginInstalled(
   });
 
   if (plugin.enabled) {
-    try {
-      await pluginLoader.loadPlugin(plugin.id);
-    } catch (err) {
-      severityAuditLog.warn("[plugins] failed to load bundled plugin", plugin.id, err);
-    }
+    await activateBundledPlugin(pluginLoader, plugin.id, false);
   }
 
   return "installed";

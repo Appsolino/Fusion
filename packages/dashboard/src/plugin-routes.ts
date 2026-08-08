@@ -350,6 +350,56 @@ export function createPluginRouter(
     res.json(plugins);
   }));
 
+  /*
+  FNXC:SoakR3PluginFreshness 2026-08-08-09:42:
+  Deploy/soak readiness must prove the active bundled Cursor (and sibling) runtimes
+  match the release-staged entry — not merely that a plugin row exists. Mounted
+  before /:id so "bundled-freshness" is not captured as an id.
+  */
+  router.get("/bundled-freshness", catchHandler(async (req: Request, res: Response) => {
+    const { assessBundledPluginFreshness, isBundledPluginId } = await import("@fusion/core");
+    const { dirname, join } = await import("node:path");
+    const requested = typeof req.query.id === "string" && req.query.id.trim()
+      ? [req.query.id.trim()]
+      : ["fusion-plugin-cursor-runtime"];
+    const getCandidatePluginDirs = (pluginId: string): string[] => {
+      const execDir = dirname(process.execPath);
+      const packageRoot = process.env.FUSION_PACKAGE_ROOT?.trim();
+      return [
+        join(execDir, "plugins", pluginId),
+        ...(packageRoot ? [join(packageRoot, "plugins", pluginId)] : []),
+        join(process.cwd(), "plugins", pluginId),
+        join(process.cwd(), "dist", "plugins", pluginId),
+      ];
+    };
+    const reports = [];
+    for (const id of requested) {
+      if (!isBundledPluginId(id)) {
+        reports.push({
+          pluginId: id,
+          status: "missing-bundle" as const,
+          bundledDir: null,
+          bundledEntryPath: null,
+          activePath: null,
+          bundledFingerprint: null,
+          activeFingerprint: null,
+          match: false,
+          reason: "not a bundled plugin id",
+        });
+        continue;
+      }
+      reports.push(await assessBundledPluginFreshness(pluginStore, id, getCandidatePluginDirs));
+    }
+    const cursor = reports.find((r) => r.pluginId === "fusion-plugin-cursor-runtime") ?? null;
+    const ok = Boolean(cursor && cursor.status === "pass" && cursor.match);
+    res.json({
+      ok,
+      status: ok ? "pass" : "fail",
+      cursor,
+      reports,
+    });
+  }));
+
   /**
    * GET /plugins/registry
    * List curated registry plugin metadata with installed-state annotations.

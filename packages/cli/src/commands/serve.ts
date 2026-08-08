@@ -644,6 +644,8 @@ export async function runServe(
       const installStatus = await ensureBundledCursorRuntimePluginInstalled(pluginStore, pluginLoader);
       if (installStatus === "installed") {
       console.log("[plugins] Installed bundled Cursor runtime plugin");
+      } else if (installStatus === "updated") {
+      console.log("[plugins] Updated bundled Cursor runtime plugin to release-staged entry");
       } else if (installStatus === "missing-bundle") {
       console.warn("[plugins] Bundled Cursor runtime plugin was not found in this build");
       }

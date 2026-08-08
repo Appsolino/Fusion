@@ -9,24 +9,24 @@ Governance **#153 MERGED** (provenance, candidate lease, release-freshness, auto
 
 **Authority:** Only authoritative live status. Other docs must link here, not copy these fields.
 
-**Last updated UTC:** 2026-08-08T05:58:00Z
+**Last updated UTC:** 2026-08-08T09:45:00Z
 
 | Field | Value |
 | --- | --- |
 | Active programme | Issue [#109](https://github.com/Appsolino/Fusion/issues/109) — Host D trust-hardening + **full autonomy** (`feat/full-autonomy`) |
 | Prior programmes | [#78](https://github.com/Appsolino/Fusion/issues/78) CLOSED · [#105](https://github.com/Appsolino/Fusion/issues/105) CLOSED |
-| Appsolino main tip | `ff3faf3840390253bafe2f4d9d9de9bf6e964a43` — SOAK-R2-DEFECT-001 remediation [#164](https://github.com/Appsolino/Fusion/pull/164) |
+| Appsolino main tip | `50ef752f492e386467d676cc8fa1100f2d17842b` — docs R3 checkpoint [#167](https://github.com/Appsolino/Fusion/pull/167); remediation for SOAK-R3-DEFECT-001 in flight |
 | Source version | `0.75.1` (package.json) |
 | Integrated upstream | `1f9b0e644abb27e19803637803d74e37d7c45ce2` — **FRESH / 0 behind** |
 | Live Runfusion HEAD | `1f9b0e644abb27e19803637803d74e37d7c45ce2` |
 | Active upstream candidate | none (post-#144) |
 | Latest published GitHub Release | `v0.73.0` (2026-07-25) — **RELEASE_STALE** vs source `0.75.1` |
-| Active Host D release | `auto3-0.75.1-ff3faf384039` (`MAIN_SHA=ff3faf384039…`) |
+| Active Host D release | `auto3-0.75.1-ff3faf384039` until SOAK-R3 plugin-freshness AUTO-3 lands |
 | Schema ceiling | check live after absorb (0045/0046 may be on Host D after AUTO-3) |
-| Full autonomy | Soak #1 **FAILED** (SOAK-DEFECT-001). Soak R2 **FAILED** (SOAK-R2-DEFECT-001). Platform fix **deployed**; Soak R3 prepared + paused — see `KNOWN-ISSUES.md` |
-| Staging health | ok; project `enginePaused=true`; effective `schedulerPausedForProject=true`; Cursor runtime project-enabled |
+| Full autonomy | Soak #1/#2/#3 **FAILED**. R3 terminal: SOAK-R3-DEFECT-001 (stale FUSION_HOME Cursor plugin vs release bundle) — see `KNOWN-ISSUES.md` |
+| Staging health | ok; project `enginePaused=true`; Cursor plugin enabled but **stale vs package** until remediation deploy |
 | Host P state | **accessed=NO — prohibited** |
-| Operating mode | **HOST-D TRUST HARDENING** · Soak R3 checkpoint ready · **remain paused** until owner authorizes unpause |
+| Operating mode | **HOST-D TRUST HARDENING** · soak paused · SOAK-R3-DEFECT-001 remediation |
 
 ## Freshness planes
 
@@ -51,7 +51,8 @@ Governance **#153 MERGED** (provenance, candidate lease, release-freshness, auto
 | Part B / Host D unpause | **not authorised** |
 | Soak #1 | **FAILED** — SOAK-DEFECT-001; evidence retained under `host-d-soak-evidence/soak-1/` |
 | Soak R2 | **FAILED** — SOAK-R2-DEFECT-001; evidence retained under `host-d-soak-evidence/soak-r2/`; HOST2-* archived |
-| Soak R3 | Mission `Host D Lights-Out Soak R3` + HOST3-001…010 created; checkpoint evidence under `host-d-soak-evidence/soak-r3-prep/`; **enginePaused remains true** |
+| Soak R3 | **FAILED** — SOAK-R3-DEFECT-001 (stale FUSION_HOME Cursor plugin); evidence under `host-d-soak-evidence/soak-r3/`; remain paused |
+| Soak R4 | Prepared after plugin-freshness remediation deploy — remain paused until owner OK |
 
 ## Steward enablement
 
@@ -66,9 +67,9 @@ Governance **#153 MERGED** (provenance, candidate lease, release-freshness, auto
 ## Owner priority
 
 ```text
-NOW:     READY FOR SOAK R3: YES — await owner authorization to unpause project enginePaused
-NEXT:    Owner-only: set project enginePaused=false once to start HOST3 soak (do not touch Host P)
+NOW:     Land + deploy SOAK-R3-DEFECT-001 bundled plugin freshness remediation; prepare Soak R4 checkpoint (remain paused)
+NEXT:    Owner authorize Soak R4 unpause only after READY FOR SOAK R4: YES
 HOLD:    Host P / production — PROHIBITED; do not unpause solely for maintenance
-NOTE:    Preserve Soak #1 and Soak R2 evidence; do not hide failed history
+NOTE:    Preserve Soak #1/#2/#3 evidence; do not hide failed history
 NOTE:    Do not auto-publish a GitHub Release on every upstream commit — version-change policy
 ```

@@ -140,7 +140,7 @@ import {
 } from "./llama-cpp-extension.js";
 import { getCachedUpdateStatus, isUpdateCheckEnabled } from "../update-cache.js";
 import { resolveSelfExtension } from "./self-extension.js";
-import { ensureBundledDependencyGraphPluginInstalled, ensureBundledCursorRuntimePluginInstalled, ensureBundledGrokRuntimePluginInstalled, ensureBundledPluginInstalled, isBundledPluginId } from "../plugins/bundled-plugin-install.js";
+import { ensureBundledDependencyGraphPluginInstalled, ensureBundledCursorRuntimePluginInstalled, ensureBundledGrokRuntimePluginInstalled, ensureBundledPluginInstalled, assessBundledPluginFreshness, isBundledPluginId } from "../plugins/bundled-plugin-install.js";
 import { registerCustomProviders, reregisterCustomProviders } from "./custom-provider-registry.js";
 import { handleOpencodeGoApiKeySaved, syncStartupModels } from "./startup-model-sync.js";
 import { DashboardTUI, DashboardLogSink, isTTYAvailable, type SystemInfo, type GitStatus, type GitCommit, type GitCommitDetail, type GitBranch, type GitWorktree, type FileEntry, type FileReadResult, type TaskStep as TUITaskStep, type TaskLogEntry as TUITaskLogEntry, type TaskDetailData, type TaskEvent } from "./dashboard-tui/index.js";
@@ -1562,9 +1562,31 @@ export async function runDashboard(port: number, opts: { paused?: boolean; dev?:
     try {
       const installStatus = await ensureBundledCursorRuntimePluginInstalled(pluginStore, pluginLoader);
       if (installStatus === "installed") {
-      console.log("[plugins] Installed bundled Cursor runtime plugin");
+        console.log("[plugins] Installed bundled Cursor runtime plugin");
+      } else if (installStatus === "updated") {
+        console.log("[plugins] Updated bundled Cursor runtime plugin to release-staged entry");
       } else if (installStatus === "missing-bundle") {
-      console.warn("[plugins] Bundled Cursor runtime plugin was not found in this build");
+        console.warn("[plugins] Bundled Cursor runtime plugin was not found in this build");
+      }
+      /*
+      FNXC:SoakR3PluginFreshness 2026-08-08-09:42:
+      Fail closed for soak/deploy readiness when the active Cursor entry still
+      does not match the release-staged bundle after ensure (stale FUSION_HOME
+      override class — SOAK-R3-DEFECT-001).
+      */
+      const cursorFreshness = await assessBundledPluginFreshness(pluginStore, "fusion-plugin-cursor-runtime");
+      if (cursorFreshness.status !== "pass") {
+        console.error(
+          `[plugins] Cursor bundled runtime freshness FAIL status=${cursorFreshness.status} `
+          + `bundled=${cursorFreshness.bundledFingerprint?.slice(0, 12) ?? "none"} `
+          + `active=${cursorFreshness.activeFingerprint?.slice(0, 12) ?? "none"} `
+          + `activePath=${cursorFreshness.activePath ?? "none"} `
+          + `reason=${cursorFreshness.reason ?? "unknown"}`,
+        );
+      } else {
+        console.log(
+          `[plugins] Cursor bundled runtime freshness PASS fingerprint=${cursorFreshness.bundledFingerprint?.slice(0, 12)}`,
+        );
       }
     } catch (err) {
     console.warn(`[plugins] Failed to auto-install bundled Cursor runtime plugin: ${err instanceof Error ? err.message : err}`);

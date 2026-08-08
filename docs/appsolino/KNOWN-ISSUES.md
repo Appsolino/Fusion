@@ -9,6 +9,35 @@ Live blockers / next action: `CURRENT-STATE.md` (links high-priority open items 
 
 ---
 
+## SOAK-R3-DEFECT-001 — Stale FUSION_HOME Cursor plugin overrides release bundle
+
+Status: **IN PROGRESS** (remediation PR)
+Severity: Critical
+Component: Bundled plugin install / SEA package layout / Host D AUTO-3
+First observed: 2026-08-08 (Host D Lights-Out Soak R3)
+Evidence: `/srv/appsolino-fusion/staging/disposables/host-d-soak-evidence/soak-r3/`
+
+### Failure fingerprints
+
+- `Planner runtime cursor did not provide a fallback-dispatch settlement boundary` on HOST3 after #164 was deployed
+- Journal: `Bundled Cursor runtime plugin was not found in this build`
+- Package `…/current/plugins/fusion-plugin-cursor-runtime/bundled.js` **has** `settleFallbackDispatch`; live `FUSION_HOME/plugins/…/bundled.js` does **not** (different SHA-256; same manifest `0.1.0`)
+
+### Root cause
+
+1. AUTO-3 SEA layout stages plugins beside `fn` (`<execDir>/plugins/<id>`).
+2. `getCandidatePluginDirs` only probed `import.meta.url`-relative paths, so ensure returned `missing-bundle`.
+3. Existing `plugin_installs` row kept pointing at the July-31 FUSION_HOME copy; same id + same manifest version → no update.
+4. Effective runtime ≠ deployed Fusion release.
+
+### Permanent correction (this remediation)
+
+- Probe `dirname(process.execPath)/plugins/<id>` for SEA packages.
+- Reconcile bundled plugins by **entry SHA-256** (Contract A: content freshness independent of manifest semver); always retarget active path to the release-staged entry and reload.
+- `GET /api/plugins/bundled-freshness` + AUTO-3 post-deploy assert Cursor freshness PASS + `settleFallbackDispatch` marker.
+
+---
+
 ## SOAK-R2-DEFECT-001 — Planning settlement livelock + lifecycle lock + worktree leak
 
 Status: **FIXED** (merged [#164](https://github.com/Appsolino/Fusion/pull/164); Host D `auto3-0.75.1-ff3faf384039`)
