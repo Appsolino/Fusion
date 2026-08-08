@@ -2014,14 +2014,18 @@ export function registerSettingsMemoryRoutes(ctx: ApiRoutesContext, deps: Settin
       pause state for the selected project so operators can tell whether that project
       will dispatch — without redesigning pause precedence (SOAK R2 Phase E).
       */
-      const globalSettings = (scopes as { global?: Record<string, unknown> }).global ?? {};
-      const projectSettings = (scopes as { project?: Record<string, unknown> }).project ?? {};
-      const effectiveEnginePaused = typeof projectSettings.enginePaused === "boolean"
-        ? projectSettings.enginePaused
-        : Boolean(globalSettings.enginePaused);
-      const effectiveGlobalPause = typeof projectSettings.globalPause === "boolean"
-        ? projectSettings.globalPause
-        : Boolean(globalSettings.globalPause);
+      const globalPauseFields = scopes.global as typeof scopes.global & {
+        enginePaused?: boolean;
+        globalPause?: boolean;
+      };
+      const projectEnginePaused = scopes.project.enginePaused;
+      const projectGlobalPause = scopes.project.globalPause;
+      const effectiveEnginePaused = typeof projectEnginePaused === "boolean"
+        ? projectEnginePaused
+        : Boolean(globalPauseFields.enginePaused);
+      const effectiveGlobalPause = typeof projectGlobalPause === "boolean"
+        ? projectGlobalPause
+        : Boolean(globalPauseFields.globalPause);
       res.json({
         ...scopes,
         workflowSettings: await scopedStore.listWorkflowSettingValuesForProject(),
@@ -2029,8 +2033,8 @@ export function registerSettingsMemoryRoutes(ctx: ApiRoutesContext, deps: Settin
           enginePaused: effectiveEnginePaused,
           globalPause: effectiveGlobalPause,
           schedulerPausedForProject: effectiveEnginePaused || effectiveGlobalPause,
-          enginePausedSource: typeof projectSettings.enginePaused === "boolean" ? "project" : "global",
-          globalPauseSource: typeof projectSettings.globalPause === "boolean" ? "project" : "global",
+          enginePausedSource: typeof projectEnginePaused === "boolean" ? "project" : "global",
+          globalPauseSource: typeof projectGlobalPause === "boolean" ? "project" : "global",
         },
       });
     } catch (err: unknown) {
