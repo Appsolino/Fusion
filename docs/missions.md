@@ -128,7 +128,7 @@ The Mission Manager create/edit form exposes this as **Branch strategy** plus a 
 
 ### Mission auto-merge override
 
-The **Merge behavior** control can inherit the project default, explicitly enable auto-merge, or select **Single pull request**. In-context help explains that auto-merge lands each feature individually while a single pull request retains all features on a shared branch for joint review. The latter persists `autoMerge: false` on the mission and stamps newly triaged feature tasks with the same false override, while preserving the mission's shared branch group. Returning the control to inherited clears the mission override. Once a shared branch has members, Mission detail displays its branch name, member count, and PR state.
+The **Merge behavior** control appears in each Mission Manager create and edit form. Use the secondary **Create** link beside **Plan New Mission** when a manual create is needed; the primary planning CTA continues to start the AI interview. Its in-context help explains that **Inherited** follows the project setting, **Auto-merge** lands each feature as it passes, and **Single pull request** retains all features on a shared branch for joint review. The latter persists `autoMerge: false` on the mission and stamps newly triaged feature tasks with the same false override, while preserving the mission's shared branch group. Returning the control to inherited clears the mission override. Mission detail shows the branch name, canonical member count, and PR state only after it resolves a mission-owned group through a linked task's branch context; unavailable, stale, or foreign groups remain hidden.
 
 ### Shared branch-group invariant across entry points
 
@@ -329,7 +329,7 @@ Milestones now carry three complementary free-text fields:
 Slices represent staged execution windows.
 
 - Pending slices remain inactive
-- Active slices are currently allowed to progress
+- Automatic progression admits at most one active slice per mission
 - Completion rolls up through feature → slice → milestone → mission
 
 Manual activation is available through `fn mission activate-slice <slice-id>`.
@@ -351,7 +351,7 @@ Typical flow:
 
 1. Mission is watched (missions updated with `autopilotEnabled: true` or explicitly started are watched)
 2. Task completion updates feature status
-3. If a slice is complete, autopilot activates next pending slice
+3. If no slice is active, autopilot activates only the earliest pending slice after every earlier milestone and slice is complete
 4. When milestones are all complete, mission transitions to complete
 
 If validation cannot run (unexpected loop state, duplicate trigger, blocked validation, or validator error), Fusion logs a mission `warning`/`error` event with structured metadata so the stuck state is visible in mission events.
@@ -372,8 +372,10 @@ Mission `status` and `autopilotEnabled` transitions are atomically written with 
 
 **Slice progression (on slice completion):**
 
-- `autopilotEnabled=true` → next pending slice is automatically activated
-- `autopilotEnabled=false`, `autoAdvance=true` → next pending slice is activated (legacy compat)
+- `autopilotEnabled=true` → serial admission activates only the earliest eligible pending slice. Any active slice blocks admission; earlier milestones and slices must be complete before later milestones start.
+- Explicit milestone dependencies are additional restrictions and never override creation order.
+- Duplicate completion callbacks and stale/startup recovery calls are idempotent no-ops when a slice is already active or no eligible slice exists.
+- `autopilotEnabled=false`, `autoAdvance=true` → the legacy compatibility entry uses the same serial admission rule
 - `autopilotEnabled=false`, `autoAdvance=false` → manual activation required
 
 **Dashboard UI:** The Mission Manager groups mission run settings together: explicit **Start mission / Stop mission / Resume mission** actions control mission run-state, while the **Autopilot** toggle controls automatic slice advancement and feature planning. The autopilot badge uses human-readable states (`Off`, `Watching`, `Activating slice`, `Completing`). When enabling autopilot on an already-active mission, the system automatically checks whether recovery is needed (no active slice or completed active slice) and progresses accordingly.

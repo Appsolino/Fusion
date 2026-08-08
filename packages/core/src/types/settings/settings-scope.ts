@@ -1026,6 +1026,12 @@ export type ReportActionType = "bug" | "feedback" | "idea" | "help";
 export type ReportTarget = "issue" | "discussion";
 
 export interface ProjectSettings {
+  /**
+   * FNXC:TaskRecommendations 2026-08-08-05:02:
+   * A project controls completion-suggestion volume centrally. Zero is an
+   * explicit opt-out; executor validation enforces the 0..20 integer boundary.
+   */
+  maxRecommendationsPerTask?: number;
   /** Hard stop: when true, all automated agent activity is **immediately**
    *  terminated — active triage, execution, and merge agent sessions are
    *  killed, and the scheduler stops dispatching new work. Acts as a

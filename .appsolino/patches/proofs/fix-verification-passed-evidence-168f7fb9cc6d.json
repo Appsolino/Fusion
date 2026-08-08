@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "run-patch-reconcile-live.mjs",
+  "recordedUtc": "2026-08-08T17:45:19Z",
+  "upstreamBefore": "81ff6b4b87a2992668a7ef5df2212973d456da35",
+  "upstreamAfter": "168f7fb9cc6dac4c4c40ccfcd10617b107696671",
+  "patch": "FIX-VERIFICATION-PASSED-EVIDENCE",
+  "cleanUpstreamRegression": {
+    "result": "FAIL"
+  },
+  "semanticComparison": {
+    "classification": "UPSTREAM_RELATED",
+    "evidence": [
+      "upstream-commit:eaadd153b1f3e90cf594b6e892d0851296a66b4e",
+      "path-overlap:.changeset/fn-8764-workflow-role-agents.md,CONCEPTS.md,docs/agents.md,docs/architecture.md,docs/cli-reference.md",
+      "defect still fails on clean upstream; overlapping paths"
+    ],
+    "relatedCommit": "eaadd153b1f3e90cf594b6e892d0851296a66b4e",
+    "equivalentBehavior": false
+  },
+  "classification": "UPSTREAM_RELATED",
+  "action": "RETAIN_OR_ADAPT",
+  "status": "ACTIVE"
+}

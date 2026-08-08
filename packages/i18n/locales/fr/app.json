@@ -3646,6 +3646,7 @@
     "assertionUpdateFailed": "Échec de la mise à jour de l'assertion",
     "attemptRetries_one": "",
     "attemptRetries_other": "",
+    "autoMergeOverrideDescription": "Hérité suit le paramètre du projet. La fusion automatique intègre chaque fonctionnalité lorsqu’elle passe. Une seule demande de tirage conserve toutes les fonctionnalités sur une branche partagée pour une révision et une fusion conjointes.",
     "autopilotActivatingSlice": "Activation du découpage",
     "autopilotCompleting": "En finalisation",
     "autopilotDescription": "Lorsqu'il est activé, Fusion active automatiquement le découpage suivant et planifie ses fonctionnalités à mesure que le travail avance.",
@@ -6000,7 +6001,10 @@
       "taskCreateWorkflow": "",
       "taskCreateWorkflowHelp": "",
       "refinementTaskWorkflow": "",
-      "refinementTaskWorkflowHelp": ""
+      "refinementTaskWorkflowHelp": "",
+      "ephemeralAgentsCompatibilityHint": "",
+      "maxRecommendationsPerTask": "",
+      "maxRecommendationsPerTaskHelp": ""
     },
     "globalGeneral": {
       "andShowsUpdateNoticesInTheCLIAnd": "",
@@ -8020,7 +8024,8 @@
       "worktreeTerminal": "Terminal",
       "workflow": "Workflow",
       "summary": "Summary",
-      "cost": ""
+      "cost": "",
+      "recommendations": ""
     },
     "terminal": {
       "loading": ""
@@ -8122,6 +8127,14 @@
       "totalCostLabel": "",
       "totalTokens": "",
       "unknownModel": ""
+    },
+    "recommendations": {
+      "title": "",
+      "created": "",
+      "creating": "",
+      "retry": "",
+      "create": "",
+      "error": ""
     }
   },
   "taskDocuments": {
