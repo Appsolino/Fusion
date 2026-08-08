@@ -9,6 +9,7 @@ import { FloatingWindow } from "./FloatingWindow";
 import { useMobileScrollLock } from "../hooks/useMobileScrollLock";
 import { useModalDismissPreference, useOverlayDismiss } from "../hooks/useOverlayDismiss";
 import { useColumnLabel } from "../i18n/labels";
+import type { DetailTaskTab } from "../hooks/useModalManager";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -379,7 +380,7 @@ export interface TaskDetailModalProps {
   /* Per-task lifecycle traits for the blocker fan-out; see the useMemo that consumes it. */
   columnFlagsByTaskId?: ReadonlyMap<string, BlockerFanoutColumnFlags>;
   onClose: () => void;
-  onOpenDetail: (task: Task | TaskDetail) => void; // For clicking dependencies
+  onOpenDetail: (task: Task | TaskDetail, initialTab?: DetailTaskTab) => void; // For clicking linked task details
   onMoveTask: (id: string, column: Column, optionsOrPosition?: { preserveProgress?: boolean } | number) => Promise<Task>;
   /** Opens a New Task draft from a reverted task description. */
   onReviseTask?: (task: Task) => void;
@@ -3820,7 +3821,21 @@ export function TaskDetailContent({
     } catch {
       addToast(t("taskDetail.deps.loadFailed", "Failed to load dependency {{id}}", { id: depId }), "error");
     }
-  }, [onOpenDetail, addToast]);
+  }, [onOpenDetail, addToast, projectId, t]);
+
+  /*
+  FNXC:SharedBranchPromotionAdvisories 2026-08-08-02:16:
+  FN-8823 promotion advisories must open the landed member on Review, not its
+  done-task default tab; archived members require a fresh detail read.
+  */
+  const handleOpenMemberReview = useCallback(async (memberTaskId: string) => {
+    try {
+      const detail = await fetchTaskDetail(memberTaskId, projectId);
+      onOpenDetail(detail, "review");
+    } catch {
+      addToast(t("branchGroup.reviewLoadFailed", "Failed to open review for {{id}}", { id: memberTaskId }), "error");
+    }
+  }, [addToast, onOpenDetail, projectId, t]);
 
   // Spec save handlers (must be declared before functions that use them)
   const handleSaveSpec = useCallback(async (newContent: string) => {
@@ -5482,6 +5497,7 @@ export function TaskDetailContent({
                   taskId={task.id}
                   projectId={projectId}
                   onBranchGroupReset={handleBranchGroupReset}
+                  onOpenReviewTask={handleOpenMemberReview}
                 />
               )}
               {/* FNXC:Workspace 2026-06-21-00:00: workspace tasks have no singular

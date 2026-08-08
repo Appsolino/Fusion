@@ -34,7 +34,7 @@ TaskDetailModal.inline-editing-and-integrations.test.tsx.
 */
 
 vi.mock("../BranchGroupCard", () => ({
-  BranchGroupCard: ({ groupId, taskId, onBranchGroupReset }: { groupId: string; taskId?: string; onBranchGroupReset?: () => void }) => {
+  BranchGroupCard: ({ groupId, taskId, onBranchGroupReset, onOpenReviewTask }: { groupId: string; taskId?: string; onBranchGroupReset?: () => void; onOpenReviewTask?: (taskId: string) => void }) => {
     const [expanded, setExpanded] = React.useState(false);
     return (
       <div>
@@ -42,6 +42,7 @@ vi.mock("../BranchGroupCard", () => ({
         {taskId && <span>Mock Branch Group Task {taskId}</span>}
         <button type="button" onClick={() => setExpanded(true)}>Mock expand branch group</button>
         {onBranchGroupReset && <button type="button" onClick={onBranchGroupReset}>Mock reset stale branch group</button>}
+        {onOpenReviewTask && <button type="button" onClick={() => onOpenReviewTask("FN-landed")}>Mock open member review</button>}
         {expanded && <span>Mock branch group expanded</span>}
       </div>
     );
@@ -1169,6 +1170,27 @@ describe("TaskDetailModal branch group surfacing", () => {
 
     expect(screen.queryByText("Mock branch group expanded")).not.toBeInTheDocument();
     expect(screen.getByText("Mock Branch Group BG-1")).toBeInTheDocument();
+  });
+
+  it("opens an advisory member directly on its Review tab", async () => {
+    const { fetchTaskDetail } = await import("../../api");
+    const onOpenDetail = vi.fn();
+    vi.mocked(fetchTaskDetail).mockResolvedValueOnce(makeTask({ id: "FN-landed", column: "done" as any }));
+    render(
+      <TaskDetailModal
+        initialTab="definition"
+        task={makeTask({ id: "FN-6041", branchContext })}
+        onClose={noop}
+        onMoveTask={noopMove}
+        onDeleteTask={noopDelete}
+        onMergeTask={noopMerge}
+        onOpenDetail={onOpenDetail}
+        addToast={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Mock open member review" }));
+    await waitFor(() => expect(onOpenDetail).toHaveBeenCalledWith(expect.objectContaining({ id: "FN-landed" }), "review"));
   });
 });
 

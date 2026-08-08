@@ -39,7 +39,7 @@ import { writeBoardWorkflowsCache } from "../utils/boardWorkflowsCache";
 import { useBoardWorkflows } from "../hooks/useBoardWorkflows";
 import { useUnmappedWorkflowRefetch } from "../hooks/useUnmappedWorkflowRefetch";
 import { TaskContextMenu, buildTaskActionMenuModel, getTaskPrAutomationLabel, type TaskContextMenuColumnMetadata, type TaskMenuActionDescriptor } from "./TaskContextMenu";
-import type { DetailTaskOpenOptions } from "../hooks/useModalManager";
+import type { DetailTaskOpenOptions, DetailTaskTab } from "../hooks/useModalManager";
 import { isTaskReverted, partitionRevertedTasks } from "../utils/taskRevert";
 
 const COLUMN_COLOR_MAP: Record<Column, string> = {
@@ -511,6 +511,7 @@ export function ListView({
     const persistedSelection = readSelectedTaskId(projectId);
     return persistedSelection ? tasks.find((task) => task.id === persistedSelection) ?? null : null;
   });
+  const [selectedTaskInitialTab, setSelectedTaskInitialTab] = useState<DetailTaskTab | undefined>();
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth(projectId));
   const splitLayoutRef = useRef<HTMLDivElement>(null);
   const [splitLayoutContainer, setSplitLayoutContainer] = useState<HTMLDivElement | null>(null);
@@ -2388,6 +2389,7 @@ export function ListView({
 
       setSelectedTaskId(task.id);
       setSelectedTaskSnapshot(task);
+      setSelectedTaskInitialTab(undefined);
     },
     [closeContextMenu, onOpenDetail, onPopOut, openMobileTasksInPopup, useSinglePaneList]
   );
@@ -2439,11 +2441,18 @@ export function ListView({
     }
     setSelectedTaskId(null);
     setSelectedTaskSnapshot(null);
+    setSelectedTaskInitialTab(undefined);
   }, []);
 
-  const handleEmbeddedOpenDetail = useCallback((nextTask: Task | TaskDetail) => {
+  /*
+  FNXC:SharedBranchPromotionAdvisories 2026-08-08-02:16:
+  FN-8823 Review links can originate inside List's embedded task detail. Retain
+  their requested tab while swapping to the landed member instead of its default.
+  */
+  const handleEmbeddedOpenDetail = useCallback((nextTask: Task | TaskDetail, initialTab?: DetailTaskTab) => {
     setSelectedTaskId(nextTask.id);
     setSelectedTaskSnapshot(nextTask);
+    setSelectedTaskInitialTab(initialTab);
 
     if ("prompt" in nextTask) {
       detailFetchTargetRef.current = null;
@@ -3653,6 +3662,7 @@ export function ListView({
                       tasks={tasks}
                       globalPaused={globalPaused}
                       embedded
+                      initialTab={selectedTaskInitialTab}
                       onRequestClose={closeEmbeddedTaskDetail}
                       onOpenDetail={handleEmbeddedOpenDetail}
                       onMoveTask={onMoveTask}
