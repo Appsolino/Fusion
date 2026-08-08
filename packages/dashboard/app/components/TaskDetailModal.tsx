@@ -4098,12 +4098,19 @@ export function TaskDetailContent({
   without mounting an empty error-message shell. The default banner fetches agent logs
   independently of the Raw Logs segment because FN-7995 persists bounded `tool_error`
   detail there; the Raw-Logs-gated display list is not a diagnostic data source.
+
+  FNXC:TaskFailedBanner 2026-08-07-23:36:
+  Only the latest tool completion can supply failure detail. A later `tool_result` or a blank latest `tool_error` prevents an older recovered error from being attributed to the current failure.
   */
   const shouldShowTaskFailureAlert = Boolean(task.status === "failed" && !hasPendingRecovery && !isPlannerChatExpanded);
   const taskFailureReason = task.error?.trim() || t("taskDetail.error.genericFailureReason", "The task failed before it could complete.");
   const taskFailureToolDetail = useMemo(() => {
-    const lastToolError = [...agentLogEntries].reverse().find((entry) => entry.type === "tool_error" && entry.detail?.trim());
-    return lastToolError?.detail?.trim().slice(0, 1024);
+    const lastToolCompletion = agentLogEntries.findLast(
+      (entry) => entry.type === "tool_result" || entry.type === "tool_error",
+    );
+    return lastToolCompletion?.type === "tool_error"
+      ? lastToolCompletion.detail?.trim().slice(0, 1024) || undefined
+      : undefined;
   }, [agentLogEntries]);
   const taskFailureHint = /workflow graph terminated|step-execute|no files? (were )?modified/i.test(`${task.error ?? ""}\n${taskFailureToolDetail ?? ""}`)
     ? t("taskDetail.error.retryHint", "Consider retrying with a different model or node.")
@@ -4355,14 +4362,46 @@ export function TaskDetailContent({
     }
   }, [oversightActive, activitySegment]);
 
+  /*
+  FNXC:TaskActivityFeedFreshness 2026-08-07-08:30:
+  Task list and SSE snapshots intentionally strip task.log. If a shared detail host captured an
+  empty full-detail snapshot before activity was written, selecting Feed must retry that complete
+  read instead of preserving "(no activity)" forever. Populated feeds remain snapshot-stable and
+  incur no extra request; Live and Raw keep their independent streaming paths.
+  */
+  const activityFeedIsEmpty = !workingTask.log?.length;
+  const refreshEmptyActivityFeed = useCallback(() => {
+    if (!activityFeedIsEmpty) return;
+
+    const requestGeneration = ++detailRequestGenerationRef.current;
+    requestTaskDetail(task.id, projectId)
+      .then((detail) => {
+        if (!mountedRef.current
+          || detailRequestGenerationRef.current !== requestGeneration
+          || activeTaskIdRef.current !== detail.id) return;
+
+        const promptResponse = latestPromptResponseRef.current;
+        const promptResponseMatchesDetail = promptResponse?.key === `${projectId ?? ""}:${detail.id}`;
+        const detailWithLatestPrompt = promptResponseMatchesDetail
+          ? { ...detail, prompt: promptResponse.prompt } as TaskDetail
+          : detail;
+        setFullDetail((previous) => previous?.id === detail.id
+          ? mergeTaskSnapshot(previous, detailWithLatestPrompt, { fullSnapshot: true })
+          : detailWithLatestPrompt);
+        setDetailLoading(false);
+      })
+      .catch(() => undefined);
+  }, [activityFeedIsEmpty, task.id, projectId, requestTaskDetail]);
+
   const selectActivityView = useCallback((value: ActivitySegment) => {
     activityViewMenuViewportGuardUntilRef.current = 0;
     setActiveTab("chat");
     setActivitySegment(value);
+    if (value === "feed") refreshEmptyActivityFeed();
     setShowActivityViewMenu(false);
     setActivityViewMenuPosition(null);
     requestAnimationFrame(() => activityViewButtonRef.current?.focus());
-  }, []);
+  }, [refreshEmptyActivityFeed]);
 
   const handleActivityTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
     const shouldOpenMenu = event.key === "ArrowDown" || (event.altKey && event.key === "ArrowDown");
