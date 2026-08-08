@@ -142,6 +142,48 @@ pgDescribe("single active task continuation slot", () => {
     expect(active[0]?.state).toBe("held");
   });
 
+  /*
+  A SECOND ATTEMPT AT THE SAME NODE. The fence run id is derived
+  (`<taskId>:<workflowId>:<nodeInstanceId>`), not per-attempt, so every attempt at a node
+  instance targets the same row — and a fence is terminalized at the end of every run. Without
+  the terminal-key drop, `upsertWorkflowWorkItem`'s (correct) refusal to requeue a terminal row
+  turned every retry, rework cycle, and operator re-dispatch into a parked card.
+  */
+  it.each(["succeeded", "failed", "cancelled"] as const)(
+    "replace re-attempts a node whose previous attempt ended %s",
+    async (priorState) => {
+      const store = h.store();
+      const task = await h.createTestTask();
+      const runId = `${task.id}:run:steps#0:step-execute`;
+      const first = await store.upsertWorkflowWorkItem(fence(task.id, runId, "step-execute"));
+      await store.transitionWorkflowWorkItem(first.id, priorState, { leaseOwner: null, leaseExpiresAt: null });
+
+      const retry = await store.replaceActiveTaskWorkflowContinuation(fence(task.id, runId, "step-execute"));
+
+      expect(retry.state).toBe("running");
+      const active = await activeRows(task.id);
+      expect(active).toHaveLength(1);
+      expect(active[0]?.id).toBe(retry.id);
+    },
+  );
+
+  /* Only the exact target key is dropped — a finished attempt at another node stays on record. */
+  it("re-attempting one node leaves another node's terminal row intact", async () => {
+    const store = h.store();
+    const task = await h.createTestTask();
+    const parse = await store.upsertWorkflowWorkItem(fence(task.id, `${task.id}:run:parse`, "parse"));
+    await store.transitionWorkflowWorkItem(parse.id, "succeeded", { leaseOwner: null, leaseExpiresAt: null });
+    const stepRun = `${task.id}:run:step-execute`;
+    const prior = await store.upsertWorkflowWorkItem(fence(task.id, stepRun, "step-execute"));
+    await store.transitionWorkflowWorkItem(prior.id, "failed", { leaseOwner: null, leaseExpiresAt: null });
+
+    await store.replaceActiveTaskWorkflowContinuation(fence(task.id, stepRun, "step-execute"));
+
+    const all = await store.listWorkflowWorkItemsForTask(task.id, { kinds: ["task"] });
+    expect(all.find((i) => i.id === parse.id)?.state).toBe("succeeded");
+    expect(await activeRows(task.id)).toHaveLength(1);
+  });
+
   /* Re-entering the same node must not retire the row it is about to write. */
   it("replace is idempotent for the same (runId, nodeId)", async () => {
     const store = h.store();
