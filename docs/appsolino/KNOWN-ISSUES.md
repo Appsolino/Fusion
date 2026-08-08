@@ -11,11 +11,17 @@ Live blockers / next action: `CURRENT-STATE.md` (links high-priority open items 
 
 ## SOAK-R2-DEFECT-001 — Planning settlement livelock + lifecycle lock + worktree leak
 
-Status: **FIXED** (pending Host D deploy of remediation PR)
+Status: **FIXED** (merged [#164](https://github.com/Appsolino/Fusion/pull/164); Host D `auto3-0.75.1-ff3faf384039`)
 Severity: Critical
 Component: Engine triage / Cursor runtime / PostgreSQL lifecycle lock / Host D soak
 First observed: 2026-08-08 (Host D Lights-Out Soak R2)
+Last observed fixed: 2026-08-08
+Affected release (failure): `auto3-0.75.1-cb506f2095f4`
+Fix release (Host D): `auto3-0.75.1-ff3faf384039`
+GitHub issue: https://github.com/Appsolino/Fusion/issues/165
+GitHub PR: https://github.com/Appsolino/Fusion/pull/164
 Evidence: `/srv/appsolino-fusion/staging/disposables/host-d-soak-evidence/soak-r2/`
+R3 checkpoint: `/srv/appsolino-fusion/staging/disposables/host-d-soak-evidence/soak-r3-prep/`
 
 ### Failure fingerprints
 
