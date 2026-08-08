@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "2026-08-08T07:12:11.505Z",
+  "sourceVersion": "0.75.1",
+  "sourceSha": null,
+  "latestPublishedVersion": "0.73.0",
+  "latestPublishedRef": "main",
+  "latestTagVersion": "0.73.0",
+  "upstreamLatestReleaseVersion": "0.75.1",
+  "status": "RELEASE_STALE",
+  "reason": "source 0.75.1 ≠ published 0.73.0 — track explicitly; do not infer product state from Latest Release badge alone",
+  "policy": "Detect RELEASE_STALE/PENDING automatically. Do not auto-publish every upstream commit; publish when VERSION changes after release-level validation."
+}
