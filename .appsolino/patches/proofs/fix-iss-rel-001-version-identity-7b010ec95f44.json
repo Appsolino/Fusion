@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "run-patch-reconcile-live.mjs",
+  "recordedUtc": "2026-08-08T04:20:50Z",
+  "upstreamBefore": "e8e63f23e95f46a974ad5fd7d2f97f5f4001a5ad",
+  "upstreamAfter": "7b010ec95f4411d0535f778622059849cd22bc1d",
+  "patch": "FIX-ISS-REL-001-VERSION-IDENTITY",
+  "cleanUpstreamRegression": {
+    "result": "UNKNOWN"
+  },
+  "semanticComparison": {
+    "classification": "APPSOLINO_ONLY",
+    "evidence": [
+      "upstream-commit:9dc248eae27537e7cd21fbdc7cffe0d841f487fa",
+      "path-overlap:.changeset/fn-7471-desktop-update-version.md,packages/dashboard/src/__tests__/cli-package-version.test.ts,packages/dashboard/src/__tests__/update-check-route.test.ts,packages/dashboard/src/__tests__/update-check.test.ts,packages/dashboard/src/cli-package-version.ts",
+      "upstream-commit:c7ff1b68d41d7c030dd660837ff5624047e98b19",
+      "path-overlap:packages/cli/src/commands/dashboard-tui/logo.ts,packages/dashboard/src/cli-package-version.ts",
+      "upstream-commit:ba3d868c2d841df89722b4e8c5517c3db7b33933",
+      "path-overlap:.changeset/fix-version-mismatch.md,.changeset/fix-worktree-already-checked-out.md,packages/cli/build.ts,packages/cli/src/__tests__/setup-test-isolation.ts,packages/cli/src/commands/task.ts"
+    ],
+    "relatedCommit": "ba3d868c2d841df89722b4e8c5517c3db7b33933",
+    "equivalentBehavior": false
+  },
+  "classification": "APPSOLINO_ONLY",
+  "action": "NEEDS_EVIDENCE",
+  "status": "ACTIVE"
+}

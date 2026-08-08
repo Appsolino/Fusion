@@ -15,12 +15,12 @@
   ],
   "upstreamComparison": {
     "classification": "UPSTREAM_RELATED",
-    "comparedAgainstSha": "1f9b0e644abb27e19803637803d74e37d7c45ce2",
+    "comparedAgainstSha": "7b010ec95f4411d0535f778622059849cd22bc1d",
     "relatedIssue": null,
     "relatedPr": null,
     "relatedCommit": "eaadd153b1f3e90cf594b6e892d0851296a66b4e",
     "evidence": "upstream-commit:eaadd153b1f3e90cf594b6e892d0851296a66b4e | path-overlap:.changeset/fn-8764-workflow-role-agents.md,CONCEPTS.md,docs/agents.md,docs/architecture.md,docs/cli-reference.md | defect still fails on clean upstream; overlapping paths",
-    "comparedAt": "2026-08-07T19:15:11Z"
+    "comparedAt": "2026-08-08T04:20:50Z"
   },
   "localAction": {
     "patchRequired": true,
@@ -48,7 +48,16 @@
         "packages/engine/src/merger.ts"
       ],
       "createdAt": "2026-08-07T19:15:11Z"
+    },
+    {
+      "revision": 3,
+      "againstUpstreamSha": "7b010ec95f4411d0535f778622059849cd22bc1d",
+      "summary": "defect still reproduces on clean upstream — retain/adapt patch identity",
+      "files": [
+        "packages/engine/src/merger.ts"
+      ],
+      "createdAt": "2026-08-08T04:20:50Z"
     }
   ],
-  "updatedUtc": "2026-08-07T19:15:11Z"
+  "updatedUtc": "2026-08-08T04:20:50Z"
 }
