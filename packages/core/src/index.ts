@@ -41,6 +41,12 @@ export type {
 export { AGENT_VALID_TRANSITIONS, DUPLICATE_OF_METADATA_KEY, REPORT_ATTACHMENT_SOURCE, assertNotWorkspaceTaskMerge, isWorkspaceTask, WorkspaceTaskMergeError, PLANNER_AGENT_ROLE} from "./types.js";
 export { WEDGE_RENOTIFY_COOLDOWN_MS, normalizeAgentRoles } from "./types.js";
 export {
+  BUILTIN_WORKFLOW_AGENT_BUNDLE_CONFIG,
+  BUILTIN_WORKFLOW_ROLE_AGENT_DEFAULTS,
+  BUILTIN_WORKFLOW_ROLE_AGENT_DEFAULT_LIST,
+} from "./agents/workflow-role-agent-defaults.js";
+export type { BuiltinWorkflowRole, WorkflowRoleAgentDefault } from "./agents/workflow-role-agent-defaults.js";
+export {
   resolveEntryPointBranchAssignment,
   sanitizeBranchSegment,
   derivePerTaskBranchName,
@@ -1141,6 +1147,7 @@ export {
 export type { CapacityRiskSignal } from "./board/capacity.js";
 export { getPrimaryPrInfo, taskHasManualOpenPullRequest } from "./tasks/task-helpers.js";
 export {
+  collectLandedMemberReviewAdvisories,
   getTaskMergeBlocker,
   getTaskHardMergeBlocker,
   REVIEW_ELIGIBLE_SENTINEL_COLUMN,
@@ -1150,6 +1157,7 @@ export {
   getLatestFailedPreMergeReviewStep,
   isTaskReadyForMerge,
   allowsAutoMergeProcessing,
+  hasSharedBranchMemberAutoMergeHold,
   hasUserAutoMergeHold,
   isSharedBranchGroupMemberIntegration,
   isLiveSharedBranchGroupMemberIntegration,
@@ -1159,6 +1167,7 @@ export {
   AWAITING_APPROVAL_PAUSE_REASON,
   isTaskBlockedOnApproval,
   findPendingPreMergeStep,
+  type LandedMemberReviewAdvisory,
   type MergeTargetResolution,
   type MergeTargetResolverOptions,
 } from "./merge/task-merge.js";
@@ -1719,6 +1728,7 @@ export {
   VALIDATOR_RUN_STATUSES,
   VALIDATION_DIAGNOSTICS_MAX_EVIDENCE_PER_ASSERTION,
   VALIDATION_DIAGNOSTICS_MAX_TEXT_BYTES,
+  selectNextSerialMissionSlice,
   normalizeValidationDiagnostics,
   renderValidationFailureDescription,
   renderValidationCause,

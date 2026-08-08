@@ -286,10 +286,14 @@ export function GeneralSection({ form, setForm, projectId, addToast, prefixError
       </div>
       <div className="form-group">
         <div className="settings-field-label-row">
+          {/*
+          FNXC:EphemeralAgentCompatibility 2026-08-08-06:12:
+          FN-8831 requires this visible compatibility input to state its canonical enabled default in the shared help tip. It remains routing-inert: the saved value never controls scheduler admission, executor dispatch or re-entry, mission start, or workflow-stage principal routing.
+          */}
           <label htmlFor="ephemeralAgentsEnabled" className="checkbox-label">
             <input id="ephemeralAgentsEnabled" type="checkbox" checked={form.ephemeralAgentsEnabled !== false} onChange={(e) => setForm((f) => ({ ...f, ephemeralAgentsEnabled: e.target.checked }))}/>{t("settings.general.useEphemeralTaskWorkerAgents", " Use ephemeral task-worker agents ")}
           </label>
-          <SettingsHelpTip settingKey="ephemeralAgentsEnabled">{t("settings.general.ephemeralAgentsCompatibilityHint", " Retained for configuration compatibility. This setting does not affect scheduler assignment or admission, executor workflow dispatch or re-entry, mission start, or workflow-stage principal routing. ")}</SettingsHelpTip>
+          <SettingsHelpTip settingKey="ephemeralAgentsEnabled">{t("settings.general.ephemeralAgentsCompatibilityHint", " Retained for configuration compatibility. Default: enabled. This setting does not affect scheduler assignment or admission, executor workflow dispatch or re-entry, mission start, or workflow-stage principal routing. ")}</SettingsHelpTip>
         </div>
       </div>
       {/*
