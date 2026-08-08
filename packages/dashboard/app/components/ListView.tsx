@@ -29,7 +29,7 @@ import {
   isNonPlanningOptionalGateBadge,
 } from "../utils/taskProgress";
 import { isTaskAgentActive } from "../utils/taskActivity";
-import { getTaskStatusBadgeLabel, hasTaskStatusBadge, isTaskPlanningActive, type TaskStatusBadgeContext } from "../utils/taskStatusBadgeLabel";
+import { getTaskStatusBadgeLabel, getTaskWipLifecycleBadgeLabel, hasTaskStatusBadge, isTaskPlanningActive, type TaskStatusBadgeContext } from "../utils/taskStatusBadgeLabel";
 import { isReviewBudgetExhaustedApproval } from "../utils/reviewBudgetApproval";
 import { useConfirm } from "../hooks/useConfirm";
 import { extractDependencyDeleteConflict, extractLineageDeleteConflict } from "../utils/taskDelete";
@@ -947,6 +947,11 @@ export function ListView({
     */
     return fromOwnWorkflow ?? (own ? undefined : columnFlagsById.get(task.column));
   }, [columnFlagsById, taskContextMenuColumnsByTaskId]);
+
+  const getTaskColumnDisplayLabel = useCallback((task: Task): string => {
+    return taskContextMenuColumnsByTaskId.get(task.id)?.find((column) => column.id === task.column)?.label
+      ?? getListColumnLabel(task.column);
+  }, [getListColumnLabel, taskContextMenuColumnsByTaskId]);
 
   const getTaskPlanningWorkflowId = useCallback((task: Task): string | null => {
     const taskWorkflowId = (task as Task & { workflowId?: string | null }).workflowId;
@@ -3163,8 +3168,18 @@ export function ListView({
                           const suppressPlanningStatusBadge = showOptionalGateBadge && isNonPlanningOptionalGateBadge(optionalGateBadge);
                           const isPlanningStatusBadge = !isReviewBudgetExhausted
                             && (isLivePlanning || isTransientPlannerActive || visualStatus === "planning");
+                          const wipLifecycleBadgeLabel = !isPaused
+                            && !isStuckState
+                            && !isReviewBudgetExhausted
+                            && !showOptionalGateBadge
+                            ? getTaskWipLifecycleBadgeLabel(visualStatus, t, {
+                              isWipColumn: isWipColumnRole(getTaskColumnFlags(task), task.column),
+                              lifecycleLabel: getTaskColumnDisplayLabel(task),
+                            })
+                            : null;
                           const hasStatus = ((hasTaskStatusBadge(visualStatus) && visualStatus !== "queued")
-                            || isTransientPlannerActive)
+                            || isTransientPlannerActive
+                            || Boolean(wipLifecycleBadgeLabel))
                             && !(suppressPlanningStatusBadge && isPlanningStatusBadge);
                           /*
                           FNXC:TaskStatusBadge 2026-07-26-14:05:
@@ -3176,7 +3191,8 @@ export function ListView({
                             ? t("tasks.reviewBudgetExhausted", "Review budget exhausted")
                             : isLivePlanning || isTransientPlannerActive
                               ? t("tasks.statusPlanning", "Planning")
-                              : getTaskStatusLabel(visualStatus ?? "", t, showOptionalGateBadge ? undefined : getRunningWorkflowStepLabel(task), { idle: !isAgentActive, overlapBlockedBy: task.overlapBlockedBy ?? null });
+                              : wipLifecycleBadgeLabel
+                                ?? getTaskStatusLabel(visualStatus ?? "", t, showOptionalGateBadge ? undefined : getRunningWorkflowStepLabel(task), { idle: !isAgentActive, overlapBlockedBy: task.overlapBlockedBy ?? null });
                           const hasDependencies = Boolean(task.dependencies && task.dependencies.length > 0);
                           const taskProgress = getTaskProgress(task, getTaskColumnFlags(task));
                           const hasProgress = taskProgress.hasProgress;
@@ -3439,8 +3455,18 @@ export function ListView({
                             const suppressPlanningStatusBadge = showOptionalGateBadge && isNonPlanningOptionalGateBadge(optionalGateBadge);
                             const isPlanningStatusBadge = !isReviewBudgetExhausted
                               && (isLivePlanning || isTransientPlannerActive || visualStatus === "planning");
+                            const wipLifecycleBadgeLabel = !isPaused
+                              && !isStuckState
+                              && !isReviewBudgetExhausted
+                              && !showOptionalGateBadge
+                              ? getTaskWipLifecycleBadgeLabel(visualStatus, t, {
+                                isWipColumn: isWipColumnRole(getTaskColumnFlags(task), task.column),
+                                lifecycleLabel: getTaskColumnDisplayLabel(task),
+                              })
+                              : null;
                             const showStatusBadge = ((hasTaskStatusBadge(visualStatus) && visualStatus !== "queued")
-                              || isTransientPlannerActive)
+                              || isTransientPlannerActive
+                              || Boolean(wipLifecycleBadgeLabel))
                               && !(suppressPlanningStatusBadge && isPlanningStatusBadge);
                             // FNXC:TaskStatusBadge 2026-07-26-14:05: the step-name override yields to the
                             // gate badge — see the grouped-card render path above.
@@ -3448,7 +3474,8 @@ export function ListView({
                               ? t("tasks.reviewBudgetExhausted", "Review budget exhausted")
                               : isLivePlanning || isTransientPlannerActive
                                 ? t("tasks.statusPlanning", "Planning")
-                                : getTaskStatusLabel(visualStatus ?? "", t, showOptionalGateBadge ? undefined : getRunningWorkflowStepLabel(task), { idle: !isAgentActive, overlapBlockedBy: task.overlapBlockedBy ?? null });
+                                : wipLifecycleBadgeLabel
+                                  ?? getTaskStatusLabel(visualStatus ?? "", t, showOptionalGateBadge ? undefined : getRunningWorkflowStepLabel(task), { idle: !isAgentActive, overlapBlockedBy: task.overlapBlockedBy ?? null });
                             const isDragging = draggingTaskId === task.id;
 
                             return (
