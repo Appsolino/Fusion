@@ -1392,6 +1392,20 @@ describe("SettingsModal", () => {
       expect(screen.getByRole("option", { name: "Require changelog update (existing changelog)" })).toBeInTheDocument();
     });
 
+    it("renders the enabled default in routing-inert ephemeral agent compatibility help", async () => {
+      renderModal({ initialSection: "general" });
+      await waitForSettingsModalReady();
+
+      const helpTrigger = screen.getByTestId("settings-help-ephemeralAgentsEnabled");
+      const helpId = helpTrigger.getAttribute("aria-describedby");
+      expect(helpId).toBeTruthy();
+
+      const helpNote = document.getElementById(helpId!);
+      expect(helpNote).toHaveAttribute("role", "note");
+      expect(helpNote).toHaveTextContent(/default: enabled/i);
+      expect(helpNote).toHaveTextContent(/does not affect scheduler assignment or admission, executor workflow dispatch or re-entry, mission start, or workflow-stage principal routing/i);
+    });
+
     it("persists the routing-inert ephemeral agent compatibility input", async () => {
       renderModal({ initialSection: "general" });
       await waitForSettingsModalReady();
