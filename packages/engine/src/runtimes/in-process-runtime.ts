@@ -1584,6 +1584,9 @@ export class InProcessRuntime
           // FNXC:NodeWorktreeIsolation 2026-07-25-22:10: planning acquires (or reuses) the task's own
           // worktree through the executor's acquisition path, so no lane runs in the shared checkout.
           acquirePlanningWorktree: (taskId) => this.executor.ensureTaskWorktreeForPlanning(taskId),
+          // FNXC:SoakPlanningConfigFailure 2026-08-08-03:11: park path must release planning trees.
+          releasePreExecutionWorktree: (taskId, reason) =>
+            this.executor.releasePreExecutionWorktree(taskId, reason),
           onSpecifyStart: (t) => {
             this.recordActivity();
             /*

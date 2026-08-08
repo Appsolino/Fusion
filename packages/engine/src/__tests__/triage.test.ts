@@ -5481,6 +5481,60 @@ describe("taskCreate tool model inheritance", () => {
       expect(store.updateTask).not.toHaveBeenCalledWith("FN-7952", expect.objectContaining({ status: null }));
     });
 
+    /*
+    FNXC:SoakPlanningConfigFailure 2026-08-08-03:11:
+    Soak #1: missing Cursor runtime plugin must park failed (no redispatch storm) and release the
+    planning worktree through the same pre-execution release seam.
+    */
+    it("parks a missing Cursor runtime plugin as operator-actionable and releases the planning worktree", async () => {
+      const task = {
+        id: "HOST-SOAK-001",
+        description: "Plan with cursor-cli while runtime plugin is unavailable",
+        column: "triage",
+        status: "planning",
+        worktree: "/tmp/fusion-soak-wt/pale-plume",
+        branch: "fusion/host-soak-001",
+        dependencies: [],
+        steps: [],
+        currentStep: 0,
+        log: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as unknown as Task;
+      const store = createMockStore({
+        getTask: vi.fn().mockResolvedValue({ ...task, attachments: [] }),
+      });
+      const releasePreExecutionWorktree = vi.fn().mockResolvedValue(true);
+      mockCreateFnAgent.mockRejectedValue(
+        new Error(
+          "Cursor CLI models require the bundled Cursor runtime plugin. "
+          + "Install and enable the Cursor Runtime plugin (fusion-plugin-cursor-runtime), "
+          + "authenticate `cursor-agent` under the Fusion service HOME, and select a discovered cursor-cli model.",
+        ),
+      );
+
+      const processor = new TriageProcessor(store, "/test/root", {
+        pollIntervalMs: 100_000,
+        releasePreExecutionWorktree,
+      });
+      await processor.specifyTask(task);
+      await processor.specifyTask(task);
+
+      expect(store.updateTask).toHaveBeenCalledWith("HOST-SOAK-001", expect.objectContaining({
+        status: "failed",
+        error: expect.stringContaining("bundled Cursor runtime plugin"),
+        recoveryRetryCount: null,
+        nextRecoveryAt: null,
+      }));
+      expect(store.updateTask).not.toHaveBeenCalledWith("HOST-SOAK-001", expect.objectContaining({ status: null }));
+      expect(releasePreExecutionWorktree).toHaveBeenCalledWith(
+        "HOST-SOAK-001",
+        "operator-actionable planning configuration failure",
+      );
+      // Second specify while already failed still must not restore claimable status / storm.
+      expect(releasePreExecutionWorktree.mock.calls.length).toBeGreaterThanOrEqual(1);
+    });
+
     it("uses bounded transient recovery when a credential refresh fails because the connection reset", async () => {
       const task = {
         id: "FN-7952-TRANSIENT",
