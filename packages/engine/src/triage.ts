@@ -3424,6 +3424,18 @@ export class TriageProcessor {
                 recoveryRetryCount: decision.nextState.recoveryRetryCount,
                 nextRecoveryAt: decision.nextState.nextRecoveryAt,
               });
+              /*
+              FNXC:SoakR2PlanningSettlement 2026-08-08-05:12:
+              Settlement/admission failure is not durable planning ownership. Release the
+              pre-execution worktree on every retry and park path so capacity cannot accumulate
+              orphan trees while the task sits claimable in todo (SOAK-R2-DEFECT-001C).
+              */
+              await this.releasePlanningWorktreeAfterConfigurationPark(
+                task.id,
+                registeredPlanningPath,
+                "planning settlement admission failure (retry)",
+              );
+              registeredPlanningPath = null;
               return;
             }
 
@@ -3438,6 +3450,12 @@ export class TriageProcessor {
             })) {
               await this.backfillBlankTitleAfterTerminalTriageFailure(task);
             }
+            await this.releasePlanningWorktreeAfterConfigurationPark(
+              task.id,
+              registeredPlanningPath,
+              "planning settlement admission failure (parked)",
+            );
+            registeredPlanningPath = null;
             return;
           }
 
@@ -3462,6 +3480,13 @@ export class TriageProcessor {
                 recoveryRetryCount: decision.nextState.recoveryRetryCount,
                 nextRecoveryAt: decision.nextState.nextRecoveryAt,
               });
+              // FNXC:SoakR2PlanningSettlement 2026-08-08-05:12: validation failure is not durable ownership — release planning worktree.
+              await this.releasePlanningWorktreeAfterConfigurationPark(
+                task.id,
+                registeredPlanningPath,
+                "deterministic plan validation failure (retry)",
+              );
+              registeredPlanningPath = null;
               return;
             }
 
@@ -3483,6 +3508,12 @@ export class TriageProcessor {
             })) {
               await this.backfillBlankTitleAfterTerminalTriageFailure(task);
             }
+            await this.releasePlanningWorktreeAfterConfigurationPark(
+              task.id,
+              registeredPlanningPath,
+              "deterministic plan validation failure (parked)",
+            );
+            registeredPlanningPath = null;
             return;
           }
 

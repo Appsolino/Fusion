@@ -2008,9 +2008,30 @@ export function registerSettingsMemoryRoutes(ctx: ApiRoutesContext, deps: Settin
     try {
       const { store: scopedStore } = await getProjectContext(req);
       const scopes = await scopedStore.getSettingsByScopeFast();
+      /*
+      FNXC:SoakR2PauseObservability 2026-08-08-05:12:
+      Project settings override globals when both define a key. Surface the effective
+      pause state for the selected project so operators can tell whether that project
+      will dispatch — without redesigning pause precedence (SOAK R2 Phase E).
+      */
+      const globalSettings = (scopes as { global?: Record<string, unknown> }).global ?? {};
+      const projectSettings = (scopes as { project?: Record<string, unknown> }).project ?? {};
+      const effectiveEnginePaused = typeof projectSettings.enginePaused === "boolean"
+        ? projectSettings.enginePaused
+        : Boolean(globalSettings.enginePaused);
+      const effectiveGlobalPause = typeof projectSettings.globalPause === "boolean"
+        ? projectSettings.globalPause
+        : Boolean(globalSettings.globalPause);
       res.json({
         ...scopes,
         workflowSettings: await scopedStore.listWorkflowSettingValuesForProject(),
+        effective: {
+          enginePaused: effectiveEnginePaused,
+          globalPause: effectiveGlobalPause,
+          schedulerPausedForProject: effectiveEnginePaused || effectiveGlobalPause,
+          enginePausedSource: typeof projectSettings.enginePaused === "boolean" ? "project" : "global",
+          globalPauseSource: typeof projectSettings.globalPause === "boolean" ? "project" : "global",
+        },
       });
     } catch (err: unknown) {
       if (err instanceof ApiError) {

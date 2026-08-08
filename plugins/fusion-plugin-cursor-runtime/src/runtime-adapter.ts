@@ -93,6 +93,14 @@ export class CursorRuntimeAdapter {
     return this.configuredBinaryPath || readConfiguredCursorBinaryPathFromFusionHome();
   }
 
+  /*
+  FNXC:SoakR2PlanningSettlement 2026-08-08-05:12:
+  Triage requires a finite fallback-dispatch settlement boundary after promptWithFallback
+  (see TriageProcessor planningAttempt handoff). Cursor CLI turns are fully awaited inside
+  runCursorAgentPrint — there is no deferred onFallbackModelUsed lifecycle — so expose the
+  same explicit no-op boundary DefaultPiRuntime provides. Omitting it made every successful
+  Host D Soak R2 plan fail closed into todo→replan livelock (SOAK-R2-DEFECT-001A).
+  */
   async createSession(options: {
     cwd?: string;
     systemPrompt?: string;
@@ -105,7 +113,11 @@ export class CursorRuntimeAdapter {
     onToolStart?: (name: string, args?: Record<string, unknown>) => void;
     onToolEnd?: (name: string, isError: boolean, result?: unknown) => void;
     beforeSpawnSession?: () => Promise<void> | void;
-  }): Promise<{ session: CursorSession; sessionFile?: undefined }> {
+  }): Promise<{
+    session: CursorSession;
+    sessionFile?: undefined;
+    settleFallbackDispatch: () => Promise<void>;
+  }> {
     await options.beforeSpawnSession?.();
 
     const modelId = stripCursorCliModelPrefix(options.defaultModelId);
@@ -156,7 +168,11 @@ export class CursorRuntimeAdapter {
       },
       dispose: () => undefined,
     };
-    return { session, sessionFile: undefined };
+    return {
+      session,
+      sessionFile: undefined,
+      settleFallbackDispatch: async () => undefined,
+    };
   }
 
   async promptWithFallback(

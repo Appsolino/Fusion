@@ -38,6 +38,9 @@ describe("backend-resolver: resolveBackend (env-based)", () => {
     expect(backend.runtimeUrl).toBe(url);
     expect(backend.migrationUrl).toBe(url); // falls back to runtime
     expect(backend.migrationUrlOverridden).toBe(false);
+    // FNXC:SoakR2LifecycleLock 2026-08-08-05:12: non-pooler DATABASE_URL is itself the direct session endpoint.
+    expect(backend.directSessionUrl).toBe(url);
+    expect(backend.directSessionProvenance).toBe("external-direct");
   });
 });
 
@@ -78,7 +81,18 @@ describe("backend-resolver: resolveBackendWithOptions", () => {
     });
     expect(backend.migrationUrl).toBe(url);
     expect(backend.migrationUrlOverridden).toBe(false);
+    expect(backend.directSessionUrl).toBe(url);
+    expect(backend.directSessionProvenance).toBe("external-direct");
+  });
+
+  it("does not treat a pooler DATABASE_URL as a direct session endpoint without migration override", () => {
+    const runtimeUrl = "postgresql://user:pass@xyz.pooler.supabase.com:6543/fusion";
+    const backend = resolveBackendWithOptions({
+      databaseUrl: runtimeUrl,
+      databaseMigrationUrl: null,
+    });
     expect(backend.directSessionUrl).toBeNull();
+    expect(backend.directSessionProvenance).toBeNull();
   });
 
   it("DATABASE_MIGRATION_URL without DATABASE_URL still resolves to embedded mode", () => {

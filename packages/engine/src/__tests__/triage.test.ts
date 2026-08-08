@@ -4675,6 +4675,157 @@ describe("taskCreate tool model inheritance", () => {
       }
     });
 
+    /*
+    FNXC:SoakR2PlanningSettlement 2026-08-08-05:12:
+    Cursor-like plugin runtimes that await the whole turn and expose a no-op settlement
+    boundary must finalize a written PROMPT.md into exactly one downstream handoff —
+    not restore claimable todo (SOAK-R2-DEFECT-001A).
+    */
+    it("settles a Cursor-like plugin plan with settleFallbackDispatch into implementation handoff once", async () => {
+      const task = createTriageTask({
+        id: "HOST2-SETTLE-001",
+        assignedAgentId: "agent-cursor",
+        planningModelProvider: "cursor-cli",
+        planningModelId: "composer-2.5",
+      });
+      const root = await createTriageFixtureRoot("fusion-triage-cursor-settle-");
+      const promptPath = join(root, ".fusion", "tasks", task.id, "PROMPT.md");
+      await mkdir(join(root, ".fusion", "tasks", task.id), { recursive: true });
+      const onSpecifyComplete = vi.fn();
+      const releasePreExecutionWorktree = vi.fn().mockResolvedValue(true);
+      const store = createMockStore({
+        getTask: vi.fn().mockResolvedValue({ ...task, attachments: [], comments: [] }),
+      });
+      const pluginRuntime = {
+        id: "cursor",
+        name: "Cursor Runtime",
+        createSession: vi.fn(async () => ({
+          session: { prompt: vi.fn(), dispose: vi.fn(), sessionManager: {}, navigateTree: vi.fn() },
+          settleFallbackDispatch: async () => undefined,
+        })),
+        promptWithFallback: vi.fn(async () => {
+          await writeFile(
+            promptPath,
+            "# Task: HOST2-SETTLE-001 - Settlement proof\n\n## Mission\n\nSoak R2 settlement proof\n\n## File Scope\n\n- README.md\n\n## Steps\n\n### Step 1: Implement\n\nEdit README.md\n",
+            "utf8",
+          );
+        }),
+        describeModel: vi.fn(() => "cursor-cli/composer-2.5"),
+      };
+      const pluginRunner = {
+        getRuntimeById: vi.fn().mockReturnValue({
+          pluginId: "fusion-plugin-cursor-runtime",
+          runtime: {
+            metadata: { runtimeId: "cursor", name: "Cursor Runtime", description: "test", version: "0.1.0" },
+            factory: vi.fn().mockResolvedValue(pluginRuntime),
+          },
+        }),
+        createRuntimeContext: vi.fn().mockResolvedValue({}),
+        getPromptContributionsForSurface: vi.fn().mockReturnValue([]),
+        getPluginSkills: vi.fn().mockReturnValue([]),
+      };
+      const agentStore = {
+        getAgent: vi.fn().mockResolvedValue({
+          id: "agent-cursor",
+          name: "Cursor planner",
+          role: "triage",
+          runtimeConfig: { runtimeHint: "cursor" },
+        }),
+      };
+      const { promptWithFallback } = await import("../pi.js");
+      (promptWithFallback as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (session: { promptWithFallback: (prompt: string, options?: unknown) => Promise<void> }, prompt: string, options?: unknown) =>
+          session.promptWithFallback(prompt, options),
+      );
+
+      try {
+        await new TriageProcessor(store, root, {
+          onSpecifyComplete,
+          releasePreExecutionWorktree,
+          pluginRunner: pluginRunner as any,
+          agentStore: agentStore as any,
+        }).specifyTask(task);
+        expect(pluginRuntime.createSession).toHaveBeenCalledTimes(1);
+        expect(onSpecifyComplete).toHaveBeenCalledTimes(1);
+        expect(store.logEntry).not.toHaveBeenCalledWith(
+          task.id,
+          expect.stringContaining("did not provide a fallback-dispatch settlement boundary"),
+        );
+        expect(store.updateTask).not.toHaveBeenCalledWith(task.id, expect.objectContaining({
+          recoveryRetryCount: 1,
+        }));
+      } finally {
+        await cleanupTriageFixtureRoot(root);
+      }
+    });
+
+    it("releases the planning worktree when settlement boundary is missing", async () => {
+      const task = createTriageTask({
+        id: "HOST2-WT-RELEASE",
+        worktree: "/tmp/fusion-soak-wt/merry-brook",
+        assignedAgentId: "agent-plugin",
+        planningModelProvider: "openai",
+        planningModelId: "gpt-4o",
+      } as any);
+      const root = await createTriageFixtureRoot("fusion-triage-settle-wt-release-");
+      const promptPath = join(root, ".fusion", "tasks", task.id, "PROMPT.md");
+      await mkdir(join(root, ".fusion", "tasks", task.id), { recursive: true });
+      const releasePreExecutionWorktree = vi.fn().mockResolvedValue(true);
+      const store = createMockStore({
+        getTask: vi.fn().mockResolvedValue({ ...task, attachments: [], comments: [] }),
+      });
+      const pluginRuntime = {
+        id: "deferred-planner",
+        name: "Deferred planner",
+        createSession: vi.fn(async () => ({
+          session: { prompt: vi.fn(), dispose: vi.fn(), sessionManager: {}, navigateTree: vi.fn() },
+        })),
+        promptWithFallback: vi.fn(async () => {
+          await writeFile(promptPath, "## Mission\n\nPlugin-written plan\n", "utf8");
+        }),
+        describeModel: vi.fn(() => "plugin/planner"),
+      };
+      const pluginRunner = {
+        getRuntimeById: vi.fn().mockReturnValue({
+          pluginId: "planner-plugin",
+          runtime: {
+            metadata: { runtimeId: "deferred-planner", name: "Deferred planner", description: "test", version: "1.0.0" },
+            factory: vi.fn().mockResolvedValue(pluginRuntime),
+          },
+        }),
+        createRuntimeContext: vi.fn().mockResolvedValue({}),
+        getPromptContributionsForSurface: vi.fn().mockReturnValue([]),
+        getPluginSkills: vi.fn().mockReturnValue([]),
+      };
+      const agentStore = {
+        getAgent: vi.fn().mockResolvedValue({
+          id: "agent-plugin",
+          name: "Plugin planner",
+          role: "triage",
+          runtimeConfig: { runtimeHint: "deferred-planner" },
+        }),
+      };
+      const { promptWithFallback } = await import("../pi.js");
+      (promptWithFallback as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (session: { promptWithFallback: (prompt: string, options?: unknown) => Promise<void> }, prompt: string, options?: unknown) =>
+          session.promptWithFallback(prompt, options),
+      );
+
+      try {
+        await new TriageProcessor(store, root, {
+          releasePreExecutionWorktree,
+          pluginRunner: pluginRunner as any,
+          agentStore: agentStore as any,
+        }).specifyTask(task);
+        expect(releasePreExecutionWorktree).toHaveBeenCalledWith(
+          task.id,
+          expect.stringContaining("planning settlement admission failure"),
+        );
+      } finally {
+        await cleanupTriageFixtureRoot(root);
+      }
+    });
+
     it("does not let an unrelated one-shot runtime timer delay clean planning admission", async () => {
       const task = createTriageTask({ id: "FN-FALLBACK-ONE-SHOT" });
       const root = await createTriageFixtureRoot("fusion-triage-fallback-one-shot-");
