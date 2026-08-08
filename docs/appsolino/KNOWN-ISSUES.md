@@ -9,6 +9,43 @@ Live blockers / next action: `CURRENT-STATE.md` (links high-priority open items 
 
 ---
 
+## SOAK-R2-DEFECT-001 — Planning settlement livelock + lifecycle lock + worktree leak
+
+Status: **FIXED** (pending Host D deploy of remediation PR)
+Severity: Critical
+Component: Engine triage / Cursor runtime / PostgreSQL lifecycle lock / Host D soak
+First observed: 2026-08-08 (Host D Lights-Out Soak R2)
+Evidence: `/srv/appsolino-fusion/staging/disposables/host-d-soak-evidence/soak-r2/`
+
+### Failure fingerprints
+
+- **001A:** `Planner runtime cursor did not provide a fallback-dispatch settlement boundary` → status restored to claimable todo → plan again (HOST2-001…010; 0 implementations)
+- **001B:** `Planning lifecycle lock requires a direct PostgreSQL session endpoint` (self-healing stranded-hold reconciliation)
+- **001C:** Pre-implementation worktrees reaped as leaked / remaining at stop (`merry-brook`, `gilt-lark`) while tasks in `todo`
+
+### Root causes
+
+1. Cursor runtime `createSession` omitted `settleFallbackDispatch`; triage fail-closed into bounded todo retries even when PROMPT.md was written.
+2. External non-pooler `DATABASE_URL` did not populate `directSessionUrl` (only `DATABASE_MIGRATION_URL` did), so Host D's direct `127.0.0.1:5432` URL still left lifecycle locks unavailable.
+3. Settlement/validation failure paths restored claimable todo without releasing the planning worktree.
+
+### Permanent correction
+
+- Cursor runtime returns an explicit no-op `settleFallbackDispatch` (same contract as DefaultPiRuntime).
+- Backend resolver treats non-pooler `DATABASE_URL` as `external-direct` lifecycle-lock endpoint.
+- Triage releases pre-execution worktrees on settlement/validation failure retry and park.
+- Self-healing fail-closes with audited `planning-lifecycle-lock-unavailable` when the lock transport is missing.
+- `/api/settings/scopes` exposes `effective.schedulerPausedForProject` for operator clarity.
+
+### Required regression tests
+
+- Cursor-like plugin settlement → single handoff (`triage.test.ts`)
+- Missing settlement boundary → worktree release
+- Backend resolver `external-direct` / pooler-null cases
+- Advisory lock accepts `external-direct` provenance
+
+---
+
 ## SOAK-DEFECT-001 — Missing Cursor runtime → planning retry storm + orphan worktrees
 
 Status: **FIXED**

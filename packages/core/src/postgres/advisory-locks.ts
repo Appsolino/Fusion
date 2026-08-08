@@ -89,7 +89,7 @@ export async function withPlanningLifecycleAdvisoryLock<T>(
     projectId: string;
     taskId: string;
     directSessionUrl: string | null;
-    provenance: "embedded-lifecycle" | "migration-override" | null;
+    provenance: "embedded-lifecycle" | "migration-override" | "external-direct" | null;
     runtimeUrl?: string | null;
     migrationUrl?: string | null;
     /** Bounds dedicated-session setup and lock acquisition, not callback work. */
@@ -114,9 +114,14 @@ export async function withPlanningLifecycleAdvisoryLock<T>(
   if (!directDatabase) {
     throw new PlanningLifecycleLockTransportError("Planning lifecycle lock direct endpoint must select a database");
   }
-  const descriptorEndpoint = input.provenance === "embedded-lifecycle"
-    ? input.runtimeUrl
-    : input.migrationUrl;
+  /*
+  FNXC:SoakR2LifecycleLock 2026-08-08-05:12:
+  embedded-lifecycle / external-direct pin against runtimeUrl; migration-override
+  pins against the explicit migration URL. Reject pooler-shaped endpoints above.
+  */
+  const descriptorEndpoint = input.provenance === "migration-override"
+    ? input.migrationUrl
+    : input.runtimeUrl;
   if (!descriptorEndpoint || descriptorEndpoint !== directUrl) {
     throw new PlanningLifecycleLockTransportError("Planning lifecycle lock endpoint does not match the resolved backend descriptor");
   }

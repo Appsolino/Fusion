@@ -7381,11 +7381,31 @@ export class SelfHealingManager extends SelfHealingGitEvidence {
               return true;
             };
             const lifecycleLock = (this.store as Partial<TaskStore>).withPlanningLifecycleLock;
-            const seeded = lifecycleLock
-              ? await lifecycleLock.call(this.store, snapshot.id, reconcileUnderLifecycleLock)
-              : await reconcileUnderLifecycleLock();
-            if (seeded) repaired += 1;
-          } catch (error) { log.warn(`reconcileStrandedHoldContinuations: failed for ${snapshot.id}: ${error instanceof Error ? error.message : String(error)}`); }
+            try {
+              const seeded = lifecycleLock
+                ? await lifecycleLock.call(this.store, snapshot.id, reconcileUnderLifecycleLock)
+                : await reconcileUnderLifecycleLock();
+              if (seeded) repaired += 1;
+            } catch (error) {
+              /*
+              FNXC:SoakR2LifecycleLock 2026-08-08-05:12:
+              When the planning lifecycle lock transport is unavailable, do not pretend
+              reconciliation succeeded and do not mutate the board unsafely. Surface the
+              exact transport reason once per task (SOAK-R2-DEFECT-001B fail-closed).
+              */
+              const msg = error instanceof Error ? error.message : String(error);
+              const lockUnavailable = /Planning lifecycle lock/i.test(msg);
+              log.warn(`reconcileStrandedHoldContinuations: failed for ${snapshot.id}: ${msg}`);
+              if (lockUnavailable) {
+                await audit(
+                  "task:reconcile-stranded-hold-continuation-no-action",
+                  "planning-lifecycle-lock-unavailable",
+                ).catch(() => undefined);
+              }
+            }
+          } catch (error) {
+            log.warn(`reconcileStrandedHoldContinuations: failed for ${snapshot.id}: ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
         if (tasks.length < 500) break;
         offset += tasks.length;

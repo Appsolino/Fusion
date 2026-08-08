@@ -58,6 +58,9 @@ describe("CursorRuntimeAdapter", () => {
     expect(result.session.model).toBe("composer-2.5");
     expect(result.session.lastModelDescription).toBe("cursor-cli/composer-2.5");
     expect(result.session.allowWrites).toBe(true);
+    // FNXC:SoakR2PlanningSettlement 2026-08-08-05:12: triage requires this boundary.
+    expect(typeof result.settleFallbackDispatch).toBe("function");
+    await expect(result.settleFallbackDispatch()).resolves.toBeUndefined();
   });
 
   it("rejects unknown cursor-cli models before execution", async () => {

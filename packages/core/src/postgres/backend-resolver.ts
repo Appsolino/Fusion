@@ -46,7 +46,16 @@ export interface ResolvedBackend {
   readonly migrationUrlOverridden: boolean;
   /** A proven direct endpoint for session-scoped lifecycle advisory locks. */
   readonly directSessionUrl?: string | null;
-  readonly directSessionProvenance?: "embedded-lifecycle" | "migration-override" | null;
+  /*
+  FNXC:SoakR2LifecycleLock 2026-08-08-05:12:
+  `external-direct` means the resolved DATABASE_URL itself is a non-pooler session
+  endpoint (Host D staging: 127.0.0.1:5432). Previously only an explicit
+  DATABASE_MIGRATION_URL populated directSessionUrl, so external-direct installs had
+  null provenance and self-healing failed with "Planning lifecycle lock requires a
+  direct PostgreSQL session endpoint" (SOAK-R2-DEFECT-001B) even though the runtime
+  URL was already session-affine.
+  */
+  readonly directSessionProvenance?: "embedded-lifecycle" | "migration-override" | "external-direct" | null;
 }
 
 /**
@@ -104,12 +113,23 @@ export function resolveBackendWithOptions(
 
   // FNXC:PlanningDependencyReseed 2026-08-04-00:43:
   // Advisory locks require one backend session. External runtime URLs can be
-  // transaction poolers, so only an explicit migration endpoint is eligible.
-  const directSessionUrl = migrationUrlOverridden ? databaseMigrationUrl : null;
+  // transaction poolers, so prefer an explicit non-pooler migration endpoint.
+  // FNXC:SoakR2LifecycleLock 2026-08-08-05:12:
+  // When DATABASE_URL is already a direct (non-pooler) session endpoint, use it —
+  // requiring DATABASE_MIGRATION_URL in that topology hid lock unreadiness until soak.
+  let directSessionUrl: string | null = null;
+  let directSessionProvenance: ResolvedBackend["directSessionProvenance"] = null;
+  if (migrationUrlOverridden && !looksLikePoolerUrl(databaseMigrationUrl)) {
+    directSessionUrl = databaseMigrationUrl;
+    directSessionProvenance = "migration-override";
+  } else if (runtimeUrl && !looksLikePoolerUrl(runtimeUrl)) {
+    directSessionUrl = runtimeUrl;
+    directSessionProvenance = "external-direct";
+  }
   return {
     mode, runtimeUrl, migrationUrl, migrationUrlOverridden,
     directSessionUrl,
-    directSessionProvenance: directSessionUrl ? "migration-override" : null,
+    directSessionProvenance,
   };
 }
 

@@ -96,7 +96,7 @@ pgDescribe("planning lifecycle advisory lock", () => {
     await expect(lock("project-a", "FN-1", async () => {})).resolves.toBeUndefined();
   });
 
-  it.each(["embedded-lifecycle", "migration-override"] as const)(
+  it.each(["embedded-lifecycle", "migration-override", "external-direct"] as const)(
     "accepts a verified %s direct-session provenance",
     async (provenance) => {
       await expect(withPlanningLifecycleAdvisoryLock({
