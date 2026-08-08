@@ -2,7 +2,7 @@
 
 <!-- FNXC:FullAutonomy 2026-08-07-21:14 -->
 
-Companion to [FULL-AUTONOMY-AUDIT.md](./FULL-AUTONOMY-AUDIT.md). Host D soak remains **blocked** while `enginePaused=true`.
+Companion to [FULL-AUTONOMY-AUDIT.md](./FULL-AUTONOMY-AUDIT.md). Host D remains **`enginePaused=true`** until owner authorises Soak R2. Soak #1 failed (SOAK-DEFECT-001); remediation [#159](https://github.com/Appsolino/Fusion/pull/159) is on Host D `auto3-0.75.1-cb506f2095f4`.
 
 ## Architecture
 

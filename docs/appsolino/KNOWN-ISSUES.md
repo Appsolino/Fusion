@@ -9,6 +9,51 @@ Live blockers / next action: `CURRENT-STATE.md` (links high-priority open items 
 
 ---
 
+## SOAK-DEFECT-001 — Missing Cursor runtime → planning retry storm + orphan worktrees
+
+Status: **FIXED**
+Severity: High
+Component: Engine triage / Cursor runtime plugin / Host D soak
+First observed: 2026-08-08 (Host D Lights-Out Soak #1)
+Last observed fixed: 2026-08-08
+Affected release (failure): `auto3-0.75.1-ac469cf355a1`
+Fix release (Host D): `auto3-0.75.1-cb506f2095f4`
+GitHub issue: https://github.com/Appsolino/Fusion/issues/160
+GitHub PR: https://github.com/Appsolino/Fusion/pull/159
+
+### Failure fingerprint
+
+- Planning error text contains `Cursor CLI models require the bundled Cursor runtime plugin`
+- `fusion-plugin-cursor-runtime` installed globally but **disabled for the soak project**
+- Same task redispatched for planning **12+ times in ~1 minute** (status restored → requeue)
+- Tasks return to `todo` while disk worktrees remain (Soak #1: `pale-plume` / `merry-thorn`)
+
+### Impact
+
+Lights-out soak cannot start real implementation; capacity consumed by orphan worktrees; no CI-repair or restart-recovery proof reached.
+
+### Permanent correction
+
+1. Project-enable `fusion-plugin-cursor-runtime`; verify `/api/models` surfaces selected `cursor-cli` model under service HOME.
+2. Set **project-effective** soak settings (project overrides global): `maxConcurrent=1`, `mergeStrategy=pull-request`, lanes on `cursor-cli`, `enginePaused=true` until owner unpause.
+3. Service-HOME GitHub auth (`gh` + `setup-git`) so private fixture `Appsolino/host-d-lights-out-soak` ls-remote/fetch/push works without a human shell after launch.
+4. Platform [#159](https://github.com/Appsolino/Fusion/pull/159): classify missing Cursor runtime as **operator-actionable**; park planning `failed`; call `releasePreExecutionWorktree` so capacity is released (no redispatch storm).
+
+### Required regression tests
+
+- Missing Cursor runtime plugin → operator-actionable park + worktree release (`triage.test.ts`)
+- Error text matches permanent/config patterns (`transient-error-detector.test.ts`)
+- Gate suite green on #159
+
+### Fix history
+
+| Release/SHA | Result | Evidence |
+| --- | --- | --- |
+| Soak #1 / `ac469cf355a1` | OPEN | scoreboard + observe logs under soak evidence |
+| #159 / `cb506f2095f4` on Host D | FIXED | AUTO-3 [31237160172](https://github.com/Appsolino/Fusion/actions/runs/31237160172); Soak R2 preflight paused |
+
+---
+
 ## ISS-UI-001 — Settings non-identity fields hijacked by browser credential autofill
 
 Status: **PARKED** (OPEN — not FIXED; do not merge PR #28)
